@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use fastbrowse_core::effects::{ControlKey, ControlValue, Move};
 use fastbrowse_core::jev::{JevError, NoulQuestion};
 use fastbrowse_core::llm::{Generation, LLMError};
-use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, Status, StepResult, Tripwire};
+use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, Status, StepResult, Tripwire, WallKind};
 use fastbrowse_core::page::{BrowserError, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
@@ -33,11 +33,13 @@ pub(crate) struct Stop {
     pub status: Status,
     pub error: Option<String>,
     pub evidence: Vec<Evidence>,
+    /// The wall this stop names when the page alone cannot say: a bot check reads like any other page.
+    pub wall: Option<WallKind>,
 }
 
 impl Stop {
     pub fn new(status: Status, error: impl Into<String>) -> Stop {
-        Stop { status, error: Some(error.into()), evidence: Vec::new() }
+        Stop { status, error: Some(error.into()), evidence: Vec::new(), wall: None }
     }
 }
 
@@ -291,6 +293,8 @@ pub(crate) fn cancelled() -> AgentError {
 
 pub(crate) struct RunState {
     pub task: String,
+    /// The caller's background: shown beside the task, never read as what it asks for.
+    pub context: Option<String>,
     pub inputs: IndexMap<String, String>,
     pub attachments: Vec<Attachment>,
     pub authorization: Authorization,
@@ -482,6 +486,7 @@ impl RunState {
     ) -> RunState {
         RunState {
             task,
+            context: None,
             inputs,
             attachments,
             authorization,

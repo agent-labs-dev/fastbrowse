@@ -12,7 +12,7 @@ use url::Url;
 
 use crate::BoxFuture;
 use crate::jev::NoulQuestion;
-use crate::models::{Operation, SecretRef, SecretResolver, SecretValue, UNTRUSTED};
+use crate::models::{Operation, SecretRef, SecretResolver, SecretValue, UNTRUSTED, WallKind};
 use crate::page::Control;
 use crate::py::json::write_string;
 use crate::py::text;
@@ -183,12 +183,53 @@ pub fn sets_new_password(control: &Control) -> bool {
 // Tokens a page uses to mark the fields of a sign-in form, whatever language its labels are in.
 const SIGN_IN_AUTOCOMPLETE: &[&str] = &["username", "current-password", "one-time-code", "webauthn"];
 
+/// Which part of a sign-in a credential field takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialField {
+    /// A password or another secret the page masks.
+    Password,
+    /// A code the site sends for this sign-in (`autocomplete=one-time-code`).
+    OneTimeCode,
+    /// The account's name (`autocomplete=username`).
+    Username,
+    /// A passkey prompt (`autocomplete=webauthn`).
+    Passkey,
+}
+
+/// What credential a field takes, on the page's own evidence that it wants a sign-in; None for any other field.
+///
+/// A one-time code is read first: a site masks its code box as it masks a password, and a caller told "password"
+/// for a code it could read from an email asks the wrong person for the wrong thing.
+pub fn credential_field(control: &Control) -> Option<CredentialField> {
+    let tokens = control.autocomplete.as_deref().unwrap_or("").to_lowercase();
+    let tokens: Vec<&str> = text::split(&tokens).filter(|token| SIGN_IN_AUTOCOMPLETE.contains(token)).collect();
+    if tokens.contains(&"one-time-code") {
+        return Some(CredentialField::OneTimeCode);
+    }
+    if control.sensitive || control.input_type.as_deref() == Some("password") || tokens.contains(&"current-password") {
+        return Some(CredentialField::Password);
+    }
+    if tokens.contains(&"username") {
+        return Some(CredentialField::Username);
+    }
+    tokens.contains(&"webauthn").then_some(CredentialField::Passkey)
+}
+
 /// Whether a field takes an account's credentials: the page's own evidence that it wants a sign-in.
 pub fn asks_for_credentials(control: &Control) -> bool {
-    let tokens = control.autocomplete.as_deref().unwrap_or("").to_lowercase();
-    control.sensitive
-        || control.input_type.as_deref() == Some("password")
-        || text::split(&tokens).any(|token| SIGN_IN_AUTOCOMPLETE.contains(&token))
+    credential_field(control).is_some()
+}
+
+/// What a wall asking for these credential fields wants: a password if any field is one, a one-time code if every
+/// field is one, and otherwise a sign-in (an account name, a passkey, or only a control to sign in with).
+pub fn wall_kind(fields: &[CredentialField]) -> WallKind {
+    if fields.contains(&CredentialField::Password) {
+        WallKind::Password
+    } else if !fields.is_empty() && fields.iter().all(|field| *field == CredentialField::OneTimeCode) {
+        WallKind::OneTimeCode
+    } else {
+        WallKind::SignIn
+    }
 }
 
 /// `\b(change|reset|update|replace|set)\b.*\bpassword\b`, ignoring case: the verb, then the word later on its line.
@@ -764,6 +805,36 @@ mod tests {
         let mut otp = Control::new("o", "textbox", "Code", [Operation::Fill]);
         otp.autocomplete = Some("One-Time-Code".into());
         assert!(asks_for_credentials(&otp));
+    }
+
+    #[test]
+    fn a_wall_is_named_for_the_credential_its_fields_ask_for() {
+        let field = |sensitive: bool, input_type: Option<&str>, autocomplete: Option<&str>| {
+            let mut control = Control::new("f", "textbox", "Field", [Operation::Fill]);
+            control.sensitive = sensitive;
+            control.input_type = input_type.map(str::to_string);
+            control.autocomplete = autocomplete.map(str::to_string);
+            credential_field(&control)
+        };
+        let code = field(true, Some("password"), Some("One-Time-Code"));
+        let password = field(false, Some("password"), None);
+        let username = field(false, Some("email"), Some("username"));
+        assert_eq!(code, Some(CredentialField::OneTimeCode));
+        assert_eq!(password, Some(CredentialField::Password));
+        assert_eq!(field(false, None, Some("current-password")), Some(CredentialField::Password));
+        assert_eq!(username, Some(CredentialField::Username));
+        assert_eq!(field(false, Some("text"), Some("name")), None);
+        for (fields, kind) in [
+            (vec![code, code], WallKind::OneTimeCode),
+            (vec![username, password], WallKind::Password),
+            (vec![code, password], WallKind::Password),
+            (vec![username], WallKind::SignIn),
+            (vec![username, code], WallKind::SignIn),
+            (vec![], WallKind::SignIn),
+        ] {
+            let fields: Vec<CredentialField> = fields.into_iter().flatten().collect();
+            assert_eq!(wall_kind(&fields), kind, "{fields:?}");
+        }
     }
 
     /// Where WHATWG and `urlsplit` disagree, the origin is the one Chrome loads.

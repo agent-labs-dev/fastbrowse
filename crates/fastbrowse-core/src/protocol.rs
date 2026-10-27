@@ -253,6 +253,9 @@ pub struct RunParams {
     pub task: String,
     #[serde(default)]
     pub start: Option<String>,
+    /// Background the run may use and never reads as the task, such as where the request came from.
+    #[serde(default)]
+    pub context: Option<String>,
     #[serde(default)]
     pub inputs: Option<IndexMap<String, String>>,
     #[serde(default)]

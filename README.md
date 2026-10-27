@@ -106,6 +106,7 @@ Steps go to stderr; the status, cost, step count, the reason a run stopped short
 | Flag | Effect |
 |:--|:--|
 | `--start URL` | the page to open first; worked out from the task when omitted |
+| `--context TEXT` | background the run may use but never treats as the task, such as where the request came from; `context=` in `run_task` and `serve` |
 | `--cloud` | force cloud Chrome even when `FASTBROWSE_PROFILE` or `FASTBROWSE_HEADED` is set |
 | `--local` | use local Chrome instead of a Browser Use Cloud browser. Cloud is the default: it passes bot checks a fresh Chrome fails, and prints a URL to watch the run live |
 | `--fetch` | read pages over HTTP and start no browser at all, for a task that only has to read one and needs no clicking, forms or screenshots |
@@ -255,6 +256,12 @@ Only `complete` exits 0, so a program can also check zero versus nonzero.
 A `budget_exceeded` JSON result includes `budget.resource` (`steps`, `seconds`, `dollars`, `jev_calls` or
 `llm_calls`) and `budget.limit`. Other results have `budget: null`. The embedding and MCP APIs carry the same
 optional object, so callers can identify the affected limit without parsing an error message.
+
+A `needs_login` result, and a `blocked` one at a bot check, carries `wall`: `kind` (`password`, `one_time_code`,
+`sign_in` or `bot_check`), the page's `origin`, the visible labels of the `fields` it asked for and `seen_at_ms`.
+A `one_time_code` wall wants a code the site sent, which a caller that can read the user's email or texts can
+supply as a secret scoped to that origin and run again; a `password` or `sign_in` wall wants the user. Other
+results have `wall: null`.
 
 A run that stops `stuck` or `unverified` before writing its answer, with evidence read for a task that asks for
 one, returns a cited answer that starts `Answer (unverified)`, written by one more composer call. If that call
@@ -500,7 +507,7 @@ await fb.run('Log in as standard_user with the saved password and add the backpa
 value leaves your vault at that moment and a one-time code is fresh. `until` gets the address the run ended on,
 and anything but `true` keeps the run from `complete`. `onFrame` receives JPEG frames of the active tab; without
 it no frame is sent. A callback that throws ends the run with status `error`. The other options are `run_task`'s:
-`inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices `chrome`, `cloudProfile`,
+`context`, `inputs`, `attachments` as bytes, `downloads`, `record`, and the browser choices `chrome`, `cloudProfile`,
 `cdpUrl`, `cdpPort`, `attach`, `targetMatch`, `foreground`, `proxyCountry`, `viewport` and `cloudAllowResizing`,
 which `Fastbrowse.start` also takes as defaults for every run. A run passes `null` for one of them to go without
 that default.

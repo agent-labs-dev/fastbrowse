@@ -525,6 +525,29 @@ async fn test_capture_session_after_last_target_closes_is_unavailable() {
     session.close().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_closed_active_tab_hands_over_to_its_opener_else_the_last_active_tab() {
+    // An OAuth popup closes itself once it has signed the run in: the run goes back to the tab that opened it, not to
+    // the first tab, and a tab with no opener left hands over to the one the run was on before it.
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    for (target, session_id) in [("second", "second-session"), ("third", "third-session")] {
+        fake.queue("Target.createTarget", [json!({"targetId": target})]);
+        fake.queue("Target.attachToTarget", [json!({"sessionId": session_id})]);
+        testing::open_owned_tab(&session, "about:blank").await.unwrap();
+    }
+    session.switch_tab("second").await.unwrap();
+    session.switch_tab("third").await.unwrap();
+    fake.queue("Target.attachToTarget", [json!({"sessionId": "popup-session"})]);
+    testing::adopt(&session, "popup", "second").await;
+    session.switch_tab("popup").await.unwrap();
+    for (closed, next) in [("popup", "second"), ("second", "third"), ("third", "owned")] {
+        testing::dispatch(&session, "Target.targetDestroyed", json!({"targetId": closed}), None);
+        assert_eq!(session.active_target_id(), next, "after {closed} closed");
+    }
+    session.close().await.unwrap();
+}
+
 /// The decision loop holds the page as `Arc<dyn Page>`, and reads an outage there as core's `Unavailable`.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_closed_tab_reaches_the_loop_as_unavailable() {

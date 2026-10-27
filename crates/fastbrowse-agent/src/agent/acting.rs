@@ -398,7 +398,7 @@ impl Agent {
         Err(Stop::new(Status::NeedsConfirmation, reason).into())
     }
 
-    async fn text(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step<String> {
+    pub(super) async fn text(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step<String> {
         let origin = self.target_origin(target);
         // Only what this field's own frame may receive: a password manager offers its names across every site it
         // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
@@ -431,7 +431,7 @@ impl Agent {
             return Ok(state.inputs.get(input).cloned().unwrap_or_default());
         }
         if let Some(name) = choice.strip_prefix("secret:") {
-            return self.secret(name, &origin).await;
+            return self.secret(name, &origin, asks_for_credentials(&self.raw_target(target))).await;
         }
         self.generate_text(state, observation, target).await
     }
@@ -453,7 +453,7 @@ impl Agent {
                 )
                 .into());
             }
-            return self.secret("new_password", origin).await;
+            return self.secret("new_password", origin, false).await;
         }
         let secrets: Vec<String> = secrets.into_iter().filter(|name| name != "new_password").collect();
         match secrets.as_slice() {
@@ -462,7 +462,7 @@ impl Agent {
                 format!("{} wants a secret and none is stored", text::repr(&target.label)),
             )
             .into()),
-            [only] => self.secret(only, origin).await,
+            [only] => self.secret(only, origin, true).await,
             _ => {
                 let criteria: IndexMap<String, Value> = secrets
                     .iter()
@@ -470,7 +470,7 @@ impl Agent {
                     .collect();
                 let question = format!("Which stored secret belongs in {}?", text::repr(&target.label));
                 let name = self.ask_choice(state, observation, &question, criteria).await?;
-                self.secret(&name, origin).await
+                self.secret(&name, origin, true).await
             }
         }
     }
@@ -486,12 +486,18 @@ impl Agent {
         self.raw_target(target).frame_origin.unwrap_or_else(|| "null".into())
     }
 
-    async fn secret(&self, name: &str, origin: &str) -> Step<String> {
+    /// The value of `name` for `origin`. A credential field nothing resolves for is a sign-in the user has to make,
+    /// not a value the caller forgot: a caller told needs_input asks for a value it has already given.
+    async fn secret(&self, name: &str, origin: &str, credential: bool) -> Step<String> {
         let value = match &self.secrets {
             Some(secrets) => resolve_secret(&**secrets, name, origin).await,
             None => None,
         };
         let Some(value) = value else {
+            if credential {
+                let error = format!("sign-in required at {origin}: secret {name} is not available there");
+                return Err(Stop::new(Status::NeedsLogin, error).into());
+            }
             return Err(Stop::new(Status::NeedsInput, format!("secret {name} is not available for {origin}")).into());
         };
         self.seen().redactor.register(name, &value, Some(origin));

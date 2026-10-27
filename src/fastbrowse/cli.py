@@ -121,6 +121,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--start", default=None, help="URL to open before the task starts; worked out from the task if omitted"
     )
+    parser.add_argument(
+        "--context",
+        default=None,
+        help="background the run may use but never treats as part of the task, such as where the request came from",
+    )
     browser = parser.add_mutually_exclusive_group()
     browser.add_argument("--cloud", action="store_true", help="use cloud Chrome, overriding local environment defaults")
     browser.add_argument("--local", action="store_true", help="use local Chrome instead of a Browser Use Cloud browser")
@@ -279,6 +284,7 @@ async def run(args: argparse.Namespace) -> int:
     result = await run_task(
         args.task,
         start=args.start,
+        context=args.context,
         browser_api_key=None
         if args.fetch or handed_over
         else options.browser_key(settings, options.cloud(args.local, chrome, args.cloud_profile, args.proxy_country)),

@@ -5,7 +5,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use fastbrowse_core::effects::{SETTING_ROLES, effect, r#move, reversal, state_key};
-use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult};
+use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult, WallKind};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
@@ -229,7 +229,13 @@ impl Agent {
                         self.redact(&origin)
                     );
                     let evidence = self.wall_quotes(&raw).await;
-                    return Err(Stop { status: Status::Blocked, error: Some(error), evidence }.into());
+                    return Err(Stop {
+                        status: Status::Blocked,
+                        error: Some(error),
+                        evidence,
+                        wall: Some(WallKind::BotCheck),
+                    }
+                    .into());
                 }
                 let plan = state.await_plan().await?;
                 if !access_inspection(&plan) {

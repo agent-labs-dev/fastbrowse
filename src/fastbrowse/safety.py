@@ -6,10 +6,11 @@ Models only ever see secret names. Values are resolved here, at dispatch time, f
 import json
 import re
 from collections.abc import Mapping, Sequence
+from enum import StrEnum
 from urllib.parse import quote, quote_plus, urlsplit
 
 from fastbrowse.jev import NoulQuestion
-from fastbrowse.models import UNTRUSTED, Operation, SecretRef, SecretResolver, SecretValue
+from fastbrowse.models import UNTRUSTED, Operation, SecretRef, SecretResolver, SecretValue, WallKind
 from fastbrowse.page import Control
 
 
@@ -157,10 +158,48 @@ def sets_new_password(control: Control) -> bool:
 _SIGN_IN_AUTOCOMPLETE = frozenset({"username", "current-password", "one-time-code", "webauthn"})
 
 
+class CredentialField(StrEnum):
+    """Which part of a sign-in a credential field takes."""
+
+    PASSWORD = "password"
+    """A password or another secret the page masks."""
+    ONE_TIME_CODE = "one_time_code"
+    """A code the site sends for this sign-in (`autocomplete=one-time-code`)."""
+    USERNAME = "username"
+    """The account's name (`autocomplete=username`)."""
+    PASSKEY = "passkey"
+    """A passkey prompt (`autocomplete=webauthn`)."""
+
+
+def credential_field(control: Control) -> CredentialField | None:
+    """What credential a field takes, on the page's own evidence that it wants a sign-in; None for any other field.
+
+    A one-time code is read first: a site masks its code box as it masks a password, and a caller told "password"
+    for a code it could read from an email asks the wrong person for the wrong thing.
+    """
+    tokens = _SIGN_IN_AUTOCOMPLETE.intersection((control.autocomplete or "").lower().split())
+    if "one-time-code" in tokens:
+        return CredentialField.ONE_TIME_CODE
+    if control.sensitive or control.input_type == "password" or "current-password" in tokens:
+        return CredentialField.PASSWORD
+    if "username" in tokens:
+        return CredentialField.USERNAME
+    return CredentialField.PASSKEY if "webauthn" in tokens else None
+
+
 def asks_for_credentials(control: Control) -> bool:
     """Whether a field takes an account's credentials: the page's own evidence that it wants a sign-in."""
-    tokens = (control.autocomplete or "").lower().split()
-    return control.sensitive or control.input_type == "password" or not _SIGN_IN_AUTOCOMPLETE.isdisjoint(tokens)
+    return credential_field(control) is not None
+
+
+def wall_kind(fields: Sequence[CredentialField]) -> WallKind:
+    """What a wall asking for these credential fields wants: a password if any field is one, a one-time code if
+    every field is one, and otherwise a sign-in (an account name, a passkey, or only a control to sign in with)."""
+    if CredentialField.PASSWORD in fields:
+        return WallKind.PASSWORD
+    if fields and all(field is CredentialField.ONE_TIME_CODE for field in fields):
+        return WallKind.ONE_TIME_CODE
+    return WallKind.SIGN_IN
 
 
 def changes_credentials(controls: Sequence[Control], target: Control, operation: Operation = Operation.CLICK) -> bool:

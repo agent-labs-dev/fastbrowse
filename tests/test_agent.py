@@ -62,10 +62,12 @@ from fastbrowse.models import (
     LLMPurpose,
     Operation,
     RunResult,
+    SecretRef,
     Status,
     StepEvent,
     StepOutcome,
     StepResult,
+    WallKind,
 )
 from fastbrowse.page import (
     Action,
@@ -7677,3 +7679,83 @@ async def test_ordinary_field_writer_does_not_receive_output_recovery_instructio
     assert "unresolved_requirements" not in context
     assert "unverified_outputs" not in context
     assert "For a search field" not in messages[0].content
+
+
+@pytest.mark.parametrize(
+    ("ids", "status", "hint", "expected"),
+    [
+        (("otp",), Status.NEEDS_LOGIN, None, WallKind.ONE_TIME_CODE),
+        (("otp", "pw"), Status.NEEDS_LOGIN, None, WallKind.PASSWORD),
+        (("sign in",), Status.NEEDS_LOGIN, None, WallKind.SIGN_IN),
+        (("otp",), Status.BLOCKED, WallKind.BOT_CHECK, WallKind.BOT_CHECK),
+        # A refusal that is not a bot check, and a run that stopped for any other reason, name no wall.
+        (("otp",), Status.BLOCKED, None, None),
+        (("otp",), Status.STUCK, None, None),
+    ],
+)
+def test_a_stop_at_a_wall_names_what_the_wall_asks_for(
+    ids: tuple[str, ...], status: Status, hint: WallKind | None, expected: WallKind | None
+) -> None:
+    """A caller routed a wall by parsing the error; a one-time code it could fetch read the same as a password."""
+    controls = {
+        "otp": field("Code from hunter2").model_copy(update={"id": "otp", "autocomplete": "one-time-code"}),
+        "pw": field("Password").model_copy(update={"id": "pw", "input_type": "password"}),
+        "sign in": _button("Sign in"),
+    }
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]))
+    agent._redactor.register("PASSWORD", "hunter2")
+    agent._raw_observation = _at("https://shop.test:443/login?next=1", *(controls[i] for i in ids))
+    wall = agent._wall(_Stop(status, "stopped", wall=hint))
+    assert (wall and wall.kind) == expected
+    if wall is None:
+        return
+    assert wall.origin == "https://shop.test"
+    assert wall.seen_at_ms > 1_700_000_000_000
+    fields = {
+        WallKind.BOT_CHECK: (),
+        WallKind.SIGN_IN: (),
+        WallKind.ONE_TIME_CODE: ("Code from [secret:PASSWORD]",),
+        WallKind.PASSWORD: ("Code from [secret:PASSWORD]", "Password"),
+    }
+    assert wall.fields == fields[wall.kind]
+
+
+async def test_the_callers_background_reaches_recovery_and_jev_apart_from_the_task() -> None:
+    page = Mock(spec=Page)
+    page.screenshot = AsyncMock(return_value=b"")
+    llm = ScriptedLLM([{"diagnosis": "d", "next_subgoal": "s", "give_up": False}])
+    agent = Agent(page, ScriptedJev({}), llm)
+    state = await run_state()
+    obs = observation((_button("Search"),))
+    request = build_request(obs, obs.controls, agent._context(state, (), check_login=False, check_bot=False), Config())
+    assert isinstance(request.state, dict) and "background" not in request.state
+    state.context = "Asked by email from Ana."
+    await agent._recover(state, obs, "stalled")
+    sent = llm.calls[0][1][-1].content
+    assert f"## Task\n{state.task}\n\n## Background (not requirements; " in sent
+    assert "as if they were the task)\nAsked by email from Ana.\n\n## Problem\nstalled" in sent
+    request = build_request(obs, obs.controls, agent._context(state, (), check_login=False, check_bot=False), Config())
+    assert isinstance(request.state, dict)
+    assert request.state["task"] == state.task and request.state["background"] == "Asked by email from Ana."
+
+
+class _Unresolved:
+    """Declares a password for the site and then cannot produce it, as a vault that is locked does."""
+
+    def available(self) -> tuple[SecretRef, ...]:
+        return (SecretRef(name="password", origins=("https://b.test",)),)
+
+    async def resolve(self, name: str, origin: str) -> str | None:
+        return None
+
+
+async def test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_needs_input() -> None:
+    password = field("Password").model_copy(
+        update={"id": "pw", "input_type": "password", "sensitive": True, "frame_origin": "https://b.test"}
+    )
+    agent = Agent(Mock(spec=Page), ScriptedJev({}), ScriptedLLM([]), secrets=_Unresolved())
+    agent._raw_observation = _at("https://b.test/login", password)
+    with pytest.raises(_Stop) as stopped:
+        await agent._text(await run_state(), agent._raw_observation, password)
+    assert stopped.value.status is Status.NEEDS_LOGIN
+    assert stopped.value.error == "sign-in required at https://b.test: secret password is not available there"

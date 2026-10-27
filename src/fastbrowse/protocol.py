@@ -126,6 +126,8 @@ class RunParams(Params):
     """Chosen by the client, and carried by every message the server sends about this run."""
     task: str
     start: str | None = None
+    context: str | None = None
+    """Background the run may use and never reads as the task, such as where the request came from."""
     inputs: dict[str, str] | None = None
     attachments: tuple[RunAttachment, ...] = ()
     limits: Limits | None = None

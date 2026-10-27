@@ -1722,6 +1722,8 @@ def run_scenario(spec: Mapping[str, Any]) -> dict[str, Any]:
     outcome = result.model_dump(mode="json")
     for step in outcome["steps"]:
         step["duration_ms"] = 0
+    if outcome["wall"] is not None:
+        outcome["wall"]["seen_at_ms"] = 0
     return {**spec, "calls": calls, "outcome": outcome, "events": events}
 
 

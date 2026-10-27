@@ -218,6 +218,7 @@ pub fn result(status: Status) -> RunResult {
         final_frame: None,
         would_fire: Vec::new(),
         recordings: Vec::new(),
+        wall: None,
     }
 }
 
