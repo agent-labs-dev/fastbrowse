@@ -227,14 +227,29 @@ struct Driver {
 
 impl Driver {
     fn spawn(binary: &Path) -> std::io::Result<Self> {
-        let mut child = Command::new(binary)
-            .arg("mcp")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            // A driver dropped without `close` (a panic, a dropped future) still dies with its owner.
-            .kill_on_drop(true)
-            .spawn()?;
+        let start = || {
+            Command::new(binary)
+                .arg("mcp")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                // A driver dropped without `close` (a panic, a dropped future) still dies with its owner.
+                .kill_on_drop(true)
+                .spawn()
+        };
+        // Linux refuses to run a file that any process holds open for writing (ETXTBSY), and a file just written is
+        // held so for a moment by a child another thread is forking. The moment passes, so the start is tried again.
+        let mut child = start();
+        for _ in 0..20 {
+            match &child {
+                Err(error) if error.raw_os_error() == Some(26) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    child = start();
+                }
+                _ => break,
+            }
+        }
+        let mut child = child?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or_else(|| std::io::Error::other("no stdout pipe"))?;
         let io = Io { stdin, stdout: BufReader::new(stdout), partial: Vec::new(), next: 0 };
