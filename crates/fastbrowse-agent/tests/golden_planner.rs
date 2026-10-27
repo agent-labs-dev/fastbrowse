@@ -25,7 +25,7 @@ fn plans_ask_what_python_asks() {
                 if case["spent"].as_bool().unwrap() {
                     ledger.as_ref().unwrap().reserve(CostComponent::Llm, 0.0, 1).unwrap();
                 }
-                let result = block_on(make_plan(&llm, task, start, ledger.as_ref()));
+                let result = block_on(make_plan(&llm, task, start, None, ledger.as_ref()));
                 let outcome = match result {
                     Ok(generated) => plan_outcome(&generated.data, generated.cost.dump()),
                     Err(error) => error_outcome(&error),

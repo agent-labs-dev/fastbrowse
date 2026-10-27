@@ -62,6 +62,8 @@ from fastbrowse.models import (
     StepResult,
     Tripwire,
     TripwireMode,
+    Wall,
+    WallKind,
 )
 from fastbrowse.navigation import navigation_urls, task_urls
 from fastbrowse.output_schema import output_model
@@ -258,6 +260,7 @@ RESULT = RunResult(
     final_frame=b"\x89PNG\r\n\x1a\n",
     would_fire=(Tripwire.NO_PROGRESS, Tripwire.NO_PROGRESS, Tripwire.PLAN_STAGNATION),
     recordings=(Path("/tmp/run/captioned.mp4"), Path("/tmp/run/plain.mp4")),
+    wall=Wall(kind=WallKind.ONE_TIME_CODE, origin="https://example.test", fields=("Code",), seen_at_ms=1793000000000),
 )
 
 QUESTIONS = {

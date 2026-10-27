@@ -33,12 +33,12 @@ use fastbrowse_core::llm::{Generation, LLMClient};
 use fastbrowse_core::models::{
     Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler, Evidence,
     Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact, StepOutcome, Tripwire,
-    TripwireMode, UntilCheck,
+    TripwireMode, UntilCheck, Wall, WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
-use fastbrowse_core::safety::{Redactor, origin_of, secret_allowed};
+use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -80,6 +80,9 @@ const GENERATE: &str = "generate";
 pub struct RunOptions {
     pub start: Option<String>,
     pub choose_start: bool,
+    /// What the caller knows about the task, shown to the planner, recovery, the composer and Jev as background
+    /// and never as requirements.
+    pub context: Option<String>,
     pub inputs: IndexMap<String, String>,
     pub attachments: Vec<Attachment>,
     pub output_schema: Option<Arc<RecordSchema>>,
@@ -99,6 +102,7 @@ pub struct HeadStart {
     pub ledger: Arc<Ledger>,
     task: String,
     start: Option<String>,
+    context: Option<String>,
     planning: Arc<Spawned<Generation<Plan>>>,
     proposing: Option<Arc<Spawned<Shortcut>>>,
     plan_billed: bool,
@@ -106,7 +110,13 @@ pub struct HeadStart {
 
 impl HeadStart {
     /// Begin the plan and, with a site's entry point to start on, the shortcut. Needs a tokio runtime.
-    pub fn begin(llm: Arc<dyn LLMClient>, task: &str, start: Option<&str>, limits: Option<Limits>) -> HeadStart {
+    pub fn begin(
+        llm: Arc<dyn LLMClient>,
+        task: &str,
+        start: Option<&str>,
+        context: Option<&str>,
+        limits: Option<Limits>,
+    ) -> HeadStart {
         let ledger = Arc::new(Ledger::new(limits.unwrap_or_default()));
         // The run's clock starts when the run takes the ledger over. Until then, a call finishing past `max_seconds` of
         // browser startup would end the run over time the limit does not count.
@@ -115,9 +125,10 @@ impl HeadStart {
         // come before those, so it is written from the task while they run. Its answer checks are written by the same
         // call, so a run can browse as soon as the plan arrives.
         let planning = Arc::new(Spawned::spawn({
-            let (llm, ledger, task, start) = (llm.clone(), ledger.clone(), task.to_string(), start.map(String::from));
+            let (llm, ledger, task) = (llm.clone(), ledger.clone(), task.to_string());
+            let (start, context) = (start.map(String::from), context.map(String::from));
             async move {
-                let planned = make_plan(&*llm, &task, start.as_deref(), Some(&ledger)).await?;
+                let planned = make_plan(&*llm, &task, start.as_deref(), context.as_deref(), Some(&ledger)).await?;
                 // The plan's receipt is billed the moment it exists: recorded only when the run took the plan, a cap
                 // the plan alone had spent used to let a later paid request through.
                 ledger.state().lines.push(planned.cost.clone());
@@ -131,6 +142,7 @@ impl HeadStart {
             ledger,
             task: task.to_string(),
             start: start.map(String::from),
+            context: context.map(String::from),
             planning,
             proposing,
             plan_billed: true,
@@ -302,16 +314,25 @@ impl Agent {
     pub async fn run(&self, task: &str, mut options: RunOptions) -> Result<RunResult, AgentError> {
         let head = options.head_start.take();
         if let Some(head) = &head
-            && (options.limits.is_some() || head.task != task || head.start != options.start)
+            && (options.limits.is_some()
+                || head.task != task
+                || head.start != options.start
+                || head.context != options.context)
         {
-            // A plan written for another task or start would be followed without complaint.
+            // A plan written for another task, start or background would be followed without complaint.
             return Err(AgentError::Invalid(
-                "a head start carries its own limits and must be begun with this task and start".into(),
+                "a head start carries its own limits and must be begun with this task, start and context".into(),
             ));
         }
         let mut head = match head {
             Some(head) => head,
-            None => HeadStart::begin(self.llm.clone(), task, options.start.as_deref(), options.limits.take()),
+            None => HeadStart::begin(
+                self.llm.clone(),
+                task,
+                options.start.as_deref(),
+                options.context.as_deref(),
+                options.limits.take(),
+            ),
         };
         let ledger = head.ledger.clone();
         // The run's clock starts here, as it did before there was a head start: a browser slow to start is not time
@@ -447,6 +468,7 @@ impl Agent {
             head.planning.clone(),
             head.plan_billed,
         );
+        state.context = options.context.clone();
         state.started_url = opening.clone();
         state.caller_start = start.map(String::from);
         if start.is_some() && opened.is_empty() {
@@ -479,7 +501,8 @@ impl Agent {
                 let notes = state.notes.clone();
                 return self.stopping_result(&notes, state, ledger, stop.status, error).await;
             }
-            let outcome = Outcome { error, evidence: stop.evidence.clone(), ..Outcome::default() };
+            let wall = self.wall(stop);
+            let outcome = Outcome { error, evidence: stop.evidence.clone(), wall, ..Outcome::default() };
             return self.result(Some(state), ledger, stop.status, outcome);
         }
         let state = state.map(|state| &*state);
@@ -487,11 +510,12 @@ impl Agent {
         match flow {
             Flow::Stop(stop) => {
                 let error = stop.error.as_deref().map(|error| self.redact(error));
+                let wall = self.wall(&stop);
                 self.result(
                     state,
                     ledger,
                     stop.status,
-                    Outcome { error, evidence: stop.evidence, ..Outcome::default() },
+                    Outcome { error, evidence: stop.evidence, wall, ..Outcome::default() },
                 )
             }
             Flow::Agent(AgentError::Budget(error)) => self.partial_result(
@@ -594,6 +618,7 @@ impl Agent {
             ledger: Some(&ledger),
             transaction_evidence_ids: transactions,
             preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
+            background: state.context.clone(),
             ..ComposeOptions::new()
         };
         let generated = compose(&*self.llm, &state.task, &plan, &state.notes, &options).await.ok()?;
@@ -705,7 +730,42 @@ impl Agent {
             final_frame: None,
             would_fire: state.map(|state| state.would_fire.clone()).unwrap_or_default(),
             recordings: Vec::new(),
+            wall: outcome.wall,
         }
+    }
+
+    /// The wall a stop ended at, read from the page the run last observed, so every way a run reaches needs_login
+    /// (a field it cannot fill, a page that offers only sign-in, a stuck run standing on a wall, an HTTP 401) names
+    /// the same thing. A caller routes on the kind: a one-time code it can fetch, a password only the user has.
+    fn wall(&self, stop: &state::Stop) -> Option<Wall> {
+        let kind = match (stop.status, stop.wall) {
+            (Status::NeedsLogin, hint) | (Status::Blocked, hint @ Some(_)) => hint,
+            _ => return None,
+        };
+        let (raw, observed) = {
+            let seen = self.seen();
+            (seen.raw.clone(), seen.observed.clone())
+        };
+        let page = observed.as_ref().or(raw.as_ref());
+        let origin = page.map_or_else(String::new, |page| self.redact(&origin_of(&page.url)));
+        let mut credentials: Vec<CredentialField> = Vec::new();
+        let mut fields: Vec<String> = Vec::new();
+        if kind != Some(WallKind::BotCheck)
+            && let Some(raw) = &raw
+        {
+            // Which fields ask for credentials is read from the raw page, whose flags masking cannot have changed;
+            // their labels from what models saw, as the error quotes them.
+            for control in &raw.controls {
+                let Some(field) = credential_field(control) else { continue };
+                credentials.push(field);
+                let shown = observed.as_ref().and_then(|o| o.controls.iter().find(|c| c.id == control.id));
+                let label = shown.map_or(&control.label, |c| &c.label);
+                if !label.is_empty() {
+                    fields.push(self.redact(label));
+                }
+            }
+        }
+        Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
     }
 
     fn public_fact(&self, fact: &Fact) -> StepFact {
@@ -896,6 +956,7 @@ impl Agent {
             start_url: state.caller_start.clone(),
             start_landing_url: state.start_landing_url.clone(),
             recovery_memory: recovery_memory(state, self.config.stall.max_recoveries, |value| self.redact(value)),
+            background: state.context.clone(),
         })
     }
 
@@ -943,6 +1004,7 @@ struct Outcome {
     citations: Vec<Citation>,
     error: Option<String>,
     budget: Option<BudgetStop>,
+    wall: Option<Wall>,
 }
 
 fn time_limit(limit: f64) -> String {
@@ -977,5 +1039,11 @@ fn blocked_without_browser(message: String) -> RunResult {
         final_frame: None,
         would_fire: Vec::new(),
         recordings: Vec::new(),
+        wall: None,
     }
+}
+
+fn now_ms() -> i64 {
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
 }

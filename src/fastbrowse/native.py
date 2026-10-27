@@ -74,6 +74,7 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 _PLAIN = (
     "start",
+    "context",
     "browser_api_key",
     "cloud_profile",
     "cdp_url",

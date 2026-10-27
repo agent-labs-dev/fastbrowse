@@ -13,7 +13,7 @@ from typing import NamedTuple, Self
 from pydantic import Field, model_validator
 
 from fastbrowse.llm import Generation, LLMClient, LLMError, Message
-from fastbrowse.models import Frozen, LLMPurpose
+from fastbrowse.models import Frozen, LLMPurpose, background_section
 from fastbrowse.telemetry import Ledger
 
 FIELD_CATEGORIES = (
@@ -259,6 +259,7 @@ async def make_plan(
     task: str,
     *,
     start: str | None = None,
+    context: str | None = None,
     ledger: Ledger | None = None,
 ) -> Generation[Plan]:
     """The plan, with the answer checks written by the same call that decomposes the task.
@@ -267,11 +268,13 @@ async def make_plan(
     that states the requirements must state them in full: a second call that normalized a terse draft traded that
     guarantee for a call saved, and a draft is not a plan's checks until it names every entity and scope."""
     site = "" if start is None else f"\n\n# Start page\n{start}"
+    # Requirements come from the task alone: the background is what the caller knows, not what it asked for.
+    background = background_section(context, "#")
     generated = await llm.generate(
         LLMPurpose.PLAN,
         [
             _instructions(),
-            Message(role="user", content=f"# Task\n{task}{site}"),
+            Message(role="user", content=f"# Task\n{task}{site}{background}"),
         ],
         Plan,
         # Output checks repeat their entity and scope, so a compound task can exceed the old prose-plan budget.

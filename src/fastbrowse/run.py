@@ -211,6 +211,7 @@ async def run_task(
     task: str,
     *,
     start: str | None = None,
+    context: str | None = None,
     browser_api_key: str | None = None,
     chrome: LocalChrome | None = None,
     cloud_profile: str | None = None,
@@ -310,6 +311,10 @@ async def run_task(
     is refused as needing a browser. Browser, recording, download and cursor options mean nothing here and
     are an error rather than ignored.
 
+    `context` is background the run may use but never reads as the task: where the request came from, what the
+    caller already knows. The planner, recovery and the answer see it in its own section headed as not
+    requirements, and Jev sees it as `background`; requirements come from `task` alone.
+
     The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`), unless
     `FASTBROWSE_PYTHON_CORE=1` keeps it on the Python core.
     """
@@ -342,6 +347,7 @@ async def run_task(
             return await _fetched(
                 task,
                 start=start,
+                context=context,
                 client=client,
                 jev=jev or settings.jev(client),
                 llm=llm or settings.llm(client),
@@ -368,7 +374,7 @@ async def run_task(
             recording: Recording | None = None
             # Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is
             # ready to open when the tab is.
-            head = HeadStart.begin(llm, task, start=start, limits=limits)
+            head = HeadStart.begin(llm, task, start=start, context=context, limits=limits)
             try:
                 await check_browser_access(check_access)
                 async with _browser(
@@ -416,6 +422,7 @@ async def run_task(
                             result = await agent.run(
                                 task,
                                 start=start,
+                                context=context,
                                 # With no page named, the first address is worked out from the task,
                                 # unless attaching to an existing window where the page is preserved.
                                 choose_start=start is None and not connection.attach,
@@ -459,6 +466,7 @@ async def _fetched(
     task: str,
     *,
     start: str | None,
+    context: str | None,
     client: httpx.AsyncClient,
     jev: JevClient,
     llm: LLMClient,
@@ -492,7 +500,7 @@ async def _fetched(
             cost=CostBreakdown(lines=()),
             artifacts=(),
         ).model_copy(update={"error": type(exc).__name__})
-    head = HeadStart.begin(llm, task, start=start, limits=limits)
+    head = HeadStart.begin(llm, task, start=start, context=context, limits=limits)
     page = FetchedPage(
         client,
         allowed_origins=origins,
@@ -504,6 +512,7 @@ async def _fetched(
         result = await agent.run(
             task,
             start=start,
+            context=context,
             # With no page named, the first address is worked out from the task, the same way a browser run
             # with no `--start` begins.
             choose_start=start is None,

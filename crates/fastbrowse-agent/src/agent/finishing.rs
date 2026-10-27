@@ -639,6 +639,7 @@ impl Agent {
             field_outputs: !state.finish_partitions.is_empty(),
             verified,
             independent_fields: state.oversized_answer,
+            background: state.context.clone(),
         })
     }
 

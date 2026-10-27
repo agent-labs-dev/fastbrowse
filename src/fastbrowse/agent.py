@@ -92,6 +92,9 @@ from fastbrowse.models import (
     TripwireMode,
     Unavailable,
     UntilCheck,
+    Wall,
+    WallKind,
+    background_section,
 )
 from fastbrowse.navigation import navigation_urls, same_address, task_urls
 from fastbrowse.page import (
@@ -147,9 +150,11 @@ from fastbrowse.retrieval import (
     subject_words,
 )
 from fastbrowse.safety import (
+    CredentialField,
     Redactor,
     asks_for_credentials,
     changes_credentials,
+    credential_field,
     downloads_question,
     irreversible_question,
     may_be_irreversible,
@@ -159,6 +164,7 @@ from fastbrowse.safety import (
     secret_allowed,
     sets_new_password,
     starts_download,
+    wall_kind,
 )
 from fastbrowse.shortcut import Shortcut, accept, accept_start, propose_shortcut, propose_start
 from fastbrowse.telemetry import BudgetExceeded, Ledger, trace
@@ -318,11 +324,19 @@ _WALL_QUOTE_CHARS = 600
 
 
 class _Stop(Exception):
-    def __init__(self, status: Status, error: str | None = None, evidence: tuple[Evidence, ...] = ()) -> None:
+    def __init__(
+        self,
+        status: Status,
+        error: str | None = None,
+        evidence: tuple[Evidence, ...] = (),
+        wall: WallKind | None = None,
+    ) -> None:
         super().__init__(error or status.value)
         self.status = status
         self.error = error
         self.evidence = evidence
+        # The wall this stop names when the page alone cannot say: a bot check reads like any other page.
+        self.wall = wall
 
 
 class _HttpFailure(Frozen):
@@ -425,6 +439,8 @@ class _RunState:
     planning: asyncio.Task[Generation[Plan]]
     plan_billed: bool = False
     """The plan's receipt reached the ledger as the plan arrived, so taking the plan must not record it again."""
+    context: str | None = None
+    """The caller's background: shown beside the task, never read as what it asks for."""
     notes: Notes = field(default_factory=Notes)
     finish_partitions: tuple[Plan, ...] = ()
     output_targets: Mapping[str, OutputTarget] = field(default_factory=dict)
@@ -666,9 +682,18 @@ class HeadStart:
     planning: asyncio.Task[Generation[Plan]]
     proposing: asyncio.Task[Shortcut] | None
     plan_billed: bool = False
+    context: str | None = None
 
     @classmethod
-    def begin(cls, llm: LLMClient, task: str, *, start: str | None = None, limits: Limits | None = None) -> Self:
+    def begin(
+        cls,
+        llm: LLMClient,
+        task: str,
+        *,
+        start: str | None = None,
+        context: str | None = None,
+        limits: Limits | None = None,
+    ) -> Self:
         ledger = Ledger(limits or Limits())
         # The run's clock starts when the run takes the ledger over. Until then, a call finishing past `max_seconds`
         # of browser startup would end the run over time the limit does not count.
@@ -676,7 +701,7 @@ class HeadStart:
         # The plan is needed to read, to judge DONE and to answer, and the start page, the first fills and clicks
         # all come before those, so it is written from the task while they run. Its answer checks are written by
         # the same call, so a run can browse as soon as the plan arrives.
-        planning = asyncio.create_task(make_plan(llm, task, start=start, ledger=ledger))
+        planning = asyncio.create_task(make_plan(llm, task, start=start, context=context, ledger=ledger))
         # The plan's receipt is put in the ledger once, by whichever comes first: the plan's own completion, or the
         # run taking the plan over and recording it. Recorded only when the run took it, a cap the plan alone had
         # spent used to let a later paid request through.
@@ -687,7 +712,7 @@ class HeadStart:
             if start is not None and _shortcut_worth_proposing(start)
             else None
         )
-        return cls(ledger, task, start, planning, proposing, plan_billed=True)
+        return cls(ledger, task, start, planning, proposing, plan_billed=True, context=context)
 
     @property
     def tasks(self) -> tuple[asyncio.Task[Any], ...]:
@@ -752,6 +777,7 @@ class Agent:
         *,
         start: str | None = None,
         choose_start: bool = False,
+        context: str | None = None,
         inputs: Mapping[str, str] | None = None,
         attachments: Sequence[Attachment] = (),
         output_schema: type[BaseModel] | None = None,
@@ -762,10 +788,12 @@ class Agent:
     ) -> RunResult:
         """Pursue `task` from `start`. A `head_start` is the plan and shortcut already asked for with this task and
         start; it carries the limits it was begun with, so `limits` is not read alongside it."""
-        if head_start is not None and (limits is not None or (head_start.task, head_start.start) != (task, start)):
-            # A plan written for another task or start would be followed without complaint.
-            raise ValueError("a head start carries its own limits and must be begun with this task and start")
-        head = head_start or HeadStart.begin(self._llm, task, start=start, limits=limits)
+        if head_start is not None and (
+            limits is not None or (head_start.task, head_start.start, head_start.context) != (task, start, context)
+        ):
+            # A plan written for another task, start or background would be followed without complaint.
+            raise ValueError("a head start carries its own limits and must be begun with this task, start and context")
+        head = head_start or HeadStart.begin(self._llm, task, start=start, context=context, limits=limits)
         ledger = head.ledger
         # The run's clock starts here, as it did before there was a head start: a browser slow to start is not time
         # spent on the task, and `max_seconds` bounds the deadline below from this moment too.
@@ -804,6 +832,7 @@ class Agent:
                         head.planning,
                         plan_billed=head.plan_billed,
                     )
+                    state.context = context
                     state.started_url = opening
                     state.caller_start = start
                     if start is not None and not history:
@@ -827,7 +856,9 @@ class Agent:
                     # What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                     result = await self._partial_result(state.notes, state, ledger, stop.status, stop.error)
                 else:
-                    result = self._result(state, ledger, stop.status, error=stop.error, evidence=stop.evidence)
+                    result = self._result(
+                        state, ledger, stop.status, error=stop.error, evidence=stop.evidence, wall=self._wall(stop)
+                    )
             except TimeoutError:
                 if not deadline.expired():
                     raise
@@ -1075,6 +1106,7 @@ class Agent:
                         "it is not a sign-in and no credential passes it. "
                         "Retry using an attached local browser or choose another source for this research.",
                         evidence=await self._wall_quotes(raw),
+                        wall=WallKind.BOT_CHECK,
                     )
                 plan = await state.await_plan()
                 if not _access_inspection(plan):
@@ -2364,7 +2396,8 @@ class Agent:
         if choice.startswith("input:"):
             return state.inputs[choice.removeprefix("input:")]
         if choice.startswith("secret:"):
-            return await self._secret(choice.removeprefix("secret:"), origin)
+            name = choice.removeprefix("secret:")
+            return await self._secret(name, origin, credential=asks_for_credentials(self._raw_target(target)))
         return await self._generate_text(state, observation, target)
 
     async def _sensitive_text(
@@ -2378,17 +2411,18 @@ class Agent:
                     "A replacement password requires --secret new_password=ENV_VAR@https://host; "
                     "set ENV_VAR to the new value instead of putting it in the task.",
                 )
-            return await self._secret("new_password", origin)
+            return await self._secret("new_password", origin, credential=False)
         secrets = tuple(name for name in secrets if name != "new_password")
         match secrets:
             case ():
                 raise _Stop(Status.NEEDS_LOGIN, f"{target.label!r} wants a secret and none is stored")
             case (only,):
-                return await self._secret(only, origin)
+                return await self._secret(only, origin, credential=True)
             case _:
                 criteria: dict[str, JsonValue] = {name: f"The stored secret named {name}" for name in secrets}
                 question = f"Which stored secret belongs in {target.label!r}?"
-                return await self._secret(await self._ask_choice(state, observation, question, criteria), origin)
+                name = await self._ask_choice(state, observation, question, criteria)
+                return await self._secret(name, origin, credential=True)
 
     def _raw_target(self, target: Control) -> Control:
         if self._raw_observation is not None:
@@ -2398,8 +2432,12 @@ class Agent:
     def _target_origin(self, target: Control) -> str:
         return self._raw_target(target).frame_origin or "null"
 
-    async def _secret(self, name: str, origin: str) -> str:
+    async def _secret(self, name: str, origin: str, *, credential: bool) -> str:
+        """The value of `name` for `origin`. A credential field nothing resolves for is a sign-in the user has to
+        make, not a value the caller forgot: a caller told needs_input asks for a value it has already given."""
         value = await resolve_secret(self._secrets, name, origin) if self._secrets else None
+        if value is None and credential:
+            raise _Stop(Status.NEEDS_LOGIN, f"sign-in required at {origin}: secret {name} is not available there")
         if value is None:
             raise _Stop(Status.NEEDS_INPUT, f"secret {name} is not available for {origin}")
         self._redactor.register(name, value, origin)
@@ -3647,7 +3685,7 @@ class Agent:
                         f"## Still to find\n{open_requirements or 'nothing'}\n\n"
                         f"## Unverified answer outputs\n{'; '.join(state.open_answer_outputs) or 'none'}\n\n"
                         + _field_corrections(state)
-                        + f"## Task\n{state.task}\n\n## Problem\n{reason}"
+                        + f"## Task\n{state.task}{background_section(state.context, '##')}\n\n## Problem\n{reason}"
                     ),
                     images=await self._screenshots(),
                 ),
@@ -4102,6 +4140,7 @@ class Agent:
                             state.notes,
                             tokens=self._config.tokens,
                             ledger=state.ledger,
+                            background=state.context,
                             transaction_evidence_ids=await self._transaction_evidence_ids(state),
                             corrections=state.answer_corrections,
                             preserve_collections=bool(state.finish_partitions or state.answer_corrections),
@@ -4274,6 +4313,7 @@ class Agent:
                         state.notes,
                         tokens=self._config.tokens,
                         ledger=state.ledger,
+                        background=state.context,
                         transaction_evidence_ids=await self._transaction_evidence_ids(state),
                         corrections=state.answer_corrections,
                         preserve_collections=bool(state.finish_partitions or state.answer_corrections),
@@ -4307,6 +4347,7 @@ class Agent:
                     state.notes,
                     tokens=self._config.tokens,
                     ledger=state.ledger,
+                    background=state.context,
                     transaction_evidence_ids=await self._transaction_evidence_ids(state),
                     corrections=state.answer_corrections,
                     preserve_collections=bool(state.finish_partitions or state.answer_corrections),
@@ -4350,6 +4391,7 @@ class Agent:
                 state.notes,
                 tokens=self._config.tokens,
                 ledger=state.ledger,
+                background=state.context,
                 transaction_evidence_ids=await self._transaction_evidence_ids(state),
                 preserve_collections=bool(state.finish_partitions or state.answer_corrections),
             )
@@ -4750,6 +4792,7 @@ class Agent:
             unread_requirements=unread,
             start_url=state.caller_start,
             start_landing_url=state.start_landing_url,
+            background=state.context,
         )
 
     async def _partial_result(
@@ -4828,6 +4871,7 @@ class Agent:
         citations: tuple[Citation, ...] = (),
         error: str | None = None,
         budget: BudgetStop | None = None,
+        wall: Wall | None = None,
     ) -> RunResult:
         observed = self._raw_observation or self._observed
         return RunResult(
@@ -4843,6 +4887,37 @@ class Agent:
             final_url=self._redactor.redact(observed.url) if state and observed else None,
             error=error,
             would_fire=tuple(state.would_fire) if state else (),
+            wall=wall,
+        )
+
+    def _wall(self, stop: _Stop) -> Wall | None:
+        """The wall a stop ended at, read from the page the run last observed, so every way a run reaches
+        needs_login (a field it cannot fill, a page that offers only sign-in, a stuck run standing on a wall, an HTTP
+        401) names the same thing. A caller routes on the kind: a one-time code it can fetch, a password only the
+        user has."""
+        if not (stop.status is Status.NEEDS_LOGIN or (stop.status is Status.BLOCKED and stop.wall is not None)):
+            return None
+        raw, observed = self._raw_observation, self._observed
+        page = observed or raw
+        origin = "" if page is None else self._redactor.redact(origin_of(page.url))
+        credentials: list[CredentialField] = []
+        fields: list[str] = []
+        if stop.wall is not WallKind.BOT_CHECK and raw is not None:
+            # Which fields ask for credentials is read from the raw page, whose flags masking cannot have changed;
+            # their labels from what models saw, as the error quotes them.
+            shown = {c.id: c for c in observed.controls} if observed else {}
+            for control in raw.controls:
+                if (credential := credential_field(control)) is None:
+                    continue
+                credentials.append(credential)
+                label = shown.get(control.id, control).label
+                if label:
+                    fields.append(self._redactor.redact(label))
+        return Wall(
+            kind=stop.wall or wall_kind(credentials),
+            origin=origin,
+            fields=tuple(fields),
+            seen_at_ms=time.time_ns() // 1_000_000,
         )
 
 

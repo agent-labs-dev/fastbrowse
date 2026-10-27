@@ -37,7 +37,9 @@ try {
 ```
 
 `run` resolves with the result whatever status the run ended in, and only `complete` is success. Read
-`result.status` before you use the answer.
+`result.status` before you use the answer. A `needs_login` result, and a `blocked` one at a bot check, says what
+stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or `bot_check`, with the page's
+`origin`, the labels of the `fields` it asked for and `seen_at_ms`.
 
 ## The rest
 
