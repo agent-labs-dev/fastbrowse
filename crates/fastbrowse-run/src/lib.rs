@@ -503,6 +503,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     // Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is ready to open
     // when the tab is.
     let head = HeadStart::begin(llm.clone(), task, options.start.as_deref(), options.limits.clone());
+    let head_stop = head.stopper();
     let scratch = Scratch::new().map_err(|error| RunError::Invalid(error.to_string()))?;
     let mut session: Option<BrowserSession> = None;
     let mut owned: Option<Owned> = None;
@@ -605,9 +606,8 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     }
     let mut result = match outcome {
         None => {
-            if let Some(head) = &head {
-                head.discard().await;
-            }
+            // The agent may hold the head start by now, and was dropped with it still running.
+            head_stop.discard().await;
             return Err(RunError::Cancelled);
         }
         Some(Ok(result)) => result,
@@ -682,6 +682,7 @@ async fn fetched(
         });
     }
     let head = HeadStart::begin(llm.clone(), task, options.start.as_deref(), options.limits.clone());
+    let head_stop = head.stopper();
     let viewport_chars = usize::try_from(config.observation.viewport_text_chars).unwrap_or_default();
     let page: Arc<dyn Page> =
         Arc::new(fetch::FetchedPage::new(http, origins, viewport_chars, options.check_access.clone()));
@@ -707,7 +708,10 @@ async fn fetched(
         None => work.await,
         Some(cancel) => tokio::select! {
             biased;
-            () = cancel() => return Err(RunError::Cancelled),
+            () = cancel() => {
+                head_stop.discard().await;
+                return Err(RunError::Cancelled);
+            }
             done = work => done,
         },
     };

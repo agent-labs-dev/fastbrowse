@@ -137,29 +137,20 @@ impl HeadStart {
         }
     }
 
-    fn tasks(&self) -> Vec<Box<dyn Fn() + Send + Sync + '_>> {
-        let mut tasks: Vec<Box<dyn Fn() + Send + Sync + '_>> = vec![Box::new(|| self.planning.cancel())];
-        if let Some(proposing) = &self.proposing {
-            tasks.push(Box::new(|| proposing.cancel()));
-        }
-        tasks
+    /// What stops the startup calls, kept by `run_task` once the agent holds the head start: a run cancelled mid-way
+    /// drops the agent, and dropping a spawned call does not stop it.
+    pub fn stopper(&self) -> HeadStop {
+        HeadStop { planning: self.planning.clone(), proposing: self.proposing.clone() }
     }
 
     /// Wait for every startup call to finish.
     async fn gather(&self) {
-        self.planning.wait().await;
-        if let Some(proposing) = &self.proposing {
-            proposing.wait().await;
-        }
+        self.stopper().gather().await;
     }
 
     /// Cancel what is still being written, so nothing bills a run that has already ended.
     pub async fn discard(&self) {
-        // One transport can take time to close, so cancel every paid call before joining any cleanup.
-        for cancel in self.tasks() {
-            cancel();
-        }
-        self.gather().await;
+        self.stopper().discard().await;
     }
 
     /// What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here.
@@ -171,6 +162,31 @@ impl HeadStart {
             self.ledger.state().lines.push(planned.cost);
         }
         self.ledger.state().lines.clone()
+    }
+}
+
+/// A head start's startup calls, to cancel from outside the run that holds it.
+pub struct HeadStop {
+    planning: Arc<Spawned<Generation<Plan>>>,
+    proposing: Option<Arc<Spawned<Shortcut>>>,
+}
+
+impl HeadStop {
+    /// Cancel every startup call, then wait for each to finish its cleanup.
+    pub async fn discard(&self) {
+        // One transport can take time to close, so cancel every paid call before joining any cleanup.
+        self.planning.cancel();
+        if let Some(proposing) = &self.proposing {
+            proposing.cancel();
+        }
+        self.gather().await;
+    }
+
+    async fn gather(&self) {
+        self.planning.wait().await;
+        if let Some(proposing) = &self.proposing {
+            proposing.wait().await;
+        }
     }
 }
 
