@@ -9,13 +9,13 @@ Added/Fixed lists: what matters about a browser agent's release is why a behavio
 Released entries describe the corresponding package on PyPI; `Unreleased` describes changes awaiting a
 release. Older entries are kept verbatim rather than rewritten as the product moves.
 
-## [Unreleased]
+## [0.7.4] - 2026-10-27
 
 - The Arch package builds the Rust core from the sdist with cargo and maturin, so it is now one package per architecture (`x86_64`, `aarch64`) rather than `any`.
 
 - **The Rust core is the default.** `run_task`, `connect_cdp`, `fastbrowse`, `fastbrowse serve` and `fastbrowse-mcp` run on it, and the npm packages ship the Rust binary and the Node addon instead of the frozen Python package. On the fixture suites it reaches the same results as the Python core on all 36 tasks, from the same model responses, with 18x less agent CPU, 54x faster startup and 5x less memory ([bench/results/rust-vs-python.md](bench/results/rust-vs-python.md)). `FASTBROWSE_PYTHON_CORE=1` runs the Python core instead, for this release only: 0.9.0 removes it ([ADR 0004](docs/adr/0004-rust-core-by-default.md)). `FASTBROWSE_RUST_CORE` is gone. The fixture eval suites now run through `run_task`, so they measure the core the package runs.
 
-- The `fastbrowse` package on PyPI carries the Rust core as `fastbrowse._native`. It ships as one wheel per platform (macOS arm64 and x64, Linux x64 and arm64, Windows x64), each serving CPython 3.13 and later, instead of one pure-Python wheel, and you no longer install a separate `fastbrowse-native` build. Installing from the sdist needs a Rust toolchain. With `FASTBROWSE_RUST_CORE=1` the `fastbrowse` and `fastbrowse-mcp` commands run the Rust CLI in-process, and `fastbrowse-mcp` then works without the `mcp` extra. The Python core is still the default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
+- The `fastbrowse` package on PyPI carries the Rust core as `fastbrowse._native`. It ships as one wheel per platform (macOS arm64 and x64, Linux x64 and arm64, Windows x64), each serving CPython 3.13 and later, instead of one pure-Python wheel, and you no longer install a separate `fastbrowse-native` build. Installing from the sdist needs a Rust toolchain. With `FASTBROWSE_RUST_CORE=1` the `fastbrowse` and `fastbrowse-mcp` commands run the Rust CLI in-process, and `fastbrowse-mcp` then works without the `mcp` extra.
 
 - `connect_cdp` runs on the Rust core with `FASTBROWSE_RUST_CORE=1`. The page it yields has the Python page's methods (`observe`, `capture`, `act`, `navigate`, `screenshot`, `address`, `origin`, `document_changed`, `response_status`, `artifacts`, `withhold_frames`), takes and returns the same models, and raises the same browser errors. `check_access` and an `artifact_sink` of your own cross as they do for `run_task`.
 
@@ -25,6 +25,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - With `FASTBROWSE_RUST_CORE=1`, every `run_task` call runs on the Rust core. It used to fall back to Python whenever an argument had no field in the `serve` protocol: your own `jev` or `llm` client, an `http` client, `check_access`, a non-default `Config`, a cloud key, `allowed_origins`, cloud options or `fetch`. Those objects now stay in Python and the core calls back into them, so they behave as they did on Python. A client's ledger reservations count against the run's limits, and a response it validates is checked against the core's own schema. There is one difference: an exception from your Jev, LLM or HTTP client that is not one of their own errors now fails only that call, as any client failure does, rather than propagating out of `run_task`. A call the run had started but no longer waits on, such as the plan begun while a browser was failing to start, can no longer end the run. This is the first step toward running Rust by default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)).
 
+
+- **An interaction that redraws a page without adding anything new no longer buys a reader call.** Sorting a list, closing a banner, opening a tab or expanding a row changes the document, and the agent read the whole page again each time, re-buying notes it already had. Each document now records the text of every capture a full read has taken from it, and after an interaction a fresh capture is compared with that record: a block it has never read means the page has something new to say, and a value the notes quote that the page no longer shows means the notes are out of date, so the read is paid for. Otherwise the notes still describe the page and the read is skipped, traced as `read_not_owed`. The comparison never shortens a read of a page the plan has not seen, never fires while a control the reader named is being clicked, and never fires on a transaction, where a review page's totals may not reappear after submit.
 
 ## [0.7.3] - 2026-10-26
 
@@ -1557,6 +1559,7 @@ Fixed in the same release, from tasks that failed in the field:
   LLM to plan and read, and code owning verification, safety and secrets.
 
 [unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.3...HEAD
+[0.7.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.4
 [0.7.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.3
 [0.7.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.1
 [0.7.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.0
