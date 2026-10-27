@@ -9,9 +9,7 @@ Added/Fixed lists: what matters about a browser agent's release is why a behavio
 Released entries describe the corresponding package on PyPI; `Unreleased` describes changes awaiting a
 release. Older entries are kept verbatim rather than rewritten as the product moves.
 
-## [0.8.0] - 2026-10-27
-
-- **The Rust core is the default across the package, and this is the release that carries it.** `run_task`, `connect_cdp`, the `fastbrowse` and `fastbrowse-mcp` commands and `fastbrowse serve` all run on the Rust core shipped as `fastbrowse._native`; `FASTBROWSE_PYTHON_CORE=1` keeps the Python core for this release only, and 0.9.0 removes it (ADR 0004). The wheels are one per platform and the npm packages ship the Rust binary and Node addon.
+## [Unreleased]
 
 - **A sign-in field whose secret cannot be produced ends `needs_login`, not `needs_input`.** A credential field offered a secret declared for its origin that the resolver then could not produce, such as a locked vault or an item removed during the run, ended `needs_input` with `secret <name> is not available for <origin>`, asking the caller for a value it had already given. It now stops `needs_login` with `sign-in required at <origin>: secret <name> is not available there` and `RunResult.wall` set. A field that takes no credential still ends `needs_input`. Both cores carry the change.
 
@@ -1582,8 +1580,7 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.0
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.7.4...HEAD
 [0.7.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.4
 [0.7.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.3
 [0.7.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.1
