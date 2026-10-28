@@ -284,15 +284,7 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 
 /// `cli.run(args)`: the exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
-    options::recording(args.record.as_deref())?;
-    let limits = limits(args)?;
-    // The operator's own flags are checked before the browser key: with the cloud browser the default, a missing key
-    // would otherwise hide a secret that could never be typed anywhere.
-    let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
-    let settings = (context.settings)()?;
-    if args.cloud && (args.headed || args.profile.is_some()) {
-        return Err(ConfigurationError("--cloud cannot be combined with --headed or --profile".into()));
-    }
+    // Flags that contradict each other are named before anything about the machine, such as a missing ffmpeg.
     if args.fetch && args.fetch_first {
         return Err(ConfigurationError(
             "--fetch never starts a browser and --fetch-first may start one, so pass one of them".into(),
@@ -311,6 +303,15 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
                 )));
             }
         }
+    }
+    options::recording(args.record.as_deref())?;
+    let limits = limits(args)?;
+    // The operator's own flags are checked before the browser key: with the cloud browser the default, a missing key
+    // would otherwise hide a secret that could never be typed anywhere.
+    let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
+    let settings = (context.settings)()?;
+    if args.cloud && (args.headed || args.profile.is_some()) {
+        return Err(ConfigurationError("--cloud cannot be combined with --headed or --profile".into()));
     }
     if args.fetch {
         // No browser is started, so the flags that shape one are refused rather than resolved: a cloud key demanded for
