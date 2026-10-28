@@ -41,13 +41,6 @@ pub(crate) const SETTLE_POLL_SECONDS: f64 = 0.1;
 pub(crate) const SETTLE_QUIET_SECONDS: f64 = 0.2;
 /// How long a settle waits for the page to draw a frame before it starts polling without one.
 pub(crate) const SETTLE_FRAME_SECONDS: f64 = 0.5;
-/// A visible loading indicator outranks a quiet DOM, because a spinner settles the fingerprint while the page it is
-/// waiting for does not exist yet. Its own budget, inside `SETTLE_SECONDS`, is what keeps a page that spins forever
-/// from paying the whole settle budget on every action: past it, quiet and ready decide alone.
-pub(crate) const SETTLE_LOADING_SECONDS: f64 = 1.5;
-/// How long a capture waits on a loading indicator an action's settle gave up on. A read of "Loading..." costs a 2 to
-/// 3 second LLM call and a second read after it, where the-internet's dynamic loading needs about 5 seconds.
-pub(crate) const CAPTURE_LOADING_SECONDS: f64 = 3.0;
 /// How many times one reading of the page starts again after the document it was reading was replaced. A
 /// self-clearing bot check such as PyPI's "Client Challenge" runs its script and then replaces itself with the page,
 /// and an observation in flight across that swap failed with CDP -32000 and ended the run as an error. This bounds
@@ -548,7 +541,7 @@ impl CdpPage {
                 // A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
                 return Ok(self.dialog_observation(dialog));
             }
-            // A timer can open a dialog while the snapshot waits on a loading indicator, and the dialog blocks that
+            // A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             // evaluate until the 120s command deadline.
             let read = async {
                 let history = async { Ok::<_, BrowserError>(self.history().await) };
@@ -783,11 +776,10 @@ impl CdpPage {
     }
 
     async fn snapshot_all_frames(&self) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
-        // A results page that hides its controls behind a loading indicator reads as empty until it clears.
         let limits = &self.config.observation;
         let caps = py_json(&json!({"onscreen": limits.max_controls, "offscreen": limits.max_offscreen_controls}));
         let script = format!("{}('snapshot', {caps})", self.page_js);
-        let result = self.read_frames::<Snapshot>(&script, true).await?;
+        let result = self.read_frames::<Snapshot>(&script).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;
@@ -797,22 +789,14 @@ impl CdpPage {
     async fn read_frames<T: FrameText>(
         &self,
         expression: &str,
-        wait_loaded: bool,
     ) -> Result<Vec<(String, FrameObservation<T>)>, BrowserError> {
         let main_session = self.session.active_session_id()?;
         let target_id = self.session.active_target_id();
-        let mut sources: Vec<(String, String)> = vec![(MAIN.to_owned(), main_session.clone())];
+        let mut sources: Vec<(String, String)> = vec![(MAIN.to_owned(), main_session)];
         sources.extend(self.session.frame_sessions());
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
-        if wait_loaded {
-            if let Some(main) = self.read_frame::<T>(MAIN, &main_session, expression, wait_loaded).await? {
-                result.push((MAIN.to_owned(), main));
-            }
-            // Loading can attach or replace child frames; read them only after that wait, as before.
-            sources = self.session.frame_sessions();
-        }
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
-        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression, wait_loaded));
+        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression));
         let frames = futures_util::future::try_join_all(reads).await?;
         for ((key, _), frame) in sources.into_iter().zip(frames) {
             if let Some(frame) = frame {
@@ -836,27 +820,17 @@ impl CdpPage {
         frame_key: &str,
         session_id: &str,
         expression: &str,
-        wait_loaded: bool,
     ) -> Result<Option<FrameObservation<T>>, BrowserError> {
         let is_main = frame_key == MAIN;
-        let mut script = expression.to_owned();
-        if wait_loaded && is_main {
-            script = format!(
-                "(async () => {{ await {}; return ({expression}); }})()",
-                self.loaded_script(CAPTURE_LOADING_SECONDS)
-            );
-        }
         let read = if is_main {
-            self.evaluate(session_id, &script).await
+            self.evaluate(session_id, expression).await
         } else {
-            self.frame_evaluate(session_id, &script).await
+            self.frame_evaluate(session_id, expression).await
         };
         let raw = match read {
             Ok(raw) => raw,
             Err(_) if !is_main => return Ok(None),
-            Err(error) if !wait_loaded => return Err(error),
-            // A navigation can discard the loading wait. Read the new document as capture did before.
-            Err(_) => self.evaluate(session_id, expression).await?,
+            Err(error) => return Err(error),
         };
         if raw.is_null() {
             return Ok(None);
@@ -923,7 +897,7 @@ impl CdpPage {
         let mut blocks: Vec<Block> = vec![];
         let mut offset = 0usize;
         let mut coverage: Vec<(String, usize)> = vec![];
-        let frames = self.read_frames::<CaptureSnapshot>(&self.capture_js, true).await?;
+        let frames = self.read_frames::<CaptureSnapshot>(&self.capture_js).await?;
         let main = frames.iter().find(|(k, _)| k == MAIN).map(|(_, f)| f);
         let title = main.map(|m| m.raw.title.clone()).unwrap_or_default();
         let url = match main {
@@ -1384,15 +1358,13 @@ impl CdpPage {
         let script = format!(
             "new Promise(resolve => {{ const sample = {page_js}; \
              const deadline = performance.now() + {deadline}; \
-             const spinning = performance.now() + {spinning}; \
              const quietOf = state => state.ready && state.quietFor >= {quiet}; \
              const poll = () => {{ \
              let state = sample('quiet'); \
              if (quietOf(state) || state.hidden || performance.now() >= deadline) state = sample('fingerprint'); \
              const quiet = quietOf(state); \
-             const stable = quiet && (!state.loading || performance.now() >= spinning); \
-             if (stable || state.hidden || performance.now() >= deadline) {{ \
-             resolve([stable, state.ready ? state.fingerprint : null]); return; }} \
+             if (quiet || state.hidden || performance.now() >= deadline) {{ \
+             resolve([quiet, state.ready ? state.fingerprint : null]); return; }} \
              setTimeout(poll, state.ready && !quiet ? Math.min({poll}, \
              Math.max(1, {quiet} - state.quietFor)) \
              : {poll}); }}; \
@@ -1401,7 +1373,6 @@ impl CdpPage {
              if (document.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }})",
             page_js = self.page_js,
             deadline = py_float(timeout_seconds * 1000.0),
-            spinning = py_float(SETTLE_LOADING_SECONDS * 1000.0),
             quiet = py_float(SETTLE_QUIET_SECONDS * 1000.0),
             poll = py_float(SETTLE_POLL_SECONDS * 1000.0),
             frame = py_float(SETTLE_FRAME_SECONDS * 1000.0),
@@ -1413,21 +1384,6 @@ impl CdpPage {
             }
             _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None]".into())),
         }
-    }
-
-    /// Wait, in the renderer, for a visible loading indicator to go. Only the indicator is waited on: a page that keeps
-    /// changing, a ticker or a clock, is readable now and would never go quiet.
-    fn loaded_script(&self, timeout_seconds: f64) -> String {
-        format!(
-            "new Promise(resolve => {{ const sample = {}; \
-             const deadline = performance.now() + {}; \
-             const poll = () => {{ const state = sample('loading'); \
-             if (!state.loading || state.hidden || performance.now() >= deadline) {{ resolve(null); return; }} \
-             setTimeout(poll, {}); }}; poll(); }})",
-            self.page_js,
-            py_float(timeout_seconds * 1000.0),
-            py_float(SETTLE_POLL_SECONDS * 1000.0)
-        )
     }
 
     // -- evaluation -------------------------------------------------------------------------------------------
