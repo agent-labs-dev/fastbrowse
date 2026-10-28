@@ -401,7 +401,7 @@ impl BrowserSession {
                 let discover = self.send("Target.setDiscoverTargets", json!({"discover": true}), None);
                 together(vec![
                     Box::pin(async { discover.await.map(drop) }),
-                    Box::pin(self.open_tab("about:blank", true)),
+                    Box::pin(self.open_owned_tab("about:blank")),
                 ])
                 .await?;
             }
@@ -825,9 +825,12 @@ impl BrowserSession {
         let Some(target) = pages.first() else {
             if self.0.grant.is_some() && target_match.is_none() {
                 // Every open window is outside the grant, as a fresh cloud browser showing only about:blank is, so
-                // there is nothing the run may take over. It opens a window of its own rather than failing.
-                self.open_tab("about:blank", false).await?;
-                return Ok(self.active_target_id());
+                // there is nothing the run may take over. It opens a window of its own rather than failing, owned
+                // until it is ready so a failed setup closes it, then kept like the window it stands in for.
+                self.open_owned_tab("about:blank").await?;
+                let target_id = self.active_target_id();
+                self.0.state.lock().unwrap().owned.remove(&target_id);
+                return Ok(target_id);
             }
             let seen: Vec<String> = listed
                 .iter()
@@ -915,9 +918,7 @@ impl BrowserSession {
             .map(drop)
     }
 
-    /// Open a tab and make it the run's. An owned tab is closed when the run ends; one opened in a browser the run
-    /// attached to is not, because it stands in for the window the caller would otherwise have kept.
-    pub(crate) async fn open_tab(&self, url: &str, owned: bool) -> Result<(), BrowserError> {
+    pub(crate) async fn open_owned_tab(&self, url: &str) -> Result<(), BrowserError> {
         // A tab that is neither in front nor focus-emulated does not render: animation frames never fire, so menus
         // that animate open never become visible, screenshots hang and clicks read as covered. A foreground run
         // activates its tab. A background run opens it behind the window's current tab, because Chrome focuses the
@@ -928,9 +929,7 @@ impl BrowserSession {
         }
         let created = self.send("Target.createTarget", params, None).await?;
         let target_id = str_of(&created["targetId"]);
-        if owned {
-            self.0.state.lock().unwrap().owned.insert(target_id.clone());
-        }
+        self.0.state.lock().unwrap().owned.insert(target_id.clone());
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
         // Foregrounding the tab and enabling its session are independent, and both finish before the tab is used.

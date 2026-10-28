@@ -98,7 +98,8 @@ async def connect_cdp(
 
     Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly.
     By default the page is an existing window (the first whose title or URL contains `target_match`, if given),
-    and it is left open on exit. The window is neither raised nor focused unless `foreground` is set, though
+    and it is left open on exit; with `allowed_origins`, no `target_match` and no page inside the grant, it is a new
+    blank tab, also left open. The window is neither raised nor focused unless `foreground` is set, though
     Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins` limits
     the page to those exact origins and `check_access` is awaited before every browser read and action (both
     described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory
@@ -256,7 +257,9 @@ async def run_task(
     be combined. `cdp_port` is the same as `cdp_url`, for a browser or Electron app started with
     `--remote-debugging-port`, its URL read from `http://127.0.0.1:<port>/json/version`. With `attach` (implied by
     `target_match`) the run drives a window already open instead of opening a tab: the first page whose title or
-    URL contains `target_match`, or else the first page. It leaves that window open, and with no `start` it begins
+    URL contains `target_match`, or else the first page; a scoped run with neither a `target_match` nor a page inside
+    `allowed_origins`, such as a fresh browser on `about:blank`, opens a blank tab as that window. It leaves that
+    window open, and with no `start` it begins
     on whatever the window shows. New windows that no page opened, as an Electron app's main process opens them,
     join the run only with `target_match`; without it they could be tabs a person opened in the same browser.
     A run in a visible window (a handed-over browser, or local Chrome with `LocalChrome.headed`) works in the
