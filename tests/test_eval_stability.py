@@ -1,11 +1,9 @@
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from fastbrowse.clients.environment import Settings
 from fastbrowse.evals.tasks import TASKS
 
 _spec = importlib.util.spec_from_file_location(
@@ -29,8 +27,8 @@ def no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def settings(**values: Any) -> Settings:
-    return Settings(_env_file=None, **values)
+def settings(**values: str) -> dict[str, str]:
+    return values
 
 
 def written(path: Path, rows: list[dict[str, object]]) -> Path:
@@ -62,7 +60,7 @@ def test_no_provider_names_every_missing_setting() -> None:
 def test_check_providers_names_the_missing_llm_key(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(eval_stability, "load_settings", lambda: settings(TYPESAFE_API_KEY="t"))
+    monkeypatch.setenv("TYPESAFE_API_KEY", "t")
     assert eval_stability.main(["--check-providers"]) == 1
     out = capsys.readouterr().out
     assert "OPENROUTER_API_KEY or AI_GATEWAY_API_KEY: the LLM needs a configured provider" in out
@@ -71,9 +69,8 @@ def test_check_providers_names_the_missing_llm_key(
 def test_check_providers_passes_when_both_routes_are_keyed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(
-        eval_stability, "load_settings", lambda: settings(OPENROUTER_API_KEY="o", AI_GATEWAY_API_KEY="g")
-    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "o")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "g")
     assert eval_stability.main(["--check-providers"]) == 0
     assert "model providers ready" in capsys.readouterr().out
 

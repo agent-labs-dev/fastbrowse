@@ -1,7 +1,7 @@
-"""One headless Chrome and one fixture server for the whole benchmark session.
+"""One headless Chrome, one page on it and one fixture server for the whole benchmark session.
 
-CodSpeed's `benchmark` fixture times a synchronous call, so the browser runs on an event loop this module
-owns and each measured call drives that loop to completion.
+CodSpeed's `benchmark` fixture times a synchronous call, so the page runs on an event loop this module owns and each
+measured call drives that loop to completion.
 """
 
 from __future__ import annotations
@@ -12,12 +12,9 @@ from collections.abc import Iterator
 import pytest
 
 from benchmarks.fixtures import serve
-from fastbrowse.adapters.local_chrome import local_chrome
-from fastbrowse.browser.page import CdpPage
-from fastbrowse.browser.session import BrowserSession
-from fastbrowse.clients.environment import load_settings
-from fastbrowse.config import Config
-from tests.browser.conftest import RecordingArtifactSink
+from fastbrowse import connect_cdp
+from fastbrowse.evals.harness import chrome
+from fastbrowse.native import NativePage
 
 
 @pytest.fixture(scope="session")
@@ -28,14 +25,11 @@ def loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 
 @pytest.fixture(scope="session")
-def page(loop: asyncio.AbstractEventLoop) -> Iterator[CdpPage]:
-    with local_chrome(load_settings().local_chrome()) as connection:
-        session = BrowserSession(connection, RecordingArtifactSink())
-        loop.run_until_complete(session.__aenter__())
-        try:
-            yield CdpPage(session, Config())
-        finally:
-            loop.run_until_complete(session.__aexit__(None, None, None))
+def page(loop: asyncio.AbstractEventLoop) -> Iterator[NativePage]:
+    with chrome() as cdp_url:
+        opened = connect_cdp(cdp_url=cdp_url, attach=False)
+        yield loop.run_until_complete(opened.__aenter__())
+        loop.run_until_complete(opened.__aexit__(None, None, None))
 
 
 @pytest.fixture(scope="session")

@@ -1,5 +1,6 @@
-//! Replays the whole agent loops `tests/golden/generate_agent.py` ran in Python: the same scripted site, every model
-//! request looked up by its bytes (so requests sent side by side may leave in any order), and the same result.
+//! Replays whole agent loops recorded in `tests/golden/agent.json`: the same scripted site, every model request
+//! looked up by its bytes (so requests sent side by side may leave in any order), and the same result. The recordings
+//! are fixed: they came from the Python implementation the core replaced, and the core must still match them.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;

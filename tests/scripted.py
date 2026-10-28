@@ -1,28 +1,22 @@
-"""Model clients that follow a script, so a run can be driven with no model behind it.
+"""Model clients that follow a script, so a run on the Rust core can be driven with no model behind it.
 
-    fastbrowse serve --stdio --run-task fastbrowse.scripted:run_task
-
-This ships in the package, though nothing a user runs reaches it, because the frozen binary is tested as it is
-released: CI has no model keys, and an executable cannot import a test's helpers. The hidden `--run-task`
-option is the only way in.
-
-The task is the script. Each step is an operation and the label of the control it lands on, steps are
-separated by `;`, and a step that has to pick a value names it after `=`:
+They cross to the core as a caller's own `jev=` and `llm=` do. The task is the script. Each step is an operation and
+the label of the control it lands on, steps are separated by `;`, and a step that has to pick a value names it after
+`=`:
 
     click Add one; fill Token = secret:token
 
-Once the steps are spent the run is called done.
+Once the steps are spent the run is called done. The binary carries its own twin of these behind
+`--run-task fastbrowse.scripted:run_task`.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from pydantic import BaseModel, JsonValue
 
-from fastbrowse import run
 from fastbrowse.jev import Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer, NoulQuestion, Question
 from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, Message
-from fastbrowse.models import CostBasis, CostComponent, CostLine, Frozen, LLMPurpose, Operation, RunResult
+from fastbrowse.models import CostBasis, CostComponent, CostLine, Frozen, LLMPurpose, Operation
 from fastbrowse.telemetry import Ledger
 
 
@@ -127,8 +121,3 @@ class ScriptedLLM:
             data=schema.model_validate(self._REPLIES[purpose]),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.ESTIMATED, dollars=0.0, purpose=purpose),
         )
-
-
-async def run_task(task: str, **arguments: Any) -> RunResult:
-    """`run_task` on a real browser, with the script in `task` standing where the models do."""
-    return await run.run_task(task, **arguments, jev=ScriptedJev(steps(task)), llm=ScriptedLLM())

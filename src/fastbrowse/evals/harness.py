@@ -2,7 +2,7 @@
 
 The harness drives fastbrowse only as an embedder does, through `run_task`, `serve --stdio` and the trace, so it
 measures whichever core the package runs. A helper the core also has is written again here rather than imported,
-since the core's copy is free to change, or to go with the Python core.
+since the core's copy is free to change.
 """
 
 import json

@@ -1,7 +1,6 @@
-"""snapshot.js on dense pages: one CDP evaluate, from sending the call to holding its result in Python, and the
-whole `observe` a step makes around it.
+"""The whole `observe` a step makes on a dense page, snapshot.js inside it, on the Rust core.
 
-    uv run --group bench pytest benchmarks --codspeed
+uv run --group bench pytest benchmarks --codspeed
 """
 
 from __future__ import annotations
@@ -10,27 +9,13 @@ import asyncio
 
 import pytest
 
-from benchmarks.fixtures import PAGES, fingerprint, open_page, snapshot
-from fastbrowse.browser.page import CdpPage
+from benchmarks.fixtures import PAGES
+from fastbrowse.native import NativePage
 
 
-@pytest.mark.parametrize("name", list(PAGES))
-def test_snapshot(benchmark, loop: asyncio.AbstractEventLoop, page: CdpPage, origin: str, name: str) -> None:
-    loop.run_until_complete(open_page(page, origin, name, PAGES[name][1]))
-    result = benchmark(lambda: loop.run_until_complete(snapshot(page)))
-    assert result["controls"]
-
-
-# The settle loop samples the fingerprint every 100ms while it waits for a page to go quiet.
-@pytest.mark.parametrize("name", list(PAGES))
-def test_fingerprint(benchmark, loop: asyncio.AbstractEventLoop, page: CdpPage, origin: str, name: str) -> None:
-    loop.run_until_complete(open_page(page, origin, name, PAGES[name][1]))
-    assert benchmark(lambda: loop.run_until_complete(fingerprint(page)))
-
-
-# What a step pays to read the page: the loading wait, the history entry, every frame's snapshot and Python's
+# What a step pays to read the page: the loading wait, the history entry, every frame's snapshot and the core's
 # validation of it, with no settle before it.
 @pytest.mark.parametrize("name", list(PAGES))
-def test_observe(benchmark, loop: asyncio.AbstractEventLoop, page: CdpPage, origin: str, name: str) -> None:
-    loop.run_until_complete(open_page(page, origin, name, PAGES[name][1]))
+def test_observe(benchmark, loop: asyncio.AbstractEventLoop, page: NativePage, origin: str, name: str) -> None:
+    loop.run_until_complete(page.navigate(f"{origin}/{name}.html?n={PAGES[name][1]}"))
     assert benchmark(lambda: loop.run_until_complete(page.observe())).controls

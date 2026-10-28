@@ -16,7 +16,7 @@ assumption checked against Typesafe's documentation.
 ## Commands
 
 ```sh
-uv sync --all-extras          # the browser-use SDK and the mcp extra too, which ty checks; builds the Rust core (cargo)
+uv sync --all-extras          # the eval-data extra too, which ty checks; builds the Rust core (cargo)
 uv run fastbrowse "..." --start https://example.com/
 uv run fastbrowse-mcp         # the MCP server, stdio
 uv run fastbrowse serve --stdio   # JSON-RPC for another process; the JavaScript SDK starts this
@@ -51,13 +51,15 @@ together.
 One test, one file, one name:
 
 ```sh
-uv run pytest tests/test_agent.py -q
-uv run pytest -k "next_page" -q
+uv run pytest tests/test_native.py -q
+uv run pytest -k "cancelled" -q
 uv run pytest tests/browser -q          # needs Chrome; skips without it
+cargo test -p fastbrowse-agent --test agent   # the run loop's own suites are the crates'
 ```
 
-A change to `src/fastbrowse/browser/snapshot.js` is checked against `benchmarks/golden/` (`tests/browser/test_snapshot_golden.py`;
-`FASTBROWSE_UPDATE_GOLDEN=1` rewrites them, and the diff is the behaviour change) and timed by CodSpeed
+A change to `src/fastbrowse/browser/snapshot.js` is checked against `benchmarks/golden/` (`test_snapshot_matches_golden`
+in `crates/fastbrowse-browser/tests/capture.rs`; `FASTBROWSE_UPDATE_GOLDEN=1` rewrites them, and the diff is the
+behaviour change) and timed by CodSpeed
 (`.github/workflows/codspeed.yml`, locally `uv run --group bench pytest benchmarks --codspeed`).
 
 The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit commands, live roots and generated files.
@@ -98,7 +100,7 @@ agent behaviour or a task.
 
 The harness (`src/fastbrowse/evals`, `tests/evals`) reaches fastbrowse only as an embedder does: the `fastbrowse`
 package's exports, `fastbrowse.models`, `fastbrowse.config`, `fastbrowse.protocol`, `serve --stdio` and the trace.
-That way it measures whichever core the package runs; `tests/evals/test_public_only.py` fails on anything else.
+That way it measures what the package runs; `tests/evals/test_public_only.py` fails on anything else.
 
 Store detailed eval runs and validation in the dedicated Langfuse project. Keep local logs in an ignored
 artifacts directory; Git keeps manifests, source hashes and compact publication baselines. Verify uploads by
@@ -106,38 +108,39 @@ reading them back before removing local evidence. Public results contain only th
 
 ## Architecture
 
-The core runs in Rust by default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)): the crates in [crates/](crates)
-port the Python modules below one for one, and the `fastbrowse` wheel carries them as `fastbrowse._native`.
-[native.py](src/fastbrowse/native.py) hands `run_task`, `connect_cdp` and the commands to it. The Python modules stay
-as the fallback `FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0, so until then a behaviour change lands in both cores.
+The core is Rust, in [crates/](crates) ([ADR 0004](docs/adr/0004-rust-core-by-default.md)), and the `fastbrowse`
+wheel carries it as `fastbrowse._native`. The Python package is the thin layer over it:
+[native.py](src/fastbrowse/native.py) hands `run_task`, `connect_cdp` and the commands to it, and the pydantic models
+in `src/fastbrowse` are the shapes a caller passes and gets back. A behaviour change lands in the crates.
 
-The run loop is `src/fastbrowse/agent.py` (`crates/fastbrowse-agent`), and everything else is a seam it calls.
+The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/agent), and everything else is a seam it calls.
 
-- **[run.py](src/fastbrowse/run.py)** opens the browser and builds the Jev and LLM clients from `Settings`, then hands control to
-  the loop. This is the embedding API: `run_task(...)`. The browser is one of three, in this order: one the
-  caller hands over (`cdp_url` or `cdp_port`, neither started nor stopped here; `attach` drives a window already
-  open instead of a new tab, and `connect_cdp` yields that page without the agent), a Browser Use Cloud browser (`browser_api_key`), or
-  local Chrome. `start` is optional; without one the first address is proposed from the task.
-- **[page.py](src/fastbrowse/page.py) / [browser/](src/fastbrowse/browser/)** index the page. [browser/snapshot.js](src/fastbrowse/browser/snapshot.js) runs in the page and returns the controls
+- **[fastbrowse-run](crates/fastbrowse-run/src/lib.rs)** opens the browser and builds the Jev and LLM clients from the
+  environment, then hands control to the loop. Python's `run_task(...)` is this, in process. The browser is one of
+  three, in this order: one the caller hands over (`cdp_url` or `cdp_port`, neither started nor stopped here; `attach`
+  drives a window already open instead of a new tab, and `connect_cdp` yields that page without the agent), a Browser
+  Use Cloud browser (`browser_api_key`), or local Chrome. `start` is optional; without one the first address is
+  proposed from the task.
+- **[fastbrowse-browser](crates/fastbrowse-browser/src)** indexes the page. [browser/snapshot.js](src/fastbrowse/browser/snapshot.js) runs in the page and returns the controls
   with what tells them apart (role, label, the card or row that disambiguates twins, whether a field blocks
   its form); [browser/capture.js](src/fastbrowse/browser/capture.js) returns the text as source blocks with stable spans, so a reader can cite them.
-- **[policy.py](src/fastbrowse/policy.py)** batches operation and target choices, read assessment and applicable wall checks.
-  Large target sets use a further choice inside a group. [jev.py](src/fastbrowse/jev.py) is the client's shape;
-  [clients/typesafe.py](src/fastbrowse/clients/typesafe.py) serves direct TypeSafe when keyed, the recommended route, and otherwise OpenRouter; [clients/vercel.py](src/fastbrowse/clients/vercel.py) serves the
-  Vercel AI Gateway, which is also the Jev primary when no other Jev key is set. OpenRouter is supported for Jev text but is not recommended and never receives Jev image input. [clients/environment.py](src/fastbrowse/clients/environment.py) selects routes; [clients/failover.py](src/fastbrowse/clients/failover.py) switches after retries.
-- **[retrieval.py](src/fastbrowse/retrieval.py)** routes short facts through Jev and other reads through the LLM. A read claim cites source
-  blocks and code copies its quote from them; a count the page does not state rests on its basis facts; [memory.py](src/fastbrowse/memory.py) holds notes with citation ids, and [citations.py](src/fastbrowse/citations.py) builds deep links.
-- **[verification.py](src/fastbrowse/verification.py)** decides whether a run may finish: Jev's done check against the plan's requirements,
+- **[policy.rs](crates/fastbrowse-agent/src/policy.rs)** batches operation and target choices, read assessment and applicable wall checks.
+  Large target sets use a further choice inside a group. [jev.rs](crates/fastbrowse-core/src/jev.rs) is the client's shape;
+  [typesafe.rs](crates/fastbrowse-clients/src/typesafe.rs) serves direct TypeSafe when keyed, the recommended route, and otherwise OpenRouter; [vercel.rs](crates/fastbrowse-clients/src/vercel.rs) serves the
+  Vercel AI Gateway, which is also the Jev primary when no other Jev key is set. OpenRouter is supported for Jev text but is not recommended and never receives Jev image input. [environment.rs](crates/fastbrowse-clients/src/environment.rs) selects routes; [failover.rs](crates/fastbrowse-clients/src/failover.rs) switches after retries.
+- **[retrieval](crates/fastbrowse-agent/src/retrieval)** routes short facts through Jev and other reads through the LLM. A read claim cites source
+  blocks and code copies its quote from them; a count the page does not state rests on its basis facts; [memory.rs](crates/fastbrowse-agent/src/memory.rs) holds notes with citation ids, and [citations.rs](crates/fastbrowse-core/src/citations.rs) builds deep links.
+- **[verification](crates/fastbrowse-agent/src/verification)** decides whether a run may finish: Jev's done check against the plan's requirements,
   then the LLM verifier for what Jev doubted and for any requirement evidenced on an address the run guessed
   from the task, then the answer: code checks each claim cites a current quote and each cited count or comparison
   rests on a list read to its end, and Jev checks each claim against its quotes and the page's other current quotes,
   and that the answer states each answer check and information requirement.
-- **[safety.py](src/fastbrowse/safety.py)** owns secrets and irreversible actions. **[effects.py](src/fastbrowse/effects.py)** says what an action actually did,
-  which is how a no-op is told from progress. **[telemetry.py](src/fastbrowse/telemetry.py)** is the ledger: steps, calls, dollars.
-- **[cli.py](src/fastbrowse/cli.py)**, **[mcp_server.py](src/fastbrowse/mcp_server.py)**, **[serve.py](src/fastbrowse/serve.py)** and **`run_task`** are the four entry points; [options.py](src/fastbrowse/options.py) holds the rules
+- **[safety.rs](crates/fastbrowse-core/src/safety.rs)** owns secrets and irreversible actions. **[effects.rs](crates/fastbrowse-core/src/effects.rs)** says what an action actually did,
+  which is how a no-op is told from progress. **[telemetry.rs](crates/fastbrowse-core/src/telemetry.rs)** is the ledger: steps, calls, dollars.
+- **[cli.rs](crates/fastbrowse-cli/src/cli.rs)**, **[mcp](crates/fastbrowse-cli/src/mcp)**, **[serve.rs](crates/fastbrowse-cli/src/serve.rs)** and **`run_task`** are the four entry points; [options.rs](crates/fastbrowse-cli/src/options.rs) holds the rules
   they share, so a flag means the same thing in all of them. `serve` is `fastbrowse serve --stdio`: it calls
   `run_task` for another process over JSON-RPC, one run at a time, and adds no agent logic. Its messages are the
-  models in [protocol.py](src/fastbrowse/protocol.py); [output_schema.py](src/fastbrowse/output_schema.py) turns a caller's JSON Schema into an `output_schema`.
+  models in [protocol.py](src/fastbrowse/protocol.py); [output_schema.rs](crates/fastbrowse-core/src/output_schema.rs) turns a caller's JSON Schema into an `output_schema`.
 - **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
   the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from the Python models (`npm run generate:sdk`).
   What it starts is the Rust `fastbrowse` binary ([crates/fastbrowse-cli](crates/fastbrowse-cli)), with the Node addon beside it
@@ -255,8 +258,8 @@ on any failed attempt or incomplete repeat coverage. `scripts/release_guard.py` 
 instead. A release that publishes a head-to-head figure also needs the comparison re-run on that same build.
 
 One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel and the
-five binaries and smoke-tests each. The macOS two are signed ad hoc
-(`scripts/macos_signatures.py`), which is enough for a binary installed through npm. Then, each step
+five binaries and smoke-tests each. The macOS two, and their Node addons, are signed ad hoc
+(`codesign --sign -` in `.github/workflows/binaries.yml`), which is enough for a binary installed through npm. Then, each step
 needing the one before: the GitHub release with **the changelog entry as its notes**, PyPI, the five platform
 packages, the SDK. PyPI and npm take the job's OIDC identity, so no token is stored. No registry takes a version
 back, so finish a release that failed partway by re-running its failed jobs. Started by hand (`gh workflow run

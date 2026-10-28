@@ -299,11 +299,10 @@ The LLM plans, reads and writes. Code owns the gates: irreversible actions stop 
 `--authorize`, secrets reach models by name only, and supported cookie banners are refused through autoconsent.
 More in [docs/design.md](docs/design.md).
 
-The core that runs the loop is Rust, in [crates/](crates), and 0.8.0 runs it by default: `run_task`,
-`fastbrowse`, `fastbrowse serve` and `fastbrowse-mcp` hand their work to it, and the `fastbrowse` wheel
-carries it as `fastbrowse._native`. `FASTBROWSE_PYTHON_CORE=1` runs the Python modules instead, as a
-fallback until 0.9.0 removes them: a fix lands in the Rust core only ([ADR 0004](docs/adr/0004-rust-core-by-default.md)). The two reach the same result on all 36
-fixture tasks, and the Rust core uses 18x less agent CPU, starts 54x faster and peaks at 5.4x less memory
+The core that runs the loop is Rust, in [crates/](crates): `run_task`, `fastbrowse`, `fastbrowse serve` and
+`fastbrowse-mcp` hand their work to it, and the `fastbrowse` wheel carries it as `fastbrowse._native`
+([ADR 0004](docs/adr/0004-rust-core-by-default.md)). It reaches the result the earlier Python core reached on all 36
+fixture tasks, with 18x less agent CPU, 54x faster startup and 5.4x less peak memory
 ([measurements](bench/results/rust-vs-python.md)).
 
 ## How it compares
@@ -423,8 +422,7 @@ To keep a run's trace in this process, as `--trace` writes it for the command, m
 `with traced() as events:` (also importable from `fastbrowse`). Each event is a dict naming its `event`, and runs
 that overlap keep separate lists. A run given neither `jev=` nor `llm=` begins with `route`, whose `providers`
 names the Jev and LLM providers it calls, and each model request that failed transiently is a `request_transient`
-with its `began` and `ended` on `time.monotonic()`. The Rust core gives those and its model requests' other
-events; the Python core gives every event `--trace` writes.
+with its `began` and `ended` on `time.monotonic()`, beside the model requests' other events.
 
 Jev uses direct TypeSafe when keyed, which is the recommended route, otherwise OpenRouter. A gateway key
 on its own also serves Jev, as a last resort rather than the recommended route, and OpenRouter never
@@ -553,7 +551,7 @@ run's evidence; it does not expose the Python `Citation` ids, requirement ids or
 
 ```sh
 claude mcp add fastbrowse -e TYPESAFE_API_KEY=... -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
-  -- uvx --from 'fastbrowse[mcp]' fastbrowse-mcp --max-dollars 0.25
+  -- uvx --from fastbrowse fastbrowse-mcp --max-dollars 0.25
 ```
 
 For a client configured by JSON, such as Claude Desktop:
@@ -563,7 +561,7 @@ For a client configured by JSON, such as Claude Desktop:
   "mcpServers": {
     "fastbrowse": {
       "command": "uvx",
-      "args": ["--from", "fastbrowse[mcp]", "fastbrowse-mcp"],
+      "args": ["--from", "fastbrowse", "fastbrowse-mcp"],
       "env": { "TYPESAFE_API_KEY": "...", "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
     }
   }

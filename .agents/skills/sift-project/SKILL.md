@@ -34,7 +34,7 @@ uv run python .sift/gate.py --base origin/main
 
 Every command must exit 0. Node.js 22+ is needed only for development. CI retains the required `check`
 status, which depends on the Python matrix, secret scan, sift job and SDK job, and on the five binary builds
-when a change touches what is frozen. The sift job uses the PR base
+when a change touches what is built. The sift job uses the PR base
 rather than main for its changed-file rules. No ast-grep dependency is needed while there are no rules.
 The vendored sift helpers are version 0.3.0; do not rewrite their source locally.
 
@@ -63,13 +63,13 @@ gitleaks detect --source . --no-banner --redact
 ## Live roots
 
 - `fastbrowse.run_task`, package exports, public Pydantic models and callback protocols are consumed by embedders.
-- `pyproject.toml` registers `fastbrowse.commands:fastbrowse` and `fastbrowse.commands:fastbrowse_mcp` console scripts, which run `fastbrowse.cli:main` and `fastbrowse.mcp_server:main`, or the Rust CLI in `fastbrowse._native`.
-- `fastbrowse serve` is reached through `cli.main`; `fastbrowse.protocol` models are the wire the npm SDK reads.
-- `packages/sdk/src/index.ts` exports are the npm package's public API. `fastbrowse.scripted` is named at run
-  time by `serve --run-task` in the smoke scripts and is a hidden import of the frozen build.
+- `pyproject.toml` registers `fastbrowse.commands:fastbrowse` and `fastbrowse.commands:fastbrowse_mcp` console scripts, which run the Rust CLI in `fastbrowse._native`.
+- `fastbrowse serve` is the Rust CLI's; `fastbrowse.protocol` models are the wire the npm SDK reads.
+- `packages/sdk/src/index.ts` exports are the npm package's public API. `fastbrowse.scripted:run_task` is named
+  at run time by `serve --run-task` in the smoke scripts, and the binary's `scripted` feature answers it.
 - `scripts/` stand-alone programs are called from `ci.yml`, `binaries.yml` and `release.yml`.
 - MCP registers its browse tool and uses its schema/docstrings as model-visible descriptions.
-- `src/fastbrowse/browser/page.py` loads snapshot and capture JavaScript by file path; both are wheel assets.
+- `crates/fastbrowse-browser/src/session.rs` compiles in `src/fastbrowse/browser/snapshot.js`, `capture.js` and the autoconsent bundle.
 - CDP event registrations, context-manager methods, pytest fixtures and test discovery call symbols indirectly.
   `benchmarks/` is collected only by `codspeed.yml`, outside `testpaths`.
 - Evals and audit modules have `python -m` entry points; scripts are also called from CI and the justfile.

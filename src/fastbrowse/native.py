@@ -23,10 +23,6 @@ import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
-from fastbrowse.browser.page import _ScriptError
-from fastbrowse.browser.recording import RecordingError
-from fastbrowse.browser.session import BrowserUnresponsive, OriginNotAllowed, PageUnresponsive
-from fastbrowse.clients.environment import ConfigurationError
 from fastbrowse.jev import (
     JevClient,
     JevError,
@@ -42,6 +38,7 @@ from fastbrowse.models import (
     ArtifactSink,
     BrowserEvent,
     BudgetStop,
+    ConfigurationError,
     CostBreakdown,
     CostComponent,
     CostLine,
@@ -49,6 +46,7 @@ from fastbrowse.models import (
     FrameHandler,
     Limits,
     LLMPurpose,
+    RecordingError,
     RunResult,
     SecretResolver,
     StepEvent,
@@ -59,12 +57,16 @@ from fastbrowse.page import (
     ActResult,
     BrowserError,
     BrowserUnavailable,
+    BrowserUnresponsive,
     Capture,
     ContextLost,
     NavigationTimeout,
     Observation,
+    OriginNotAllowed,
+    PageUnresponsive,
     ScreenshotsUnavailable,
     SiteUnreachable,
+    _ScriptError,
 )
 from fastbrowse.telemetry import BudgetExceeded, collecting
 
@@ -124,8 +126,7 @@ def options(arguments: dict[str, Any]) -> str:
 
 
 class _Raised:
-    """The first exception a callback raised. When it stopped the run, `run_task` on Python lets it through, so this
-    one does too."""
+    """The first exception a callback raised. When it stopped the run, `run_task` raises it to the caller."""
 
     def __init__(self) -> None:
         self.first: BaseException | None = None
@@ -372,7 +373,7 @@ def _check(check_access: Callable[[], Awaitable[None]]) -> Callable[[], Awaitabl
 
 
 async def run(task: str, arguments: dict[str, Any]) -> RunResult:
-    """Run `task` with `run_task`'s `arguments` on the Rust core, and return its result as Python's returns one."""
+    """Run `task` with `run_task`'s `arguments` on the Rust core, and return its result."""
     # The Rust core, built from crates/fastbrowse-py into this package; compiled, so the checker has no types for it.
     core: Any = importlib.import_module("fastbrowse._native")
 
@@ -390,7 +391,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         if on_event is not None:
             await on_event(_event(payload))
 
-    # A `traced()` block collecting this run's events gets the core's too, as it gets the Python core's.
+    # A `traced()` block collecting this run's events gets the core's too.
     events = collecting()
     native = core.run_task(
         task,
@@ -419,7 +420,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
             raise raised.first from None
         raise ValueError(message) from None
     except asyncio.CancelledError:
-        # Python's `run_task` closes its browser before the cancellation reaches its caller, and so does this.
+        # The browser is closed before the cancellation reaches the caller.
         await asyncio.shield(native.finished)
         raise
     finally:
@@ -429,7 +430,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
 
 
 def _on_this_clock(events: list[dict[str, Any]], offset: float) -> list[dict[str, Any]]:
-    """The core's trace events with their times moved onto `time.monotonic()`, which Python's are read on."""
+    """The core's trace events with their times moved onto this process's `time.monotonic()`."""
     return [
         event | {name: event[name] + offset for name in ("began", "ended") if isinstance(event.get(name), int | float)}
         for event in events

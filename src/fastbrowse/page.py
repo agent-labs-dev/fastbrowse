@@ -6,7 +6,6 @@ and executes `Action`s. Nothing above this seam touches CDP.
 
 import hashlib
 import json
-import re
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
@@ -14,35 +13,6 @@ from typing import Protocol
 from pydantic import Field, field_serializer
 
 from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
-
-
-def cut_marker(omitted_chars: int) -> str:
-    return f"\n[Viewport text cut: {omitted_chars} characters omitted; read the page for the rest]"
-
-
-def cut_text(text: str, max_chars: int, *, json_encoded: bool = False) -> str:
-    """`text` within `max_chars`, ending with how much was cut so a model knows the page goes on."""
-
-    def size(value: str) -> int:
-        # A JSON state escapes quotes and newlines; its budget must count those extra characters.
-        return len(json.dumps(value)) - len('""') if json_encoded else len(value)
-
-    if size(text) <= max_chars:
-        return text
-
-    def fits(keep: int) -> bool:
-        return size(text[:keep] + cut_marker(len(text) - keep)) <= max_chars
-
-    # The longest prefix that fits with its marker. Escaping makes one character cost up to six, so an excess
-    # measured in encoded characters cannot be subtracted from a count of source characters.
-    low, high = 0, min(len(text), max_chars)
-    while low < high:
-        middle = (low + high + 1) // 2
-        if fits(middle):
-            low = middle
-        else:
-            high = middle - 1
-    return text[:low] + cut_marker(len(text) - low) if low > 0 and fits(low) else ""
 
 
 class Control(Frozen):
@@ -87,47 +57,6 @@ class Control(Frozen):
         # A frozenset of strings iterates in hash order, which changes with each process's hash seed, so the
         # same control reached the field writer's prompt as ["click", "fill"] in one run and reversed in the next.
         return sorted(operations)
-
-
-_ARROWS = "›»→>"  # noqa: RUF001 - the chevrons pagers draw, not a typo for ">"
-_NEXT_PAGE = re.compile(
-    rf"(?:next(?: page)?|more results|older(?: posts)?)\s*[{_ARROWS}]*|[{_ARROWS}]{{1,2}}", re.IGNORECASE
-)
-
-
-def pages_forward(control: Control) -> bool:
-    """Whether a link is a pager's way to the next page of a list: marked `rel="next"`, or labelled like one.
-
-    "next", "Next" and an arrow, "Next page", a lone chevron. The page's own mark says so in any language and behind
-    an icon, so the label is only the fallback.
-    """
-    return bool(control.next_page) or _NEXT_PAGE.fullmatch(" ".join(control.label.split())) is not None
-
-
-_LOAD_MORE = re.compile(r"(?:show|view|load|see)(?: \d+)? more(?: [\w-]+){0,3}", re.IGNORECASE)
-
-
-def loads_more(control: Control) -> bool:
-    """Whether a control is labelled as loading more of the list it ends: "View more flights", "Show 20 more".
-
-    It sits at the foot of the list like a pager does, past what the off-screen cap keeps, and may carry no
-    mark but its words: Google Flights' button has only its label. "Learn more" and the like do not match.
-    """
-    return Operation.CLICK in control.operations and _LOAD_MORE.fullmatch(" ".join(control.label.split())) is not None
-
-
-def pager_link(control: Control) -> bool:
-    """Whether this control is one the loop could actually walk a list with: a link, to an address.
-
-    A carousel's arrow and a wizard's button read exactly like a pager, and a busy page draws many of them. Only a
-    link to somewhere else is ever followed, so anything else by that name earns no special treatment.
-    """
-    return (
-        control.role == "link"
-        and Operation.CLICK in control.operations
-        and bool(control.href)
-        and pages_forward(control)
-    )
 
 
 class Tab(Frozen):
@@ -290,6 +219,26 @@ class SiteUnreachable(BrowserError):
 
     Treated as `NavigationTimeout` is: before the first step the site was down, not the agent wrong. A name that
     does not resolve is not one of these; that can be a mistyped address."""
+
+
+class BrowserUnresponsive(BrowserError, Unavailable):
+    """The browser stopped answering: an outage the same run may not meet again, not a failed task."""
+
+
+class PageUnresponsive(BrowserError):
+    """A tab that stopped answering while the browser behind it still answers: a failure driving the page, which ends
+    the run as its own error rather than an outage."""
+
+
+class OriginNotAllowed(BrowserError):
+    """A document outside `allowed_origins`. The message never names it: an address can carry a credential."""
+
+    def __init__(self) -> None:
+        super().__init__("the page is outside allowed_origins")
+
+
+class _ScriptError(BrowserError):
+    """A script the core evaluated threw in the page, as one can when the page replaced a global it calls."""
 
 
 class ActResult(Frozen):

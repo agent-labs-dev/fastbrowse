@@ -1,4 +1,5 @@
-//! Replays what `tests/golden/golden_capture.py` recorded while Python's own tests ran: each case is one outermost call
+//! Replays fixed recordings of the Python implementation the core replaced, taken while its tests ran: each case is one
+//! outermost call
 //! of a retrieval or verification function, with the arguments it was given, every model request it made and the
 //! answer it got, and what it returned and left behind.
 //!
