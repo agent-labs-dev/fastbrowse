@@ -121,7 +121,8 @@ class GatewayJev(Jev):
 
 def jev_from_environment(http: httpx.AsyncClient) -> Jev:
     """The judge on the provider a run would start on: the direct API, else OpenRouter, else the gateway."""
-    keys = environment()
+    # Matched without case, as the core reads its settings.
+    keys = {name.upper(): value for name, value in environment().items()}
     if key := keys.get("TYPESAFE_API_KEY"):
         return Jev(http, api_key=key, base_url=TYPESAFE_URL, model=TYPESAFE_MODEL)
     if key := keys.get("OPENROUTER_API_KEY"):
