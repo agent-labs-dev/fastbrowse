@@ -556,6 +556,25 @@ async def test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out
     await owner.navigate(before)
 
 
+async def test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_own(
+    chrome_connection: BrowserConnection, browser_session: BrowserSession, sites: OriginSites
+) -> None:
+    # A fresh cloud browser shows only about:blank, which no grant covers; the run must still start, in a window
+    # it opens, without touching the person's foreign one.
+    owner = CdpPage(browser_session, Config())
+    await owner.navigate(f"{sites.foreign()}/page")
+    async with scoped(chrome_connection, sites.granted, attach=True) as (session, page):
+        opened = session.active_target_id
+        assert opened != browser_session.active_target_id
+        assert opened not in session._owned
+        await page.navigate(f"{sites.granted}/ok")
+        assert "Granted popup" in (await page.capture()).text
+    # The window stands in for the one the run would have attached to, so it outlives the run.
+    targets = (await browser_session.client.send.Target.getTargets())["targetInfos"]
+    assert opened in {t["targetId"] for t in targets}
+    await browser_session.client.send.Target.closeTarget(params={"targetId": opened})
+
+
 async def test_a_document_the_network_never_saw_is_not_read_or_controlled(
     chrome_connection: BrowserConnection, sites: OriginSites
 ) -> None:

@@ -823,6 +823,15 @@ impl BrowserSession {
             });
         }
         let Some(target) = pages.first() else {
+            if self.0.grant.is_some() && target_match.is_none() {
+                // Every open window is outside the grant, as a fresh cloud browser showing only about:blank is, so
+                // there is nothing the run may take over. It opens a window of its own rather than failing, owned
+                // until it is ready so a failed setup closes it, then kept like the window it stands in for.
+                self.open_owned_tab("about:blank").await?;
+                let target_id = self.active_target_id();
+                self.0.state.lock().unwrap().owned.remove(&target_id);
+                return Ok(target_id);
+            }
             let seen: Vec<String> = listed
                 .iter()
                 .map(|t| format!("{} ({})", py_repr(t["title"].as_str().unwrap_or_default()), str_of(&t["url"])))
