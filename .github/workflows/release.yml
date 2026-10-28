@@ -102,8 +102,11 @@ jobs:
       - name: Check the release evals guard
         env:
           GH_TOKEN: ${{ github.token }}
-          RAN_HERE: ${{ needs.build.outputs.evals_required == 'true' && '--evals-ran-here' || '' }}
-        run: uv run python scripts/release_guard.py "$(uv version --short)" $RAN_HERE
+          RAN_HERE: ${{ needs.build.outputs.evals_required }}
+        run: |
+          args=("$(uv version --short)")
+          if test "$RAN_HERE" = true; then args+=(--evals-ran-here); fi
+          uv run python scripts/release_guard.py "${args[@]}"
 
   # All five targets, each built and smoke-tested on a runner of its own kind, alongside the eval run rather
   # than after it. Nothing publishes unless the guard passes too, so a red fixture gate costs a build but never
