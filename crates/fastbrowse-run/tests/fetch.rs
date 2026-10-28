@@ -1,5 +1,5 @@
-//! tests/test_fetch.py: a page read over HTTP has to produce the blocks a browser capture produces, or quotes break.
-//! `golden/fetch.json` holds the blocks Python's reader makes of every fixture page; `golden/generate.py` writes it.
+//! A page read over HTTP has to produce the blocks a browser capture produces, or quotes break. `golden/fetch.json`
+//! holds the blocks the Python reader made of every fixture page, which the Rust one must still make.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -256,6 +256,18 @@ async fn test_a_compressed_body_is_refused_rather_than_quoted() {
             .with_header("content-encoding", "gzip")
     });
     assert!(fetched(&http, "https://a.example/").await.unwrap_err().0.contains("compressed"));
+}
+
+#[tokio::test]
+async fn test_the_request_names_the_client() {
+    // A server refuses a client that does not name itself: Wikipedia answers 403 to a request carrying no User-Agent
+    // and 200 to one that names it, and httpx sends its own default where this sends none.
+    let http = serving(|request| {
+        let agent = request.header("user-agent").unwrap_or_default();
+        assert!(agent.starts_with("fastbrowse/"), "the request names the client, got {agent:?}");
+        Response::new(200, "<p>the page</p>").with_header("content-type", "text/html")
+    });
+    fetched(&http, "https://a.example/").await.expect("fetched");
 }
 
 #[tokio::test]

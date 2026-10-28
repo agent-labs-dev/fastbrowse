@@ -3,7 +3,7 @@ name = "fastbrowse-probe"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Bench binary on the browser crate: scripted observe, capture and act steps for the differential check against Python, and the binary whose size the port is measured by."
+description = "Bench binary on the browser crate: scripted observe, capture and act steps with their timings, and the binary whose size the browser layer is measured by."
 
 [dependencies]
 fastbrowse-browser = { path = "../fastbrowse-browser" }

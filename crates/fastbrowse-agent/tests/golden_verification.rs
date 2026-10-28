@@ -1,4 +1,5 @@
-//! verification.py against every call Python's own tests made, as `tests/golden/golden_capture.py` recorded them.
+//! Verification against every call the Python implementation's tests made, as `tests/golden/verification*.json` hold
+//! them.
 
 mod common;
 

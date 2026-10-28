@@ -1,48 +1,15 @@
-"""Seam between the browser layer and the decision loop.
+"""What a page reads and does, as `connect_cdp`'s page returns it, and the errors it raises.
 
-The browser layer produces `Observation` (bounded, for Jev's action choice) and `Capture` (complete, for reading),
-and executes `Action`s. Nothing above this seam touches CDP.
+An `Observation` is bounded, for Jev's action choice; a `Capture` is complete, for reading; an `Action` is what the
+page is asked to do.
 """
 
-import hashlib
-import json
-import re
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Protocol
 
 from pydantic import Field, field_serializer
 
-from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
-
-
-def cut_marker(omitted_chars: int) -> str:
-    return f"\n[Viewport text cut: {omitted_chars} characters omitted; read the page for the rest]"
-
-
-def cut_text(text: str, max_chars: int, *, json_encoded: bool = False) -> str:
-    """`text` within `max_chars`, ending with how much was cut so a model knows the page goes on."""
-
-    def size(value: str) -> int:
-        # A JSON state escapes quotes and newlines; its budget must count those extra characters.
-        return len(json.dumps(value)) - len('""') if json_encoded else len(value)
-
-    if size(text) <= max_chars:
-        return text
-
-    def fits(keep: int) -> bool:
-        return size(text[:keep] + cut_marker(len(text) - keep)) <= max_chars
-
-    # The longest prefix that fits with its marker. Escaping makes one character cost up to six, so an excess
-    # measured in encoded characters cannot be subtracted from a count of source characters.
-    low, high = 0, min(len(text), max_chars)
-    while low < high:
-        middle = (low + high + 1) // 2
-        if fits(middle):
-            low = middle
-        else:
-            high = middle - 1
-    return text[:low] + cut_marker(len(text) - low) if low > 0 and fits(low) else ""
+from fastbrowse.models import Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
 
 
 class Control(Frozen):
@@ -87,47 +54,6 @@ class Control(Frozen):
         # A frozenset of strings iterates in hash order, which changes with each process's hash seed, so the
         # same control reached the field writer's prompt as ["click", "fill"] in one run and reversed in the next.
         return sorted(operations)
-
-
-_ARROWS = "›»→>"  # noqa: RUF001 - the chevrons pagers draw, not a typo for ">"
-_NEXT_PAGE = re.compile(
-    rf"(?:next(?: page)?|more results|older(?: posts)?)\s*[{_ARROWS}]*|[{_ARROWS}]{{1,2}}", re.IGNORECASE
-)
-
-
-def pages_forward(control: Control) -> bool:
-    """Whether a link is a pager's way to the next page of a list: marked `rel="next"`, or labelled like one.
-
-    "next", "Next" and an arrow, "Next page", a lone chevron. The page's own mark says so in any language and behind
-    an icon, so the label is only the fallback.
-    """
-    return bool(control.next_page) or _NEXT_PAGE.fullmatch(" ".join(control.label.split())) is not None
-
-
-_LOAD_MORE = re.compile(r"(?:show|view|load|see)(?: \d+)? more(?: [\w-]+){0,3}", re.IGNORECASE)
-
-
-def loads_more(control: Control) -> bool:
-    """Whether a control is labelled as loading more of the list it ends: "View more flights", "Show 20 more".
-
-    It sits at the foot of the list like a pager does, past what the off-screen cap keeps, and may carry no
-    mark but its words: Google Flights' button has only its label. "Learn more" and the like do not match.
-    """
-    return Operation.CLICK in control.operations and _LOAD_MORE.fullmatch(" ".join(control.label.split())) is not None
-
-
-def pager_link(control: Control) -> bool:
-    """Whether this control is one the loop could actually walk a list with: a link, to an address.
-
-    A carousel's arrow and a wizard's button read exactly like a pager, and a busy page draws many of them. Only a
-    link to somewhere else is ever followed, so anything else by that name earns no special treatment.
-    """
-    return (
-        control.role == "link"
-        and Operation.CLICK in control.operations
-        and bool(control.href)
-        and pages_forward(control)
-    )
 
 
 class Tab(Frozen):
@@ -230,15 +156,6 @@ class Capture(Frozen):
     blocks: tuple[Block, ...]
     inaccessible_frames: int = Field(default=0, ge=0)
 
-    @property
-    def read_key(self) -> str:
-        contexts = [
-            (block.source_id, block.control_context.model_dump()) for block in self.blocks if block.control_context
-        ]
-        if not contexts:
-            return self.sha256
-        return hashlib.sha256(json.dumps([self.sha256, contexts], sort_keys=True).encode()).hexdigest()
-
 
 class Action(Frozen):
     operation: Operation
@@ -292,6 +209,26 @@ class SiteUnreachable(BrowserError):
     does not resolve is not one of these; that can be a mistyped address."""
 
 
+class BrowserUnresponsive(BrowserError, Unavailable):
+    """The browser stopped answering: an outage the same run may not meet again, not a failed task."""
+
+
+class PageUnresponsive(BrowserError):
+    """A tab that stopped answering while the browser behind it still answers: a failure driving the page, which ends
+    the run as its own error rather than an outage."""
+
+
+class OriginNotAllowed(BrowserError):
+    """A document outside `allowed_origins`. The message never names it: an address can carry a credential."""
+
+    def __init__(self) -> None:
+        super().__init__("the page is outside allowed_origins")
+
+
+class _ScriptError(BrowserError):
+    """A script the core evaluated threw in the page, as one can when the page replaced a global it calls."""
+
+
 class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool
@@ -300,55 +237,3 @@ class ActResult(Frozen):
     moved: bool = False
     """The action itself took the page elsewhere: its own input event began a navigation or changed the address,
     or it opened a tab. A page that moves on its own time, even to a new document just after the action, is not."""
-
-
-class Page(Protocol):
-    @property
-    def artifacts(self) -> tuple[Artifact, ...]: ...
-
-    async def observe(self) -> Observation: ...
-
-    async def document_changed(self, observation: Observation) -> bool:
-        """Whether the current URL or document differs, without indexing the page's controls again."""
-        ...
-
-    async def navigate(self, url: str, *, back_to: str | None = None) -> None:
-        """`back_to` is the page BACK opens when this tab has no earlier entry on its site: a run that went straight
-        to a deep address keeps the start page it skipped one BACK away without spending a load on it."""
-        ...
-
-    async def capture(self) -> Capture: ...
-
-    async def act(self, action: Action, observation: Observation) -> ActResult:
-        """Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail."""
-        ...
-
-    async def redrawn(self, observation: Observation, timeout_seconds: float, *, target_id: str | None = None) -> bool:
-        """Whether `target_id`, or with none any control `observation` offered, changed within `timeout_seconds`.
-
-        `act` refuses a control that changed since it was observed, so work deciding on it is already spent. A change
-        is reported once the page has settled after it, ready to be observed again.
-        """
-        ...
-
-    async def screenshot(self) -> bytes: ...
-
-    def withhold_frames(self, withheld: bool) -> None:
-        """Hold back live and recorded frames while the page may show a secret, which pixels cannot mask."""
-        ...
-
-    def lifecycle_mark(self) -> int:
-        """The page's current lifecycle generation, for a caller waiting on the next transition."""
-        ...
-
-    async def wait_for_lifecycle(self, mark: int, seconds: float) -> bool:
-        """Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`."""
-        ...
-
-    async def address(self) -> str:
-        """The address the current document was served from, after any redirect."""
-        ...
-
-    async def response_status(self) -> int | None:
-        """The HTTP status the current document was served with, or None when the browser does not say."""
-        ...

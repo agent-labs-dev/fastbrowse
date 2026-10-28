@@ -32,7 +32,7 @@ pub async fn eval_active(session: &BrowserSession, expression: &str) -> Value {
 
 /// Have the active tab report itself visible. pytest runs one test at a time, so its tab is the window's front one;
 /// here the binary's tests share one Chrome at once, every tab but the newest is hidden, and a hidden page skips the
-/// waits on its loading indicator.
+/// settle's wait for a drawn frame.
 pub async fn visible(session: &BrowserSession) {
     let session_id = session.active_session_id().expect("active tab");
     session

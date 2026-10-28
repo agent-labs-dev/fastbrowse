@@ -44,16 +44,16 @@ def _jobs() -> dict[str, Any]:
 
 
 def test_the_rust_job_runs_on_every_pull_request() -> None:
-    """The Rust crates embed snapshot.js and mirror the Python modules their goldens come from, so a Python-only
-    change can break them. A path filter on the job would let that change merge without the Rust checks seeing it."""
+    """The Rust crates embed snapshot.js and read fixtures from outside crates/, so a change elsewhere can break them.
+    A path filter on the job would let that change merge without the Rust checks seeing it."""
     rust = _jobs()["rust"]
     assert "if" not in rust
     assert "needs" not in rust
 
 
 def _binaries_pathspecs() -> list[str]:
-    frozen = next(step for step in _jobs()["changes"]["steps"] if step.get("id") == "frozen")
-    listed = frozen["run"].split(" -- ", 1)[1].split("\nthen", 1)[0]
+    built = next(step for step in _jobs()["changes"]["steps"] if step.get("id") == "built")
+    listed = built["run"].split(" -- ", 1)[1].split("\nthen", 1)[0]
     return shlex.split(listed.replace("\\\n", " "))
 
 

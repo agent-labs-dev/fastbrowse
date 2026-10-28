@@ -181,9 +181,12 @@ pub async fn fetch_capture(
 ) -> Result<Capture, NotFetched> {
     eligible(url, allowed_origins)?;
     // httpx decodes gzip and deflate; this reads only what arrives uncompressed, so it says so (RFC 9110 12.5.3).
+    // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
+    // 200 to one that names it, and httpx sends its own default where this sends none. The version is the crate's own.
     let headers = [
         ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
         ("accept-encoding".to_string(), "identity".to_string()),
+        ("user-agent".to_string(), format!("fastbrowse/{}", env!("CARGO_PKG_VERSION"))),
     ];
     // Sent as WHATWG serializes it, the address the capture reports: hyper takes no space or non-ASCII path.
     let mut target = url::Url::parse(url).map_or_else(|_| url.to_string(), String::from);

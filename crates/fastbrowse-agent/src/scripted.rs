@@ -1,5 +1,4 @@
-//! Port of `src/fastbrowse/scripted.py`: model clients that follow a script, so a run can be driven with no model
-//! behind it.
+//! Model clients that follow a script, so a run can be driven with no model behind it.
 //!
 //! The frozen binary is tested as it is released, and CI has no model keys, so its smoke run answers from a script.
 //! The task is the script. Each step is an operation and the label of the control it lands on, steps are separated by
@@ -201,8 +200,7 @@ impl LLMClient for ScriptedLLM {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_scripted.py: the scripted model clients the frozen binary's smoke run uses, asked what a run would
-    //! ask them.
+    //! The scripted model clients the binary's smoke run uses, asked what a run would ask them.
     use fastbrowse_core::jev::NoulQuestion;
 
     use super::*;

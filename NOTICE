@@ -1,7 +1,7 @@
 fastbrowse includes code adapted from the following MIT-licensed projects:
 
 - browser-use/jev-ultrafast, Copyright (c) 2026 Browser Use
-  (src/fastbrowse/browser/page.py and session.py name what they port)
+  (src/fastbrowse/browser/snapshot.js and crates/fastbrowse-browser/src/page name what they port)
 - browser-use/browser-harness, Copyright (c) 2026 Browser Use
 - browser-use/browser-use, Copyright (c) 2024 Gregor Zunic
 

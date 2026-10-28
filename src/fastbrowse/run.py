@@ -1,57 +1,35 @@
-"""Run one task end to end: assemble a browser, the model clients and the agent, then return the result.
+"""Run one task end to end, or drive a page without the agent, on the Rust core in this process.
 
-This is the entry point for embedding fastbrowse in something else. The terminal (`fastbrowse.cli`) and
-the live eval are both callers of it, so the assembly has one definition rather than one per caller, and
-an embedder gets the parts that are easy to forget: the cloud browser's own cost folded into the result,
-downloads kept when a directory is given, and owned tabs closed on every path out.
+This is the entry point for embedding fastbrowse in something else. Every argument crosses to the core
+(`fastbrowse.native`), which assembles the browser, the model clients and the agent, folds the cloud
+browser's own cost into the result, keeps downloads when a directory is given, and closes owned tabs on
+every path out.
 """
 
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import asynccontextmanager
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel
 
 from fastbrowse import native
-from fastbrowse.adapters.browser_use_cloud import BrowserUseCloudBrowser
-from fastbrowse.adapters.local_chrome import async_local_chrome
-from fastbrowse.agent import Agent, HeadStart
-from fastbrowse.artifacts import DirectorySink
-from fastbrowse.browser import BrowserSession, CdpPage
-from fastbrowse.browser.cursor import cursor_feedback
-from fastbrowse.browser.recording import Recording
-from fastbrowse.browser.session import check_browser_access
-from fastbrowse.clients.environment import load_settings
 from fastbrowse.config import Config
-from fastbrowse.core import python_core
-from fastbrowse.fetch import FetchedPage, NeedsBrowser
 from fastbrowse.jev import JevClient
 from fastbrowse.llm import LLMClient
 from fastbrowse.models import (
     ArtifactSink,
     Attachment,
     Authorization,
-    BrowserConnection,
-    BrowserEvent,
-    CostBreakdown,
-    CostLine,
     EventHandler,
     FrameHandler,
     Limits,
     LocalChrome,
     RunResult,
     SecretResolver,
-    Status,
-    StepEvent,
-    Unavailable,
     UntilCheck,
 )
-from fastbrowse.origins import parse_origins
 from fastbrowse.page import BrowserError
-from fastbrowse.telemetry import trace
 
 
 async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.AsyncClient | None = None) -> str:
@@ -94,7 +72,7 @@ async def connect_cdp(
     config: Config | None = None,
     artifact_sink: ArtifactSink | None = None,
     downloads: Path | None = None,
-) -> AsyncGenerator[CdpPage | native.NativePage]:
+) -> AsyncGenerator[native.NativePage]:
     """A page on a browser or Electron app that is already running, for driving it without the agent.
 
     Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly. By default
@@ -104,109 +82,10 @@ async def connect_cdp(
     is set, though Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins`
     limits the page to those exact origins and `check_access` is awaited before every browser read and action (both
     described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory removed
-    on exit. The page is the Rust core's (`fastbrowse.native.NativePage`), with the same methods as the Python core's
-    `CdpPage`, which `FASTBROWSE_PYTHON_CORE=1` gives instead.
+    on exit. The page is the Rust core's (`fastbrowse.native.NativePage`).
     """
-    if not python_core():
-        async with native.connect_cdp(locals()) as page:
-            yield page
-        return
-    await check_browser_access(check_access)
-    if port is not None and cdp_url is not None:
-        raise BrowserError("port and cdp_url both name a browser to attach to; pass one")
-    if cdp_url is None:
-        if port is None:
-            raise BrowserError("connect_cdp needs a port or a cdp_url")
-        cdp_url = await resolve_cdp_port(port, host)
-    connection = BrowserConnection(
-        cdp_url=cdp_url,
-        live_url=None,
-        remote=True,
-        attach=attach or target_match is not None,
-        target_match=target_match,
-        foreground=foreground,
-        allowed_origins=None if allowed_origins is None else tuple(allowed_origins),
-    )
-    config = config or Config()
-    with TemporaryDirectory() as scratch:
-        sink = artifact_sink or DirectorySink(downloads or Path(scratch))
-        async with BrowserSession(
-            connection,
-            sink,
-            max_download_bytes=config.max_download_bytes,
-            refuse_cookie_banners=config.refuse_cookie_banners,
-            check_access=check_access,
-        ) as session:
-            yield CdpPage(session, config)
-
-
-@asynccontextmanager
-async def _browser(
-    key: str | None,
-    chrome: LocalChrome,
-    http: httpx.AsyncClient,
-    cost: list[CostLine],
-    *,
-    profile: str | None = None,
-    cdp_url: str | None = None,
-    cdp_port: int | None = None,
-    attach: bool = False,
-    target_match: str | None = None,
-    foreground: bool = False,
-    proxy_country: str | None = "us",
-    viewport: tuple[int, int] | None = None,
-    allow_resizing: bool = False,
-    cloud_extensions: Sequence[str] = (),
-    cloud_timeout_minutes: int = 15,
-) -> AsyncGenerator[BrowserConnection]:
-    """The browser a run drives: one it is handed, a cloud browser, or local Chrome."""
-    if cloud_extensions and (key is None or cdp_url is not None or cdp_port is not None):
-        raise BrowserError("cloud_extensions load into a Browser Use Cloud browser this run starts, which needs a key")
-    if cdp_url is not None and cdp_port is not None:
-        raise BrowserError("cdp_url and cdp_port both name a browser to attach to; pass one")
-    if cdp_url is not None or cdp_port is not None:
-        if key is not None:
-            raise BrowserError("cdp_url/cdp_port is a browser to attach to; a cloud key would start a second one")
-        if profile is not None:
-            raise BrowserError("cloud_profile belongs to a browser fastbrowse starts, not to one it is handed")
-        if cdp_url is None:
-            assert cdp_port is not None
-            cdp_url = await resolve_cdp_port(cdp_port, http=http)
-        # Nothing to start and nothing to stop: the caller's browser outlives the run. The session either opens
-        # its own tab and closes only that, or, attaching, drives a window already open and leaves it open.
-        yield BrowserConnection(
-            cdp_url=cdp_url,
-            live_url=None,
-            remote=True,
-            attach=attach or (target_match is not None),
-            target_match=target_match,
-            foreground=foreground,
-        )
-        return
-    if attach or target_match is not None:
-        raise BrowserError("attach and target_match require cdp_url or cdp_port")
-    if key is None:
-        if profile is not None:
-            raise BrowserError("cloud_profile names a Browser Use Cloud profile, which needs a cloud browser")
-        async with async_local_chrome(chrome) as connection:
-            yield connection.model_copy(update={"foreground": connection.foreground or foreground})
-        return
-    remote = BrowserUseCloudBrowser(
-        key,
-        http=http,
-        profile=profile,
-        proxy_country=proxy_country,
-        viewport=viewport,
-        allow_resizing=allow_resizing,
-        extensions=cloud_extensions,
-        timeout_minutes=cloud_timeout_minutes,
-    )
-    try:
-        async with remote:
-            yield remote.connection
-    finally:
-        # Keep the last reported cost even when setup or teardown fails.
-        cost.extend(remote.cost)
+    async with native.connect_cdp(locals()) as page:
+        yield page
 
 
 async def run_task(
@@ -267,7 +146,7 @@ async def run_task(
     background: its tab opens behind the window's current one and the window is neither raised nor focused.
     `foreground` brings the tab and its window to the front instead, to watch the run.
     Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
-    local Chrome as `chrome` describes (default: from `Settings`, headless with a throwaway profile).
+    local Chrome as `chrome` describes (default: from the environment and `.env`, headless with a throwaway profile).
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
     and `viewport` shape a cloud browser this run starts. `cloud_allow_resizing` opts that browser into
@@ -276,7 +155,7 @@ async def run_task(
     an error with a local or attached browser rather than ignored. `cloud_timeout_minutes` is how long that
     browser may live (15 by default; the service allows up to 240), so a run that needs longer asks for it
     rather than losing its browser. The other cloud options mean nothing for the other two browsers. `jev` and
-    `llm` default to clients built from `Settings` (the environment, then `.env`), so an embedder that
+    `llm` default to clients the Rust core builds from the environment, then `.env`, so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
 
     `allowed_origins` limits the documents the run may inspect and control to those exact `http(s)://host[:port]`
@@ -319,245 +198,9 @@ async def run_task(
     caller already knows. The planner, recovery and the answer see it in its own section headed as not
     requirements, and Jev sees it as `background`; requirements come from `task` alone.
 
-    The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`), unless
-    `FASTBROWSE_PYTHON_CORE=1` keeps it on the Python core.
+    The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`).
     """
-    if not python_core():
-        return await native.run(task, locals())
-    config = config or Config()
-    settings = load_settings()
-    # The providers this run calls, for an eval to keep beside its result. A caller's own clients are not described.
-    if jev is None and llm is None:
-        trace("route", providers=settings.providers())
-    origins = None if allowed_origins is None else parse_origins(allowed_origins)
-    handed_over = cdp_url is not None or cdp_port is not None
-    if origins is not None and record is not None:
-        raise ValueError("record shows whatever the tab shows, so it cannot be combined with allowed_origins")
-    if fetch:
-        # None of these names anything a browserless run has, and accepting one would report a browser that
-        # was never started, a file that was never written or a cursor nobody saw.
-        for flag, value in (
-            ("browser_api_key", browser_api_key),
-            ("chrome", chrome),
-            ("cloud_profile", cloud_profile),
-            ("cdp_url", cdp_url),
-            ("cdp_port", cdp_port),
-            ("target_match", target_match),
-            ("downloads", downloads),
-            ("record", record),
-        ):
-            if value is not None and value is not False:
-                raise ValueError(f"fetch mode starts no browser, so it cannot be combined with {flag}")
-        if attach or cursor:
-            raise ValueError("fetch mode starts no browser, so it cannot be combined with attach or cursor")
-        async with httpx.AsyncClient(timeout=60) if http is None else _borrowed(http) as client:
-            return await _fetched(
-                task,
-                start=start,
-                context=context,
-                client=client,
-                jev=jev or settings.jev(client),
-                llm=llm or settings.llm(client),
-                config=config,
-                secrets=secrets,
-                on_event=on_event,
-                origins=origins,
-                check_access=check_access,
-                output_schema=output_schema,
-                inputs=inputs,
-                attachments=attachments,
-                authorization=authorization,
-                limits=limits,
-                until=until,
-            )
-    browser_cost: list[CostLine] = []
-    with TemporaryDirectory() as scratch:
-        sink = DirectorySink(downloads or Path(scratch))
-        async with httpx.AsyncClient(timeout=60) if http is None else _borrowed(http) as client:
-            jev = jev or settings.jev(client)
-            llm = llm or settings.llm(client)
-            session: BrowserSession | None = None
-            result: RunResult | None = None
-            recording: Recording | None = None
-            # Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is
-            # ready to open when the tab is.
-            head = HeadStart.begin(llm, task, start=start, context=context, limits=limits)
-            try:
-                await check_browser_access(check_access)
-                async with _browser(
-                    browser_api_key,
-                    chrome or settings.local_chrome(),
-                    client,
-                    browser_cost,
-                    profile=cloud_profile,
-                    cdp_url=cdp_url,
-                    cdp_port=cdp_port,
-                    attach=attach,
-                    target_match=target_match,
-                    # The cursor is drawn over the window's front tab, so the run's tab has to be that one.
-                    foreground=foreground or cursor,
-                    proxy_country=proxy_country,
-                    viewport=viewport,
-                    allow_resizing=cloud_allow_resizing,
-                    cloud_extensions=cloud_extensions,
-                    cloud_timeout_minutes=cloud_timeout_minutes,
-                ) as connection:
-                    connection = connection.model_copy(update={"allowed_origins": origins})
-                    if on_event is not None:
-                        await on_event(BrowserEvent(live_url=connection.live_url, browser_id=connection.browser_id))
-                    session = BrowserSession(
-                        connection,
-                        sink,
-                        max_download_bytes=config.max_download_bytes,
-                        refuse_cookie_banners=config.refuse_cookie_banners,
-                        on_frame=on_frame,
-                        check_access=check_access,
-                    )
-                    # A cloud or headless browser has no window on this machine to draw over.
-                    shown = (
-                        cursor
-                        and browser_api_key is None
-                        and urlsplit(connection.cdp_url).hostname in {"localhost", "127.0.0.1", "::1"}
-                        and (handed_over or (chrome or settings.local_chrome()).headed)
-                    )
-                    async with session, cursor_feedback(shown) as feedback:
-                        page = CdpPage(session, config, cursor=feedback)
-                        async with nullcontext() if record is None else Recording(session, record) as recording:
-                            agent = Agent(
-                                page, jev, llm, config=config, secrets=secrets, on_event=_captioned(on_event, recording)
-                            )
-                            result = await agent.run(
-                                task,
-                                start=start,
-                                context=context,
-                                # With no page named, the first address is worked out from the task,
-                                # unless attaching to an existing window where the page is preserved.
-                                choose_start=start is None and not connection.attach,
-                                output_schema=output_schema,
-                                inputs=inputs,
-                                attachments=attachments,
-                                authorization=authorization,
-                                until=until,
-                                head_start=head,
-                            )
-                            # The card is a data: document navigated into the tab, which would replace the
-                            # caller's own app page; an attached window is theirs and stays where it is.
-                            if recording is not None and not connection.attach:
-                                await recording.show_result(task, result)
-            except (BrowserError, Unavailable) as exc:
-                # A cloud browser that cannot be started is an outage, not a failed run.
-                status = Status.UNAVAILABLE if isinstance(exc, Unavailable) else Status.ERROR
-                result = result or RunResult(
-                    status=status,
-                    answer=None,
-                    data=None,
-                    evidence=(),
-                    steps=(),
-                    # The plan and shortcut were asked for before the browser failed, and what they spent is real.
-                    cost=CostBreakdown(lines=await head.abandon()),
-                    artifacts=session.artifacts if session is not None else (),
-                )
-                # `budget` names the limit a budget_exceeded run hit, and means nothing under another status.
-                result = result.model_copy(update={"status": status, "error": str(exc), "budget": None})
-            finally:
-                # A run that never began leaves its head start running; one that did has discarded it already.
-                await head.discard()
-            # Read after the browser closes either way: a failed result card still leaves the finished videos.
-            if recording is not None:
-                result = result.model_copy(update={"recordings": recording.outputs})
-    assert result is not None
-    return result.model_copy(update={"cost": CostBreakdown(lines=(*result.cost.lines, *browser_cost))})
-
-
-async def _fetched(
-    task: str,
-    *,
-    start: str | None,
-    context: str | None,
-    client: httpx.AsyncClient,
-    jev: JevClient,
-    llm: LLMClient,
-    config: Config,
-    secrets: SecretResolver | None,
-    on_event: EventHandler | None,
-    origins: tuple[str, ...] | None,
-    check_access: Callable[[], Awaitable[None]] | None,
-    output_schema: type[BaseModel] | None,
-    inputs: Mapping[str, str] | None,
-    attachments: Sequence[Attachment],
-    authorization: Authorization | None,
-    limits: Limits | None,
-    until: UntilCheck | None,
-) -> RunResult:
-    """`task` read over HTTP, with no browser started at all.
-
-    A step that would act, download or look at pixels raises `NeedsBrowser`, and that is reported as
-    `blocked`: the document was never the problem, and a browser would answer a different task.
-    """
-    try:
-        await check_browser_access(check_access)
-    except BrowserError as exc:
-        # The caller's own gate refused the run, which is an error result, not an exception to the embedder.
-        return RunResult(
-            status=Status.ERROR,
-            answer=None,
-            data=None,
-            evidence=(),
-            steps=(),
-            cost=CostBreakdown(lines=()),
-            artifacts=(),
-        ).model_copy(update={"error": type(exc).__name__})
-    head = HeadStart.begin(llm, task, start=start, context=context, limits=limits)
-    page = FetchedPage(
-        client,
-        allowed_origins=origins,
-        viewport_text_chars=config.observation.viewport_text_chars,
-        check_access=check_access,
-    )
-    agent = Agent(page, jev, llm, config=config, secrets=secrets, on_event=on_event)
-    try:
-        result = await agent.run(
-            task,
-            start=start,
-            context=context,
-            # With no page named, the first address is worked out from the task, the same way a browser run
-            # with no `--start` begins.
-            choose_start=start is None,
-            output_schema=output_schema,
-            inputs=inputs,
-            attachments=attachments,
-            authorization=authorization,
-            until=until,
-            head_start=head,
-        )
-    except NeedsBrowser as exc:
-        result = RunResult(
-            status=Status.BLOCKED,
-            answer=None,
-            data=None,
-            evidence=(),
-            steps=(),
-            # The plan and the shortcut were asked for before the first page, and what they spent is real.
-            cost=CostBreakdown(lines=await head.abandon()),
-            artifacts=(),
-        ).model_copy(update={"error": str(exc)})
-    finally:
-        await head.discard()
-    return result
-
-
-def _captioned(on_event: EventHandler | None, recording: Recording | None) -> EventHandler | None:
-    """Pass each step to the recording as well, which captions it."""
-    if recording is None:
-        return on_event
-
-    async def handle(event: StepEvent | BrowserEvent) -> None:
-        if isinstance(event, StepEvent):
-            recording.caption(event.step)
-        if on_event is not None:
-            await on_event(event)
-
-    return handle
+    return await native.run(task, locals())
 
 
 @asynccontextmanager

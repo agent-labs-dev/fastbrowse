@@ -1,10 +1,6 @@
 //! `fastbrowse._native`: the Rust core in-process for Python.
 //!
-//! `origin_of`, `parse_origin` and `text_fragment` stand in for their namesakes in `fastbrowse.origins` and
-//! `fastbrowse.citations`, and `run_task`, `connect_cdp` and `cli_main` for `fastbrowse.run_task`, `connect_cdp`
-//! and the commands, unless `FASTBROWSE_PYTHON_CORE=1`.
-//!
-//! Strings cross as USVStrings, the way WebIDL hands them to a URL parser.
+//! `run_task`, `connect_cdp` and `cli_main` are what `fastbrowse.run_task`, `connect_cdp` and the commands run.
 
 mod bridge;
 mod connect;
@@ -19,11 +15,10 @@ use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::models::Event;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Trace;
-use fastbrowse_core::{citations, origins};
 use fastbrowse_run::RunError;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyCFunction, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyCFunction, PyTuple};
 
 use crate::bridge::{Context, Failure, HostJev, HostLlm, HostSecrets, HostTransport, LlmCall, Sent};
 use crate::host::{host_call, runtime};
@@ -36,31 +31,6 @@ pyo3::create_exception!(
     "A run that ended without a result: `args` is why (`invalid`, `configuration`, `recording`, `cancelled` or `callback`) and \
      the message."
 );
-
-/// The string as a USVString: each lone surrogate becomes one U+FFFD (PyO3's lossy conversion makes three).
-fn usv(s: &Bound<'_, PyString>) -> PyResult<String> {
-    if let Ok(utf8) = s.to_str() {
-        return Ok(utf8.to_owned());
-    }
-    let bytes: Vec<u8> = s.call_method1("encode", ("utf-16-le", "surrogatepass"))?.extract()?;
-    let units: Vec<u16> = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
-    Ok(String::from_utf16_lossy(&units))
-}
-
-#[pyfunction]
-fn origin_of(url: &Bound<'_, PyString>) -> PyResult<Option<String>> {
-    Ok(origins::origin_of(&usv(url)?))
-}
-
-#[pyfunction]
-fn parse_origin(value: &Bound<'_, PyString>) -> PyResult<String> {
-    origins::parse_origin(&usv(value)?).map_err(|e| PyValueError::new_err(e.to_string()))
-}
-
-#[pyfunction]
-fn text_fragment(url: &Bound<'_, PyString>, text: &Bound<'_, PyString>) -> PyResult<String> {
-    citations::text_fragment(&usv(url)?, &usv(text)?).map_err(|e| PyValueError::new_err(e.to_string()))
-}
 
 fn json_argument(py: Python<'_>, value: serde_json::Value) -> PyResult<Bound<'_, PyTuple>> {
     PyTuple::new(py, [value.to_string()])
@@ -372,9 +342,6 @@ fn monotonic() -> f64 {
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(origin_of, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
-    m.add_function(wrap_pyfunction!(text_fragment, m)?)?;
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;

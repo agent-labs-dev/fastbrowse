@@ -1,4 +1,4 @@
-"""Fixtures for browser-layer tests: a real headless Chrome plus two-host fixture sites.
+"""Fixtures for browser tests of the Rust core through the package: a real headless Chrome plus two-host fixture sites.
 
 Skips browser fixtures when Chrome is not installed, since these tests exercise
 real CDP mechanics (OOPIFs, downloads, dialogs) that cannot be faked without losing their signal.
@@ -8,19 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
 
-from fastbrowse.adapters.local_chrome import find_chrome, free_port, local_chrome
-from fastbrowse.browser.page import CdpPage
-from fastbrowse.browser.session import BrowserSession
-from fastbrowse.clients.environment import load_settings
-from fastbrowse.config import Config
-from fastbrowse.models import Artifact, ArtifactKind, BrowserConnection
+from fastbrowse.evals.harness import chrome, find_chrome
+from fastbrowse.models import Artifact, ArtifactKind
 
 SITES = Path(__file__).parent / "sites"
 
@@ -131,8 +126,8 @@ def _handler_for(
 
 @pytest.fixture(scope="session")
 def iframe_site() -> Iterator[str]:
-    port = free_port()
-    server = ThreadingHTTPServer(("127.0.0.1", port), _handler_for(SITES / "iframe"))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(SITES / "iframe"))
+    port = server.server_address[1]
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     try:
@@ -143,8 +138,8 @@ def iframe_site() -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def main_site(iframe_site: str) -> Iterator[str]:
-    port = free_port()
-    server = ThreadingHTTPServer(("127.0.0.1", port), _handler_for(SITES / "main", iframe_origin=iframe_site))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(SITES / "main", iframe_origin=iframe_site))
+    port = server.server_address[1]
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     try:
@@ -154,26 +149,9 @@ def main_site(iframe_site: str) -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
-def chrome_connection() -> Iterator[BrowserConnection]:
-    if find_chrome(load_settings().chrome) is None:
+def cdp_url() -> Iterator[str]:
+    """The DevTools websocket of one headless Chrome the session shares."""
+    if find_chrome() is None:
         pytest.skip("Chrome is not installed")
-    with local_chrome(load_settings().local_chrome()) as connection:
-        yield connection
-
-
-@pytest_asyncio.fixture
-async def artifact_sink() -> RecordingArtifactSink:
-    return RecordingArtifactSink()
-
-
-@pytest_asyncio.fixture
-async def browser_session(
-    chrome_connection: BrowserConnection, artifact_sink: RecordingArtifactSink
-) -> AsyncIterator[BrowserSession]:
-    async with BrowserSession(chrome_connection, artifact_sink) as session:
-        yield session
-
-
-@pytest_asyncio.fixture
-async def page(browser_session: BrowserSession) -> CdpPage:
-    return CdpPage(browser_session, Config())
+    with chrome() as url:
+        yield url

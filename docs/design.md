@@ -8,8 +8,7 @@ fastbrowse splits a browser agent into three owners:
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
-`fastbrowse._native` into the wheel. The Python modules are the same design in the fallback core that
-`FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0 ([ADR 0004](adr/0004-rust-core-by-default.md)).
+`fastbrowse._native` into the wheel ([ADR 0004](adr/0004-rust-core-by-default.md)).
 
 ## Authorization
 
@@ -140,7 +139,7 @@ recordings do not show it.
 
 ## Browser capabilities over plain CDP
 
-Verified with `cdp-use==1.4.5` against local headless Chrome and a Browser Use cloud browser:
+Verified over raw CDP against local headless Chrome and a Browser Use cloud browser:
 
 | Capability | Mechanism | Local | Cloud |
 |---|---|---|---|
@@ -212,4 +211,5 @@ refused. A target covered by a band fixed to the window (an anchored ad, a stick
 it, and one the band still covers is focused and pressed or typed into from the keyboard, so the band is never
 clicked. Any other cover, such as a dialog, an open menu or popover, or a full-window backdrop, is reported as
 `covered`. Focus and the receiving field are checked before typing. Settling waits for an interactive
-document and a quiet DOM, with a bounded extra wait for visible loading indicators.
+document and a quiet DOM. It does not guess at loading indicators by class name: a page still loading is read as
+it stands, and the reader and Jev judge from its text whether to look again.

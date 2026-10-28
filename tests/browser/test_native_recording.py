@@ -1,8 +1,7 @@
-"""`record` and `cursor` on the Rust core: both videos written and reported as Python reports them, and a cursor
-that cannot be drawn leaves the run to go on without it."""
+"""`record` and `cursor` on the Rust core: both videos written and reported, and a cursor that cannot be drawn leaves
+the run to go on without it."""
 
 import asyncio
-import importlib
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,39 +10,25 @@ import pytest
 from pydantic import JsonValue
 
 from fastbrowse import run_task
-from fastbrowse.browser.recording import RecordingError
 from fastbrowse.jev import Evaluation, Question
-from fastbrowse.models import BrowserConnection, Status
-from fastbrowse.scripted import ScriptedJev, ScriptedLLM, steps
+from fastbrowse.models import RecordingError, Status
+from tests.scripted import ScriptedJev, ScriptedLLM, steps
 
-try:
-    NATIVE = hasattr(importlib.import_module("fastbrowse._native"), "run_task")
-except ImportError:
-    NATIVE = False
-
-pytestmark = pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with run_task is not installed")
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="recording needs ffmpeg")
 
 
 @needs_ffmpeg
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("core", ["python", "rust"])
 async def test_a_recorded_run_reports_both_videos(
-    core: str,
-    chrome_connection: BrowserConnection,
+    cdp_url: str,
     main_site: str,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if core == "rust":
-        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
-    else:
-        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     record = tmp_path / "run.mp4"
     result = await run_task(
         "Open the dispatch page",
         start=f"{main_site}/dispatch.html",
-        cdp_url=chrome_connection.cdp_url,
+        cdp_url=cdp_url,
         record=record,
         jev=ScriptedJev(steps("")),
         llm=ScriptedLLM(),
@@ -53,32 +38,30 @@ async def test_a_recorded_run_reports_both_videos(
     assert all(path.stat().st_size > 0 for path in result.recordings)
 
 
-async def test_a_recording_that_cannot_start_raises_recording_error_on_the_rust_core(
-    chrome_connection: BrowserConnection, main_site: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_recording_that_cannot_start_raises_recording_error(
+    cdp_url: str, main_site: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(RecordingError, match="ffmpeg"):
         await run_task(
             "Open the dispatch page",
             start=f"{main_site}/dispatch.html",
-            cdp_url=chrome_connection.cdp_url,
+            cdp_url=cdp_url,
             record=tmp_path / "run.mp4",
             jev=ScriptedJev(steps("")),
             llm=ScriptedLLM(),
         )
 
 
-async def test_cursor_runs_on_the_rust_core_and_draws_nothing_where_it_cannot(
-    chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
+async def test_a_cursor_draws_nothing_where_it_cannot_and_the_run_goes_on(
+    cdp_url: str, main_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
-    # No cua-driver on PATH, so there is nothing to draw with and the run goes on without it, as on Python.
+    # No cua-driver on PATH, so there is nothing to draw with and the run goes on without it.
     monkeypatch.setenv("PATH", "")
     result = await run_task(
         "Open the dispatch page",
         start=f"{main_site}/dispatch.html",
-        cdp_url=chrome_connection.cdp_url,
+        cdp_url=cdp_url,
         cursor=True,
         jev=ScriptedJev(steps("")),
         llm=ScriptedLLM(),
@@ -88,18 +71,11 @@ async def test_cursor_runs_on_the_rust_core_and_draws_nothing_where_it_cannot(
 
 @needs_ffmpeg
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("core", ["python", "rust"])
 async def test_a_run_cancelled_during_the_result_card_still_writes_both_videos(
-    core: str,
-    chrome_connection: BrowserConnection,
+    cdp_url: str,
     main_site: str,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if core == "rust":
-        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
-    else:
-        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
     finished = asyncio.Event()
     jev = ScriptedJev(steps(""))
     evaluate = jev.evaluate
@@ -116,7 +92,7 @@ async def test_a_run_cancelled_during_the_result_card_still_writes_both_videos(
         run_task(
             "Open the dispatch page",
             start=f"{main_site}/dispatch.html",
-            cdp_url=chrome_connection.cdp_url,
+            cdp_url=cdp_url,
             record=record,
             jev=jev,
             llm=ScriptedLLM(),
