@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from fastbrowse.evals.harness import environment
 from fastbrowse.models import JsonValue
 
 ACCEPTED = 0.5
@@ -119,25 +119,15 @@ class GatewayJev(Jev):
         return float(answer["probability"])
 
 
-class _Keys(BaseSettings):
-    """The provider keys, from the environment or a `.env`, as a run reads them."""
-
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    typesafe_api_key: str | None = None
-    openrouter_api_key: str | None = None
-    ai_gateway_api_key: str | None = None
-
-
 def jev_from_environment(http: httpx.AsyncClient) -> Jev:
     """The judge on the provider a run would start on: the direct API, else OpenRouter, else the gateway."""
-    keys = _Keys()
-    if keys.typesafe_api_key:
-        return Jev(http, api_key=keys.typesafe_api_key, base_url=TYPESAFE_URL, model=TYPESAFE_MODEL)
-    if keys.openrouter_api_key:
-        return Jev(http, api_key=keys.openrouter_api_key, base_url=OPENROUTER_URL, model=OPENROUTER_MODEL)
-    if keys.ai_gateway_api_key:
-        return GatewayJev(http, api_key=keys.ai_gateway_api_key)
+    keys = environment()
+    if key := keys.get("TYPESAFE_API_KEY"):
+        return Jev(http, api_key=key, base_url=TYPESAFE_URL, model=TYPESAFE_MODEL)
+    if key := keys.get("OPENROUTER_API_KEY"):
+        return Jev(http, api_key=key, base_url=OPENROUTER_URL, model=OPENROUTER_MODEL)
+    if key := keys.get("AI_GATEWAY_API_KEY"):
+        return GatewayJev(http, api_key=key)
     raise RuntimeError("the judge needs TYPESAFE_API_KEY, OPENROUTER_API_KEY or AI_GATEWAY_API_KEY")
 
 
