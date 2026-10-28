@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Settling no longer waits on anything named like a spinner.** A settle waited up to 1.5s, and every observation and read up to 3s more, while any visible element had `spinner`, `loading`, `loader`, `skeleton` or `shimmer` in its class or id. A guessed list matches content: Shopify themes call the add-to-cart button's label `loader-button__text`, so on every product page each action paid 1.5s and each observation 3s. Through a CDP proxy on a six-part cart task, settle waits took 331s of the 363s not spent in model calls; without the list the median observation wait fell from 3.08s to 0.05s and the median action settle from 1.60s to 0.20s, and seconds per step from 7.2 to 4.0. Settling now waits for an interactive document and a quiet DOM alone. A page still loading is read as it stands, and the reader and Jev judge from its text whether to look again: on a page that shows "Loading..." for 2.5s, the answer is still right (3 of 3 runs) at about 3s more than before.
+
 ## [0.8.3] - 2026-10-28
 
 - **A task with a non-ASCII character no longer crashes the Rust core.** Reading the paths a task names, the core looked one byte past each character, so a task with a long dash, an accented letter or an emoji panicked at `navigation.rs` before the run began. It now reads the next character itself.

@@ -211,4 +211,5 @@ refused. A target covered by a band fixed to the window (an anchored ad, a stick
 it, and one the band still covers is focused and pressed or typed into from the keyboard, so the band is never
 clicked. Any other cover, such as a dialog, an open menu or popover, or a full-window backdrop, is reported as
 `covered`. Focus and the receiving field are checked before typing. Settling waits for an interactive
-document and a quiet DOM, with a bounded extra wait for visible loading indicators.
+document and a quiet DOM. It does not guess at loading indicators by class name: a page still loading is read as
+it stands, and the reader and Jev judge from its text whether to look again.
