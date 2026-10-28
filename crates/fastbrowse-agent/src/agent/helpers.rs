@@ -783,8 +783,6 @@ pub(crate) fn code_decision(operation: Operation, target: Option<Control>) -> De
         read_assessment: crate::policy::ReadAssessment::Absent,
         directed: false,
         destination: None,
-        operation_odds: None,
-        target_odds: None,
     }
 }
 

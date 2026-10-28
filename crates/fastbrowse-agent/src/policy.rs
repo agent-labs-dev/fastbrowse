@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
-use fastbrowse_core::config::{Config, Thresholds};
+use fastbrowse_core::config::Config;
 use fastbrowse_core::jev::{
     Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, JevClient, JevError, NoulAnswer, NoulQuestion, Question,
 };
@@ -217,11 +217,6 @@ pub struct Decision {
     /// Drop target of a drag: the control the element Jev chose to drag is released onto.
     #[serde(default)]
     pub destination: Option<Control>,
-    /// The chosen operation's probability over the runner-up's (`lead_odds`); None when it was not one choice.
-    #[serde(default)]
-    pub operation_odds: Option<f64>,
-    #[serde(default)]
-    pub target_odds: Option<f64>,
 }
 
 fn absent() -> ReadAssessment {
@@ -236,32 +231,6 @@ impl Decision {
             Some(target) => self.operation_confidence.min(target),
         }
     }
-
-    /// Whether a choice is too doubtful to act on: under `recover_below` and not a clear favourite.
-    pub fn uncertain(&self, thresholds: &Thresholds) -> bool {
-        !settled(self.operation_confidence, self.operation_odds, thresholds)
-            || self.target_confidence.is_some_and(|t| !settled(t, self.target_odds, thresholds))
-    }
-}
-
-fn settled(confidence: f64, odds: Option<f64>, thresholds: &Thresholds) -> bool {
-    confidence >= thresholds.recover_below
-        || odds.is_some_and(|o| confidence >= thresholds.lead_confidence_from && o >= thresholds.lead_odds)
-}
-
-/// A runner-up at probability 0 makes the lead unbounded; this stands for it and keeps the value finite.
-const MAX_ODDS: f64 = 100.0;
-
-/// The chosen option's probability over the most probable other option's.
-pub fn odds(answer: &ChoiceAnswer) -> f64 {
-    let chosen = answer.probabilities.get(&answer.choice).copied().unwrap_or(0.0);
-    let runner_up = answer
-        .probabilities
-        .iter()
-        .filter(|(option, _)| **option != answer.choice)
-        .map(|(_, p)| *p)
-        .fold(0.0_f64, f64::max);
-    if runner_up <= chosen / MAX_ODDS { MAX_ODDS } else { chosen / runner_up }
 }
 
 /// `_Request`: one step's state and questions, and what each choice's options stand for.
@@ -832,13 +801,10 @@ async fn evaluate(
     let mut tab_id: Option<String> = None;
     let mut url: Option<String> = None;
     let mut target_confidence: Option<f64> = None;
-    // Only a target chosen in one question has a runner-up to lead; a grouped or two-ended one keeps the flat bar.
-    let mut target_odds: Option<f64> = None;
     if let Some(candidates) = request.targets.get(&operation) {
         let target_answer = choice_answer(&evaluation, &format!("{operation}_target"))?;
         target = Some(find_control(candidates, &target_answer.choice)?);
         target_confidence = Some(target_answer.confidence);
-        target_odds = Some(odds(&target_answer));
     } else if let Some(groups) = request.groups.get(&operation) {
         let group_answer = choice_answer(&evaluation, &format!("{operation}_group"))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
@@ -853,7 +819,6 @@ async fn evaluate(
         let target_answer = choice_answer(&evaluation, "switch_tab_target")?;
         tab_id = Some(target_answer.choice.clone());
         target_confidence = Some(target_answer.confidence);
-        target_odds = Some(odds(&target_answer));
     } else if operation == Operation::Navigate {
         let mut group_confidence = 1.0;
         let (target_answer, question) = if request.navigation_groups.is_empty() {
@@ -902,7 +867,6 @@ async fn evaluate(
         };
         // A drag is only as certain as the weaker of its two ends.
         target_confidence = Some(target_confidence.map_or(destination_confidence, |t| t.min(destination_confidence)));
-        target_odds = None;
     }
     let read_assessment = if request.questions.contains_key("read_assessment") {
         let answer = choice_answer(&evaluation, "read_assessment")?;
@@ -928,8 +892,6 @@ async fn evaluate(
         read_assessment,
         directed: false,
         destination,
-        operation_odds: Some(odds(&operation_answer)),
-        target_odds,
     })
 }
 

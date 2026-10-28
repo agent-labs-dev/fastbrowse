@@ -9,15 +9,7 @@ from fastbrowse.models import Frozen, TripwireMode
 
 class Thresholds(Frozen):
     recover_below: float = 0.55
-    """Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts,
-    unless the choice is a clear favourite (`lead_odds`)."""
-    lead_odds: float = 1.5
-    """A choice whose top option is at least this many times as probable as the runner-up acts under
-    `recover_below`, down to `lead_confidence_from`. On a shop's search results Jev split 0.54 to 0.38 between
-    clicking a suggestion and pressing Enter, both ways forward, and put 0.47 to 0.68 on one of 120-odd controls
-    with the next at 0.11 to 0.34: a flat bar sent each of those to a 3s recovery. A near tie still goes."""
-    lead_confidence_from: float = 0.35
-    """Below this a lead is over a flat spread of options, not a favourite."""
+    """Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts."""
     sensitive_act_from: float = 0.90
     """Minimum confidence for an action code has classified as irreversible (authorization also required)."""
     login_required_above: float = 0.70

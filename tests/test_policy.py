@@ -20,7 +20,6 @@ from fastbrowse.jev import (
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Operation, StepOutcome
 from fastbrowse.page import Control, Observation
 from fastbrowse.policy import (
-    Decision,
     HistoryEntry,
     ObservationTooLarge,
     ReadAssessment,
@@ -646,40 +645,3 @@ async def test_explicit_start_redirect_is_normalized_to_its_landing_page() -> No
     operation = jev.requests[0]["operation"]
     assert isinstance(operation, ChoiceQuestion)
     assert "navigate" not in operation.criteria
-
-
-@pytest.mark.parametrize(
-    ("operation", "target", "uncertain"),
-    [
-        # Above the bar acts whatever the lead.
-        ((0.60, 1.1), (0.90, 1.2), False),
-        # Shop search: click 0.57 against fill 0.24 is a favourite.
-        ((0.53, 0.57 / 0.24), None, False),
-        # One of 124 controls at 0.47 against 0.28.
-        ((0.90, 20.0), (0.47, 0.47 / 0.28), False),
-        # Click a suggestion 0.54 against press Enter 0.38: a near tie, recovery decides.
-        ((0.49, 0.54 / 0.38), None, True),
-        # A lead over a flat spread is no favourite.
-        ((0.30, 3.0), None, True),
-        # A grouped target has no single runner-up, so it keeps the flat bar.
-        ((0.90, 20.0), (0.50, None), True),
-    ],
-)
-def test_a_clear_favourite_acts_under_the_recovery_bar(
-    operation: tuple[float, float | None], target: tuple[float, float | None] | None, uncertain: bool
-) -> None:
-    decision = Decision(
-        operation=Operation.CLICK,
-        target=None,
-        tab_id=None,
-        operation_confidence=operation[0],
-        operation_odds=operation[1],
-        target_confidence=None if target is None else target[0],
-        target_odds=None if target is None else target[1],
-        login_required=None,
-        offered_controls=0,
-        reduction=Reduction.NONE,
-        cost=(),
-        input_tokens=0,
-    )
-    assert decision.uncertain(Config().thresholds) is uncertain

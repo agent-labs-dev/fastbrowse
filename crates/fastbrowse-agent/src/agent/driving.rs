@@ -248,7 +248,7 @@ impl Agent {
                     decision = code_decision(Operation::Read, None);
                 }
             }
-            let mut uncertain = decision.uncertain(&self.config.thresholds);
+            let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
             let mut decided_by = Decider::Jev;
             if !state.open_answer_outputs.is_empty() || uncertain || !not_acting(decision.operation) {
                 let usable = without_failed_links(state, &observation);

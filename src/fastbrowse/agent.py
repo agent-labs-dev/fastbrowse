@@ -1116,7 +1116,7 @@ class Agent:
                     state.passed_wall = raw.url
                     # A task inspecting an access boundary needs its observed wall read and verified, not passed.
                     decision = _code_decision(Operation.READ, None)
-            uncertain = decision.uncertain(self._config.thresholds)
+            uncertain = decision.confidence < self._config.thresholds.recover_below
             decided_by = Decider.JEV
             if (state.open_answer_outputs or uncertain or decision.operation not in _NOT_ACTING) and (
                 directed := _follow_recovery(

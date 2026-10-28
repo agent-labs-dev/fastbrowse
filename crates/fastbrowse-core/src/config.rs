@@ -9,17 +9,9 @@ use crate::py::{lax, text};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
-    /// Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts,
-    /// unless the choice is a clear favourite (`lead_odds`).
+    /// Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts.
     #[serde(deserialize_with = "lax::float")]
     pub recover_below: f64,
-    /// A choice whose top option is at least this many times as probable as the runner-up acts under
-    /// `recover_below`, down to `lead_confidence_from`. See config.py for the shop run that set it.
-    #[serde(deserialize_with = "lax::float")]
-    pub lead_odds: f64,
-    /// Below this a lead is over a flat spread of options, not a favourite.
-    #[serde(deserialize_with = "lax::float")]
-    pub lead_confidence_from: f64,
     /// Minimum confidence for an action code has classified as irreversible (authorization also required).
     #[serde(deserialize_with = "lax::float")]
     pub sensitive_act_from: f64,
@@ -54,8 +46,6 @@ impl Default for Thresholds {
     fn default() -> Self {
         Thresholds {
             recover_below: 0.55,
-            lead_odds: 1.5,
-            lead_confidence_from: 0.35,
             sensitive_act_from: 0.90,
             login_required_above: 0.70,
             bot_check_above: 0.70,
