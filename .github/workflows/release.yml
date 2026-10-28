@@ -22,6 +22,7 @@ jobs:
     permissions: {contents: read}
     outputs:
       version: ${{ steps.version.outputs.version }}
+      evals_required: ${{ steps.evals.outputs.required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,6 +41,11 @@ jobs:
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - id: version
         run: echo "version=$(uv version --short)" >> "$GITHUB_OUTPUT"
+      # A patch release ships a bug fix, so it skips the half-hour fixture suites; see scripts/release_guard.py.
+      - id: evals
+        run: |
+          required=$(uv run python scripts/release_guard.py "$(uv version --short)" --evals-required)
+          echo "required=$required" >> "$GITHUB_OUTPUT"
       # The tag is the Python version, and every npm version is published from it.
       - run: uv run python scripts/npm_versions.py
       # The sdist here; the wheels are one per platform, built and smoke-tested by the binaries workflow.
@@ -57,14 +63,19 @@ jobs:
           name: notes
           path: ${{ runner.temp }}/notes.md
 
-  # The same fixture suites the schedule runs, on the tag. They take longer than a build, so they start
-  # alongside it, and the guard below holds the release until both are green. Read-only contents, and the
-  # model keys come from this repository's secrets: a maintainer pushes a tag, never a pull request.
+  # The same fixture suites the schedule runs, on the tag, for a minor or major release. They take longer than a
+  # build, so they start alongside the binaries, and the guard below holds the release until both are green. A
+  # patch release runs the job with the suites skipped rather than skipping the job, because a skipped job would
+  # skip every publish job that needs it. Read-only contents, and the model keys come from this repository's
+  # secrets: a maintainer pushes a tag, never a pull request.
   evals:
+    needs: build
     if: github.event_name == 'push'
     permissions: {contents: read}
     secrets: inherit
     uses: ./.github/workflows/evals.yml
+    with:
+      skip: ${{ needs.build.outputs.evals_required != 'true' }}
 
   # Everything a release needs besides a build: the fixture suites green on the commit that ships, and for a
   # release that publishes a comparison, its measured build in the release history running the same executable
@@ -86,11 +97,13 @@ jobs:
         with:
           python-version: "3.14"
           enable-cache: false
-      # This job only runs once the eval job has succeeded, so its green result is what the guard is told.
+      # This job only runs once the eval job has succeeded, so when the suites were required its green result is
+      # what the guard is told. The guard decides afresh whether they were required, and looks a run up if so.
       - name: Check the release evals guard
         env:
           GH_TOKEN: ${{ github.token }}
-        run: uv run python scripts/release_guard.py "$(uv version --short)" --evals-ran-here
+          RAN_HERE: ${{ needs.build.outputs.evals_required == 'true' && '--evals-ran-here' || '' }}
+        run: uv run python scripts/release_guard.py "$(uv version --short)" $RAN_HERE
 
   # All five targets, each built and smoke-tested on a runner of its own kind, alongside the eval run rather
   # than after it. Nothing publishes unless the guard passes too, so a red fixture gate costs a build but never

@@ -1,11 +1,13 @@
 """Refuse a release without the fixture suites green on the build it ships.
 
-Every release needs the fixture suites green on its exact commit. The release workflow runs them itself on the
-tag and says so with `--evals-ran-here`; a guard run anywhere else looks for a green Evals workflow run on that
-commit instead. A release that commits `docs/results/<version>.jsonl` claims a measured comparison and needs
-more: the measured build must be in its history and run byte-identical executable code. This runs before the
-tag creates the GitHub release or PyPI publishes the wheel, so agent code cannot ship on a red fixture gate and
-a comparison cannot be shipped on code nobody ran.
+Every minor or major release needs the fixture suites green on its exact commit. A patch release (`x.y.z` with `z`
+above 0) that publishes no comparison skips them: it carries a bug fix that has to reach users within the hour, not
+after a half-hour eval campaign, and the scheduled nightly run still covers its commit. The release workflow runs
+them itself on the tag and says so with `--evals-ran-here`; a guard run anywhere else looks for a green Evals
+workflow run on that commit instead. A release that commits `docs/results/<version>.jsonl` claims a measured
+comparison and needs more: the measured build must be in its history and run byte-identical executable code. This
+runs before the tag creates the GitHub release or PyPI publishes the wheel, so agent code cannot ship on a red
+fixture gate and a comparison cannot be shipped on code nobody ran.
 
 The comparison's evidence commit may follow the clean build it measures, but only documentation may: the
 measured commit must be an ancestor of the tag and every tracked file that runs, builds or measures the evals
@@ -43,6 +45,7 @@ DEFAULT_BRANCH = "main"
 _EVIDENCE_FILES = {"README.md", "CHANGELOG.md", "AGENTS.md", "CONTRIBUTING.md", "CLAUDE.md"}
 _EVIDENCE_PREFIXES = ("docs/", ".agents/")
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
+_PATCH = re.compile(r"^\d+\.\d+\.[1-9]\d*$")
 
 
 def comparison_rows(version: str, root: Path = ROOT) -> list[dict[str, Any]] | None:
@@ -153,6 +156,15 @@ def _publication_problems(version: str, root: Path = ROOT) -> list[str]:
 publication_problems = _publication_problems
 
 
+def evals_required(version: str, root: Path = ROOT) -> bool:
+    """Whether this release must have the fixture suites green on its build before it publishes.
+
+    Only a plain patch version is exempt, so a pre-release or a malformed version fails closed, and a patch that
+    publishes a comparison still needs the run its numbers claim.
+    """
+    return not _PATCH.fullmatch(version) or comparison_rows(version, root) is not None
+
+
 def problems(
     version: str,
     head: str,
@@ -164,14 +176,14 @@ def problems(
 ) -> list[str]:
     """Every reason this release may not be published; empty when it may."""
     issues: list[str] = []
-    # Every release, not only one that publishes a comparison, needs the Evals workflow green on its exact
-    # commit; a release with no results file once skipped this and could ship agent code the fixture gate had
-    # not passed. A malformed build fails closed rather than querying a commit that is not a full sha.
+    # Every minor or major release, not only one that publishes a comparison, needs the Evals workflow green on
+    # its exact commit; a release with no results file once skipped this and could ship agent code the fixture
+    # gate had not passed. A malformed build fails closed rather than querying a commit that is not a full sha.
     if not _HEX40.fullmatch(head):
         return [f"release build {head!r} is not a full 40-hex commit sha"]
     # The release workflow runs the suites in a job this guard waits on, so its green result is the fixture
     # evidence; asking GitHub for a separately dispatched run would refuse a tag that ran them itself.
-    if not evals_ran_here and not _evals_green(repository, head, token):
+    if evals_required(version, root) and not evals_ran_here and not _evals_green(repository, head, token):
         issues.append(f"no successful {WORKFLOW} run on the release build {head[:12]}")
     rows = comparison_rows(version, root)
     if rows is None:
@@ -215,15 +227,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="the fixture suites ran green on this build in this same workflow run, so no earlier run is looked for",
     )
+    parser.add_argument(
+        "--evals-required",
+        action="store_true",
+        help="print whether this release needs the fixture suites (true or false) and check nothing else",
+    )
     args = parser.parse_args(argv)
     if not args.version:
         parser.error("a version is required")
-    # Green fixture suites are required for every release, so the commit is needed even with no results, and so
-    # is a token whenever they have to be looked up rather than reported by the job that just passed them.
+    required = evals_required(args.version)
+    if args.evals_required:
+        print("true" if required else "false")
+        return 0
+    # The commit is needed even with no results, and a token whenever green fixture suites are required and have
+    # to be looked up rather than reported by the job that just passed them.
     if not args.head:
         print("no release commit: run from the release workflow or pass --head")
         return 1
-    if not args.evals_ran_here and not args.token:
+    if required and not args.evals_ran_here and not args.token:
         print("no GitHub token: set GH_TOKEN to read the workflow runs")
         return 1
     try:
@@ -241,7 +262,12 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(issues))
         print(f"REFUSED the release of {args.version}")
         return 1
-    evidence = "ran the fixture suites green here" if args.evals_ran_here else f"has a successful {WORKFLOW} run"
+    if not required:
+        evidence = "is a patch release, which skips the fixture suites,"
+    elif args.evals_ran_here:
+        evidence = "ran the fixture suites green here"
+    else:
+        evidence = f"has a successful {WORKFLOW} run"
     if comparison_rows(args.version) is None:
         print(f"PASS {args.version} {evidence} on the release build")
         return 0

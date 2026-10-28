@@ -66,7 +66,7 @@ def test_a_release_without_a_comparison_still_needs_a_green_eval_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: False)
-    issues = release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path)
+    issues = release_guard.problems("0.6.0", "b" * 40, "org/repo", "token", root=tmp_path)
     assert any("no successful" in issue for issue in issues), issues
 
 
@@ -82,7 +82,7 @@ def test_a_release_without_a_comparison_still_queries_the_release_build(
 ) -> None:
     calls: list[tuple] = []
     monkeypatch.setattr(release_guard, "_evals_green", lambda *args: calls.append(args) or True)
-    release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path)
+    release_guard.problems("0.6.0", "b" * 40, "org/repo", "token", root=tmp_path)
     assert calls == [("org/repo", "b" * 40, "token")]
 
 
@@ -94,6 +94,43 @@ def test_a_malformed_release_build_is_refused_without_a_query(
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: pytest.fail("queried a malformed release build"))
     issues = release_guard.problems("0.5.19", head, "org/repo", "token", root=tmp_path)
     assert any("full 40-hex" in issue for issue in issues), issues
+
+
+@pytest.mark.parametrize(
+    ("version", "required"),
+    [("0.8.3", False), ("1.0.10", False), ("0.9.0", True), ("1.0.0", True), ("0.9.1rc1", True), ("0.8", True)],
+)
+def test_only_a_plain_patch_release_skips_the_fixture_suites(tmp_path: Path, version: str, required: bool) -> None:
+    """A bug fix ships without the eval campaign; a pre-release or malformed version fails closed."""
+    assert release_guard.evals_required(version, tmp_path) is required
+
+
+def test_a_patch_release_without_a_comparison_passes_without_a_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: pytest.fail("looked for an eval run"))
+    assert release_guard.problems("0.8.3", "b" * 40, "org/repo", "", root=tmp_path) == []
+    assert release_guard.main(["9.9.9", "--head", "b" * 40]) == 0
+    assert "patch release" in capsys.readouterr().out
+
+
+def test_a_patch_release_that_publishes_a_comparison_still_needs_a_green_eval_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _root(tmp_path, "0.5.19", [_row()])
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: False)
+    assert release_guard.evals_required("0.5.19", root)
+    issues = release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=root)
+    assert any("no successful" in issue for issue in issues), issues
+
+
+def test_the_cli_tells_the_release_workflow_whether_to_run_the_suites(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert release_guard.main(["9.9.9", "--evals-required"]) == 0
+    assert release_guard.main(["9.9.0", "--evals-required"]) == 0
+    assert capsys.readouterr().out.split() == ["false", "true"]
 
 
 def test_cli_requires_a_release_commit_even_without_a_comparison(
@@ -108,7 +145,7 @@ def test_cli_requires_a_token_even_without_a_comparison(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.delenv("GH_TOKEN", raising=False)
-    assert release_guard.main(["9.9.9", "--head", "b" * 40]) == 1
+    assert release_guard.main(["9.9.0", "--head", "b" * 40]) == 1
     assert "no GitHub token" in capsys.readouterr().out
 
 
@@ -124,7 +161,7 @@ def test_the_cli_takes_its_own_eval_run_as_the_evidence_without_a_token(
     """The job that ran them reports them, so the release workflow needs no token to look anything up."""
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: pytest.fail("looked for an earlier run"))
-    assert release_guard.main(["9.9.9", "--head", "b" * 40, "--evals-ran-here"]) == 0
+    assert release_guard.main(["9.9.0", "--head", "b" * 40, "--evals-ran-here"]) == 0
     assert "ran the fixture suites green here" in capsys.readouterr().out
 
 
@@ -135,7 +172,7 @@ def test_a_query_error_fails_closed_even_without_a_comparison(
         raise RuntimeError("cannot read evals.yml runs from GitHub: connection reset")
 
     monkeypatch.setattr(release_guard, "_evals_green", _boom)
-    assert release_guard.main(["9.9.9", "--head", "b" * 40, "--token", "token"]) == 1
+    assert release_guard.main(["9.9.0", "--head", "b" * 40, "--token", "token"]) == 1
     assert "cannot read" in capsys.readouterr().out
 
 

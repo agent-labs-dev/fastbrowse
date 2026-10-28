@@ -31,6 +31,12 @@ on:
         type: string
         required: false
         default: ""
+      skip:
+        # A patch release calls this with the suites skipped (scripts/release_guard.py decides), so the job
+        # still succeeds and the publish jobs behind it run.
+        description: Skip the suites and succeed
+        type: boolean
+        default: false
   schedule:
     - cron: "0 3 * * *"
 
@@ -48,12 +54,17 @@ jobs:
       EVAL_REPEAT: ${{ inputs.repeat || '3' }}
       EVAL_BUDGET: ${{ inputs.budget }}
     steps:
+      # A skipped release run leaves every step below out; the two verdict steps skip with the fixture step.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !inputs.skip }}
         with: {persist-credentials: false}
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        if: ${{ !inputs.skip }}
         with: {python-version: "3.13"}
       - run: uv sync --locked --all-extras
+        if: ${{ !inputs.skip }}
       - name: Require the full comparison protocol
+        if: ${{ !inputs.skip }}
         # A quick dispatch cannot be the green run a published comparison points at: fewer than three repeats is
         # not a rate. This fails before the credential check and before any paid call the runner would make.
         run: |
@@ -62,6 +73,7 @@ jobs:
           esac
           test "$EVAL_REPEAT" -ge 3 || { echo "repeat must be at least 3, got $EVAL_REPEAT"; exit 1; }
       - name: Check the model credentials
+        if: ${{ !inputs.skip }}
         # A missing provider fails before the first task, with its setting named and no empty score report.
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -69,6 +81,7 @@ jobs:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
         run: uv run python scripts/eval_stability.py --check-providers
       - name: Run the fixture eval suites
+        if: ${{ !inputs.skip }}
         id: fixtures
         # The runner exits non-zero on any failed attempt. The stability check below is the verdict at a fixed
         # 100% target, and it requires every task of both suites at the full repeat count, so a runner that died
@@ -105,7 +118,7 @@ jobs:
             --rows artifacts/evals/nightly.jsonl \
             --baseline docs/results
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        if: always() && !inputs.skip
         with:
           name: eval-rows
           path: artifacts/evals/nightly*
