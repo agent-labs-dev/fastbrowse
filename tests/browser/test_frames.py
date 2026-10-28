@@ -74,7 +74,7 @@ async def test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_late
 
         transport.results["Target.createTarget"] = [{"targetId": "second"}]
         transport.results["Target.attachToTarget"] = [{"sessionId": "second-session"}]
-        await session._open_owned_tab("about:blank")
+        await session._open_tab("about:blank", owned=True)
         await asyncio.gather(*session._background)
         await session.switch_tab("owned")
         await asyncio.gather(*session._background)

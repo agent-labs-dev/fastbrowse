@@ -28,7 +28,7 @@ async def test_a_closed_active_tab_hands_over_to_its_opener_else_the_last_active
         for target, session_id in (("second", "second-session"), ("third", "third-session")):
             transport.results["Target.createTarget"] = [{"targetId": target}]
             transport.results["Target.attachToTarget"] = [{"sessionId": session_id}]
-            await session._open_owned_tab("about:blank")
+            await session._open_tab("about:blank", owned=True)
         await session.switch_tab("second")
         await session.switch_tab("third")
         transport.results["Target.attachToTarget"] = [{"sessionId": "popup-session"}]

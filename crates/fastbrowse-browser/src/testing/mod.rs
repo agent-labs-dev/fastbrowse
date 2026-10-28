@@ -89,7 +89,7 @@ pub async fn adopt(session: &BrowserSession, target_id: &str, opener_id: &str) {
 }
 
 pub async fn open_owned_tab(session: &BrowserSession, url: &str) -> Result<(), BrowserError> {
-    session.open_owned_tab(url).await
+    session.open_tab(url, true).await
 }
 
 pub async fn prepare_session(session: &BrowserSession, session_id: &str) -> Result<(), BrowserError> {
