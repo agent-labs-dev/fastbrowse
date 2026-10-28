@@ -456,7 +456,7 @@ def _protocol(row: Mapping[str, Any]) -> list[Finding]:
     from pydantic import ValidationError
 
     from fastbrowse.evals.live_tasks import PageEvidence, page_defect
-    from fastbrowse.evals.observe import VIEWPORT
+    from fastbrowse.evals._harness import VIEWPORT
 
     where = _where(row)
     if row.get("category") != "navigate":

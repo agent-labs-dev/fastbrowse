@@ -109,7 +109,7 @@ reading them back before removing local evidence. Public results contain only th
 The core runs in Rust by default ([ADR 0004](docs/adr/0004-rust-core-by-default.md)): the crates in [crates/](crates)
 port the Python modules below one for one, and the `fastbrowse` wheel carries them as `fastbrowse._native`.
 [native.py](src/fastbrowse/native.py) hands `run_task`, `connect_cdp` and the commands to it. The Python modules stay
-as the fallback `FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0, so until then a behaviour change lands in both cores.
+The Python core and the `FASTBROWSE_PYTHON_CORE=1` fallback are gone as of 0.9.0 (docs/adr/0004); a behaviour change lands in the Rust core.
 
 The run loop is `src/fastbrowse/agent.py` (`crates/fastbrowse-agent`), and everything else is a seam it calls.
 

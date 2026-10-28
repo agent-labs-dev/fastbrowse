@@ -8,8 +8,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from urllib.parse import urlsplit
 
-from fastbrowse.core import python_core
-
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
@@ -73,6 +71,4 @@ class OriginGrant:
         return origin_of(url) in self.origins
 
 
-# The Rust core (crates/fastbrowse-py) in place of the two parsers above, unless FASTBROWSE_PYTHON_CORE=1.
-if not python_core():
-    from fastbrowse._native import origin_of, parse_origin  # ty: ignore[unresolved-import]
+from fastbrowse._native import origin_of, parse_origin  # ty: ignore[unresolved-import]

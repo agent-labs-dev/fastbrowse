@@ -1,20 +1,11 @@
-"""The `fastbrowse` and `fastbrowse-mcp` commands: the Rust core's CLI, or Python's with `FASTBROWSE_PYTHON_CORE=1`."""
+"""The `fastbrowse` and `fastbrowse-mcp` commands, on the Rust core (crates/fastbrowse-cli)."""
 
 from fastbrowse import native
-from fastbrowse.core import python_core
 
 
 def fastbrowse() -> None:
-    if not python_core():
-        native.command("fastbrowse")
-    from fastbrowse.cli import main
-
-    main()
+    native.command("fastbrowse")
 
 
 def fastbrowse_mcp() -> None:
-    if not python_core():
-        native.command("fastbrowse-mcp")
-    from fastbrowse.mcp_server import main
-
-    main()
+    native.command("fastbrowse-mcp")

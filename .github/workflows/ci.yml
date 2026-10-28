@@ -131,14 +131,8 @@ jobs:
       - run: cargo test --workspace --locked
       # Builds the package and its Rust core, `fastbrowse._native`.
       - run: uv sync --locked --all-extras
-      # The browser suites go last and together: pytest collecting a file outside tests/browser between two inside it
-      # loses the fixtures tests/browser/conftest.py gives the later one.
-      - env: {FASTBROWSE_PYTHON_CORE: "0"}
-        run: >-
-          uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py
-          tests/test_retrieval.py tests/test_agent.py tests/test_native.py
-          tests/browser/test_safety.py tests/browser/test_native_parity.py tests/browser/test_native_recording.py
-          tests/browser/test_native_connect.py
+      # The Python suites that covered the retired core are gone (docs/adr/0004); the crates carry its tests.
+      - run: uv run --no-sync pytest -q
       - run: cargo build -p fastbrowse-node --release --locked
       - run: cp target/release/libfastbrowse_node.so crates/fastbrowse-node/fastbrowse.node
       - run: node --test crates/fastbrowse-node/test/core.test.ts

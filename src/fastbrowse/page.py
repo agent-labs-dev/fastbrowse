@@ -292,6 +292,29 @@ class SiteUnreachable(BrowserError):
     does not resolve is not one of these; that can be a mistyped address."""
 
 
+class BrowserUnresponsive(BrowserError, Unavailable):
+    """The browser stopped answering: an outage the same run may not meet again, not a failed task."""
+
+
+class PageUnresponsive(BrowserError):
+    """A tab that stopped answering while the browser behind it still answers: a failure driving the page."""
+
+
+class OriginNotAllowed(BrowserError):
+    """A document outside `allowed_origins`. The message never names it: an address can carry a credential."""
+
+    def __init__(self) -> None:
+        super().__init__("the page is outside allowed_origins")
+
+
+class ScriptError(BrowserError):
+    """A page script the browser could not run."""
+
+
+class RecordingError(RuntimeError):
+    """A recording that could not start or finish, for example with no ffmpeg on `PATH`."""
+
+
 class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool

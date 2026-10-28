@@ -9,7 +9,6 @@ authors = [{ name = "Agent Labs" }]
 requires-python = ">=3.13"
 classifiers = ["Development Status :: 4 - Beta"]
 dependencies = [
-    "cdp-use==1.4.5",
     "httpx[http2]>=0.28,<1",
     "pydantic>=2.11,<3",
     "pydantic-settings>=2.10,<3",
@@ -25,9 +24,6 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 [project.optional-dependencies]
 browser-use = ["browser-use-sdk==3.12.1"]
 eval-data = ["pyyaml>=6,<7"]
-# The Python core's MCP server, which `fastbrowse-mcp` runs with FASTBROWSE_PYTHON_CORE=1; the Rust one needs nothing.
-# mcp 2.x renamed FastMCP to MCPServer and changed other APIs; migrating the server is its own change.
-mcp = ["mcp>=1.20,<2"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.commands:fastbrowse"
@@ -71,9 +67,6 @@ dev = [
     "pre-commit>=4.6.2",
     "actionlint-py==1.7.12.25",
 ]
-# What builds the native executable (`packaging/fastbrowse.spec`). A group of its own, so that the build
-# environment holds the package, this, and neither the development tools nor an extra.
-freeze = ["pyinstaller==6.22.3"]
 # snapshot.js benchmarks (`benchmarks/`), which CodSpeed runs when the script changes.
 bench = ["pytest-codspeed>=5,<6"]
 

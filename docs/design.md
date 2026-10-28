@@ -8,8 +8,8 @@ fastbrowse splits a browser agent into three owners:
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
-`fastbrowse._native` into the wheel. The Python modules are the same design in the fallback core that
-`FASTBROWSE_PYTHON_CORE=1` selects until 0.9.0 ([ADR 0004](adr/0004-rust-core-by-default.md)).
+`fastbrowse._native` into the wheel. The Python modules are a thin layer over it, and the Python core is gone as of 0.9.0
+([ADR 0004](adr/0004-rust-core-by-default.md)).
 
 ## Authorization
 

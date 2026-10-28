@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl
 
-from fastbrowse.adapters.local_chrome import free_port
+from fastbrowse.evals._harness import free_port
 from fastbrowse.evals.local import FIXTURES as EVAL_FIXTURES
 from fastbrowse.evals.local import Recorder
 

@@ -2,7 +2,7 @@
 //!
 //! `origin_of`, `parse_origin` and `text_fragment` stand in for their namesakes in `fastbrowse.origins` and
 //! `fastbrowse.citations`, and `run_task`, `connect_cdp` and `cli_main` for `fastbrowse.run_task`, `connect_cdp`
-//! and the commands, unless `FASTBROWSE_PYTHON_CORE=1`.
+//! and the commands. This is the only core as of 0.9.0 (docs/adr/0004).
 //!
 //! Strings cross as USVStrings, the way WebIDL hands them to a URL parser.
 

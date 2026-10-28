@@ -14,6 +14,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **`traced()` keeps a run's trace in your own process.** `from fastbrowse import traced`, then make the run inside `with traced() as events:`: the in-process counterpart of `--trace`, on either core. A run that builds its own model clients now begins its trace with a `route` event naming the Jev and LLM providers it calls, in `--trace` and `FASTBROWSE_TRACE` output too.
 
 - The eval harness drives fastbrowse only as an embedder does, through `run_task`, `serve --stdio` and the trace, so every suite measures whichever core the package runs. A fixture row's `providers` is now the route the run itself reported. `python -m fastbrowse.evals.latency` times real runs of a fixture task per candidate model instead of calling the planner and reader directly, and `python -m fastbrowse.evals.probe` is gone: the reader and claim check it ran in isolation are not reachable from outside the core.
+## [0.9.0]
+
+- **The Python core is retired.** The Rust core ([ADR 0004](docs/adr/0004-rust-core-by-default.md)) is now the only core: `run_task`, `connect_cdp`, `fastbrowse`, `fastbrowse serve` and `fastbrowse-mcp` hand their work to it, and the `FASTBROWSE_PYTHON_CORE=1` escape hatch is gone. The Python modules under `src/fastbrowse` are the thin layer over `fastbrowse._native` and no longer carry a second implementation of the run loop or the browser. Deleting the core took its tests, the PyInstaller build (`packaging/fastbrowse.spec`, the `freeze` dependency group and the `binaries` job that froze it) and the `cdp-use` dependency with it. Installing from the sdist still needs a Rust toolchain, which [ADR 0001](docs/adr/0001-rust-core-with-in-process-bindings.md) named as the step that is hard to undo.
+- The `mcp` extra is gone with the Python MCP server; `fastbrowse-mcp` is the Rust one and needs nothing. The eval, bench and audit harnesses stay Python and drive the Rust core, and the harness modules that called the Python internals directly (`evals/probe.py`, `evals/latency.py`, `evals/observe.py`) are retired.
+
 
 ## [0.8.1] - 2026-10-28
 

@@ -23,9 +23,6 @@ import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
-from fastbrowse.browser.page import _ScriptError
-from fastbrowse.browser.recording import RecordingError
-from fastbrowse.browser.session import BrowserUnresponsive, OriginNotAllowed, PageUnresponsive
 from fastbrowse.clients.environment import ConfigurationError
 from fastbrowse.jev import (
     JevClient,
@@ -56,6 +53,11 @@ from fastbrowse.models import (
 )
 from fastbrowse.page import (
     Action,
+    BrowserUnresponsive,
+    OriginNotAllowed,
+    PageUnresponsive,
+    RecordingError,
+    ScriptError,
     ActResult,
     BrowserError,
     BrowserUnavailable,
@@ -447,7 +449,7 @@ _PAGE_ERRORS: dict[str, type[BrowserError]] = {
         SiteUnreachable,
         BrowserUnresponsive,
         PageUnresponsive,
-        _ScriptError,
+        ScriptError,
     )
 }
 

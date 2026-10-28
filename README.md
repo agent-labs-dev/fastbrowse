@@ -298,9 +298,9 @@ More in [docs/design.md](docs/design.md).
 
 The core that runs the loop is Rust, in [crates/](crates), and 0.8.0 runs it by default: `run_task`,
 `fastbrowse`, `fastbrowse serve` and `fastbrowse-mcp` hand their work to it, and the `fastbrowse` wheel
-carries it as `fastbrowse._native`. `FASTBROWSE_PYTHON_CORE=1` runs the Python modules instead, as a
-fallback until 0.9.0 removes them: a fix lands in the Rust core only ([ADR 0004](docs/adr/0004-rust-core-by-default.md)). The two reach the same result on all 36
-fixture tasks, and the Rust core uses 18x less agent CPU, starts 54x faster and peaks at 5.4x less memory
+carries it as `fastbrowse._native`, and it is the only core as of 0.9.0
+([ADR 0004](docs/adr/0004-rust-core-by-default.md)). The Rust core uses 18x less agent CPU, starts 54x faster
+and peaks at 5.4x less memory than the retired Python core
 ([measurements](bench/results/rust-vs-python.md)).
 
 ## How it compares

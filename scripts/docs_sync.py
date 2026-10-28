@@ -53,7 +53,7 @@ STATUS_ROW = re.compile(r"^\| `([a-z_]+)` \| (\d+) \|", re.MULTILINE)
 MEDIA = re.compile(r'!\[[^\]]*\]\(([^)\s]+)|<(?:img|video|source)[^>]*\bsrc(?:set)?="([^"]+)"')
 TROUBLE_HEADING = re.compile(r"^## ([a-z_]+) \(exit (\d+)\)", re.MULTILINE)
 STATUS_MEMBER = re.compile(r'^\s+([A-Z_]+) = "([a-z_]+)"', re.MULTILINE)
-EXIT_ENTRY = re.compile(r"Status\.([A-Z_]+): (\d+),")
+EXIT_ENTRY = re.compile(r"Status::([A-Za-z]+) => (\d+),")
 
 
 def read(path: Path) -> str:
@@ -88,8 +88,9 @@ def statuses(root: Path) -> dict[str, str]:
 
 
 def exit_codes(root: Path) -> dict[str, str]:
-    """Each status's exit code, keyed by its enum member."""
-    return dict(EXIT_ENTRY.findall(read(root / "src/fastbrowse/cli.py")))
+    """Each status's exit code, keyed by its enum member. The Rust CLI owns them now (docs/adr/0004)."""
+    found = EXIT_ENTRY.findall(read(root / "crates/fastbrowse-cli/src/cli.rs"))
+    return {re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper(): code for name, code in found}
 
 
 def check_flags(copy: dict[str, str], code: str) -> list[str]:
@@ -122,7 +123,7 @@ def check_statuses(root: Path, copy: dict[str, str]) -> list[str]:
     names = set(statuses(root).values())
     codes = exit_codes(root)
     problems = [
-        f"src/fastbrowse/cli.py: `{name}` has no exit code in EXIT_CODES"
+        f"crates/fastbrowse-cli/src/cli.rs: `{name}` has no exit code in `exit_code`"
         for member, name in statuses(root).items()
         if member not in codes
     ]
