@@ -27,6 +27,10 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with: {python-version: "3.13"}
       - run: uv sync --locked --group bench
+      # `uv sync` builds the Rust core with the dev profile `[tool.uv]` sets, minutes faster and about half the
+      # speed; the benchmarks time the release build a wheel ships. rustup reads rust-toolchain.toml.
+      - run: uvx maturin==1.15.0 develop --release --uv
+        env: {VIRTUAL_ENV: "${{ github.workspace }}/.venv"}
       # The runner image's Node is 18, and Playwright needs 20 or newer.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22", package-manager-cache: false}
