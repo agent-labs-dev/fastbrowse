@@ -822,16 +822,20 @@ impl BrowserSession {
                     || t["title"].as_str().unwrap_or_default().contains(needle)
             });
         }
-        let Some(target) = pages.first() else {
-            if self.0.grant.is_some() && target_match.is_none() {
-                // Every open window is outside the grant, as a fresh cloud browser showing only about:blank is, so
-                // there is nothing the run may take over. It opens a window of its own rather than failing, owned
-                // until it is ready so a failed setup closes it, then kept like the window it stands in for.
+        if pages.is_empty() && self.0.grant.is_some() && target_match.is_none() {
+            // Every open window is outside the grant, as a fresh cloud browser showing only about:blank is. An empty
+            // window shows nothing to keep from the run, so it is taken over rather than left beside a second one.
+            pages.extend(targets.iter().filter(|t| empty_window(t)).take(1));
+            if pages.is_empty() {
+                // Nothing the run may take over: it opens a window of its own rather than failing, owned until it is
+                // ready so a failed setup closes it, then kept like the window it stands in for.
                 self.open_owned_tab("about:blank").await?;
                 let target_id = self.active_target_id();
                 self.0.state.lock().unwrap().owned.remove(&target_id);
                 return Ok(target_id);
             }
+        }
+        let Some(target) = pages.first() else {
             let seen: Vec<String> = listed
                 .iter()
                 .map(|t| format!("{} ({})", py_repr(t["title"].as_str().unwrap_or_default()), str_of(&t["url"])))
@@ -1930,6 +1934,12 @@ pub fn py_repr(s: &str) -> String {
     }
     out.push(quote);
     out
+}
+
+/// A window with nothing in it: about:blank that no page opened. A new tab page can list the person's most visited
+/// sites, and a blank window a page opened may hold whatever that page wrote into it.
+fn empty_window(target: &Value) -> bool {
+    target["type"] == "page" && target["url"] == "about:blank" && target["openerId"].as_str().is_none_or(str::is_empty)
 }
 
 #[cfg(test)]

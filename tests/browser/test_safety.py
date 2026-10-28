@@ -575,6 +575,26 @@ async def test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_o
     await browser_session.client.send.Target.closeTarget(params={"targetId": opened})
 
 
+async def test_an_attached_browser_with_only_an_empty_window_takes_it_over(
+    chrome_connection: BrowserConnection, browser_session: BrowserSession, sites: OriginSites
+) -> None:
+    # A fresh cloud browser shows one about:blank window; the run takes it over instead of opening a second beside
+    # it, so the person watching sees one window.
+    owner = CdpPage(browser_session, Config())
+    await owner.navigate(f"{sites.foreign()}/page")
+    blank = (await browser_session.client.send.Target.createTarget(params={"url": "about:blank"}))["targetId"]
+    before = {t["targetId"] for t in (await browser_session.client.send.Target.getTargets())["targetInfos"]}
+    try:
+        async with scoped(chrome_connection, sites.granted, attach=True) as (session, page):
+            assert session.active_target_id == blank
+            await page.navigate(f"{sites.granted}/ok")
+            assert "Granted popup" in (await page.capture()).text
+        after = {t["targetId"] for t in (await browser_session.client.send.Target.getTargets())["targetInfos"]}
+        assert after == before
+    finally:
+        await browser_session.client.send.Target.closeTarget(params={"targetId": blank})
+
+
 async def test_a_document_the_network_never_saw_is_not_read_or_controlled(
     chrome_connection: BrowserConnection, sites: OriginSites
 ) -> None:

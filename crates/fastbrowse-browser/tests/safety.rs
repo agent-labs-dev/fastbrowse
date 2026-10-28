@@ -572,6 +572,39 @@ async fn test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_ow
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_attached_browser_with_only_an_empty_window_takes_it_over() {
+    let _serial = one_at_a_time().await;
+    let Some(connection) = chrome() else { return };
+    let Some(h) = harness().await else { return };
+    let sites = origin_sites();
+    // A fresh cloud browser shows one about:blank window; the run takes it over instead of opening a second beside
+    // it, so the person watching sees one window.
+    h.page.navigate(&format!("{}/page", sites.foreign("127.0.0.1")), None).await.expect("navigate");
+    let created = h.session.send("Target.createTarget", json!({"url": "about:blank"}), None).await.expect("create");
+    let blank = created["targetId"].as_str().expect("a target").to_owned();
+    let target_ids = |targets: serde_json::Value| -> Vec<String> {
+        let mut ids: Vec<String> = targets["targetInfos"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .filter_map(|t| t["targetId"].as_str().map(str::to_owned))
+            .collect();
+        ids.sort();
+        ids
+    };
+    let before = target_ids(h.session.send("Target.getTargets", json!({}), None).await.expect("targets"));
+    let s = scoped(connection, &sites.granted, true, None).await.expect("attached");
+    assert_eq!(s.session.active_target_id(), blank);
+    s.page.navigate(&format!("{}/ok", sites.granted), None).await.expect("navigate");
+    assert!(s.page.capture().await.expect("capture").text.contains("Granted popup"));
+    s.close().await;
+    let after = target_ids(h.session.send("Target.getTargets", json!({}), None).await.expect("targets"));
+    assert_eq!(after, before);
+    h.session.send("Target.closeTarget", json!({"targetId": blank}), None).await.expect("close");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_document_the_network_never_saw_is_not_read_or_controlled() {
     let _serial = one_at_a_time().await;
     let Some(connection) = chrome() else { return };

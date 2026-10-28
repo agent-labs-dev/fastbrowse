@@ -797,14 +797,17 @@ class BrowserSession:
         pages = [t for t in listed if not t["url"].startswith("devtools://")]
         if target_match is not None:
             pages = [t for t in pages if target_match in t["url"] or target_match in t["title"]]
-        if not pages:
-            if self._grant is not None and target_match is None:
-                # Every open window is outside the grant, as a fresh cloud browser showing only about:blank is, so
-                # there is nothing the run may take over. It opens a window of its own rather than failing, owned
-                # until it is ready so a failed setup closes it, then kept like the window it stands in for.
+        if not pages and self._grant is not None and target_match is None:
+            # Every open window is outside the grant, as a fresh cloud browser showing only about:blank is. An empty
+            # window shows nothing to keep from the run, so it is taken over rather than left beside a second one.
+            pages = [t for t in targets if _empty_window(t)][:1]
+            if not pages:
+                # Nothing the run may take over: it opens a window of its own rather than failing, owned until it is
+                # ready so a failed setup closes it, then kept like the window it stands in for.
                 target_id = await self._open_owned_tab("about:blank")
                 self._owned.discard(target_id)
                 return target_id
+        if not pages:
             seen = [f"{t['title']!r} ({t['url']})" for t in listed]
             wanted = "no page" if target_match is None else f"no page matching {target_match!r}"
             raise BrowserError(f"{wanted} to attach to; pages: {seen}")
@@ -1543,3 +1546,9 @@ def _readable_text(mime: str, raw: bytes) -> str | None:
             text += f"\n[Download cut: {len(raw) - _DOWNLOAD_TEXT_BYTES} bytes omitted; full file in artifact]"
         return text
     return None
+
+
+def _empty_window(target: TargetInfo) -> bool:
+    """A window with nothing in it: about:blank that no page opened. A new tab page can list the person's most
+    visited sites, and a blank window a page opened may hold whatever that page wrote into it."""
+    return target["type"] == "page" and target["url"] == "about:blank" and not target.get("openerId")
