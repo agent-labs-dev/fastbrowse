@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-28
+
 - **A scoped run attached to a browser with no granted window opens one of its own.** A run with `allowed_origins` and `attach` but no `target_match` refuses every window outside the grant, and a browser that shows only `about:blank`, as a freshly started cloud browser does, has none inside it, so the run ended `error` at step 0 with `no page to attach to; pages: []`. It now opens a blank tab, takes it as its window and starts from there. The tab is left open when the run ends, as the window it stands in for would be, so a live view and the next run on that browser still have the page. A `target_match` that matches nothing still fails. Both cores carry the change.
 
 ## [0.8.0] - 2026-10-27
@@ -1584,7 +1586,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.1
 [0.8.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.0
 [0.7.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.4
 [0.7.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.3
