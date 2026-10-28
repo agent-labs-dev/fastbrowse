@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-28
+
 - **A task with a non-ASCII character no longer crashes the Rust core.** Reading the paths a task names, the core looked one byte past each character, so a task with a long dash, an accented letter or an emoji panicked at `navigation.rs` before the run began. It now reads the next character itself.
 
 ## [0.8.2] - 2026-10-28
@@ -1598,7 +1600,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.2...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.3
 [0.8.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.2
 [0.8.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.1
 [0.8.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.0
