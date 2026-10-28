@@ -15,6 +15,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The eval harness drives fastbrowse only as an embedder does, through `run_task`, `serve --stdio` and the trace, so every suite measures whichever core the package runs. A fixture row's `providers` is now the route the run itself reported. `python -m fastbrowse.evals.latency` times real runs of a fixture task per candidate model instead of calling the planner and reader directly, and `python -m fastbrowse.evals.probe` is gone: the reader and claim check it ran in isolation are not reachable from outside the core.
 
+- The fixture runner's claim judge reads its key as a run does, from the environment or `.env`, on the direct API, OpenRouter or the AI Gateway, and asks again when the provider answers 429, a 5xx or drops the connection, rather than ending the campaign before the run it judged is recorded.
+
 ## [0.8.1] - 2026-10-28
 
 - **A scoped run attached to a browser with no granted window opens one of its own.** A run with `allowed_origins` and `attach` but no `target_match` refuses every window outside the grant, and a browser that shows only `about:blank`, as a freshly started cloud browser does, has none inside it, so the run ended `error` at step 0 with `no page to attach to; pages: []`. It now opens a blank tab, takes it as its window and starts from there. The tab is left open when the run ends, as the window it stands in for would be, so a live view and the next run on that browser still have the page. A `target_match` that matches nothing still fails. Both cores carry the change.

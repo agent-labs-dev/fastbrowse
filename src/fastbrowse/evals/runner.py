@@ -9,7 +9,7 @@ posted, whether an order was placed or a password changed.
 Each mock task gets a site of its own, so one task's session, basket or order can never decide another's grade.
 
 Needs OPENROUTER_API_KEY or AI_GATEWAY_API_KEY; the README's Models section describes provider routing. A task
-with claims is graded by the harness's own Jev judge, which needs OPENROUTER_API_KEY or TYPESAFE_API_KEY.
+with claims is graded by the harness's own Jev judge, on the same keys.
 """
 
 import argparse

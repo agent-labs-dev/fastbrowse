@@ -8,12 +8,13 @@ structured output, so a figure written with a currency, a comma or a trailing ze
 The judge is the harness's, not the run's, so it calls Jev itself rather than through either core's client.
 """
 
-import os
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fastbrowse.models import JsonValue
 
@@ -24,6 +25,13 @@ OPENROUTER_URL = "https://openrouter.ai/api"
 OPENROUTER_MODEL = "jev-1.13"
 TYPESAFE_URL = "https://api.typesafe.ai"
 TYPESAFE_MODEL = "jev-1.13.0"
+GATEWAY_URL = "https://ai-gateway.vercel.sh"
+
+RETRY_DELAYS = (0.5, 1.5, 4.0, 8.0)
+"""Seconds before each retry of a judgement the provider failed transiently, so a busy provider costs a campaign
+a few seconds rather than the row of a run already paid for."""
+
+RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,27 +61,84 @@ class Jev:
     def __init__(self, http: httpx.AsyncClient, *, api_key: str, base_url: str, model: str) -> None:
         self._http = http
         self._api_key = api_key
-        self._url = base_url.rstrip("/") + "/v1/systemone"
+        self._base_url = base_url.rstrip("/")
         self._model = model
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, JsonValue]) -> Mapping[str, float]:
-        response = await self._http.post(
-            self._url,
-            json={"model": self._model, "state": state, "questions": dict(questions)},
-            headers={"Authorization": f"Bearer {self._api_key}"},
+        url, body, headers = self._request(state, questions)
+        headers = {"Authorization": f"Bearer {self._api_key}", **headers}
+        for delay in (*RETRY_DELAYS, None):
+            try:
+                response = await self._http.post(url, json=body, headers=headers)
+            except httpx.TransportError:
+                if delay is None:
+                    raise
+            else:
+                if delay is None or response.status_code not in RETRYABLE_STATUS:
+                    response.raise_for_status()
+                    answers: Mapping[str, Mapping[str, float]] = response.json()["answers"]
+                    return {key: self._probability(answers[key]) for key in questions}
+            await asyncio.sleep(delay)
+        raise AssertionError("unreachable: the last attempt returns or raises")
+
+    def _request(
+        self, state: JsonValue, questions: Mapping[str, JsonValue]
+    ) -> tuple[str, dict[str, JsonValue], dict[str, str]]:
+        return (
+            f"{self._base_url}/v1/systemone",
+            {"model": self._model, "state": state, "questions": dict(questions)},
+            {},
         )
-        response.raise_for_status()
-        answers = response.json()["answers"]
-        return {key: float(answers[key]["noul"]) for key in questions}
+
+    def _probability(self, answer: Mapping[str, float]) -> float:
+        return float(answer["noul"])
+
+
+class GatewayJev(Jev):
+    """Jev through the Vercel AI Gateway, which names a yes/no question `boolean` and its P(yes) `probability`."""
+
+    def __init__(self, http: httpx.AsyncClient, *, api_key: str, base_url: str = GATEWAY_URL) -> None:
+        super().__init__(http, api_key=api_key, base_url=base_url, model="typesafe-ai/jev")
+
+    def _request(
+        self, state: JsonValue, questions: Mapping[str, JsonValue]
+    ) -> tuple[str, dict[str, JsonValue], dict[str, str]]:
+        wire: dict[str, JsonValue] = {
+            key: {**question, "type": "boolean"} if isinstance(question, dict) else question
+            for key, question in questions.items()
+        }
+        headers = {
+            "ai-gateway-auth-method": "api-key",
+            "ai-gateway-protocol-version": "0.0.1",
+            "ai-model-id": self._model,
+            "ai-evaluation-model-specification-version": "4",
+        }
+        return f"{self._base_url}/v4/ai/evaluation-model", {"state": state, "questions": wire}, headers
+
+    def _probability(self, answer: Mapping[str, float]) -> float:
+        return float(answer["probability"])
+
+
+class _Keys(BaseSettings):
+    """The provider keys, from the environment or a `.env`, as a run reads them."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    typesafe_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    ai_gateway_api_key: str | None = None
 
 
 def jev_from_environment(http: httpx.AsyncClient) -> Jev:
-    """The judge keyed from OPENROUTER_API_KEY, else TYPESAFE_API_KEY."""
-    if key := os.environ.get("OPENROUTER_API_KEY"):
-        return Jev(http, api_key=key, base_url=OPENROUTER_URL, model=OPENROUTER_MODEL)
-    if key := os.environ.get("TYPESAFE_API_KEY"):
-        return Jev(http, api_key=key, base_url=TYPESAFE_URL, model=TYPESAFE_MODEL)
-    raise RuntimeError("the judge needs OPENROUTER_API_KEY or TYPESAFE_API_KEY")
+    """The judge on the provider a run would start on: the direct API, else OpenRouter, else the gateway."""
+    keys = _Keys()
+    if keys.typesafe_api_key:
+        return Jev(http, api_key=keys.typesafe_api_key, base_url=TYPESAFE_URL, model=TYPESAFE_MODEL)
+    if keys.openrouter_api_key:
+        return Jev(http, api_key=keys.openrouter_api_key, base_url=OPENROUTER_URL, model=OPENROUTER_MODEL)
+    if keys.ai_gateway_api_key:
+        return GatewayJev(http, api_key=keys.ai_gateway_api_key)
+    raise RuntimeError("the judge needs TYPESAFE_API_KEY, OPENROUTER_API_KEY or AI_GATEWAY_API_KEY")
 
 
 async def judge(
