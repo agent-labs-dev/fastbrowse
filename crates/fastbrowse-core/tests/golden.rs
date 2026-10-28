@@ -1,4 +1,4 @@
-//! The bytes Python wrote, from `tests/golden/generate.py`, written again by Rust and compared byte for byte.
+//! The bytes Python wrote, fixed in `tests/golden`, written again by Rust and compared byte for byte.
 
 use std::fs;
 use std::path::Path;

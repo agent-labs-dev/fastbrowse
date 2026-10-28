@@ -1,4 +1,4 @@
-"""`scripts/npm_platform_package.py`: one frozen build in, one publishable `@fastbrowse/<os>-<arch>` package out."""
+"""`scripts/npm_platform_package.py`: one Rust binary in, one publishable `@fastbrowse/<os>-<arch>` package out."""
 
 import json
 import os
@@ -18,33 +18,28 @@ TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"
 needs_modes = pytest.mark.skipif(os.name == "nt", reason="Windows keeps no executable bit")
 
 
-def _frozen(root: Path, *, version: str = "1.2.3", executable: str = "fastbrowse") -> Path:
-    """A directory shaped like PyInstaller's output: the executable, and `_internal/` beside it."""
-    tree = root / "fastbrowse"
-    internal = tree / "_internal"
-    (internal / f"fastbrowse-{version}.dist-info").mkdir(parents=True)
-    (internal / f"fastbrowse-{version}.dist-info" / "METADATA").write_text(f"Name: fastbrowse\nVersion: {version}\n")
-    (internal / "fastbrowse" / "browser").mkdir(parents=True)
-    (internal / "fastbrowse" / "browser" / "snapshot.js").write_text("// the page script\n")
-    (internal / "libpython3.13.so.1.0").write_bytes(b"\x7fELF")
-    (tree / executable).write_bytes(b"\x7fELF the bootloader")
-    (tree / executable).chmod(0o755)
-    return tree
+def _rust(root: Path, *, version: str = "1.2.3", name: str = "fastbrowse") -> Path:
+    """A file shaped like the Rust executable: the version it reports is a literal among its bytes."""
+    root.mkdir(parents=True, exist_ok=True)
+    binary = root / name
+    binary.write_bytes(b"\x7fELF ... fastbrowse " + version.encode() + b"protocol_version ...")
+    binary.chmod(0o755)
+    return binary
 
 
-def _assemble(frozen: Path, target: str, version: str, out: Path) -> subprocess.CompletedProcess[str]:
-    command = [sys.executable, str(SCRIPT), str(frozen), "--target", target, "--version", version, "--out", str(out)]
-    return subprocess.run(command, capture_output=True, text=True)
+def _assemble(build: Path, target: str, version: str, out: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(SCRIPT), str(build), "--target", target, "--version", version, "--out", str(out)]
+    return subprocess.run([*command, *extra], capture_output=True, text=True)
 
 
-def _assembled(frozen: Path, target: str, version: str, out: Path) -> dict[str, Any]:
-    done = _assemble(frozen, target, version, out)
+def _assembled(build: Path, target: str, out: Path, *extra: str) -> dict[str, Any]:
+    done = _assemble(build, target, "1.2.3", out, *extra)
     assert done.returncode == 0, done.stderr
     return json.loads((out / "package.json").read_text())
 
 
 def test_the_package_is_named_for_its_target_and_installs_only_on_it(tmp_path: Path) -> None:
-    manifest = _assembled(_frozen(tmp_path), "darwin-arm64", "1.2.3", tmp_path / "package")
+    manifest = _assembled(_rust(tmp_path), "darwin-arm64", tmp_path / "package")
 
     assert manifest["name"] == "@fastbrowse/darwin-arm64"
     assert manifest["version"] == "1.2.3"
@@ -64,13 +59,13 @@ def test_the_package_is_named_for_its_target_and_installs_only_on_it(tmp_path: P
 def test_each_target_declares_its_own_system(
     tmp_path: Path, target: str, system: str, cpu: str, libc: list[str] | None
 ) -> None:
-    manifest = _assembled(_frozen(tmp_path), target, "1.2.3", tmp_path / "package")
+    manifest = _assembled(_rust(tmp_path), target, tmp_path / "package")
 
     assert (manifest["os"], manifest["cpu"], manifest.get("libc")) == ([system], [cpu], libc)
 
 
 def test_nothing_runs_when_the_package_is_installed(tmp_path: Path) -> None:
-    manifest = _assembled(_frozen(tmp_path), "linux-x64", "1.2.3", tmp_path / "package")
+    manifest = _assembled(_rust(tmp_path), "linux-x64", tmp_path / "package")
 
     assert "scripts" not in manifest
     assert "bin" not in manifest
@@ -78,7 +73,7 @@ def test_nothing_runs_when_the_package_is_installed(tmp_path: Path) -> None:
 
 
 def test_the_package_can_be_published_from_this_repository(tmp_path: Path) -> None:
-    manifest = _assembled(_frozen(tmp_path), "linux-x64", "1.2.3", tmp_path / "package")
+    manifest = _assembled(_rust(tmp_path), "linux-x64", tmp_path / "package")
 
     # A scoped package is private unless told otherwise, and provenance is checked against the repository.
     assert manifest["publishConfig"] == {"access": "public"}
@@ -89,92 +84,22 @@ def test_the_package_can_be_published_from_this_repository(tmp_path: Path) -> No
     assert "@fastbrowse/linux-x64" in (tmp_path / "package" / "README.md").read_text()
 
 
-def test_the_build_is_carried_whole_under_fastbrowse(tmp_path: Path) -> None:
-    frozen = _frozen(tmp_path)
-    out = tmp_path / "package"
-    manifest = _assembled(frozen, "linux-x64", "1.2.3", out)
-
-    carried = sorted(path.relative_to(out / "fastbrowse") for path in (out / "fastbrowse").rglob("*"))
-    assert carried == sorted(path.relative_to(frozen) for path in frozen.rglob("*"))
-    assert (out / "fastbrowse" / "fastbrowse").read_bytes() == (frozen / "fastbrowse").read_bytes()
-    assert "fastbrowse" in manifest["files"]
-
-
-@needs_modes
-def test_the_executable_keeps_its_executable_bit(tmp_path: Path) -> None:
-    frozen = _frozen(tmp_path)
-    # What downloading an artifact that was not archived does to it.
-    (frozen / "fastbrowse").chmod(0o644)
-    out = tmp_path / "package"
-    _assembled(frozen, "linux-x64", "1.2.3", out)
-
-    assert (out / "fastbrowse" / "fastbrowse").stat().st_mode & 0o111 == 0o111
-    assert (out / "fastbrowse" / "_internal" / "fastbrowse" / "browser" / "snapshot.js").stat().st_mode & 0o111 == 0
-
-
-@needs_modes
-def test_the_archive_the_binaries_workflow_uploads_is_taken_as_it_is(tmp_path: Path) -> None:
-    frozen = _frozen(tmp_path / "dist")
-    archive = tmp_path / "fastbrowse-linux-x64.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(frozen, arcname="fastbrowse")
-    out = tmp_path / "package"
-    _assembled(archive, "linux-x64", "1.2.3", out)
-
-    assert (out / "fastbrowse" / "fastbrowse").stat().st_mode & 0o111 == 0o111
-    assert (out / "fastbrowse" / "_internal" / "fastbrowse" / "browser" / "snapshot.js").is_file()
-
-
-@needs_modes
-def test_a_symbolic_link_is_carried_as_the_file_it_points_to(tmp_path: Path) -> None:
-    frozen = _frozen(tmp_path)
-    # npm leaves links out of a package, so one left as a link would be a library missing after the install.
-    (frozen / "_internal" / "libpython3.13.so").symlink_to("libpython3.13.so.1.0")
-    out = tmp_path / "package"
-    _assembled(frozen, "linux-x64", "1.2.3", out)
-
-    copied = out / "fastbrowse" / "_internal" / "libpython3.13.so"
-    assert not copied.is_symlink()
-    assert copied.read_bytes() == b"\x7fELF"
-
-
-def test_what_macos_tar_adds_to_an_archive_is_left_out(tmp_path: Path) -> None:
-    frozen = _frozen(tmp_path / "dist")
-    archive = tmp_path / "fastbrowse-darwin-arm64.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(frozen, arcname="fastbrowse")
-        # bsdtar writes a file's extended attributes as a second entry, named for the file with `._` in front.
-        tar.add(frozen / "_internal" / "libpython3.13.so.1.0", arcname="fastbrowse/._fastbrowse")
-        tar.add(frozen / "_internal" / "libpython3.13.so.1.0", arcname="fastbrowse/_internal/._libpython3.13.so.1.0")
-    out = tmp_path / "package"
-    _assembled(archive, "darwin-arm64", "1.2.3", out)
-
-    carried = sorted(path.relative_to(out / "fastbrowse") for path in (out / "fastbrowse").rglob("*"))
-    assert carried == sorted(path.relative_to(frozen) for path in frozen.rglob("*"))
-
-
 def test_a_windows_package_holds_the_exe(tmp_path: Path) -> None:
     out = tmp_path / "package"
-    manifest = _assembled(_frozen(tmp_path, executable="fastbrowse.exe"), "win32-x64", "1.2.3", out)
+    manifest = _assembled(_rust(tmp_path, name="fastbrowse.exe"), "win32-x64", out)
 
     assert (manifest["os"], manifest["cpu"]) == (["win32"], ["x64"])
     assert (out / "fastbrowse" / "fastbrowse.exe").is_file()
 
 
 def test_a_build_for_another_system_is_refused(tmp_path: Path) -> None:
-    done = _assemble(_frozen(tmp_path), "win32-x64", "1.2.3", tmp_path / "package")
+    archive = tmp_path / "fastbrowse-linux-x64.tar.gz"
+    with tarfile.open(archive, "w:gz") as packed:
+        packed.add(_rust(tmp_path / "build" / "fastbrowse").parent, arcname="fastbrowse")
+    done = _assemble(archive, "win32-x64", "1.2.3", tmp_path / "package")
 
     assert done.returncode == 1
     assert "fastbrowse.exe" in done.stderr
-    assert not (tmp_path / "package").exists()
-
-
-def test_a_version_the_build_does_not_hold_is_refused(tmp_path: Path) -> None:
-    done = _assemble(_frozen(tmp_path, version="1.2.3"), "linux-x64", "1.2.4", tmp_path / "package")
-
-    assert done.returncode == 1
-    assert "1.2.3" in done.stderr
-    assert "1.2.4" in done.stderr
     assert not (tmp_path / "package").exists()
 
 
@@ -182,14 +107,14 @@ def test_a_directory_with_something_in_it_is_not_written_over(tmp_path: Path) ->
     out = tmp_path / "package"
     out.mkdir()
     (out / "kept").write_text("someone's file")
-    done = _assemble(_frozen(tmp_path), "linux-x64", "1.2.3", out)
+    done = _assemble(_rust(tmp_path), "linux-x64", "1.2.3", out)
 
     assert done.returncode == 1
     assert sorted(path.name for path in out.iterdir()) == ["kept"]
 
 
 def test_the_targets_are_the_ones_built_and_the_ones_the_sdk_depends_on() -> None:
-    # Each job of the workflow builds every target: the frozen and Rust executables, and the wheel.
+    # Each job of the workflow builds every target: the Rust executable and addon, and the wheel.
     built = set(re.findall(r"\{target: ([\w-]+),", (REPO / ".github/workflows/binaries.yml").read_text()))
     sdk = json.loads((REPO / "packages/sdk/package.json").read_text())
 
@@ -199,27 +124,11 @@ def test_the_targets_are_the_ones_built_and_the_ones_the_sdk_depends_on() -> Non
         assert _assemble(Path("no-such-build"), target, "1.2.3", Path("unused")).stderr.startswith("refused: ")
 
 
-def _rust(root: Path, *, version: str = "1.2.3", name: str = "fastbrowse") -> Path:
-    """A file shaped like the Rust executable: the version it reports is a literal among its bytes."""
-    root.mkdir(parents=True, exist_ok=True)
-    binary = root / name
-    binary.write_bytes(b"\x7fELF ... fastbrowse " + version.encode() + b"protocol_version ...")
-    binary.chmod(0o755)
-    return binary
-
-
-def _assembled_rust(binary: Path, target: str, out: Path, *extra: str) -> dict[str, Any]:
-    command = [sys.executable, str(SCRIPT), str(binary), "--rust", "--target", target, "--version", "1.2.3"]
-    done = subprocess.run([*command, "--out", str(out), *extra], capture_output=True, text=True)
-    assert done.returncode == 0, done.stderr
-    return json.loads((out / "package.json").read_text())
-
-
 @needs_modes
-def test_a_rust_binary_is_carried_as_fastbrowse_and_as_fastbrowse_mcp(tmp_path: Path) -> None:
+def test_the_binary_is_carried_as_fastbrowse_and_as_fastbrowse_mcp(tmp_path: Path) -> None:
     binary = _rust(tmp_path / "build")
     out = tmp_path / "package"
-    manifest = _assembled_rust(binary, "linux-x64", out)
+    manifest = _assembled(binary, "linux-x64", out)
 
     assert manifest["files"] == ["fastbrowse", "NOTICE"]
     assert sorted(path.name for path in (out / "fastbrowse").iterdir()) == ["fastbrowse", "fastbrowse-mcp"]
@@ -230,13 +139,13 @@ def test_a_rust_binary_is_carried_as_fastbrowse_and_as_fastbrowse_mcp(tmp_path: 
         assert (out / "fastbrowse" / name).stat().st_mode & 0o111
 
 
-def test_a_rust_binary_in_the_workflow_archive_is_taken_as_it_is(tmp_path: Path) -> None:
+def test_the_binary_in_the_workflow_archive_is_taken_as_it_is(tmp_path: Path) -> None:
     binary = _rust(tmp_path / "build" / "fastbrowse", name="fastbrowse.exe")
     archive = tmp_path / "fastbrowse-win32-x64.tar.gz"
     with tarfile.open(archive, "w:gz") as packed:
         packed.add(binary.parent, arcname="fastbrowse")
     out = tmp_path / "package"
-    _assembled_rust(archive, "win32-x64", out)
+    _assembled(archive, "win32-x64", out)
 
     assert sorted(path.name for path in (out / "fastbrowse").iterdir()) == ["fastbrowse-mcp.exe", "fastbrowse.exe"]
 
@@ -245,18 +154,17 @@ def test_the_addon_rides_along_as_fastbrowse_node(tmp_path: Path) -> None:
     addon = tmp_path / "libfastbrowse_node.dylib"
     addon.write_bytes(b"\xcf\xfa\xed\xfe the addon")
     out = tmp_path / "package"
-    manifest = _assembled_rust(_rust(tmp_path / "build"), "darwin-arm64", out, "--addon", str(addon))
+    manifest = _assembled(_rust(tmp_path / "build"), "darwin-arm64", out, "--addon", str(addon))
 
     assert manifest["files"] == ["fastbrowse", "NOTICE", "fastbrowse.node"]
     assert (out / "fastbrowse.node").read_bytes() == addon.read_bytes()
 
 
 @pytest.mark.parametrize("held", ["1.2.30", "11.2.3", "1.2"])
-def test_a_rust_binary_of_another_version_is_refused(tmp_path: Path, held: str) -> None:
+def test_a_binary_of_another_version_is_refused(tmp_path: Path, held: str) -> None:
     binary = tmp_path / "fastbrowse"
     binary.write_bytes(b"\x7fELF " + held.encode() + b" more")
-    command = [sys.executable, str(SCRIPT), str(binary), "--rust", "--target", "linux-x64", "--version", "1.2.3"]
-    done = subprocess.run([*command, "--out", str(tmp_path / "package")], capture_output=True, text=True)
+    done = _assemble(binary, "linux-x64", "1.2.3", tmp_path / "package")
 
     assert done.returncode == 1
     assert "holds no version 1.2.3" in done.stderr

@@ -62,8 +62,7 @@ def check(name, extras):
         check(requirement.name, requirement.extras)
 
 
-# The mcp extra is what fastbrowse-mcp imports.
-check("fastbrowse", {"mcp"})
+check("fastbrowse", set())
 print(f"{len(seen)} requirement sets checked")
 if failures:
     raise SystemExit("\n".join(failures))

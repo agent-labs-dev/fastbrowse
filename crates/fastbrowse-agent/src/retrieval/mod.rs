@@ -65,7 +65,7 @@ pub(crate) fn notes_room(tokens: &TokenBudget, messages: &[Message], response: &
 }
 
 /// The response models the readers and the composer ask for, by their Python names, for tests that hold them to
-/// pydantic's validation. `_FieldAnswerDraft` is the one `generate_validation.py` builds, with fields 0 and 2.
+/// pydantic's validation. `_FieldAnswerDraft` is the one `tests/golden/validation.json` records, with fields 0 and 2.
 #[doc(hidden)]
 pub fn response_schema(name: &str) -> Option<fastbrowse_core::validation::ModelSchema> {
     use fastbrowse_core::schema::Schema;

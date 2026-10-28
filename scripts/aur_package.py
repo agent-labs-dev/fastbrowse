@@ -5,10 +5,11 @@
 
     uv run python scripts/aur_package.py --publish   # after the package has built, put it on the AUR
 
-`packaging/aur/PKGBUILD` builds three source distributions from PyPI by checksum: fastbrowse, the one exact
-cdp-use version that fastbrowse release requires, and the mcp 1.x pinned in `MCP` below. fastbrowse's checksum
-exists only once PyPI holds the release, so this runs after a tag has published and not in the pull request that
-sets the version.
+`packaging/aur/PKGBUILD` builds fastbrowse's source distribution from PyPI by checksum, compiling the Rust core
+into the wheel. `--write` writes both files whole from `PKGBUILD` and `SRCINFO` below, so a release from before the
+Python core was removed, which needs cdp-use beside it, is refused rather than packaged. The checksum exists only
+once PyPI holds the release, so this runs after a tag has published and not in the pull request that sets the
+version.
 
 A release used to fail here after PyPI had accepted the upload but before its file host served the file: the
 checksums were right and the Arch build's download was a 404. `--wait` therefore waits for the file itself, not
@@ -40,53 +41,111 @@ FILES = ("PKGBUILD", ".SRCINFO")
 AUR_REMOTE = "ssh://aur@aur.archlinux.org/fastbrowse.git"
 
 
-# The newest mcp 1.x. Arch's python-mcp moved to 2.x, and mcp 2 renamed FastMCP to MCPServer, so the Python
-# core's MCP server cannot import it. fastbrowse requires a range (`mcp<2,>=1.20`) rather than one exact
-# version, so this cannot be read off PyPI the way cdp-use's exact pin is: it is the newest 1.x chosen here.
-MCP = "1.30.0"
+PKGBUILD = """\
+# Maintainer: Agent Labs <https://github.com/agent-labs-dev/fastbrowse/issues>
+#
+# Written from the PyPI release by scripts/aur_package.py, which sets pkgver and sha256sums.
+
+pkgname=fastbrowse
+pkgver={version}
+pkgrel=1
+pkgdesc="Browser automation with cited answers, structured output and code-controlled credentials and authorization"
+# The wheel carries the Rust core as `fastbrowse._native`, compiled here from the sdist, so the package is one per
+# architecture (docs/adr/0004).
+arch=('x86_64' 'aarch64')
+# makepkg's LTO flags compile ring's C and assembly into bitcode the Rust link does not pull in, which leaves the
+# module with undefined ring symbols at import.
+options=('!lto')
+url="https://github.com/agent-labs-dev/fastbrowse"
+license=('MIT')
+depends=(
+  'python>=3.13'
+  'python-h2'
+  'python-httpx>=0.28.1'
+  'python-pydantic>=2.11'
+)
+makedepends=('python-build' 'python-installer' 'python-maturin' 'rust')
+optdepends=(
+  'chromium: a local browser for --local'
+  'google-chrome: a local browser for --local'
+)
+source=("https://files.pythonhosted.org/packages/source/f/fastbrowse/fastbrowse-$pkgver.tar.gz")
+sha256sums=('{sha256}')
+
+build() {{
+  cd "$srcdir/fastbrowse-$pkgver"
+  python -m build --wheel --no-isolation
+}}
+
+package() {{
+  local prefix=/opt/fastbrowse script
+  # A virtual environment is this file and an interpreter beside it. Written by hand, because `python -m venv`
+  # records the build directory in the files it makes.
+  install -d "$pkgdir$prefix/bin" "$pkgdir/usr/bin"
+  ln -s /usr/bin/python "$pkgdir$prefix/bin/python"
+  printf 'home = /usr/bin\\ninclude-system-site-packages = true\\n' > "$pkgdir$prefix/pyvenv.cfg"
+  python -m installer --destdir="$pkgdir" --prefix="$prefix" "$srcdir/fastbrowse-$pkgver"/dist/*.whl
+
+  for script in fastbrowse fastbrowse-mcp; do
+    # The installer names the interpreter that ran it, which would start the system Python and never look in
+    # the private prefix.
+    sed -i "1s|.*|#!$prefix/bin/python|" "$pkgdir$prefix/bin/$script"
+    ln -s "$prefix/bin/$script" "$pkgdir/usr/bin/$script"
+  done
+
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$srcdir/fastbrowse-$pkgver"/{{LICENSE,NOTICE}}
+}}
+"""
+"""The PKGBUILD for one release, given its version and its source distribution's checksum."""
+
+SRCINFO = """\
+pkgbase = fastbrowse
+\tpkgdesc = Browser automation with cited answers, structured output and code-controlled credentials and authorization
+\tpkgver = {version}
+\tpkgrel = 1
+\turl = https://github.com/agent-labs-dev/fastbrowse
+\tarch = x86_64
+\tarch = aarch64
+\tlicense = MIT
+\tmakedepends = python-build
+\tmakedepends = python-installer
+\tmakedepends = python-maturin
+\tmakedepends = rust
+\tdepends = python>=3.13
+\tdepends = python-h2
+\tdepends = python-httpx>=0.28.1
+\tdepends = python-pydantic>=2.11
+\toptdepends = chromium: a local browser for --local
+\toptdepends = google-chrome: a local browser for --local
+\toptions = !lto
+\tsource = https://files.pythonhosted.org/packages/source/f/fastbrowse/fastbrowse-{version}.tar.gz
+\tsha256sums = {sha256}
+
+pkgname = fastbrowse
+"""
+"""What `makepkg --printsrcinfo` writes for that PKGBUILD, which `packaging/aur/build.sh` checks."""
 
 
 class Release(NamedTuple):
-    """What the package pins: the three versions, and the checksum of each one's source distribution."""
+    """What the package pins: the fastbrowse version, and the checksum of its source distribution."""
 
     version: str
-    cdp_use: str
-    mcp: str
-    sums: tuple[str, str, str]
+    sha256: str
 
 
 def pinned(pkgbuild: str) -> Release:
-    """The release a PKGBUILD installs."""
+    """The release a PKGBUILD installs: its version and the checksum of its first source, which is fastbrowse's."""
     version = re.search(r"^pkgver=(\S+)$", pkgbuild, re.MULTILINE)
-    cdp_use = re.search(r"^_cdp_use=(\S+)$", pkgbuild, re.MULTILINE)
-    mcp = re.search(r"^_mcp=(\S+)$", pkgbuild, re.MULTILINE)
-    sums = re.search(r"^sha256sums=\('([0-9a-f]{64})'\s+'([0-9a-f]{64})'\s+'([0-9a-f]{64})'\)$", pkgbuild, re.MULTILINE)
-    if not (version and cdp_use and mcp and sums):
-        raise SystemExit("PKGBUILD has no pkgver, _cdp_use, _mcp or triple of sha256sums to read")
-    return Release(version[1], cdp_use[1], mcp[1], (sums[1], sums[2], sums[3]))
+    sha256 = re.search(r"^sha256sums=\('([0-9a-f]{64})'", pkgbuild, re.MULTILINE)
+    if not (version and sha256):
+        raise SystemExit("PKGBUILD has no pkgver or sha256sums to read")
+    return Release(version[1], sha256[1])
 
 
-def rewrite(text: str, old: Release, new: Release) -> str:
-    """A PKGBUILD or .SRCINFO that installed `old`, installing `new`.
-
-    The version lines are matched whole, with or without the spaces .SRCINFO puts around `=`, and the source
-    names by their own prefix: fastbrowse and cdp-use may one day carry the same number, and a plain
-    replacement of one version would then move the other.
-    """
-    for key, was, now in (
-        ("pkgver", old.version, new.version),
-        ("_cdp_use", old.cdp_use, new.cdp_use),
-        ("_mcp", old.mcp, new.mcp),
-    ):
-        text = re.sub(rf"^(\s*{key} ?= ?){re.escape(was)}$", rf"\g<1>{now}", text, flags=re.MULTILINE)
-    # A new upstream version starts again from the first build of it.
-    text = re.sub(r"^(\s*pkgrel ?= ?)\d+$", r"\g<1>1", text, flags=re.MULTILINE)
-    text = text.replace(f"fastbrowse-{old.version}.tar.gz", f"fastbrowse-{new.version}.tar.gz")
-    text = text.replace(f"cdp_use-{old.cdp_use}.tar.gz", f"cdp_use-{new.cdp_use}.tar.gz")
-    text = text.replace(f"mcp-{old.mcp}.tar.gz", f"mcp-{new.mcp}.tar.gz")
-    for was, now in zip(old.sums, new.sums, strict=True):
-        text = text.replace(was, now)
-    return text
+def render(release: Release) -> dict[str, str]:
+    """`PKGBUILD` and `.SRCINFO` for `release`, by file name."""
+    fields = release._asdict()
+    return {"PKGBUILD": PKGBUILD.format(**fields), ".SRCINFO": SRCINFO.format(**fields)}
 
 
 def source_url(name: str, filename: str) -> str:
@@ -146,22 +205,15 @@ def _source_sum(record: dict) -> str:
 
 
 def published(version: str, wait: float = 0) -> Release:
-    """The release as PyPI holds it: the cdp-use version it requires, and all three sources' checksums."""
+    """The release as PyPI holds it, refused when it still needs cdp-use, which this package does not build."""
     record = _pypi("fastbrowse", version, wait)
     requires = record["info"]["requires_dist"] or []
-    pins = [match[1] for line in requires if (match := re.fullmatch(r"cdp-use==(\S+)", line))]
-    if len(pins) != 1:
-        raise SystemExit(f"fastbrowse {version} does not require one exact cdp-use version, which the PKGBUILD assumes")
-    release = Release(
-        version,
-        pins[0],
-        MCP,
-        (_source_sum(record), _source_sum(_pypi("cdp-use", pins[0], wait)), _source_sum(_pypi("mcp", MCP, wait))),
-    )
+    if any(re.match(r"cdp-use\b", line) for line in requires):
+        raise SystemExit(f"fastbrowse {version} still needs cdp-use, from before the Python core was removed")
+    release = Release(version, _source_sum(record))
     if wait:
-        # The three files the PKGBUILD will fetch, waited for by the address it fetches them from.
-        for name, pinned_version in (("fastbrowse", version), ("cdp-use", pins[0]), ("mcp", MCP)):
-            _reachable(source_url(name, f"{name.replace('-', '_')}-{pinned_version}.tar.gz"), wait)
+        # The file the PKGBUILD will fetch, waited for by the address it fetches it from.
+        _reachable(source_url("fastbrowse", f"fastbrowse-{version}.tar.gz"), wait)
     return release
 
 
@@ -229,20 +281,15 @@ def main() -> int:
         return publish(directory, old)
     new = published(version, args.wait)
     if old == new:
-        print(f"the AUR package is fastbrowse {new.version} with cdp-use {new.cdp_use} and mcp {new.mcp}")
+        print(f"the AUR package is fastbrowse {new.version}")
         return 0
     if not args.write:
-        print(
-            f"packaging/aur is fastbrowse {old.version} with cdp-use {old.cdp_use} and mcp {old.mcp}, and PyPI has:",
-            file=sys.stderr,
-        )
-        print(f"  fastbrowse {new.version} with cdp-use {new.cdp_use} and mcp {new.mcp}", file=sys.stderr)
+        print(f"packaging/aur is fastbrowse {old.version}, and PyPI has {new.version}", file=sys.stderr)
         print("run scripts/aur_package.py --write", file=sys.stderr)
         return 1
-    for name in FILES:
-        path = directory / name
-        path.write_text(rewrite(path.read_text(encoding="utf-8"), old, new), encoding="utf-8")
-    print(f"the AUR package is now fastbrowse {new.version} with cdp-use {new.cdp_use} and mcp {new.mcp}")
+    for name, text in render(new).items():
+        (directory / name).write_text(text, encoding="utf-8")
+    print(f"the AUR package is now fastbrowse {new.version}")
     return 0
 
 

@@ -1,5 +1,5 @@
-//! tests/test_fetch.py: a page read over HTTP has to produce the blocks a browser capture produces, or quotes break.
-//! `golden/fetch.json` holds the blocks Python's reader makes of every fixture page; `golden/generate.py` writes it.
+//! A page read over HTTP has to produce the blocks a browser capture produces, or quotes break. `golden/fetch.json`
+//! holds the blocks the Python reader made of every fixture page, which the Rust one must still make.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

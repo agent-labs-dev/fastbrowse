@@ -1,27 +1,19 @@
-"""`connect_cdp` on the Rust core: a page with the Python page's methods, reading and acting as it does."""
+"""`connect_cdp` on the Rust core: a page a caller reads and acts on, in this process."""
 
 import asyncio
-import importlib
 import json
 import time
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 import pytest
 
-from fastbrowse.browser.session import OriginNotAllowed
-from fastbrowse.models import BrowserConnection, Operation, StepOutcome
-from fastbrowse.page import Action, BrowserError
+from fastbrowse.models import Operation, StepOutcome
+from fastbrowse.page import Action, BrowserError, OriginNotAllowed
 from fastbrowse.run import connect_cdp
 from tests.browser.conftest import RecordingArtifactSink
-
-try:
-    NATIVE = hasattr(importlib.import_module("fastbrowse._native"), "connect_cdp")
-except ImportError:
-    NATIVE = False
-
-pytestmark = pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with connect_cdp is not installed")
 
 
 async def read(cdp_url: str, url: str) -> dict[str, object]:
@@ -48,51 +40,39 @@ async def read(cdp_url: str, url: str) -> dict[str, object]:
 
 
 @pytest.mark.timeout(120)
-async def test_both_cores_read_and_act_alike(
-    chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_a_page_reads_and_acts(cdp_url: str, main_site: str) -> None:
     url = f"{main_site}/index.html"
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
-    python = await read(chrome_connection.cdp_url, url)
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
-    rust = await read(chrome_connection.cdp_url, url)
-    assert python["typed"] is StepOutcome.EXECUTED
-    assert python["png"] == b"\x89PNG\r\n\x1a\n"
-    assert rust == python
+    read_back = await read(cdp_url, url)
+    assert read_back["typed"] is StepOutcome.EXECUTED
+    assert read_back["png"] == b"\x89PNG\r\n\x1a\n"
+    assert (read_back["address"], read_back["origin"], read_back["status"]) == (url, main_site, 200)
+    assert "Username" in cast(list[str], read_back["labels"])
+    assert read_back["text"]
+    assert read_back["changed"] is False
+    assert read_back["artifacts"] == ()
 
 
-async def test_a_page_outside_the_allowed_origins_raises_origin_not_allowed(
-    chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
-    async with connect_cdp(
-        cdp_url=chrome_connection.cdp_url, attach=False, allowed_origins=["https://elsewhere.example"]
-    ) as page:
+async def test_a_page_outside_the_allowed_origins_raises_origin_not_allowed(cdp_url: str, main_site: str) -> None:
+    async with connect_cdp(cdp_url=cdp_url, attach=False, allowed_origins=["https://elsewhere.example"]) as page:
         with pytest.raises(OriginNotAllowed):
             await page.navigate(f"{main_site}/index.html")
 
 
-async def test_check_access_refusing_raises_browser_error_naming_its_type(
-    chrome_connection: BrowserConnection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
+async def test_check_access_refusing_raises_browser_error_naming_its_type(cdp_url: str, tmp_path: Path) -> None:
 
     async def refused() -> None:
         raise PermissionError("revoked for jane@example.com")
 
     with pytest.raises(BrowserError, match=r"\(PermissionError, caller supplied\)") as raised:
-        async with connect_cdp(cdp_url=chrome_connection.cdp_url, check_access=refused, downloads=tmp_path):
+        async with connect_cdp(cdp_url=cdp_url, check_access=refused, downloads=tmp_path):
             pass
     assert "jane" not in str(raised.value)
 
 
 @pytest.mark.timeout(60)
-async def test_a_download_goes_to_the_callers_artifact_sink(
-    chrome_connection: BrowserConnection, main_site: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
+async def test_a_download_goes_to_the_callers_artifact_sink(cdp_url: str, main_site: str) -> None:
     sink = RecordingArtifactSink()
-    async with connect_cdp(cdp_url=chrome_connection.cdp_url, attach=False, artifact_sink=sink) as page:
+    async with connect_cdp(cdp_url=cdp_url, attach=False, artifact_sink=sink) as page:
         await page.navigate(f"{main_site}/index.html")
         observation = await page.observe()
         link = next(control for control in observation.controls if control.label == "Download attachment")
@@ -151,8 +131,5 @@ async def cancelled_once_open(cdp_url: str, *, after_settling: bool) -> set[str]
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize("after_settling", [False, True], ids=["before-the-page-arrives", "as-the-page-arrives"])
-async def test_a_cancelled_open_closes_the_tab_it_opened(
-    chrome_connection: BrowserConnection, monkeypatch: pytest.MonkeyPatch, after_settling: bool
-) -> None:
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
-    assert await cancelled_once_open(chrome_connection.cdp_url, after_settling=after_settling) == set()
+async def test_a_cancelled_open_closes_the_tab_it_opened(cdp_url: str, after_settling: bool) -> None:
+    assert await cancelled_once_open(cdp_url, after_settling=after_settling) == set()

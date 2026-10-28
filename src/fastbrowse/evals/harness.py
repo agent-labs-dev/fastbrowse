@@ -2,7 +2,7 @@
 
 The harness drives fastbrowse only as an embedder does, through `run_task`, `serve --stdio` and the trace, so it
 measures whichever core the package runs. A helper the core also has is written again here rather than imported,
-since the core's copy is free to change, or to go with the Python core.
+since the core's copy is free to change.
 """
 
 import json
@@ -109,6 +109,30 @@ def _tail(log: IO[bytes]) -> str:
     log.seek(0)
     text = log.read()[-2000:].decode(errors="replace").strip()
     return f":\n{text}" if text else ""
+
+
+def environment(dotenv: Path = Path(".env")) -> dict[str, str]:
+    """The settings a run would see: this process's environment over the `.env` the core reads beside it.
+
+    `KEY=value` lines, optionally quoted, and a `#` after a space starts a comment, as python-dotenv reads them. An
+    empty value is no setting at all.
+    """
+    read: dict[str, str] = {}
+    if dotenv.is_file():
+        for line in dotenv.read_text(encoding="utf-8").splitlines():
+            line = line.strip().removeprefix("export ")
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            elif not value.startswith("#"):
+                value = value.split(" #", 1)[0].rstrip()
+            read[key.strip()] = value
+    # The process wins even when it sets a key empty, as the core's `Settings::from_sources` does; emptiness is
+    # applied after the merge.
+    return {key: value for key, value in (read | os.environ).items() if value}
 
 
 def origin_of(url: str) -> str:

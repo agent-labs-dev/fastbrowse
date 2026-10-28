@@ -1,11 +1,10 @@
-"""`fastbrowse.native`: `run_task` on the Rust core in this process, the default since 0.8.0.
+"""`fastbrowse.native`: `run_task` on the Rust core in this process.
 
-The options are checked here without the module. The runs need `fastbrowse._native`, which `uv sync` builds.
+The runs need `fastbrowse._native`, which `uv sync` builds.
 """
 
 import asyncio
 import base64
-import importlib
 import inspect
 import json
 import os
@@ -21,8 +20,6 @@ import pytest
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from fastbrowse import native, run_task
-from fastbrowse.clients.environment import ConfigurationError
-from fastbrowse.clients.openai_compatible import _ends_mid_json
 from fastbrowse.config import Config
 from fastbrowse.evals.harness import providers, transient_seconds
 from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, Question
@@ -31,26 +28,19 @@ from fastbrowse.models import (
     Attachment,
     BrowserEvent,
     BudgetStop,
+    ConfigurationError,
     CostBasis,
     CostComponent,
     CostLine,
     Limits,
     LLMPurpose,
     LocalChrome,
+    SecretRef,
     Status,
     StepEvent,
 )
-from fastbrowse.safety import ScopedSecrets
-from fastbrowse.scripted import ScriptedJev, ScriptedLLM, steps
 from fastbrowse.telemetry import BudgetExceeded, traced
-
-try:
-    fastbrowse_native = importlib.import_module("fastbrowse._native")
-
-    NATIVE = hasattr(fastbrowse_native, "run_task")
-except ImportError:
-    NATIVE = False
-needs_native = pytest.mark.skipif(not NATIVE, reason="fastbrowse._native with run_task is not installed")
+from tests.scripted import ScriptedJev, ScriptedLLM, steps
 
 
 class Release(BaseModel):
@@ -72,8 +62,29 @@ async def _until(_: str) -> bool:
     return True
 
 
+class Secrets:
+    """A `SecretResolver` holding each value for one origin."""
+
+    def __init__(self, values: Mapping[str, str], origin: str) -> None:
+        self._values = values
+        self._origin = origin
+
+    def available(self) -> tuple[SecretRef, ...]:
+        return tuple(SecretRef(name=name, origins=(self._origin,)) for name in self._values)
+
+    async def resolve(self, name: str, origin: str) -> str | None:
+        return self._values.get(name) if origin == self._origin else None
+
+
+def _ends_mid_json(error: ValidationError) -> bool:
+    return any(
+        detail["type"] == "json_invalid" and str(detail.get("ctx", {}).get("error", "")).startswith("EOF")
+        for detail in error.errors(include_url=False)
+    )
+
+
 def test_arguments_become_the_options_the_core_reads() -> None:
-    secrets = ScopedSecrets({"password": "hunter2"}, "https://shop.example")
+    secrets = Secrets({"password": "hunter2"}, "https://shop.example")
     written = native.options(
         arguments(
             start="https://pypi.org/",
@@ -111,14 +122,12 @@ def test_every_run_task_argument_crosses() -> None:
 
 @pytest.fixture
 def rust_core(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
     # A checkout's `.env` would hand the run a real key.
     monkeypatch.chdir(tmp_path)
     for name in ("OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_KEY", "BROWSER_USE_API_KEY"):
         monkeypatch.delenv(name, raising=False)
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_a_missing_key_raises_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="OPENROUTER_API_KEY"):
@@ -139,7 +148,6 @@ class Silent:
         writer.close()
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_cancelling_the_awaiting_task_stops_the_rust_run_and_closes_its_connection(
     monkeypatch: pytest.MonkeyPatch,
@@ -163,7 +171,6 @@ async def test_cancelling_the_awaiting_task_stops_the_rust_run_and_closes_its_co
     assert [event.type for event in events] == ["browser"]
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_an_exception_a_callback_raises_comes_out_of_run_task(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
@@ -211,7 +218,6 @@ class Counted:
         self.http = httpx.AsyncClient(transport=httpx.MockTransport(page))
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_the_callers_own_clients_serve_the_rust_run() -> None:
     counted = Counted()
@@ -232,7 +238,6 @@ async def test_the_callers_own_clients_serve_the_rust_run() -> None:
     assert result.cost.known_dollars == 0.0
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_a_reservation_the_rust_ledger_refuses_ends_the_run_budget_exceeded() -> None:
     counted = Counted()
@@ -264,7 +269,6 @@ async def test_a_reservation_the_rust_ledger_refuses_ends_the_run_budget_exceede
     assert result.budget == BudgetStop(resource="llm_calls", limit=1)
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_check_access_refusing_ends_the_run_naming_only_the_exception_type() -> None:
     counted = Counted()
@@ -286,7 +290,6 @@ async def test_check_access_refusing_ends_the_run_naming_only_the_exception_type
     assert counted.requests == []
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_an_llm_client_that_raises_fails_as_that_client_and_the_run_reports_it() -> None:
     counted = Counted()
@@ -307,7 +310,6 @@ async def test_an_llm_client_that_raises_fails_as_that_client_and_the_run_report
     assert (result.status, result.error) == (Status.ERROR, "'not a model error'")
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_a_redirect_the_callers_client_would_follow_is_checked_against_the_allowed_origins() -> None:
     counted = Counted()
@@ -336,7 +338,6 @@ async def test_a_redirect_the_callers_client_would_follow_is_checked_against_the
 UNKNOWN = CostLine(component=CostComponent.LLM, basis=CostBasis.UNKNOWN, purpose=LLMPurpose.PLAN)
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_receipts_a_client_adds_to_ledger_lines_count_in_the_result() -> None:
     counted = Counted()
@@ -377,7 +378,6 @@ def reading(counted: Counted) -> None:
     counted.jev.evaluate = evidence  # ty: ignore[invalid-assignment]
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises() -> None:
     counted = Counted()
@@ -395,7 +395,7 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             # A request's charge is known only once it is cancelled, which may take a while: the run waits, as
-            # Python's `run_task` joins a cancelled client, for as long as it takes.
+            # The core joins a cancelled client, for as long as it takes.
             await asyncio.sleep(2.1)
             try:
                 ledger.lines.extend([UNKNOWN])
@@ -423,7 +423,6 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
         assert cleanup == ["recorded"]
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_it() -> None:
     counted = Counted()
@@ -451,7 +450,6 @@ async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_
     assert _ends_mid_json(errors[0])
 
 
-@needs_native
 @pytest.mark.usefixtures("rust_core")
 async def test_cancelling_a_run_stops_the_plan_it_began_before_run_task_raises() -> None:
     counted = Counted()
@@ -483,37 +481,23 @@ async def test_cancelling_a_run_stops_the_plan_it_began_before_run_task_raises()
         run.cancel()
         with pytest.raises(asyncio.CancelledError):
             await run
-        # Python's `run_task` cancels the plan it began and joins it before the cancellation reaches the caller.
+        # The core cancels the plan it began and joins it before the cancellation reaches the caller.
         assert stopped == ["plan"]
 
 
-@pytest.mark.parametrize(("command", "core_module"), [("fastbrowse", "fastbrowse.cli"), ("fastbrowse_mcp", "mcp")])
-def test_the_commands_run_the_rust_cli_without_the_python_one(command: str, core_module: str) -> None:
+@pytest.mark.parametrize("command", ["fastbrowse", "fastbrowse_mcp"])
+def test_the_commands_run_the_rust_cli(command: str) -> None:
     program = command.replace("_", "-")
     script = f"import sys; sys.argv = [{program!r}, '--help']; from fastbrowse import commands; commands.{command}()"
-    ran = subprocess.run(
-        [sys.executable, "-X", "importtime", "-c", script],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "FASTBROWSE_PYTHON_CORE": "0"},
-        timeout=30,
-    )
+    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
     assert ran.returncode == 0, ran.stderr
     assert ran.stdout.startswith(f"usage: {program}")
-    imported = {line.rsplit("|", 1)[-1].strip() for line in ran.stderr.splitlines() if line.startswith("import time:")}
-    assert core_module not in imported
 
 
-@needs_native
-@pytest.mark.parametrize("core", ["python", "rust"])
 async def test_a_transient_model_failure_reaches_traced_on_its_clock(
-    core: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The fixture runner leaves out time lost to provider retries, read from `traced()`, on either core."""
-    if core == "rust":
-        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "0")
-    else:
-        monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1")
+    """The fixture runner leaves out time lost to provider retries, read from `traced()`."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
     asked: list[str] = []
@@ -545,15 +529,8 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
     assert 0.5 <= transient_seconds(events, started, ended) < ended - started
 
 
-@needs_native
-@pytest.mark.parametrize("core", ["python", "rust"])
-async def test_a_run_names_the_providers_it_calls_in_its_trace(
-    core: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The fixture runner records the route each run took from the run's own trace, on either core."""
-    from fastbrowse.clients.environment import load_settings
-
-    monkeypatch.setenv("FASTBROWSE_PYTHON_CORE", "1" if core == "python" else "0")
+async def test_a_run_names_the_providers_it_calls_in_its_trace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The fixture runner records the route each run took from the run's own trace."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
     for name in [name for name in os.environ if name.startswith(("FASTBROWSE_LLM", "FASTBROWSE_JEV"))]:
@@ -567,6 +544,9 @@ async def test_a_run_names_the_providers_it_calls_in_its_trace(
                 "Read the release", start="https://pypi.example/httpx", fetch=True, http=http, jev=ScriptedJev([])
             )
     assert result.status is not Status.COMPLETE
-    assert providers(events) == load_settings().providers()
+    assert providers(events) == (
+        "Jev openrouter (no backup: an outage past its retries ends the run); "
+        "LLM google/gemini-3.5-flash-lite, google/gemini-3.8-flash via OpenRouter"
+    )
     # A caller's own clients are theirs to describe.
     assert providers(own) is None

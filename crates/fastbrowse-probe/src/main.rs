@@ -1,11 +1,10 @@
-//! Drive the browser crate through scripted steps and print what each step produced, for the differential check
-//! against Python's `CdpPage` (bench/differential.py) and for timing it (bench/run.py).
+//! Drive the browser crate through scripted steps and print what each step produced, with each step's time.
 //!
 //! Usage: fastbrowse-probe <script.json> <main-origin> [--only <page>]
 //!
 //! The script lists pages, each a fixture path and steps: `observe`, `capture`, or an action naming its target by
 //! label (the first control in the latest observation with that label, optionally the nth). Every page runs in a
-//! fresh session on one launched Chrome, as each Python browser test does. Prints `{"pages": [...]}` with each
+//! fresh session on one launched Chrome. Prints `{"pages": [...]}` with each
 //! step's output and its wall time in milliseconds.
 
 use std::env;

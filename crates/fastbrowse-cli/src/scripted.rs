@@ -1,8 +1,8 @@
 //! Stand-ins for `run_task` that `fastbrowse serve --stdio --run-task NAME` runs, and the altered servers the SDK's
 //! tests start, so a test of the binary needs no browser and no model.
 //!
-//! They are the Rust twins of `tests/serve_scripts.py` and `packages/sdk/test/servers/*.py`, named as Python names
-//! them (`tests.serve_scripts:echo`, `scripted_run:echo`), so one transcript drives either binary.
+//! Each is named as `--run-task` and FASTBROWSE_TEST_SERVER name it (`tests.serve_scripts:echo`, `scripted_run`), names
+//! the tests that drive them share.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -77,7 +77,6 @@ async fn until_stopped(args: &RunArgs, closed: Option<String>) -> Outcome {
 
 async fn run(name: &str, args: RunArgs, requests: Requests) -> Outcome {
     match name {
-        // tests/serve_scripts.py
         "tests.serve_scripts:echo" => {
             emit(&args, browser(None, None)).await;
             Ok(RunResult { answer: Some(format!("echo: {}", args.task)), ..result(Status::Complete) })
@@ -103,7 +102,6 @@ async fn run(name: &str, args: RunArgs, requests: Requests) -> Outcome {
             };
             Ok(RunResult { answer: Some(answer), ..result(Status::Complete) })
         }
-        // packages/sdk/test/servers/scripted_run.py
         "scripted_run:echo" => {
             let params = requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).last().cloned();
             let attachments: Vec<Value> =
@@ -184,8 +182,7 @@ async fn run(name: &str, args: RunArgs, requests: Requests) -> Outcome {
             emit(&args, step(0)).await;
             Ok(RunResult { data: json!(2), ..result(Status::Complete) })
         }
-        // src/fastbrowse/scripted.py: `run_task` on a real browser, the script in the task standing where the models
-        // do. The binary's smoke run, which has no model keys, is this.
+        // `run_task` on a real browser, the script in the task standing where the models do. The binary's smoke run, which has no model keys, is this.
         "fastbrowse.scripted:run_task" => {
             let script = fastbrowse_agent::scripted::steps(&args.task)
                 .map_err(|error| RunError::Failed(format!("ValueError: {error}")))?;
@@ -300,18 +297,18 @@ impl Transport for Noting {
     }
 }
 
-/// How FASTBROWSE_TEST_SERVER alters the real server, as each of the SDK's `servers/*.py` does.
+/// How FASTBROWSE_TEST_SERVER alters the real server for the SDK's tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestServer {
-    /// `environment.py`: first writes the environment it was started with to FASTBROWSE_TEST_ENVIRONMENT_FILE.
+    /// `environment`: first writes the environment it was started with to FASTBROWSE_TEST_ENVIRONMENT_FILE.
     Environment,
-    /// `protocol_2.py`: answers `initialize` with a protocol version the SDK does not speak.
+    /// `protocol_2`: answers `initialize` with a protocol version the SDK does not speak.
     Protocol2,
-    /// `stderr_line.py`: first writes one known line to stderr.
+    /// `stderr_line`: first writes one known line to stderr.
     StderrLine,
-    /// `outlives_shutdown.py`: answers `shutdown`, then never exits, and shrugs off a polite signal.
+    /// `outlives_shutdown`: answers `shutdown`, then never exits, and shrugs off a polite signal.
     OutlivesShutdown,
-    /// `scripted_run.py`: the run FASTBROWSE_TEST_RUN names stands where `run_task` does.
+    /// `scripted_run`: the run FASTBROWSE_TEST_RUN names stands where `run_task` does.
     ScriptedRun(String),
 }
 
@@ -351,7 +348,7 @@ pub fn setup(run_task: Option<&str>, transport: Arc<dyn Transport>) -> (Arc<dyn 
     }
 }
 
-/// After `serve` returns: `outlives_shutdown.py` never exits, and shrugs off a polite signal.
+/// After `serve` returns: `outlives_shutdown` never exits, and shrugs off a polite signal.
 pub async fn linger() {
     if test_server() != Some(TestServer::OutlivesShutdown) {
         return;
