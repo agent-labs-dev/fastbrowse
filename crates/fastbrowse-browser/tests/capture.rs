@@ -447,30 +447,6 @@ async fn test_record_candidates_preserve_frame_and_shadow_boundaries() {
     }
 }
 
-/// A read of "Loading..." costs an LLM call and a second read once the page has drawn what it was loading.
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_capture_waits_for_a_loading_indicator_an_action_gave_up_on() {
-    let Some(h) = harness().await else { return };
-    h.goto("/loading.html").await;
-    visible(&h.session).await;
-    let capture = content_capture(&h.page).await;
-    assert!(capture.text.contains("Hello World!"));
-    assert!(!capture.text.contains("Loading..."));
-    h.close().await;
-}
-
-/// GitHub's empty progress bar and lazy skeletons below the fold cost every GitHub read the full wait.
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_capture_does_not_wait_on_an_indicator_off_screen() {
-    let Some(h) = harness().await else { return };
-    h.goto("/offscreen-loading.html").await;
-    let started = Instant::now();
-    let capture = content_capture(&h.page).await;
-    assert!(capture.text.contains("BSD-3-Clause"));
-    assert!(started.elapsed().as_secs_f64() < 1.0);
-    h.close().await;
-}
-
 /// Read after the whole page, a subscription form's heading followed the footer, and the reader gave the page's
 /// heading above the frame as the heading the form shows.
 #[tokio::test(flavor = "multi_thread")]

@@ -380,56 +380,6 @@ async def test_noop_input_still_waits_for_quiet(page: CdpPage, browser_session: 
     assert quiet >= page_module._SETTLE_QUIET_SECONDS * 1000
 
 
-async def test_capture_waits_for_loading_in_the_same_renderer_call(
-    page: CdpPage, browser_session: BrowserSession, main_site: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await page.navigate(f"{main_site}/dispatch.html")
-    await eval_value(
-        browser_session,
-        browser_session.active_session_id,
-        "document.body.innerHTML = '<p aria-busy=true>Loading</p>'; "
-        "setTimeout(() => { const p = document.querySelector('p'); "
-        "p.removeAttribute('aria-busy'); p.textContent = 'Ready to read'; }, 150);",
-    )
-    evaluate = AsyncMock(wraps=page._evaluate)
-    monkeypatch.setattr(page, "_evaluate", evaluate)
-    capture = await page.capture()
-    assert "Ready to read" in capture.text and "Loading" not in capture.text
-    assert evaluate.await_count == 1
-
-
-async def test_observe_waits_for_loading_before_reading_controls(
-    page: CdpPage, browser_session: BrowserSession, main_site: str
-) -> None:
-    await page.navigate(f"{main_site}/dispatch.html")
-    await eval_value(
-        browser_session,
-        browser_session.active_session_id,
-        "document.body.innerHTML = '<div aria-busy=true>Loading results</div>'; "
-        "setTimeout(() => { const d = document.querySelector('div'); d.removeAttribute('aria-busy'); "
-        "d.innerHTML = '<button>Nonstop result</button>'; }, 150);",
-    )
-    observation = await page.observe()
-    assert [control.label for control in observation.controls] == ["Nonstop result"]
-
-
-async def test_observe_reports_a_dialog_that_opens_while_it_waits_for_loading(
-    page: CdpPage, browser_session: BrowserSession, main_site: str
-) -> None:
-    await page.navigate(f"{main_site}/dispatch.html")
-    await eval_value(
-        browser_session,
-        browser_session.active_session_id,
-        "document.body.innerHTML = '<div aria-busy=true>Loading results</div>'; "
-        "setTimeout(() => alert('Session expired'), 150);",
-    )
-    # The dialog blocks the snapshot's evaluate, which otherwise waits out the 120s command deadline.
-    async with asyncio.timeout(10):
-        observation = await page.observe()
-    assert observation.dialog is not None and observation.dialog.message == "Session expired"
-    await browser_session.handle_dialog(True)
-
-
 @pytest.fixture(scope="module")
 def hung_frame_site() -> Iterator[str]:
     """A page whose cross-site frame stops answering: its renderer spins once the test asks it to."""

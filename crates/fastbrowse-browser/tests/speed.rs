@@ -366,60 +366,6 @@ async fn test_noop_input_still_waits_for_quiet() {
     h.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_capture_waits_for_loading_in_the_same_renderer_call() {
-    let _serial = one_at_a_time().await;
-    let Some((h, proxy)) = proxied().await else { return };
-    h.goto("/dispatch.html").await;
-    eval_active(
-        &h.session,
-        "document.body.innerHTML = '<p aria-busy=true>Loading</p>'; \
-         setTimeout(() => { const p = document.querySelector('p'); \
-         p.removeAttribute('aria-busy'); p.textContent = 'Ready to read'; }, 150);",
-    )
-    .await;
-    let start = proxy.len();
-    let capture = h.page.capture().await.expect("capture");
-    assert!(capture.text.contains("Ready to read") && !capture.text.contains("Loading"), "{}", capture.text);
-    assert_eq!(proxy.page_evaluations_since(start), 1);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_observe_waits_for_loading_before_reading_controls() {
-    let _serial = one_at_a_time().await;
-    let Some(h) = harness().await else { return };
-    h.goto("/dispatch.html").await;
-    eval_active(
-        &h.session,
-        "document.body.innerHTML = '<div aria-busy=true>Loading results</div>'; \
-         setTimeout(() => { const d = document.querySelector('div'); d.removeAttribute('aria-busy'); \
-         d.innerHTML = '<button>Nonstop result</button>'; }, 150);",
-    )
-    .await;
-    let observation = h.observe().await;
-    assert_eq!(observation.controls.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["Nonstop result"]);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_observe_reports_a_dialog_that_opens_while_it_waits_for_loading() {
-    let _serial = one_at_a_time().await;
-    let Some(h) = harness().await else { return };
-    h.goto("/dispatch.html").await;
-    eval_active(
-        &h.session,
-        "document.body.innerHTML = '<div aria-busy=true>Loading results</div>'; \
-         setTimeout(() => alert('Session expired'), 150);",
-    )
-    .await;
-    // The dialog blocks the snapshot's evaluate, which otherwise waits out the 120s command deadline.
-    let observation = timeout(Duration::from_secs(10), h.page.observe()).await.expect("in time").expect("observe");
-    assert_eq!(observation.dialog.as_ref().map(|d| d.message.as_str()), Some("Session expired"));
-    h.session.handle_dialog(true, None).await.expect("dialog");
-    h.close().await;
-}
-
 /// A page whose cross-site frame stops answering: its renderer spins once the test asks it to.
 fn hung_frame_site() -> &'static str {
     static SITE: OnceLock<String> = OnceLock::new();

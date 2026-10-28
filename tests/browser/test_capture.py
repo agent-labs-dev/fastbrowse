@@ -1,7 +1,6 @@
 """Capture blocks preserve the records a reader needs to cite together."""
 
 import json
-import time
 
 import pytest
 from pydantic import JsonValue
@@ -447,23 +446,6 @@ async def test_record_candidates_preserve_frame_and_shadow_boundaries(
     else:
         assert all(block.frame_id is None and "/shadow:" in block.source_id for block in inner)
         assert len({block.source_id.rsplit(":", 1)[0] for block in inner}) == 3
-
-
-async def test_a_capture_waits_for_a_loading_indicator_an_action_gave_up_on(page: CdpPage, main_site: str) -> None:
-    """A read of "Loading..." costs an LLM call and a second read once the page has drawn what it was loading."""
-    await page.navigate(f"{main_site}/loading.html")
-    capture = await content_capture(page)
-    assert "Hello World!" in capture.text
-    assert "Loading..." not in capture.text
-
-
-async def test_a_capture_does_not_wait_on_an_indicator_off_screen(page: CdpPage, main_site: str) -> None:
-    """GitHub's empty progress bar and lazy skeletons below the fold cost every GitHub read the full wait."""
-    await page.navigate(f"{main_site}/offscreen-loading.html")
-    started = time.monotonic()
-    capture = await content_capture(page)
-    assert "BSD-3-Clause" in capture.text
-    assert time.monotonic() - started < 1.0
 
 
 async def test_a_same_origin_frame_is_read_where_it_stands(page: CdpPage, browser_session: BrowserSession) -> None:

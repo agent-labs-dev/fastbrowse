@@ -399,13 +399,6 @@ _SETTLE_POLL_SECONDS = 0.1
 _SETTLE_QUIET_SECONDS = 0.2
 _SETTLE_FRAME_SECONDS = 0.5
 """How long a settle waits for the page to draw a frame before it starts polling without one."""
-# A visible loading indicator outranks a quiet DOM, because a spinner settles the fingerprint while the page it
-# is waiting for does not exist yet. Its own budget, inside `_SETTLE_SECONDS`, is what keeps a page that spins
-# forever from paying the whole settle budget on every action: past it, quiet and ready decide alone.
-_SETTLE_LOADING_SECONDS = 1.5
-# How long a capture waits on a loading indicator an action's settle gave up on. A read of "Loading..." costs a
-# 2 to 3 second LLM call and a second read after it, where the-internet's dynamic loading needs about 5 seconds.
-_CAPTURE_LOADING_SECONDS = 3.0
 _REREADS = 10
 """How many times one reading of the page starts again after the document it was reading was replaced. A
 self-clearing bot check such as PyPI's "Client Challenge" runs its script and then replaces itself with the page,
@@ -620,7 +613,7 @@ class CdpPage(Page):
         snapshot = asyncio.create_task(self._snapshot_all_frames())
         response = asyncio.create_task(self._document_response())
         try:
-            # A timer can open a dialog while the snapshot waits on a loading indicator, and the dialog blocks that
+            # A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             # evaluate until the 120s command deadline.
             read = await self._until_dialog(asyncio.gather(history, snapshot, response))
         finally:
@@ -790,40 +783,28 @@ class CdpPage(Page):
         )
 
     async def _snapshot_all_frames(self) -> tuple[dict[str, _FrameObservation[_Snapshot]], int]:
-        # A results page that hides its controls behind a loading indicator reads as empty until it clears.
         limits = self._config.observation
         caps = json.dumps({"onscreen": limits.max_controls, "offscreen": limits.max_offscreen_controls})
-        result = await self._read_frames(f"{self._page_js}('snapshot', {caps})", _Snapshot, wait_loaded=True)
+        result = await self._read_frames(f"{self._page_js}('snapshot', {caps})", _Snapshot)
         coverage = {frame.session_id: frame.raw.inaccessible_frames for frame in result.values()}
         return result, self._inaccessible_frames(coverage)
 
-    async def _read_frames[T: _FrameText](
-        self, expression: str, shape: type[T], *, wait_loaded: bool = False
-    ) -> dict[str, _FrameObservation[T]]:
+    async def _read_frames[T: _FrameText](self, expression: str, shape: type[T]) -> dict[str, _FrameObservation[T]]:
         result: dict[str, _FrameObservation[T]] = {}
         main_session = self._session.active_session_id
         target_id = self._session.active_target_id
         sources = [(_MAIN, main_session), *self._session.frame_sessions().items()]
 
         async def read(frame_key: str, session_id: str) -> _FrameObservation[T] | None:
-            script = expression
-            if wait_loaded and frame_key == _MAIN:
-                script = (
-                    f"(async () => {{ await {self._loaded_script(_CAPTURE_LOADING_SECONDS)}; "
-                    f"return ({expression}); }})()"
-                )
             try:
                 if frame_key == _MAIN:
-                    raw = await self._evaluate(session_id, script)
+                    raw = await self._evaluate(session_id, expression)
                 else:
-                    raw = await self._frame_evaluate(session_id, script)
+                    raw = await self._frame_evaluate(session_id, expression)
             except BrowserError:
                 if frame_key != _MAIN:
                     return None
-                if not wait_loaded:
-                    raise
-                # A navigation can discard the loading wait. Read the new document as capture did before.
-                raw = await self._evaluate(session_id, expression)
+                raise
             if raw is None:
                 return None
             try:
@@ -838,11 +819,6 @@ class CdpPage(Page):
                 return None
             return _FrameObservation(None if frame_key == _MAIN else frame_key, session_id, parsed)
 
-        if wait_loaded:
-            if main := await read(_MAIN, main_session):
-                result[_MAIN] = main
-            # Loading can attach or replace child frames; read them only after that wait, as before.
-            sources = list(self._session.frame_sessions().items())
         # Preserve source order regardless of completion order so capture offsets and hashes stay stable.
         tasks = [asyncio.create_task(read(key, sid)) for key, sid in sources]
         try:
@@ -893,7 +869,7 @@ class CdpPage(Page):
         blocks: list[Block] = []
         offset = 0
         coverage: dict[str, int] = {}
-        frames = await self._read_frames(self._capture_js, _CaptureSnapshot, wait_loaded=True)
+        frames = await self._read_frames(self._capture_js, _CaptureSnapshot)
         main = frames.get(_MAIN)
         title = main.raw.title if main else ""
         url = main.raw.url if main else await self._origin_once()
@@ -2400,7 +2376,6 @@ class CdpPage(Page):
             self._session.active_session_id,
             f"new Promise(resolve => {{ const sample = {self._page_js}; "
             f"const deadline = performance.now() + {timeout_seconds * 1000}; "
-            f"const spinning = performance.now() + {_SETTLE_LOADING_SECONDS * 1000}; "
             f"const quietOf = state => state.ready && state.quietFor >= {_SETTLE_QUIET_SECONDS * 1000}; "
             "const poll = () => { "
             # The fingerprint walks the whole document, so it is taken only once the clock says quiet, or as the
@@ -2408,11 +2383,8 @@ class CdpPage(Page):
             "let state = sample('quiet'); "
             "if (quietOf(state) || state.hidden || performance.now() >= deadline) state = sample('fingerprint'); "
             "const quiet = quietOf(state); "
-            "const stable = quiet && (!state.loading || performance.now() >= spinning); "
-            "if (stable || state.hidden || performance.now() >= deadline) { "
-            "resolve([stable, state.ready ? state.fingerprint : null]); return; } "
-            # Quiet but still spinning polls at the plain interval: sampling costs a walk of the document, so
-            # aiming at the moment quiet arrives would busy-poll once quiet has already arrived.
+            "if (quiet || state.hidden || performance.now() >= deadline) { "
+            "resolve([quiet, state.ready ? state.fingerprint : null]); return; } "
             f"setTimeout(poll, state.ready && !quiet ? Math.min({_SETTLE_POLL_SECONDS * 1000}, "
             f"Math.max(1, {_SETTLE_QUIET_SECONDS * 1000} - state.quietFor)) "
             f": {_SETTLE_POLL_SECONDS * 1000}); }}; "
@@ -2425,17 +2397,6 @@ class CdpPage(Page):
             "if (document.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); })",
         )
         return _SETTLED.validate_python(result)
-
-    def _loaded_script(self, timeout_seconds: float) -> str:
-        """Wait, in the renderer, for a visible loading indicator to go. Only the indicator is waited on: a page
-        that keeps changing, a ticker or a clock, is readable now and would never go quiet."""
-        return (
-            f"new Promise(resolve => {{ const sample = {self._page_js}; "
-            f"const deadline = performance.now() + {timeout_seconds * 1000}; "
-            "const poll = () => { const state = sample('loading'); "
-            "if (!state.loading || state.hidden || performance.now() >= deadline) { resolve(null); return; } "
-            f"setTimeout(poll, {_SETTLE_POLL_SECONDS * 1000}); }}; poll(); }})"
-        )
 
     async def _evaluate(
         self,
