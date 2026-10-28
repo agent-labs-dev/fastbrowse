@@ -33,10 +33,11 @@ want to browse. Keep its `references` directory beside `SKILL.md`. Personal inst
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the CLI path. Set `TYPESAFE_API_KEY`
 for Jev, direct TypeSafe, which is the recommended route, and `OPENROUTER_API_KEY` for the LLM. If no direct
 Jev key is available, OpenRouter also serves Jev text, but it is not recommended and never receives Jev image
-input. `AI_GATEWAY_API_KEY` is the LLM fallback, and on its own also serves Jev as a last resort, not a Jev
-route to choose. Set keys in the calling process environment or a local `.env`, outside the conversation. Local
-Chrome is the skill default and needs only the model key. Add `BROWSER_USE_API_KEY` for cloud browsing. An
-existing DevTools connection reuses your Chrome; `--local` without a connection starts a separate browser.
+input. `AI_GATEWAY_API_KEY` is the LLM fallback, and on its own also serves Jev as a last resort rather than
+the recommended Jev route. Set keys in the calling process environment or a local `.env`, outside the
+conversation. Local Chrome is the skill default and needs only the model key. Add `BROWSER_USE_API_KEY` for
+cloud browsing. An existing DevTools connection reuses your Chrome; `--local` without a connection starts a
+separate browser.
 The [CLI guide](../README.md#try-it) covers browser profiles, secrets, and budgets.
 For MCP, use the [server setup](../README.md#use-it-from-an-mcp-client) instead; credentials belong to the server's environment.
 

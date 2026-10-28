@@ -10,7 +10,7 @@ evals rather than taken from Typesafe.
 |:--|:--|:--|
 | OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `clients/typesafe.py` with base URL `https://openrouter.ai/api`; a supported Jev text route when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended, and never sent Jev image input |
 | Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `clients/typesafe.py`, selected with `FASTBROWSE_JEV_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route, and the only one that may receive Jev image input |
-| Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `clients/vercel.py`, used with `AI_GATEWAY_API_KEY` as a backup for an outage or the last resort when no other Jev key is supplied. Not a Jev route to choose, and it receives no Jev image input. `FASTBROWSE_JEV_BASE_URL` retargets the selected source |
+| Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `clients/vercel.py`, used with `AI_GATEWAY_API_KEY` as a backup for an outage or the last resort when no other Jev key is supplied. A last resort rather than the recommended Jev route, and it receives no Jev image input. `FASTBROWSE_JEV_BASE_URL` retargets the selected source |
 | Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `clients/validation.py` decodes each shape separately; `policy.py` asks one per control to filter a dense page |
 | Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `policy.py` (operation and target), `retrieval.py` (field and short-fact reads) |
 | Score | Ordered levels, returning a probability-weighted index ([Score](https://docs.typesafe.ai/primitives/score)) | Modelled in `jev.py`, not yet called |
@@ -26,14 +26,14 @@ evals rather than taken from Typesafe.
 
 Use direct TypeSafe. It is the recommended Jev route: one service between fastbrowse and the model, the
 published direct-API price, and the only route that may receive Jev image input. Set
-`TYPESAFE_API_KEY`, or `FASTBROWSE_JEV_SOURCE=typesafe` to make the choice explicit.
+`TYPESAFE_API_KEY`; `FASTBROWSE_JEV_SOURCE=typesafe` makes the choice explicit.
 
 OpenRouter is supported for Jev text when it is the only Jev key, but it is not recommended. It adds a
 third party between fastbrowse and TypeSafe, and it never receives Jev image input. Treat it as a
 convenience for a machine that has no direct key, not as the production route.
 
-The Vercel AI Gateway is a last resort, not a Jev route to choose. `AI_GATEWAY_API_KEY` alone serves the
-LLM and also serves Jev as the last resort; beside a direct or OpenRouter key it adds a Jev backup.
+The Vercel AI Gateway is a last resort rather than the recommended Jev route. `AI_GATEWAY_API_KEY` alone
+serves the LLM and also serves Jev as the last resort; beside a direct or OpenRouter key it adds a Jev backup.
 
 Jev's Images and Box surfaces are Dreamer-ready and are not used by fastbrowse. When they are used, they
 are direct-only: the client sends the `TypeSafe-Danger-Zone-Images` header and an `assets` map only on the

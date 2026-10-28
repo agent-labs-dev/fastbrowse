@@ -80,7 +80,7 @@ uvx fastbrowse "What is the title of the top story right now?" --start https://n
 Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied. That is the recommended route. OpenRouter
 is supported for Jev text when `OPENROUTER_API_KEY` is set and no direct key is supplied, but it is not
 recommended: it puts another service between fastbrowse and TypeSafe, and it never receives Jev image
-input. A gateway key on its own also serves Jev, as a last resort, not a route to choose; with
+input. A gateway key on its own also serves Jev, as a last resort rather than the recommended route; with
 `AI_GATEWAY_API_KEY` beside another key, the gateway is the backup. `FASTBROWSE_JEV_SOURCE` overrides
 automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
 `OPENROUTER_API_KEY` is set, otherwise the Vercel AI Gateway's OpenAI-compatible chat completions.
@@ -427,8 +427,8 @@ with its `began` and `ended` on `time.monotonic()`. The Rust core gives those an
 events; the Python core gives every event `--trace` writes.
 
 Jev uses direct TypeSafe when keyed, which is the recommended route, otherwise OpenRouter. A gateway key
-on its own also serves Jev, as a last resort, not a Jev route to choose, and OpenRouter never receives
-Jev image input. See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides and failover.
+on its own also serves Jev, as a last resort rather than the recommended route, and OpenRouter never
+receives Jev image input. See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides and failover.
 Any other source
 can be passed as `run_task(jev=...)`, implementing async `evaluate(state, questions)`; `run_task(llm=...)`
 accepts an implementation of the `LLMClient.generate(...)` protocol in `fastbrowse.llm`.

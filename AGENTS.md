@@ -124,7 +124,7 @@ The run loop is `src/fastbrowse/agent.py` (`crates/fastbrowse-agent`), and every
 - **[policy.py](src/fastbrowse/policy.py)** batches operation and target choices, read assessment and applicable wall checks.
   Large target sets use a further choice inside a group. [jev.py](src/fastbrowse/jev.py) is the client's shape;
   [clients/typesafe.py](src/fastbrowse/clients/typesafe.py) serves direct TypeSafe when keyed, the recommended route, and otherwise OpenRouter; [clients/vercel.py](src/fastbrowse/clients/vercel.py) serves the
-  Vercel AI Gateway backup. OpenRouter is supported for Jev text but is not recommended and never receives Jev image input. [clients/environment.py](src/fastbrowse/clients/environment.py) selects routes; [clients/failover.py](src/fastbrowse/clients/failover.py) switches after retries.
+  Vercel AI Gateway, which is also the Jev primary when no other Jev key is set. OpenRouter is supported for Jev text but is not recommended and never receives Jev image input. [clients/environment.py](src/fastbrowse/clients/environment.py) selects routes; [clients/failover.py](src/fastbrowse/clients/failover.py) switches after retries.
 - **[retrieval.py](src/fastbrowse/retrieval.py)** routes short facts through Jev and other reads through the LLM. A read claim cites source
   blocks and code copies its quote from them; a count the page does not state rests on its basis facts; [memory.py](src/fastbrowse/memory.py) holds notes with citation ids, and [citations.py](src/fastbrowse/citations.py) builds deep links.
 - **[verification.py](src/fastbrowse/verification.py)** decides whether a run may finish: Jev's done check against the plan's requirements,
