@@ -66,8 +66,8 @@ The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit com
 
 [Entire](https://docs.entire.io) is enabled in this repository, so a commit made during an agent session is linked
 to the session behind it: the prompt, the transcript, the tool calls and the files touched. The commit gets an
-`Entire-Checkpoint` trailer, the context is stored under `refs/entire/checkpoints/`, and no extra commit lands on
-the branch. `.entire/settings.json` and the hooks for Claude Code, Codex and OpenCode are committed here.
+`Entire-Checkpoint` trailer, the context is stored in local Git refs under `entire/checkpoints`, and no extra commit
+lands on the branch. `.entire/settings.json` and the hooks for Claude Code and Codex are committed here.
 
 ```sh
 curl -fsSL https://entire.com/install.sh | bash   # or: brew install --cask entireio/tap/entire
@@ -82,8 +82,12 @@ because the repository is public and a checkpoint carries the prompt and transcr
 local until you send them somewhere private, with
 `entire configure --local --checkpoint-remote github:<org>/<repo>`.
 
-`uv run pre-commit install` rewrites the Git hooks, so run `entire enable` again after it. `entire agent add codex`,
-`opencode` or `cursor` installs hooks for another agent in the same way.
+`uv run pre-commit install` rewrites the Git hooks, so run `entire enable` again after it. `entire agent add cursor`
+installs hooks for another agent in the same way. OpenCode is left out: Entire's plugin uses the OpenCode 1 API,
+which OpenCode 2 refuses to load ([entireio/cli#2588](https://github.com/entireio/cli/issues/2588)).
+
+The committed hooks run through `sh`. On Windows, run `entire enable` in the checkout so Entire writes the hook form
+for the local shell, and leave that rewrite uncommitted.
 
 ## Evals
 
