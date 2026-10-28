@@ -146,7 +146,7 @@ async def run_task(
     background: its tab opens behind the window's current one and the window is neither raised nor focused.
     `foreground` brings the tab and its window to the front instead, to watch the run.
     Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
-    local Chrome as `chrome` describes (default: from `Settings`, headless with a throwaway profile).
+    local Chrome as `chrome` describes (default: from the environment and `.env`, headless with a throwaway profile).
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
     and `viewport` shape a cloud browser this run starts. `cloud_allow_resizing` opts that browser into
@@ -155,7 +155,7 @@ async def run_task(
     an error with a local or attached browser rather than ignored. `cloud_timeout_minutes` is how long that
     browser may live (15 by default; the service allows up to 240), so a run that needs longer asks for it
     rather than losing its browser. The other cloud options mean nothing for the other two browsers. `jev` and
-    `llm` default to clients built from `Settings` (the environment, then `.env`), so an embedder that
+    `llm` default to clients the Rust core builds from the environment, then `.env`, so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
 
     `allowed_origins` limits the documents the run may inspect and control to those exact `http(s)://host[:port]`

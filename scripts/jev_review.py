@@ -25,7 +25,7 @@ from pathlib import Path
 import httpx
 from pydantic import JsonValue
 
-from fastbrowse.evals.harness import environment
+from fastbrowse.evals.judge import Judge, jev_from_environment
 from fastbrowse.jev import NoulAnswer, NoulQuestion
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,21 +40,6 @@ _GENERATED = ("docs/results/",)
 # What a user of the package or its CLI can notice: the code, and the metadata that names its entry points and
 # the Pythons and dependencies it installs with.
 _USER_VISIBLE = ("src/", "pyproject.toml")
-
-
-# Each Jev route this reads a key for, in the order a run prefers them: direct TypeSafe, then OpenRouter, then the
-# Vercel AI Gateway. The two direct APIs serve System One; the gateway has its own evaluation endpoint.
-_ROUTES = (
-    ("TYPESAFE_API_KEY", "https://api.typesafe.ai/v1/systemone", {"model": "jev-1.13.0"}),
-    ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/systemone", {"model": "jev-1.13"}),
-    ("AI_GATEWAY_API_KEY", "https://ai-gateway.vercel.sh/v4/ai/evaluation-model", {}),
-)
-_GATEWAY_HEADERS = {
-    "ai-gateway-auth-method": "api-key",
-    "ai-gateway-protocol-version": "0.0.1",
-    "ai-model-id": "typesafe-ai/jev",
-    "ai-evaluation-model-specification-version": "4",
-}
 
 
 def _git(*args: str) -> str:
@@ -126,41 +111,32 @@ def changes(span: str) -> tuple[str, bool, dict[str, str]]:
     return code_diff, visible, {p: text for p, text in prose.items() if text.strip() or p == "CHANGELOG.md"}
 
 
-async def _ask(
-    http: httpx.AsyncClient, env: Mapping[str, str], state: JsonValue, key: str, question: NoulQuestion
-) -> NoulAnswer | None:
-    """Jev's answer to one question, or None when the route failed or answered without it."""
-    name, url, body = next((route for route in _ROUTES if env.get(route[0])), _ROUTES[-1])
-    gateway = name == "AI_GATEWAY_API_KEY"
-    wire = {
+async def _ask(jev: Judge, state: JsonValue, key: str, question: NoulQuestion) -> NoulAnswer | None:
+    """Jev's answer to one question, or None when the provider failed or answered without it."""
+    wire: JsonValue = {
         "instructions": question.instructions,
-        "type": "boolean" if gateway else "noul",
+        "type": "noul",
         "criteria": {"true": question.true, "false": question.false},
     }
     try:
-        response = await http.post(
-            url,
-            json={**body, "state": state, "questions": {key: wire}},
-            headers={"Authorization": f"Bearer {env[name]}", **(_GATEWAY_HEADERS if gateway else {})},
-        )
-        response.raise_for_status()
-        answer = response.json()["answers"][key]
-        return NoulAnswer(probability=answer["probability"] if gateway else answer["noul"])
+        probabilities = await jev.evaluate(state, {key: wire})
+        return NoulAnswer(probability=probabilities[key])
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         return None
 
 
 async def review(base: str, head: str = "HEAD") -> str:
-    env = environment()
-    if not any(env.get(name) for name, _, _ in _ROUTES):
-        return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
-    code_diff, visible, prose = changes(f"{base}...{head}")
-    asked = questions(prose, user_visible=visible)
-    if not asked:
-        return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
-    state: JsonValue = {"code_diff": _clip(code_diff, _CODE_CHARS) or "(no code changes)"}
     async with httpx.AsyncClient(timeout=120) as http:
-        results = await asyncio.gather(*(_ask(http, env, state, key, question) for key, question in asked.items()))
+        try:
+            jev = jev_from_environment(http)
+        except RuntimeError:
+            return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
+        code_diff, visible, prose = changes(f"{base}...{head}")
+        asked = questions(prose, user_visible=visible)
+        if not asked:
+            return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
+        state: JsonValue = {"code_diff": _clip(code_diff, _CODE_CHARS) or "(no code changes)"}
+        results = await asyncio.gather(*(_ask(jev, state, key, question) for key, question in asked.items()))
     answers = {key: answer for key, answer in zip(asked, results, strict=True) if answer is not None}
     text, warnings = report(answers)
     if missing := [key for key in asked if key not in answers]:
