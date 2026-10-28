@@ -8,18 +8,18 @@ evals rather than taken from Typesafe.
 
 | | Documented | Where fastbrowse relies on it |
 |:--|:--|:--|
-| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `clients/typesafe.py` with base URL `https://openrouter.ai/api`; a supported Jev text route when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended, and never sent Jev image input |
-| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `clients/typesafe.py`, selected with `FASTBROWSE_JEV_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route, and the only one that may receive Jev image input |
-| Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `clients/vercel.py`, used with `AI_GATEWAY_API_KEY` as a backup for an outage or the last resort when no other Jev key is supplied. A last resort rather than the recommended Jev route, and it receives no Jev image input. `FASTBROWSE_JEV_BASE_URL` retargets the selected source |
-| Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `clients/validation.py` decodes each shape separately; `policy.py` asks one per control to filter a dense page |
-| Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `policy.py` (operation and target), `retrieval.py` (field and short-fact reads) |
-| Score | Ordered levels, returning a probability-weighted index ([Score](https://docs.typesafe.ai/primitives/score)) | Modelled in `jev.py`, not yet called |
-| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `MAX_CHOICE_OPTIONS = 255`; the 240 cap and group-then-element selection are **ours** |
-| Tokens | 32k for state plus the largest question, 64k in total ([Models](https://docs.typesafe.ai/models)) | `TokenBudget` targets 24k and 48k; the headroom and `chars_per_token = 3.0` are **ours**, because tokens are estimated locally. Jev requests also stop at 48,000 characters for state plus the largest question and 96,000 total, because recorded dense JSON used 1.84 characters per token |
+| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `crates/fastbrowse-clients/src/typesafe.rs` with base URL `https://openrouter.ai/api`; a supported Jev text route when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended, and never sent Jev image input |
+| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `crates/fastbrowse-clients/src/typesafe.rs`, selected with `FASTBROWSE_JEV_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route, and the only one that may receive Jev image input |
+| Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `crates/fastbrowse-clients/src/vercel.rs`, used with `AI_GATEWAY_API_KEY` as a backup for an outage or the last resort when no other Jev key is supplied. A last resort rather than the recommended Jev route, and it receives no Jev image input. `FASTBROWSE_JEV_BASE_URL` retargets the selected source |
+| Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `crates/fastbrowse-clients/src/validation.rs` decodes each shape separately; `crates/fastbrowse-agent/src/policy.rs` asks one per control to filter a dense page |
+| Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `crates/fastbrowse-agent/src/policy.rs` (operation and target), `crates/fastbrowse-agent/src/retrieval/` (field and short-fact reads) |
+| Score | Ordered levels, returning a probability-weighted index ([Score](https://docs.typesafe.ai/primitives/score)) | Modelled in `crates/fastbrowse-core/src/jev.rs`, not yet called |
+| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `MAX_CHOICE_OPTIONS = 255` in `crates/fastbrowse-core/src/jev.rs`; the 240 cap and group-then-element selection are **ours** |
+| Tokens | 32k for state plus the largest question, 64k in total ([Models](https://docs.typesafe.ai/models)) | `TokenBudget` (`crates/fastbrowse-core/src/config.rs`) targets 24k and 48k; the headroom and `chars_per_token = 3.0` are **ours**, because tokens are estimated locally. Jev requests also stop at 48,000 characters for state plus the largest question and 96,000 total, because recorded dense JSON used 1.84 characters per token |
 | Rate limits | 1,200 requests a minute and 250k tokens a second on the direct API, subject to change ([Models](https://docs.typesafe.ai/models)); no extra gateway limit on paid tiers ([Gateway limits](https://vercel.com/docs/ai-gateway/rate-limits)) | Retries handle 429 responses; concurrent runs share their provider's limits |
 | Errors | 400/401/403/404/422/429/5xx, with 529 for overload; retry with backoff, honouring server retry headers ([Exceptions](https://docs.typesafe.ai/sdk/python/api/exceptions)) | `post_with_retry` retries 408, 429, 500, 502, 503, 504, 520 to 524 and 529 (not the 4xx request errors) and honours `retry-after-ms` and `retry-after`, capped at 10s |
-| Price | $0.042 per million input tokens; output is free ([Models](https://docs.typesafe.ai/models), [gateway catalog](https://ai-gateway.vercel.sh/v1/models)) | `CostComponent.JEV` on the ledger |
-| Latency | Provider timings do not establish end-to-end run time | The retry budget in `clients/validation.py` is **ours**; published run timings are on the [benchmark page](https://fastbrowse.ai/benchmarks) |
+| Price | $0.042 per million input tokens; output is free ([Models](https://docs.typesafe.ai/models), [gateway catalog](https://ai-gateway.vercel.sh/v1/models)) | `CostComponent::Jev` on the ledger |
+| Latency | Provider timings do not establish end-to-end run time | The retry budget in `crates/fastbrowse-clients/src/validation.rs` is **ours**; published run timings are on the [benchmark page](https://fastbrowse.ai/benchmarks) |
 | Streaming | Gateway evaluation does not stream ([AI SDK evaluation](https://ai-sdk.dev/docs/ai-sdk-core/evaluation)) | Not needed: answers are a few numbers |
 
 ## Choosing a provider
@@ -78,8 +78,8 @@ summarises how concentrated the distribution is; it is not the chosen option's p
 ([Confidence](https://docs.typesafe.ai/confidence)). Noul has no separate confidence: its probability is
 the answer.
 
-Every threshold in `config.py` (`recover_below` 0.55, `done_accept_from` 0.85, `claim_problem_above` 0.70)
-and in `retrieval.py` (the 0.90 read cut; a record on a later page of a filtered count or comparison matches from
+Every threshold in `crates/fastbrowse-core/src/config.rs` (`recover_below` 0.55, `done_accept_from` 0.85, `claim_problem_above` 0.70)
+and in `crates/fastbrowse-agent/src/retrieval/` (the 0.90 read cut; a record on a later page of a filtered count or comparison matches from
 0.70 and is rejected at 0.20 or below) is **ours**. None is a Typesafe recommendation. Each is set per
 question on the evals, and the gates behind them (VERIFY, the claim check, the LLM fallback) mean a
 miscalibrated threshold tends to cost seconds rather than a wrong answer. Not always: a completion
@@ -92,7 +92,7 @@ Typesafe's guidance ([Primitives](https://docs.typesafe.ai/primitives), [Noul](h
 and where fastbrowse follows it:
 
 - **Narrow, explicit judgments, with true/false descriptions that match the instruction.** Every Noul
-  question in `verification.py` and `safety.py` carries both descriptions.
+  question in `crates/fastbrowse-agent/src/verification/` and `crates/fastbrowse-core/src/safety.rs` carries both descriptions.
 - **Concrete option boundaries, plus an escape option when coverage is incomplete.** The short-fact read
   offers `synthesis` for the LLM reader and `absent` for no relevant evidence. Scalar field extraction offers
   `none`, and the policy offers `escalate`. Repeated short values from the same page and frame share one option
@@ -124,7 +124,7 @@ and where fastbrowse follows it:
 
 ## Unused primitives
 
-- **Structured instructions** ([Structure](https://docs.typesafe.ai/primitives/advanced)): `jev.py`
+- **Structured instructions** ([Structure](https://docs.typesafe.ai/primitives/advanced)): `crates/fastbrowse-core/src/jev.rs`
   types instructions as strings. Structured criteria are used where they help: the tab choice passes each tab as an object.
 - **Score** for graded judgments such as relevance.
 - **Full Choice distributions** for trying a second-best target, rather than only the top pick

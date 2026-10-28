@@ -129,9 +129,10 @@ def environment(dotenv: Path = Path(".env")) -> dict[str, str]:
                 value = value[1:-1]
             elif not value.startswith("#"):
                 value = value.split(" #", 1)[0].rstrip()
-            if value:
-                read[key.strip()] = value
-    return read | {key: value for key, value in os.environ.items() if value}
+            read[key.strip()] = value
+    # The process wins even when it sets a key empty, as the core's `Settings::from_sources` does; emptiness is
+    # applied after the merge.
+    return {key: value for key, value in (read | os.environ).items() if value}
 
 
 def origin_of(url: str) -> str:
