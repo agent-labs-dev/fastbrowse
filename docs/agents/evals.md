@@ -25,8 +25,10 @@ running, and verify current provider availability and pricing. Preserve the camp
 unknown spend stays reserved until reconciled. A provider outage is recorded as an ungraded infrastructure
 failure, not silently converted into a task failure or removed from the denominator.
 
-The scheduled fixture job checks configured providers before running. A gateway key alone covers Jev and
-the LLM; direct TypeSafe and OpenRouter routes are also supported. Keys stay in ignored configuration.
+The scheduled fixture job checks configured providers before running. Direct TypeSafe is the recommended
+Jev route; OpenRouter also serves Jev text when it is the only Jev key, but is not recommended and never
+receives Jev image input. A gateway key alone covers the LLM and also serves Jev as a last resort; beside
+another Jev key it is a backup for an outage, not a route to choose. Keys stay in ignored configuration.
 Run local checks directly, with owned browsers and containers stopped on exit.
 
 ## Evidence and release

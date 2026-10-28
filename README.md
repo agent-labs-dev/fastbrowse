@@ -70,15 +70,18 @@ already open, such as an Electron app, see [Open windows and Electron apps](#ope
 A Node program needs neither uv nor Python: see [Use it from JavaScript](#use-it-from-javascript).
 
 ```sh
-export OPENROUTER_API_KEY=...   # for Jev and the LLM that plans and reads
-# export AI_GATEWAY_API_KEY=... # Vercel AI Gateway: Jev backup, and Jev and the LLM when OPENROUTER_API_KEY is unset
+export TYPESAFE_API_KEY=...     # Jev, direct TypeSafe (recommended)
+export OPENROUTER_API_KEY=...   # the LLM that plans and reads; also a Jev text route
+# export AI_GATEWAY_API_KEY=... # Vercel AI Gateway: the LLM when OPENROUTER_API_KEY is unset; Jev last resort
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
-Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied, otherwise OpenRouter when `OPENROUTER_API_KEY` is
-set, and the Vercel AI Gateway when neither is. With `AI_GATEWAY_API_KEY` beside another key, the gateway is the
-backup. `FASTBROWSE_JEV_SOURCE` overrides
+Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied. That is the recommended route. OpenRouter
+is supported for Jev text when `OPENROUTER_API_KEY` is set and no direct key is supplied, but it is not
+recommended: it puts another service between fastbrowse and TypeSafe, and it never receives Jev image
+input. A gateway key on its own also serves Jev, as a last resort, not a route to choose; with
+`AI_GATEWAY_API_KEY` beside another key, the gateway is the backup. `FASTBROWSE_JEV_SOURCE` overrides
 automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
 `OPENROUTER_API_KEY` is set, otherwise the Vercel AI Gateway's OpenAI-compatible chat completions.
 
@@ -423,8 +426,9 @@ names the Jev and LLM providers it calls, and each model request that failed tra
 with its `began` and `ended` on `time.monotonic()`. The Rust core gives those and its model requests' other
 events; the Python core gives every event `--trace` writes.
 
-Jev uses direct TypeSafe when keyed, otherwise OpenRouter, with Vercel AI Gateway also supported.
-See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides and failover.
+Jev uses direct TypeSafe when keyed, which is the recommended route, otherwise OpenRouter. A gateway key
+on its own also serves Jev, as a last resort, not a Jev route to choose, and OpenRouter never receives
+Jev image input. See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides and failover.
 Any other source
 can be passed as `run_task(jev=...)`, implementing async `evaluate(state, questions)`; `run_task(llm=...)`
 accepts an implementation of the `LLMClient.generate(...)` protocol in `fastbrowse.llm`.
@@ -440,10 +444,12 @@ the PyPI package's version and are published by the same tag.
 
 The binary brings no browser. It finds local Chrome, starts a Browser Use Cloud browser, or drives one already
 running, as the command line does. It reads the same keys from the environment of your process
-(`OPENROUTER_API_KEY`, and `BROWSER_USE_API_KEY` for a cloud browser); `env` in `Fastbrowse.start` adds to them.
+(`TYPESAFE_API_KEY` for Jev, `OPENROUTER_API_KEY` for the LLM, and `BROWSER_USE_API_KEY` for a cloud
+browser); `env` in `Fastbrowse.start` adds to them.
 
 ```sh
 npm install fastbrowse zod
+export TYPESAFE_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
 
@@ -546,7 +552,7 @@ The answer contains numbered Markdown links. MCP's `citations` list contains `qu
 run's evidence; it does not expose the Python `Citation` ids, requirement ids or deep-link fields.
 
 ```sh
-claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
+claude mcp add fastbrowse -e TYPESAFE_API_KEY=... -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
   -- uvx --from 'fastbrowse[mcp]' fastbrowse-mcp --max-dollars 0.25
 ```
 
@@ -558,7 +564,7 @@ For a client configured by JSON, such as Claude Desktop:
     "fastbrowse": {
       "command": "uvx",
       "args": ["--from", "fastbrowse[mcp]", "fastbrowse-mcp"],
-      "env": { "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
+      "env": { "TYPESAFE_API_KEY": "...", "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
     }
   }
 }

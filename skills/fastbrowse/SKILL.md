@@ -36,8 +36,10 @@ for generated commands, use an argument array rather than interpolating user tex
 Allow time for the browser run and wait for the process to finish. Progress goes to stderr and the JSON result
 goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an unfinished run's evidence.
 
-fastbrowse needs `OPENROUTER_API_KEY` or `AI_GATEWAY_API_KEY` configured in its environment or `.env`; either
-serves both Jev and the LLM. Local browsing needs Chrome;
+fastbrowse needs `TYPESAFE_API_KEY` for Jev (direct TypeSafe, recommended) and `OPENROUTER_API_KEY` for the
+LLM, or `AI_GATEWAY_API_KEY` for the LLM when OpenRouter is absent. OpenRouter also serves Jev text when it is
+the only Jev key, but it is not recommended and never receives Jev image input; `AI_GATEWAY_API_KEY` also
+serves Jev only as a last resort, not a route to choose. Local browsing needs Chrome;
 cloud browsing also needs `BROWSER_USE_API_KEY`. Pass `--local` or the existing browser's `--cdp-url` explicitly,
 since the CLI itself defaults to cloud. A cloud browser cannot reach the caller's localhost. Check for
 configured keys without printing their values; if missing, ask the user to configure them outside the conversation.

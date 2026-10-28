@@ -96,6 +96,36 @@ async def test_systemone_rejects_invalid_cost(cost: JsonValue) -> None:
             await TypeSafeJevClient("key", http=http, base_url=OPENROUTER_URL).evaluate("blue", {"q": choice()})
 
 
+@pytest.mark.parametrize(
+    ("base_url", "key"),
+    [(OPENROUTER_URL, "openrouter-key"), ("https://direct.test", "key")],
+)
+async def test_jev_requests_carry_no_image_input(base_url: str, key: str) -> None:
+    """Jev images are direct-only and not used by the agent yet, so no request may carry pixels.
+
+    The policy is deliberate: a run configured with only an OpenRouter key keeps image input off, and the
+    router never receives page pixels. A future image path must change this test with the direct-only
+    capability it adds, not quietly turn the header or assets on for every route.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "typesafe-danger-zone-images" not in request.headers
+        assert "assets" not in json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "answers": {"q": {"type": "noul", "noul": 0.5}},
+                "usage": {"input_tokens": 1},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await TypeSafeJevClient(key, http=http, base_url=base_url).evaluate(
+            "page", {"q": NoulQuestion(instructions="Is it?")}
+        )
+    assert isinstance(result.answers["q"], NoulAnswer)
+
+
 async def test_direct_encodes_all_question_types_and_estimates_usage() -> None:
     questions: Mapping[str, Question] = {
         "col": choice(),

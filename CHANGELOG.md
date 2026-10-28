@@ -25,6 +25,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The fixture runner's claim judge reads its key as a run does, from the environment or `.env`, on the direct API, OpenRouter or the AI Gateway, and asks again when the provider answers 429, a 5xx or drops the connection, rather than ending the campaign before the run it judged is recorded.
 
+- **Direct TypeSafe is the recommended Jev route.** It puts one service between fastbrowse and the model and keeps the direct-API price. OpenRouter still serves Jev text when it is the only Jev key, but it is not recommended, and it never receives Jev image input. A gateway key on its own also serves Jev, as a last resort; otherwise the Vercel AI Gateway is a Jev fallback for an outage, not a route to choose. Jev's Images and Box surfaces are not used by the agent yet; when they are, a run with only an OpenRouter key keeps image input off, so page pixels never travel through the router. The LLM's screenshot path is separate and still follows the LLM route.
+
 ## [0.8.1] - 2026-10-28
 
 - **A scoped run attached to a browser with no granted window opens one of its own.** A run with `allowed_origins` and `attach` but no `target_match` refuses every window outside the grant, and a browser that shows only `about:blank`, as a freshly started cloud browser does, has none inside it, so the run ended `error` at step 0 with `no page to attach to; pages: []`. It now opens a blank tab, takes it as its window and starts from there. The tab is left open when the run ends, as the window it stands in for would be, so a live view and the next run on that browser still have the page. A `target_match` that matches nothing still fails. Both cores carry the change.
