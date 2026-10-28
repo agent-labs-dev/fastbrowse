@@ -825,7 +825,12 @@ impl BrowserSession {
         if pages.is_empty() && self.0.grant.is_some() && target_match.is_none() {
             // Every open window is outside the grant, as a fresh cloud browser showing only about:blank is. An empty
             // window shows nothing to keep from the run, so it is taken over rather than left beside a second one.
-            pages.extend(targets.iter().filter(|t| empty_window(t)).take(1));
+            for candidate in targets.iter().filter(|t| empty_window(t)) {
+                if self.still_blank(&str_of(&candidate["targetId"])).await? {
+                    pages.push(candidate);
+                    break;
+                }
+            }
             if pages.is_empty() {
                 // Nothing the run may take over: it opens a window of its own rather than failing, owned until it is
                 // ready so a failed setup closes it, then kept like the window it stands in for.
@@ -865,6 +870,22 @@ impl BrowserSession {
 
     /// A window that was already open loaded its document before the new-document scripts were registered, so
     /// without this its freshness tracking and banner refusal would start only at its next navigation.
+    /// Whether a window still holds the document Chrome gives a new about:blank. How a window was created does not
+    /// say what is in it: a page can be written into after it opens, and such a window is not the run's.
+    async fn still_blank(&self, target_id: &str) -> Result<bool, BrowserError> {
+        let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
+        let session_id = str_of(&attach["sessionId"]);
+        let read = self
+            .send(
+                "Runtime.evaluate",
+                json!({"expression": BLANK_DOCUMENT_JS, "returnByValue": true}),
+                Some(&session_id),
+            )
+            .await;
+        let _ = self.send("Target.detachFromTarget", json!({"sessionId": session_id}), None).await;
+        Ok(read?["result"]["value"] == json!(true))
+    }
+
     async fn run_document_scripts(&self, session_id: &str) {
         let scripts = self.0.new_document_scripts.iter().map(|source| async move {
             let _ = self.send("Runtime.evaluate", json!({"expression": source}), Some(session_id)).await;
@@ -1935,6 +1956,9 @@ pub fn py_repr(s: &str) -> String {
     out.push(quote);
     out
 }
+
+/// The document a new about:blank window holds, before anything is written into it.
+const BLANK_DOCUMENT_JS: &str = r#"document.documentElement.outerHTML === "<html><head></head><body></body></html>""#;
 
 /// A window with nothing in it: about:blank that no page opened. A new tab page can list the person's most visited
 /// sites, and a blank window a page opened may hold whatever that page wrote into it.

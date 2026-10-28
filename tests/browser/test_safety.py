@@ -595,6 +595,30 @@ async def test_an_attached_browser_with_only_an_empty_window_takes_it_over(
         await browser_session.client.send.Target.closeTarget(params={"targetId": blank})
 
 
+async def test_an_attached_browser_leaves_a_blank_window_that_was_written_into(
+    chrome_connection: BrowserConnection, browser_session: BrowserSession, sites: OriginSites
+) -> None:
+    # about:blank with no opener can still hold what a page or an app wrote into it; that is not the run's to take.
+    owner = CdpPage(browser_session, Config())
+    await owner.navigate(f"{sites.foreign()}/page")
+    client = browser_session.client
+    written = (await client.send.Target.createTarget(params={"url": "about:blank"}))["targetId"]
+    attached = await client.send.Target.attachToTarget(params={"targetId": written, "flatten": True})
+    await client.send.Runtime.evaluate(
+        params={"expression": "document.write('<p>private</p>')"}, session_id=attached["sessionId"]
+    )
+    await client.send.Target.detachFromTarget(params={"sessionId": attached["sessionId"]})
+    try:
+        async with scoped(chrome_connection, sites.granted, attach=True) as (session, _page):
+            opened = session.active_target_id
+            assert opened != written
+        targets = {t["targetId"]: t for t in (await client.send.Target.getTargets())["targetInfos"]}
+        assert targets[written]["url"] == "about:blank"
+        await client.send.Target.closeTarget(params={"targetId": opened})
+    finally:
+        await client.send.Target.closeTarget(params={"targetId": written})
+
+
 async def test_a_document_the_network_never_saw_is_not_read_or_controlled(
     chrome_connection: BrowserConnection, sites: OriginSites
 ) -> None:

@@ -605,6 +605,36 @@ async fn test_an_attached_browser_with_only_an_empty_window_takes_it_over() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_attached_browser_leaves_a_blank_window_that_was_written_into() {
+    let _serial = one_at_a_time().await;
+    let Some(connection) = chrome() else { return };
+    let Some(h) = harness().await else { return };
+    let sites = origin_sites();
+    // about:blank with no opener can still hold what a page or an app wrote into it; that is not the run's to take.
+    h.page.navigate(&format!("{}/page", sites.foreign("127.0.0.1")), None).await.expect("navigate");
+    let created = h.session.send("Target.createTarget", json!({"url": "about:blank"}), None).await.expect("create");
+    let written = created["targetId"].as_str().expect("a target").to_owned();
+    let attached = h
+        .session
+        .send("Target.attachToTarget", json!({"targetId": written, "flatten": true}), None)
+        .await
+        .expect("attach");
+    let session_id = attached["sessionId"].as_str().expect("a session").to_owned();
+    h.session
+        .send("Runtime.evaluate", json!({"expression": "document.write('<p>private</p>')"}), Some(&session_id))
+        .await
+        .expect("write");
+    h.session.send("Target.detachFromTarget", json!({"sessionId": session_id}), None).await.expect("detach");
+    let s = scoped(connection, &sites.granted, true, None).await.expect("attached");
+    let opened = s.session.active_target_id();
+    assert_ne!(opened, written);
+    s.close().await;
+    h.session.send("Target.closeTarget", json!({"targetId": opened}), None).await.expect("close");
+    h.session.send("Target.closeTarget", json!({"targetId": written}), None).await.expect("close");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_document_the_network_never_saw_is_not_read_or_controlled() {
     let _serial = one_at_a_time().await;
     let Some(connection) = chrome() else { return };
