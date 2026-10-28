@@ -259,6 +259,18 @@ async fn test_a_compressed_body_is_refused_rather_than_quoted() {
 }
 
 #[tokio::test]
+async fn test_the_request_names_the_client() {
+    // A server refuses a client that does not name itself: Wikipedia answers 403 to a request carrying no User-Agent
+    // and 200 to one that names it, and httpx sends its own default where this sends none.
+    let http = serving(|request| {
+        let agent = request.header("user-agent").unwrap_or_default();
+        assert!(agent.starts_with("fastbrowse/"), "the request names the client, got {agent:?}");
+        Response::new(200, "<p>the page</p>").with_header("content-type", "text/html")
+    });
+    fetched(&http, "https://a.example/").await.expect("fetched");
+}
+
+#[tokio::test]
 async fn test_access_withdrawn_after_the_navigation_stops_the_read() {
     let allowed = Arc::new(AtomicBool::new(true));
     let gate = allowed.clone();
