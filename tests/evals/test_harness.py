@@ -1,6 +1,32 @@
+from pathlib import Path
+
 import pytest
 
-from fastbrowse.evals.harness import TaskSecrets, origin_of, providers, transient_seconds
+from fastbrowse.evals.harness import TaskSecrets, environment, origin_of, providers, transient_seconds
+
+
+def test_the_environment_reads_the_dotenv_beside_it_under_real_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "# a comment\n"
+        "TYPESAFE_API_KEY=direct  # the recommended route\n"
+        "export OPENROUTER_API_KEY='router'\n"
+        "AI_GATEWAY_API_KEY=\n"
+        "FASTBROWSE_JEV_SOURCE=openrouter\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FASTBROWSE_JEV_SOURCE", "typesafe")
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
+
+    read = environment(dotenv)
+
+    assert (read["TYPESAFE_API_KEY"], read["OPENROUTER_API_KEY"]) == ("direct", "router")
+    assert "AI_GATEWAY_API_KEY" not in read
+    assert read["FASTBROWSE_JEV_SOURCE"] == "typesafe"
 
 
 def test_transient_time_counts_overlapping_calls_once_and_only_within_the_run() -> None:

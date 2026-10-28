@@ -17,11 +17,12 @@ before a task starts, naming the setting to add. OpenRouter or the gateway can s
 
 import argparse
 import json
-import os
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+
+from fastbrowse.evals.harness import environment
 
 
 def rows(path: Path) -> list[dict[str, object]]:
@@ -91,7 +92,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.check_providers:
         try:
-            gaps = provider_gaps(os.environ)
+            gaps = provider_gaps(env := environment())
         except ValueError as error:
             print(f"invalid settings: {error}")
             return 1
@@ -100,8 +101,8 @@ def main(argv: list[str]) -> int:
             for gap in gaps:
                 print(f"- {gap}")
             return 1
-        llm = "OpenRouter" if os.environ.get("OPENROUTER_API_KEY") else "the gateway"
-        print(f"model providers ready: Jev {jev_source(os.environ)}; LLM via {llm}")
+        llm = "OpenRouter" if env.get("OPENROUTER_API_KEY") else "the gateway"
+        print(f"model providers ready: Jev {jev_source(env)}; LLM via {llm}")
         return 0
     if args.rows is None:
         parser.error("rows is required unless --check-providers is given")

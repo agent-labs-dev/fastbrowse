@@ -44,7 +44,7 @@ These commands produce candidates, not blocking verdicts. Run them from the repo
 
 ```sh
 uvx vulture==2.16 src tests scripts --min-confidence 80 --sort-by-size
-npx --yes jscpd@4.0.8 --silent --reporters json --output .sift/runs/evidence/jscpd src/fastbrowse/*.py src/fastbrowse/clients src/fastbrowse/adapters src/fastbrowse/evals/*.py src/fastbrowse/audit/*.py scripts tests
+npx --yes jscpd@4.0.8 --silent --reporters json --output .sift/runs/evidence/jscpd src/fastbrowse/*.py src/fastbrowse/evals/*.py src/fastbrowse/audit/*.py scripts tests
 uvx zizmor==1.30.1 --offline .github/workflows
 npx --yes markdownlint-cli2@0.23.3 README.md AGENTS.md CONTRIBUTING.md SECURITY.md 'docs/*.md'
 npx --yes -p typescript@7.0.2 tsc --allowJs --checkJs --noEmit --target es2022 --lib es2022,dom,dom.iterable src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js

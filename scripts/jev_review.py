@@ -25,6 +25,7 @@ from pathlib import Path
 import httpx
 from pydantic import JsonValue
 
+from fastbrowse.evals.harness import environment
 from fastbrowse.jev import NoulAnswer, NoulQuestion
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -125,9 +126,11 @@ def changes(span: str) -> tuple[str, bool, dict[str, str]]:
     return code_diff, visible, {p: text for p, text in prose.items() if text.strip() or p == "CHANGELOG.md"}
 
 
-async def _ask(http: httpx.AsyncClient, state: JsonValue, key: str, question: NoulQuestion) -> NoulAnswer | None:
+async def _ask(
+    http: httpx.AsyncClient, env: Mapping[str, str], state: JsonValue, key: str, question: NoulQuestion
+) -> NoulAnswer | None:
     """Jev's answer to one question, or None when the route failed or answered without it."""
-    name, url, body = next((route for route in _ROUTES if os.environ.get(route[0])), _ROUTES[-1])
+    name, url, body = next((route for route in _ROUTES if env.get(route[0])), _ROUTES[-1])
     gateway = name == "AI_GATEWAY_API_KEY"
     wire = {
         "instructions": question.instructions,
@@ -138,7 +141,7 @@ async def _ask(http: httpx.AsyncClient, state: JsonValue, key: str, question: No
         response = await http.post(
             url,
             json={**body, "state": state, "questions": {key: wire}},
-            headers={"Authorization": f"Bearer {os.environ[name]}", **(_GATEWAY_HEADERS if gateway else {})},
+            headers={"Authorization": f"Bearer {env[name]}", **(_GATEWAY_HEADERS if gateway else {})},
         )
         response.raise_for_status()
         answer = response.json()["answers"][key]
@@ -148,7 +151,8 @@ async def _ask(http: httpx.AsyncClient, state: JsonValue, key: str, question: No
 
 
 async def review(base: str, head: str = "HEAD") -> str:
-    if not any(os.environ.get(name) for name, _, _ in _ROUTES):
+    env = environment()
+    if not any(env.get(name) for name, _, _ in _ROUTES):
         return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
     code_diff, visible, prose = changes(f"{base}...{head}")
     asked = questions(prose, user_visible=visible)
@@ -156,7 +160,7 @@ async def review(base: str, head: str = "HEAD") -> str:
         return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
     state: JsonValue = {"code_diff": _clip(code_diff, _CODE_CHARS) or "(no code changes)"}
     async with httpx.AsyncClient(timeout=120) as http:
-        results = await asyncio.gather(*(_ask(http, state, key, question) for key, question in asked.items()))
+        results = await asyncio.gather(*(_ask(http, env, state, key, question) for key, question in asked.items()))
     answers = {key: answer for key, answer in zip(asked, results, strict=True) if answer is not None}
     text, warnings = report(answers)
     if missing := [key for key in asked if key not in answers]:

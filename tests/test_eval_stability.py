@@ -15,7 +15,9 @@ _spec.loader.exec_module(eval_stability)
 
 
 @pytest.fixture(autouse=True)
-def no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_ambient_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A checkout's `.env` would hand the check a real key.
+    monkeypatch.chdir(tmp_path)
     for name in (
         "TYPESAFE_API_KEY",
         "AI_GATEWAY_API_KEY",
@@ -64,6 +66,14 @@ def test_check_providers_names_the_missing_llm_key(
     assert eval_stability.main(["--check-providers"]) == 1
     out = capsys.readouterr().out
     assert "OPENROUTER_API_KEY or AI_GATEWAY_API_KEY: the LLM needs a configured provider" in out
+
+
+def test_check_providers_reads_the_keys_a_run_reads_from_dotenv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=o\n", encoding="utf-8")
+    assert eval_stability.main(["--check-providers"]) == 0
+    assert "Jev openrouter; LLM via OpenRouter" in capsys.readouterr().out
 
 
 def test_check_providers_passes_when_both_routes_are_keyed(

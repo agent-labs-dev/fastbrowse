@@ -97,7 +97,7 @@ To work on fastbrowse itself:
 
 ```sh
 git clone https://github.com/agent-labs-dev/fastbrowse.git && cd fastbrowse
-uv sync --all-extras   # the extras carry mcp and browser_use_sdk, which the tests and evals import;
+uv sync --all-extras   # the eval-data extra carries pyyaml, which the tests and evals import;
                        # this also builds the Rust core, so it needs cargo, which rustup installs at the version rust-toolchain.toml pins
 cp .env.example .env   # then fill in the keys, BROWSER_USE_API_KEY included, or pass --local
 uv run fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
