@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-28
+
 - **A scoped attach takes over an empty window instead of opening a second.** Since 0.8.1 a scoped run attached to a browser with no granted window opened a blank tab of its own, so a fresh cloud browser's live view showed the run's tab beside a leftover `about:blank`. When the browser has an `about:blank` window that no page opened and that still holds the empty document, the run now takes it over; it opens a tab only when there is none. A new tab page, which can list the person's most visited sites, a blank window another page opened, and one something has written into are never taken over. Both cores carry the change.
 
 - **`traced()` keeps a run's trace in your own process.** `from fastbrowse import traced`, then make the run inside `with traced() as events:`: the in-process counterpart of `--trace`, on either core. A run that builds its own model clients now begins its trace with a `route` event naming the Jev and LLM providers it calls, in `--trace` and `FASTBROWSE_TRACE` output too.
@@ -1594,7 +1596,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.1...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.2
 [0.8.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.1
 [0.8.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.0
 [0.7.4]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.7.4
