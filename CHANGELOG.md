@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A task with a non-ASCII character no longer crashes the Rust core.** Reading the paths a task names, the core looked one byte past each character, so a task with a long dash, an accented letter or an emoji panicked at `navigation.rs` before the run began. It now reads the next character itself.
+
 ## [0.8.2] - 2026-10-28
 
 - **A scoped attach takes over an empty window instead of opening a second.** Since 0.8.1 a scoped run attached to a browser with no granted window opened a blank tab of its own, so a fresh cloud browser's live view showed the run's tab beside a leftover `about:blank`. When the browser has an `about:blank` window that no page opened and that still holds the empty document, the run now takes it over; it opens a tab only when there is none. A new tab page, which can list the person's most visited sites, a blank window another page opened, and one something has written into are never taken over. Both cores carry the change.
