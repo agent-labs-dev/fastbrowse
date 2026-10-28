@@ -797,14 +797,18 @@ class BrowserSession:
         pages = [t for t in listed if not t["url"].startswith("devtools://")]
         if target_match is not None:
             pages = [t for t in pages if target_match in t["url"] or target_match in t["title"]]
-        if not pages:
-            if self._grant is not None and target_match is None:
-                # Every open window is outside the grant, as a fresh cloud browser showing only about:blank is, so
-                # there is nothing the run may take over. It opens a window of its own rather than failing, owned
-                # until it is ready so a failed setup closes it, then kept like the window it stands in for.
+        if not pages and self._grant is not None and target_match is None:
+            # Every open window is outside the grant, as a fresh cloud browser showing only about:blank is. An empty
+            # window shows nothing to keep from the run, so it is taken over rather than left beside a second one.
+            pages = [t for t in targets if _empty_window(t)]
+            pages = [t for t in pages if await self._still_blank(t["targetId"])][:1]
+            if not pages:
+                # Nothing the run may take over: it opens a window of its own rather than failing, owned until it is
+                # ready so a failed setup closes it, then kept like the window it stands in for.
                 target_id = await self._open_owned_tab("about:blank")
                 self._owned.discard(target_id)
                 return target_id
+        if not pages:
             seen = [f"{t['title']!r} ({t['url']})" for t in listed]
             wanted = "no page" if target_match is None else f"no page matching {target_match!r}"
             raise BrowserError(f"{wanted} to attach to; pages: {seen}")
@@ -819,6 +823,20 @@ class BrowserSession:
         )
         self._set_active_target(target_id)
         return target_id
+
+    async def _still_blank(self, target_id: str) -> bool:
+        """Whether a window still holds the document Chrome gives a new about:blank. How a window was created does
+        not say what is in it: a page can be written into after it opens, and such a window is not the run's."""
+        attach = await self.client.send.Target.attachToTarget(params={"targetId": target_id, "flatten": True})
+        session_id = attach["sessionId"]
+        try:
+            read = await self.client.send.Runtime.evaluate(
+                params={"expression": _BLANK_DOCUMENT_JS, "returnByValue": True}, session_id=session_id
+            )
+            return read.get("result", {}).get("value") is True
+        finally:
+            with contextlib.suppress(Exception):
+                await self.client.send.Target.detachFromTarget(params={"sessionId": session_id})
 
     async def _run_document_scripts(self, session_id: str) -> None:
         # A window that was already open loaded its document before the new-document scripts were registered, so
@@ -1543,3 +1561,13 @@ def _readable_text(mime: str, raw: bytes) -> str | None:
             text += f"\n[Download cut: {len(raw) - _DOWNLOAD_TEXT_BYTES} bytes omitted; full file in artifact]"
         return text
     return None
+
+
+# The document a new about:blank window holds, before anything is written into it.
+_BLANK_DOCUMENT_JS = 'document.documentElement.outerHTML === "<html><head></head><body></body></html>"'
+
+
+def _empty_window(target: TargetInfo) -> bool:
+    """A window with nothing in it: about:blank that no page opened. A new tab page can list the person's most
+    visited sites, and a blank window a page opened may hold whatever that page wrote into it."""
+    return target["type"] == "page" and target["url"] == "about:blank" and not target.get("openerId")

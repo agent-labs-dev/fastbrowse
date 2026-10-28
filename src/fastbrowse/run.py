@@ -97,15 +97,15 @@ async def connect_cdp(
 ) -> AsyncGenerator[CdpPage | native.NativePage]:
     """A page on a browser or Electron app that is already running, for driving it without the agent.
 
-    Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly.
-    By default the page is an existing window (the first whose title or URL contains `target_match`, if given),
-    and it is left open on exit; with `allowed_origins`, no `target_match` and no page inside the grant, it is a new
-    blank tab, also left open. The window is neither raised nor focused unless `foreground` is set, though
-    Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins` limits
-    the page to those exact origins and `check_access` is awaited before every browser read and action (both
-    described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory
-    removed on exit. The page is the Rust core's (`fastbrowse.native.NativePage`), with the same methods as the
-    Python core's `CdpPage`, which `FASTBROWSE_PYTHON_CORE=1` gives instead.
+    Pass `port` to look the websocket URL up from `http://<host>:<port>/json/version`, or `cdp_url` directly. By default
+    the page is an existing window (the first whose title or URL contains `target_match`, if given), and it is left open
+    on exit; with `allowed_origins`, no `target_match` and no page inside the grant, it is an empty `about:blank` window
+    no page opened, else a new blank tab, also left open. The window is neither raised nor focused unless `foreground`
+    is set, though Chrome itself activates a visible window whose front tab receives a pointer press. `allowed_origins`
+    limits the page to those exact origins and `check_access` is awaited before every browser read and action (both
+    described on `run_task`). Downloads go to `artifact_sink`, else to `downloads`, else to a scratch directory removed
+    on exit. The page is the Rust core's (`fastbrowse.native.NativePage`), with the same methods as the Python core's
+    `CdpPage`, which `FASTBROWSE_PYTHON_CORE=1` gives instead.
     """
     if not python_core():
         async with native.connect_cdp(locals()) as page:
@@ -257,12 +257,12 @@ async def run_task(
     and closes the tabs it owns. Cookies and task changes can persist. `cdp_url` and `browser_api_key` cannot
     be combined. `cdp_port` is the same as `cdp_url`, for a browser or Electron app started with
     `--remote-debugging-port`, its URL read from `http://127.0.0.1:<port>/json/version`. With `attach` (implied by
-    `target_match`) the run drives a window already open instead of opening a tab: the first page whose title or
-    URL contains `target_match`, or else the first page; a scoped run with neither a `target_match` nor a page inside
-    `allowed_origins`, such as a fresh browser on `about:blank`, opens a blank tab as that window. It leaves that
-    window open, and with no `start` it begins
-    on whatever the window shows. New windows that no page opened, as an Electron app's main process opens them,
-    join the run only with `target_match`; without it they could be tabs a person opened in the same browser.
+    `target_match`) the run drives a window already open instead of opening a tab: the first page whose title or URL
+    contains `target_match`, or else the first page; a scoped run with neither a `target_match` nor a page inside
+    `allowed_origins`, such as a fresh browser on `about:blank`, takes over that empty window, or opens a blank tab when
+    there is none. It leaves that window open, and with no `start` it begins on whatever the window shows. New windows
+    that no page opened, as an Electron app's main process opens them, join the run only with `target_match`; without it
+    they could be tabs a person opened in the same browser.
     A run in a visible window (a handed-over browser, or local Chrome with `LocalChrome.headed`) works in the
     background: its tab opens behind the window's current one and the window is neither raised nor focused.
     `foreground` brings the tab and its window to the front instead, to watch the run.
