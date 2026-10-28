@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A clear favourite acts without waiting for recovery.** A step whose confidence fell under `recover_below` (0.55) went to a 3s LLM recovery even when Jev's pick was well ahead: on a shop it put 0.47 on one of 124 controls with the next at 0.28, and 0.57 on clicking against 0.24 on typing. A choice whose top option is at least 1.5 times as probable as the runner-up (`Thresholds.lead_odds`) now acts down to a confidence of 0.35 (`lead_confidence_from`); a near tie, such as 0.54 on clicking a suggestion against 0.38 on pressing Enter, still goes to recovery, and irreversible actions keep their own bar. Both cores carry the change.
+
 ## [0.8.3] - 2026-10-28
 
 - **A task with a non-ASCII character no longer crashes the Rust core.** Reading the paths a task names, the core looked one byte past each character, so a task with a long dash, an accented letter or an emoji panicked at `navigation.rs` before the run began. It now reads the next character itself.

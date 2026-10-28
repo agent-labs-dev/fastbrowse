@@ -15,7 +15,7 @@ from typing import assert_never
 from pydantic import JsonValue
 
 from fastbrowse.batches import evaluate_batches
-from fastbrowse.config import Config
+from fastbrowse.config import Config, Thresholds
 from fastbrowse.jev import (
     Answer,
     ChoiceAnswer,
@@ -194,6 +194,9 @@ class Decision(Frozen):
     says nothing about this one."""
     destination: Control | None = None
     """Drop target of a drag: the control the element Jev chose to drag is released onto."""
+    operation_odds: float | None = None
+    """The chosen operation's probability over the runner-up's (`lead_odds`); None when it was not one choice."""
+    target_odds: float | None = None
 
     @property
     def confidence(self) -> float:
@@ -201,6 +204,29 @@ class Decision(Frozen):
         if self.target_confidence is None:
             return self.operation_confidence
         return min(self.operation_confidence, self.target_confidence)
+
+    def uncertain(self, thresholds: Thresholds) -> bool:
+        """Whether a choice is too doubtful to act on: under `recover_below` and not a clear favourite."""
+        if not _settled(self.operation_confidence, self.operation_odds, thresholds):
+            return True
+        return self.target_confidence is not None and not _settled(self.target_confidence, self.target_odds, thresholds)
+
+
+def _settled(confidence: float, odds: float | None, thresholds: Thresholds) -> bool:
+    if confidence >= thresholds.recover_below:
+        return True
+    return odds is not None and confidence >= thresholds.lead_confidence_from and odds >= thresholds.lead_odds
+
+
+_MAX_ODDS = 100.0
+"""A runner-up at probability 0 makes the lead unbounded; this stands for it and keeps the value finite."""
+
+
+def odds(answer: ChoiceAnswer) -> float:
+    """The chosen option's probability over the most probable other option's."""
+    chosen = answer.probabilities.get(answer.choice, 0.0)
+    runner_up = max((p for option, p in answer.probabilities.items() if option != answer.choice), default=0.0)
+    return _MAX_ODDS if runner_up <= chosen / _MAX_ODDS else chosen / runner_up
 
 
 @dataclass(frozen=True, slots=True)
@@ -678,10 +704,13 @@ async def _evaluate(
     tab_id: str | None = None
     url: str | None = None
     target_confidence: float | None = None
+    # Only a target chosen in one question has a runner-up to lead; a grouped or two-ended one keeps the flat bar.
+    target_odds: float | None = None
     if operation in request.targets:
         target_answer = _choice(evaluation, f"{operation.value}_target")
         target = _control(request.targets[operation], target_answer.choice)
         target_confidence = target_answer.confidence
+        target_odds = odds(target_answer)
     elif operation in request.groups:
         group_answer = _choice(evaluation, f"{operation.value}_group")
         group = request.groups[operation][int(group_answer.choice)]
@@ -694,6 +723,7 @@ async def _evaluate(
         target_answer = _choice(evaluation, "switch_tab_target")
         tab_id = target_answer.choice
         target_confidence = target_answer.confidence
+        target_odds = odds(target_answer)
     elif operation is Operation.NAVIGATE:
         group_confidence = 1.0
         if request.navigation_groups:
@@ -733,6 +763,7 @@ async def _evaluate(
         target_confidence = (
             destination_confidence if target_confidence is None else min(target_confidence, destination_confidence)
         )
+        target_odds = None
     return Decision(
         operation=operation,
         url=url,
@@ -741,6 +772,8 @@ async def _evaluate(
         destination=destination,
         operation_confidence=operation_answer.confidence,
         target_confidence=target_confidence,
+        operation_odds=odds(operation_answer),
+        target_odds=target_odds,
         login_required=_noul_probability(evaluation, "login_required"),
         bot_check=_noul_probability(evaluation, "bot_check"),
         read_assessment=(
