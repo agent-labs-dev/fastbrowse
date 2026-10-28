@@ -51,6 +51,7 @@ from fastbrowse.models import (
 )
 from fastbrowse.origins import parse_origins
 from fastbrowse.page import BrowserError
+from fastbrowse.telemetry import trace
 
 
 async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.AsyncClient | None = None) -> str:
@@ -325,6 +326,9 @@ async def run_task(
         return await native.run(task, locals())
     config = config or Config()
     settings = load_settings()
+    # The providers this run calls, for an eval to keep beside its result. A caller's own clients are not described.
+    if jev is None and llm is None:
+        trace("route", providers=settings.providers())
     origins = None if allowed_origins is None else parse_origins(allowed_origins)
     handed_over = cdp_url is not None or cdp_port is not None
     if origins is not None and record is not None:

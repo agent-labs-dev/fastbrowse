@@ -416,6 +416,13 @@ caller's event loop, so one that catches `CancelledError` without re-raising kee
 `asyncio.run` then waits for it at shutdown. Live frames and recordings are held back while a
 resolved secret may show on the page, as PNG step frames are. No handler means no live capture.
 
+To keep a run's trace in this process, as `--trace` writes it for the command, make the run inside
+`with traced() as events:` (also importable from `fastbrowse`). Each event is a dict naming its `event`, and runs
+that overlap keep separate lists. A run given neither `jev=` nor `llm=` begins with `route`, whose `providers`
+names the Jev and LLM providers it calls, and each model request that failed transiently is a `request_transient`
+with its `began` and `ended` on `time.monotonic()`. The Rust core gives those and its model requests' other
+events; the Python core gives every event `--trace` writes.
+
 Jev uses direct TypeSafe when keyed, otherwise OpenRouter, with Vercel AI Gateway also supported.
 See [Jev routing](docs/jev.md#provider-failover) for key precedence, overrides and failover.
 Any other source

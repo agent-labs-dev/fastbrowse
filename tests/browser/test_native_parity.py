@@ -14,7 +14,6 @@ import pytest
 from fastbrowse.adapters.local_chrome import find_chrome
 from fastbrowse.evals.bench import CASSETTES, IN_PROCESS, BenchTask, bench_task, corpus
 from fastbrowse.evals.replay import Cassette, Latency, Proxy
-from fastbrowse.models import LocalChrome
 
 try:
     fastbrowse_native = importlib.import_module("fastbrowse._native")
@@ -33,7 +32,7 @@ TASKS = ("table-extract", "mock-sign-in", "mock-upload-document")
 
 async def replayed(task: BenchTask, logs: Path) -> dict[str, Any]:
     proxy = Proxy(Cassette.load(CASSETTES / f"{task.id}.jsonl.gz"), forward=None, replay=True, latency=Latency.ZERO)
-    entry = await bench_task(task, agent_argv=[IN_PROCESS], proxy=proxy, logs=logs, chrome=LocalChrome())
+    entry = await bench_task(task, agent_argv=[IN_PROCESS], proxy=proxy, logs=logs)
     return entry["result"]
 
 

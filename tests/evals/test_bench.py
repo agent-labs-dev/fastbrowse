@@ -18,8 +18,6 @@ from fastbrowse.evals.replay import (
     nearest_body,
     request_key,
 )
-from fastbrowse.models import Operation
-from fastbrowse.page import Control
 
 LLM = "/llm/chat/completions"
 JEV = "/jev/v1/systemone"
@@ -103,13 +101,6 @@ def test_list_order_is_part_of_the_key() -> None:
     a = {"content": json.dumps({"operations": ["click", "enter", "fill"]})}
     b = {"content": json.dumps({"operations": ["fill", "click", "enter"]})}
     assert request_key(LLM, a) != request_key(LLM, b)
-
-
-def test_control_operations_are_written_sorted() -> None:
-    operations = frozenset({Operation.FILL, Operation.CLICK, Operation.ENTER, Operation.SELECT})
-    control = Control(id="1", frame_id=None, role="combobox", label="Size", operations=operations)
-    assert control.model_dump(mode="json")["operations"] == ["click", "enter", "fill", "select"]
-    assert Control.model_validate_json(control.model_dump_json()).operations == operations
 
 
 def test_describe_names_purpose_and_model() -> None:

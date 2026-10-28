@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Generator, Iterable
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -185,7 +185,11 @@ def collecting() -> list[object] | None:
 
 @contextmanager
 def traced() -> Generator[list[object]]:
-    """Trace records from this context and its child tasks only, so runs that overlap keep separate traces."""
+    """The trace events of the runs made in this context and its child tasks, so runs that overlap keep separate
+    traces: each a dict naming its `event`. A run given neither `jev` nor `llm` begins with `route`, whose
+    `providers` names the Jev and LLM providers it calls. Each model request that
+    failed transiently is a `request_transient` with its `began` and `ended` on `time.monotonic()`. The Python core
+    gives every event `--trace` writes; the Rust core gives those two and the model requests' other events."""
     handler = _Collect()
     token = _trace_events.set(handler.events)
     TRACE.addHandler(handler)
@@ -198,25 +202,6 @@ def traced() -> Generator[list[object]]:
         # Runs can finish out of order; the last collector restores the level from before any run started.
         if not any(isinstance(active, _Collect) for active in TRACE.handlers):
             TRACE.setLevel(handler.previous_level)
-
-
-def transient_seconds(events: Iterable[object], began: float, ended: float) -> float:
-    """Time within `began`..`ended` that calls spent on transient provider failures, calls that overlapped
-    counted once. Evals run an attempt with any of it again rather than subtract it, which would credit the one arm
-    whose requests are visible. An upper bound on the delay: a call running beside the failed one may have taken as
-    long anyway."""
-    spans = sorted(
-        (max(float(event["began"]), began), min(float(event["ended"]), ended))
-        for event in events
-        if isinstance(event, dict) and event.get("event") == "request_transient"
-    )
-    total, reach = 0.0, began
-    for start, end in spans:
-        start = max(start, reach)
-        if end > start:
-            total += end - start
-            reach = end
-    return total
 
 
 type CallOutcome = Literal["ok", "error", "cancelled"]

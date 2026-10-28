@@ -43,8 +43,6 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
-from fastbrowse.adapters.local_chrome import free_port
-
 PASSWORD_KEY = b"fastbrowse-mock-site"
 
 ACCOUNTS: Mapping[str, str] = {
@@ -1088,7 +1086,7 @@ def mock_server(port: int = 0) -> Generator[tuple[str, Callable[[], Site]]]:
 
     `port` 0 takes a free one; the benchmark names its own, since the address reaches the model's prompts."""
     handler = type("Handler", (_Handler,), {"site": Site()})
-    server = ThreadingHTTPServer(("127.0.0.1", port or free_port()), handler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
 
     def fresh() -> Site:
         site = Site()

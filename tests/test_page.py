@@ -202,3 +202,11 @@ def test_a_cdp_server_error_is_a_lost_context_and_keeps_no_page_text() -> None:
     assert str(lost) == "Runtime.evaluate failed (CDP -32000)"
     other = _browser_error("Runtime.evaluate", RuntimeError({"code": -32602, "message": "Invalid parameters"}))
     assert not isinstance(other, ContextLost) and str(other) == "Runtime.evaluate failed (CDP -32602)"
+
+
+def test_control_operations_are_written_sorted() -> None:
+    # The bench keys a replayed request on its body, so a set written in another order would be another prompt.
+    operations = frozenset({Operation.FILL, Operation.CLICK, Operation.ENTER, Operation.SELECT})
+    control = Control(id="1", frame_id=None, role="combobox", label="Size", operations=operations)
+    assert control.model_dump(mode="json")["operations"] == ["click", "enter", "fill", "select"]
+    assert Control.model_validate_json(control.model_dump_json()).operations == operations
