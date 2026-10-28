@@ -7,31 +7,20 @@ shows up as a failed case with a reason instead of a silent crash.
     python -m fastbrowse.audit.probes <name>
 """
 
-import ast
 import asyncio
-import contextlib
-import inspect
-import io
 import json
 import os
-import re
 import subprocess
 import sys
 from typing import Any
 
 from fastbrowse.audit.cases import CLI_FLAGS
 from fastbrowse.models import (
-    BrowserEvent,
     CostBreakdown,
-    Decider,
     Limits,
     LocalChrome,
-    Operation,
     RunResult,
     Status,
-    StepEvent,
-    StepOutcome,
-    StepResult,
 )
 
 

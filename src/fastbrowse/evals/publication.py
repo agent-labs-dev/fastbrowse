@@ -455,8 +455,8 @@ def _protocol(row: Mapping[str, Any]) -> list[Finding]:
     """A navigation pass must rest on a document the harness read, at the comparison viewport."""
     from pydantic import ValidationError
 
-    from fastbrowse.evals.live_tasks import PageEvidence, page_defect
     from fastbrowse.evals._harness import VIEWPORT
+    from fastbrowse.evals.live_tasks import PageEvidence, page_defect
 
     where = _where(row)
     if row.get("category") != "navigate":

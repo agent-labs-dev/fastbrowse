@@ -9,11 +9,11 @@ import logging
 from typing import Any
 
 import pytest
-
-from fastbrowse.models import BrowserEvent, EventHandler, FrameHandler, RunResult, Status, UntilCheck
 from tests.serve_client import FakeClient, serving
 from tests.test_serve_run import _result, _run, _settings
 from tests.test_serve_secrets import PASSWORD, SHOP, VALUE, Typist, _asked, _exchange
+
+from fastbrowse.models import BrowserEvent, EventHandler, FrameHandler, RunResult, Status, UntilCheck
 
 # Two JPEG headers with bytes after them that are not text, so a frame written as anything but base64 fails.
 FRAMES = (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\xfb\xff", b"\xff\xd8\xff\xe1\x00\x00\xfe\xfa")

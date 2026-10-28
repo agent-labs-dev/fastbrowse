@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel, ValidationError
-
-from fastbrowse.models import RunResult
 from tests.serve_client import serving
 from tests.test_serve_run import Recorder, _result, _run, _settings
+
+from fastbrowse.models import RunResult
 
 ORDER: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

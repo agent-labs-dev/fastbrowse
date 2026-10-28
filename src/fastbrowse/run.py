@@ -29,7 +29,6 @@ from fastbrowse.models import (
     UntilCheck,
 )
 from fastbrowse.page import BrowserError
-from fastbrowse.telemetry import trace
 
 
 async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.AsyncClient | None = None) -> str:

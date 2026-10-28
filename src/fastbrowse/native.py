@@ -53,19 +53,19 @@ from fastbrowse.models import (
 )
 from fastbrowse.page import (
     Action,
-    BrowserUnresponsive,
-    OriginNotAllowed,
-    PageUnresponsive,
-    RecordingError,
-    ScriptError,
     ActResult,
     BrowserError,
     BrowserUnavailable,
+    BrowserUnresponsive,
     Capture,
     ContextLost,
     NavigationTimeout,
     Observation,
+    OriginNotAllowed,
+    PageUnresponsive,
+    RecordingError,
     ScreenshotsUnavailable,
+    ScriptError,
     SiteUnreachable,
 )
 from fastbrowse.telemetry import BudgetExceeded, collecting
