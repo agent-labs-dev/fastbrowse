@@ -1,7 +1,5 @@
 """Tunable policy. Defaults are starting points to be recalibrated from recorded decision packets."""
 
-from collections.abc import Sequence
-
 from pydantic import Field
 
 from fastbrowse.models import Frozen, TripwireMode
@@ -71,20 +69,6 @@ class TokenBudget(Frozen):
     """A page of records needs room for each value and its verbatim quote in the reader's JSON."""
     compose_output_tokens: int = Field(default=8000, gt=0)
     """A long answer repeats citation ids for every claim, so it needs more room than a planning response."""
-
-    def input_chars(self, questions: Sequence[str] = (), *, jev: bool = False) -> int:
-        sizes = [len(question) for question in questions]
-        largest = self.state_plus_largest_question * self.chars_per_token
-        total = self.state_plus_all_questions * self.chars_per_token
-        if jev:
-            # Dense JSON measured 1.84 characters per token, so the prose estimate admitted oversized requests.
-            largest = min(largest, 48_000)
-            total = min(total, 96_000)
-        return max(0, int(min(largest - max(sizes, default=0), total - sum(sizes))))
-
-    def remaining_chars(self, context: str, questions: Sequence[str] = (), *, jev: bool = False) -> int:
-        """Room for notes after other content, using the same conservative input targets for LLM prompts."""
-        return max(0, self.input_chars(questions, jev=jev) - len(context))
 
 
 class StallRules(Frozen):

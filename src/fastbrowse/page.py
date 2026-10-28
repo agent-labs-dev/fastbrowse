@@ -1,18 +1,15 @@
-"""Seam between the browser layer and the decision loop.
+"""What a page reads and does, as `connect_cdp`'s page returns it, and the errors it raises.
 
-The browser layer produces `Observation` (bounded, for Jev's action choice) and `Capture` (complete, for reading),
-and executes `Action`s. Nothing above this seam touches CDP.
+An `Observation` is bounded, for Jev's action choice; a `Capture` is complete, for reading; an `Action` is what the
+page is asked to do.
 """
 
-import hashlib
-import json
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Protocol
 
 from pydantic import Field, field_serializer
 
-from fastbrowse.models import Artifact, Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
+from fastbrowse.models import Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
 
 
 class Control(Frozen):
@@ -159,15 +156,6 @@ class Capture(Frozen):
     blocks: tuple[Block, ...]
     inaccessible_frames: int = Field(default=0, ge=0)
 
-    @property
-    def read_key(self) -> str:
-        contexts = [
-            (block.source_id, block.control_context.model_dump()) for block in self.blocks if block.control_context
-        ]
-        if not contexts:
-            return self.sha256
-        return hashlib.sha256(json.dumps([self.sha256, contexts], sort_keys=True).encode()).hexdigest()
-
 
 class Action(Frozen):
     operation: Operation
@@ -249,55 +237,3 @@ class ActResult(Frozen):
     moved: bool = False
     """The action itself took the page elsewhere: its own input event began a navigation or changed the address,
     or it opened a tab. A page that moves on its own time, even to a new document just after the action, is not."""
-
-
-class Page(Protocol):
-    @property
-    def artifacts(self) -> tuple[Artifact, ...]: ...
-
-    async def observe(self) -> Observation: ...
-
-    async def document_changed(self, observation: Observation) -> bool:
-        """Whether the current URL or document differs, without indexing the page's controls again."""
-        ...
-
-    async def navigate(self, url: str, *, back_to: str | None = None) -> None:
-        """`back_to` is the page BACK opens when this tab has no earlier entry on its site: a run that went straight
-        to a deep address keeps the start page it skipped one BACK away without spending a load on it."""
-        ...
-
-    async def capture(self) -> Capture: ...
-
-    async def act(self, action: Action, observation: Observation) -> ActResult:
-        """Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail."""
-        ...
-
-    async def redrawn(self, observation: Observation, timeout_seconds: float, *, target_id: str | None = None) -> bool:
-        """Whether `target_id`, or with none any control `observation` offered, changed within `timeout_seconds`.
-
-        `act` refuses a control that changed since it was observed, so work deciding on it is already spent. A change
-        is reported once the page has settled after it, ready to be observed again.
-        """
-        ...
-
-    async def screenshot(self) -> bytes: ...
-
-    def withhold_frames(self, withheld: bool) -> None:
-        """Hold back live and recorded frames while the page may show a secret, which pixels cannot mask."""
-        ...
-
-    def lifecycle_mark(self) -> int:
-        """The page's current lifecycle generation, for a caller waiting on the next transition."""
-        ...
-
-    async def wait_for_lifecycle(self, mark: int, seconds: float) -> bool:
-        """Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`."""
-        ...
-
-    async def address(self) -> str:
-        """The address the current document was served from, after any redirect."""
-        ...
-
-    async def response_status(self) -> int | None:
-        """The HTTP status the current document was served with, or None when the browser does not say."""
-        ...

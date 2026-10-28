@@ -461,7 +461,7 @@ def _page_error(failed: Exception) -> BrowserError:
 
 
 class NativePage:
-    """`CdpPage`'s methods, on a page the Rust core drives."""
+    """A page the Rust core drives: what `connect_cdp` yields."""
 
     def __init__(self, page: Any, failed: type[Exception]) -> None:
         self._page = page
