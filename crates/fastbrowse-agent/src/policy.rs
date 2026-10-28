@@ -1184,6 +1184,7 @@ mod tests {
                                 Answer::Noul(NoulAnswer { kind: NoulTag, probability: if yes { 0.9 } else { 0.1 } })
                             }
                             Question::Score(_) => unreachable!("the policy asks no score"),
+                            Question::Box(_) => unreachable!("the policy asks no box"),
                         };
                         (key.clone(), answer)
                     })

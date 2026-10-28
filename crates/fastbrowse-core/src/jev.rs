@@ -19,6 +19,8 @@ pub const JEV_DOLLARS_PER_INPUT_TOKEN: f64 = 0.042 / 1_000_000.0;
 literal_tag!(ChoiceTag = "choice");
 literal_tag!(NoulTag = "noul");
 literal_tag!(ScoreTag = "score");
+literal_tag!(BoxTag = "box");
+literal_tag!(ImageTag = "image");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -78,13 +80,52 @@ fn score_criteria<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Err
     }
 }
 
-/// `ChoiceQuestion | NoulQuestion | ScoreQuestion`, discriminated by `type`.
+/// Where something is in an image: fractional edges in [0, 1], measured from the image's top-left, plus a
+/// calibrated confidence. Direct TypeSafe only, and it needs Jev 1.14.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxQuestion {
+    #[serde(default, rename = "type")]
+    pub kind: BoxTag,
+    pub instructions: String,
+}
+
+impl BoxQuestion {
+    pub fn new(instructions: impl Into<String>) -> Self {
+        BoxQuestion { kind: BoxTag, instructions: instructions.into() }
+    }
+}
+
+/// An image attached to a Jev request. Listed once in the request's `assets` map and referenced by key from the
+/// state or a question's instructions. Direct TypeSafe only: the OpenRouter and gateway routes never receive pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageAsset {
+    #[serde(default = "image_type", rename = "type")]
+    pub kind: ImageTag,
+    /// `png` or `jpeg`.
+    pub format: String,
+    pub data_base64: String,
+}
+
+fn image_type() -> ImageTag {
+    ImageTag
+}
+
+impl ImageAsset {
+    pub fn new(format: impl Into<String>, data_base64: impl Into<String>) -> Self {
+        ImageAsset { kind: ImageTag, format: format.into(), data_base64: data_base64.into() }
+    }
+}
+
+/// `ChoiceQuestion | NoulQuestion | ScoreQuestion | BoxQuestion`, discriminated by `type`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Question {
     Choice(ChoiceQuestion),
     Noul(NoulQuestion),
     Score(ScoreQuestion),
+    Box(BoxQuestion),
 }
 
 /// Reads the `type` member first, as a pydantic discriminated union does, so an error names the right model.
@@ -93,15 +134,17 @@ fn by_type<'de, D: Deserializer<'de>, T>(
     choice: impl FnOnce(Value) -> Result<T, serde_json::Error>,
     noul: impl FnOnce(Value) -> Result<T, serde_json::Error>,
     score: impl FnOnce(Value) -> Result<T, serde_json::Error>,
+    boxed: impl FnOnce(Value) -> Result<T, serde_json::Error>,
 ) -> Result<T, D::Error> {
     let value = Value::deserialize(d)?;
     let parsed = match value.get("type").and_then(Value::as_str) {
         Some("choice") => choice(value),
         Some("noul") => noul(value),
         Some("score") => score(value),
+        Some("box") => boxed(value),
         Some(_) => {
             return Err(serde::de::Error::custom(
-                "Input tag does not match any of the expected tags: 'choice', 'noul', 'score'",
+                "Input tag does not match any of the expected tags: 'choice', 'noul', 'score', 'box'",
             ));
         }
         None => return Err(serde::de::Error::custom("Unable to extract tag using discriminator 'type'")),
@@ -116,6 +159,7 @@ impl<'de> Deserialize<'de> for Question {
             |v| serde_json::from_value(v).map(Question::Choice),
             |v| serde_json::from_value(v).map(Question::Noul),
             |v| serde_json::from_value(v).map(Question::Score),
+            |v| serde_json::from_value(v).map(Question::Box),
         )
     }
 }
@@ -133,6 +177,11 @@ impl From<NoulQuestion> for Question {
 impl From<ScoreQuestion> for Question {
     fn from(q: ScoreQuestion) -> Self {
         Question::Score(q)
+    }
+}
+impl From<BoxQuestion> for Question {
+    fn from(q: BoxQuestion) -> Self {
+        Question::Box(q)
     }
 }
 
@@ -169,13 +218,33 @@ pub struct ScoreAnswer {
     pub confidence: f64,
 }
 
-/// `ChoiceAnswer | NoulAnswer | ScoreAnswer`, discriminated by `type`.
+/// Where something is in an image: fractional edges in [0, 1] plus a calibrated confidence. The box can be
+/// near-exact while `confidence` is low, so a threshold on it has to be tuned per use, not assumed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxAnswer {
+    #[serde(default, rename = "type")]
+    pub kind: BoxTag,
+    #[serde(deserialize_with = "lax::float_unit")]
+    pub left: f64,
+    #[serde(deserialize_with = "lax::float_unit")]
+    pub right: f64,
+    #[serde(deserialize_with = "lax::float_unit")]
+    pub top: f64,
+    #[serde(deserialize_with = "lax::float_unit")]
+    pub bottom: f64,
+    #[serde(deserialize_with = "lax::float_unit")]
+    pub confidence: f64,
+}
+
+/// `ChoiceAnswer | NoulAnswer | ScoreAnswer | BoxAnswer`, discriminated by `type`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Answer {
     Choice(ChoiceAnswer),
     Noul(NoulAnswer),
     Score(ScoreAnswer),
+    Box(BoxAnswer),
 }
 
 impl<'de> Deserialize<'de> for Answer {
@@ -185,6 +254,7 @@ impl<'de> Deserialize<'de> for Answer {
             |v| serde_json::from_value(v).map(Answer::Choice),
             |v| serde_json::from_value(v).map(Answer::Noul),
             |v| serde_json::from_value(v).map(Answer::Score),
+            |v| serde_json::from_value(v).map(Answer::Box),
         )
     }
 }
@@ -246,11 +316,23 @@ impl Schema for Evaluation {
             ],
         )
         .ty();
+        let boxed = ModelTy::frozen(
+            "BoxAnswer",
+            vec![
+                Field::default("type", BoxTag::ty(), "box"),
+                Field::required("left", Ty::Float.le(1).ge(0)),
+                Field::required("right", Ty::Float.le(1).ge(0)),
+                Field::required("top", Ty::Float.le(1).ge(0)),
+                Field::required("bottom", Ty::Float.le(1).ge(0)),
+                confidence(),
+            ],
+        )
+        .ty();
         let answer = Ty::Alias(
             "Answer",
             Box::new(Ty::Tagged {
                 property: "type",
-                variants: vec![("choice", choice), ("noul", noul), ("score", score)],
+                variants: vec![("choice", choice), ("noul", noul), ("score", score), ("box", boxed)],
             }),
         );
         ModelTy::frozen(
@@ -312,4 +394,21 @@ pub trait JevClient: Send + Sync {
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, JevError>>;
+
+    /// Answer questions against one state with images listed in `assets` and referenced by key from the state or a
+    /// question's instructions. Jev image input is direct-TypeSafe only, so a route that cannot carry pixels refuses
+    /// a non-empty `assets` rather than dropping them silently. A caller with no images keeps calling `evaluate`.
+    fn evaluate_with_assets<'a>(
+        &'a self,
+        state: &'a Value,
+        assets: &'a IndexMap<String, ImageAsset>,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+        if assets.is_empty() {
+            return self.evaluate(state, questions);
+        }
+        Box::pin(async move {
+            Err(JevError::Failed("Jev image input is only supported on the direct TypeSafe route".into()))
+        })
+    }
 }

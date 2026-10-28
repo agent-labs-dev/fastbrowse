@@ -13,8 +13,8 @@ use std::time::Duration;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::jev::{
-    Answer, ChoiceAnswer, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, JevError, NoulAnswer, Question, RetriesExhausted,
-    ScoreAnswer,
+    Answer, BoxAnswer, ChoiceAnswer, Evaluation, ImageAsset, JEV_DOLLARS_PER_INPUT_TOKEN, JevError, NoulAnswer, Question,
+    RetriesExhausted, ScoreAnswer,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 use fastbrowse_core::py::json::{dumps, float_str};
@@ -22,7 +22,7 @@ use fastbrowse_core::py::lax::float_of;
 use fastbrowse_core::py::{self, text};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger, LedgerState, Trace, monotonic};
 use indexmap::IndexMap;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
 use crate::http::{Http, Response, TransportError};
@@ -56,8 +56,24 @@ pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> 
                 body.insert("type".into(), "score".into());
                 body.insert("criteria".into(), q.criteria.clone().into());
             }
+            Question::Box(q) => {
+                body.insert("instructions".into(), q.instructions.clone().into());
+                body.insert("type".into(), "box".into());
+            }
         }
         result.insert(key.clone(), Value::Object(body));
+    }
+    Value::Object(result)
+}
+
+/// The request's `assets` map: each image listed once, keyed so the state or a question's instructions can name it.
+pub fn wire_assets(assets: &IndexMap<String, ImageAsset>) -> Value {
+    let mut result = Map::new();
+    for (key, asset) in assets {
+        result.insert(
+            key.clone(),
+            json!({"type": "image", "format": asset.format, "data_base64": asset.data_base64}),
+        );
     }
     Value::Object(result)
 }
@@ -664,6 +680,7 @@ pub fn parse_answers(
             Question::Noul(_) if gateway => "boolean",
             Question::Noul(_) => "noul",
             Question::Score(_) => "score",
+            Question::Box(_) => "box",
         };
         if answer.get("type").and_then(Value::as_str) != Some(expected_type) {
             return Err(format!("incorrect answer type for {key}"));
@@ -701,6 +718,23 @@ pub fn parse_answers(
                 }
                 let confidence = probability(confidence_value)?;
                 Answer::Score(ScoreAnswer { kind: Default::default(), score, probabilities: probs, confidence })
+            }
+            Question::Box(_) => {
+                // Fractional edges share the [0, 1] check with a probability; the box can be near-exact at low
+                // confidence, so nothing here treats confidence as a correctness signal.
+                let (left, right) = (probability(answer.get("left"))?, probability(answer.get("right"))?);
+                let (top, bottom) = (probability(answer.get("top"))?, probability(answer.get("bottom"))?);
+                if left > right || top > bottom {
+                    return Err(format!("box edges are inverted for {key}"));
+                }
+                Answer::Box(BoxAnswer {
+                    kind: Default::default(),
+                    left,
+                    right,
+                    top,
+                    bottom,
+                    confidence: probability(confidence_value)?,
+                })
             }
         };
         answers.insert(key.clone(), parsed);

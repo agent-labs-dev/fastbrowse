@@ -135,7 +135,7 @@ impl JevClient for ScriptedJev {
                     let probability = f64::from(u8::from(key == "complete"));
                     answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability }));
                 }
-                Question::Score(_) => {
+                Question::Score(_) | Question::Box(_) => {
                     failure = Some(JevError::Failed(format!("the scripted Jev has no answer for {}", text::repr(key))));
                     break;
                 }

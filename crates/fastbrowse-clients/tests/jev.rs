@@ -13,8 +13,8 @@ use fastbrowse_clients::typesafe::{OPENROUTER_MODEL, OPENROUTER_URL, TypeSafeJev
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spend};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::jev::{
-    Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, JevClient, JevError, NoulAnswer,
-    NoulQuestion, Question, ScoreQuestion,
+    Answer, BoxQuestion, ChoiceAnswer, ChoiceQuestion, Evaluation, ImageAsset, JEV_DOLLARS_PER_INPUT_TOKEN, JevClient,
+    JevError, NoulAnswer, NoulQuestion, Question, ScoreQuestion,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, Limits};
 use fastbrowse_core::telemetry::Ledger;
@@ -109,9 +109,8 @@ async fn test_openrouter_uses_systemone_and_records_cost() {
 }
 
 /// Jev images are direct-only and the agent sends none yet, so no request on either System One route carries pixels.
-/// A run keyed only for OpenRouter keeps image input off, and the router never receives a page's pixels. An image path
-/// added later changes this test with the direct-only capability it adds, rather than turning the header or assets on
-/// for every route.
+/// A run that sends no images keeps image input off on every route, so a run keyed only for OpenRouter never carries
+/// a page's pixels and neither route turns the header or assets on unprompted.
 #[tokio::test]
 async fn test_jev_requests_carry_no_image_input() {
     for (key, base_url) in [("openrouter-key", OPENROUTER_URL), ("key", "https://direct.test")] {
@@ -132,6 +131,43 @@ async fn test_jev_requests_carry_no_image_input() {
         let result = client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
         assert!(matches!(result.answers["q"], Answer::Noul(_)));
     }
+}
+
+/// Jev image input is direct-TypeSafe only. The direct route carries the assets map and the header the image path
+/// needs; OpenRouter is supported for Jev text but never receives pixels, so an image there is refused, not dropped.
+#[tokio::test]
+async fn test_jev_image_input_is_direct_only() {
+    let assets = IndexMap::from([("shot".to_string(), ImageAsset::new("png", "AAAA"))]);
+    let asked = questions([("c", BoxQuestion::new("the button in `shot`").into())]);
+
+    let http = answering(|request| {
+        assert!(
+            request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("typesafe-danger-zone-images")),
+            "the direct route sends the images header"
+        );
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(
+            body["assets"],
+            json!({"shot": {"type": "image", "format": "png", "data_base64": "AAAA"}})
+        );
+        assert_eq!(body["questions"]["c"], json!({"type": "box", "instructions": "the button in `shot`"}));
+        let response = Response::json(
+            200,
+            &json!({"answers": {"c": {"type": "box", "left": 0.24, "right": 0.76, "top": 0.55,
+                    "bottom": 0.62, "confidence": 0.87}}, "usage": {"input_tokens": 1}}),
+        );
+        Box::pin(async move { Ok(response) })
+    });
+    let client = TypeSafeJevClient::new("key", http, "https://direct.test", OPENROUTER_MODEL);
+    let result = client.evaluate_with_assets(&json!("page"), &assets, &asked).await.unwrap();
+    let Answer::Box(placed) = &result.answers["c"] else { panic!("a box") };
+    assert_eq!((placed.left, placed.right, placed.top, placed.bottom, placed.confidence), (0.24, 0.76, 0.55, 0.62, 0.87));
+
+    // OpenRouter must refuse an image rather than send it: no request is made at all.
+    let http = answering(|_| panic!("OpenRouter must not carry pixels"));
+    let client = TypeSafeJevClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL);
+    let error = client.evaluate_with_assets(&json!("page"), &assets, &asked).await.unwrap_err();
+    assert!(error.to_string().contains("direct TypeSafe route"), "{error}");
 }
 
 #[tokio::test]

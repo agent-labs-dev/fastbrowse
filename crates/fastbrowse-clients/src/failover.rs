@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question, RetriesExhausted};
+use fastbrowse_core::jev::{Evaluation, ImageAsset, JevClient, JevError, Question, RetriesExhausted};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
@@ -43,11 +43,12 @@ impl FailoverJevClient {
     async fn evaluate_paid(
         &self,
         state: &Value,
+        assets: &IndexMap<String, ImageAsset>,
         questions: &IndexMap<String, Question>,
     ) -> Result<Evaluation, JevError> {
         let paid = Paid::default();
         let mut guard = PaidOnDrop { paid: paid.clone(), parent: JevSpend::current(), armed: true };
-        let result = jev_spend(Lines::Paid(paid.clone()), None, self.switching(state, questions)).await;
+        let result = jev_spend(Lines::Paid(paid.clone()), None, self.switching(state, assets, questions)).await;
         guard.armed = false;
         let mut result = match result {
             Ok(result) => result,
@@ -66,10 +67,15 @@ impl FailoverJevClient {
         Ok(result)
     }
 
-    async fn switching(&self, state: &Value, questions: &IndexMap<String, Question>) -> Result<Evaluation, JevError> {
+    async fn switching(
+        &self,
+        state: &Value,
+        assets: &IndexMap<String, ImageAsset>,
+        questions: &IndexMap<String, Question>,
+    ) -> Result<Evaluation, JevError> {
         let on_backup = self.on_backup.load(Ordering::SeqCst);
         let client = if on_backup { &self.backup } else { &self.primary };
-        let error = match client.evaluate(state, questions).await {
+        let error = match client.evaluate_with_assets(state, assets, questions).await {
             Err(JevError::RetriesExhausted(error)) if !on_backup => error,
             other => return other,
         };
@@ -84,7 +90,7 @@ impl FailoverJevClient {
         let held: IndexMap<String, _> = error.answered.iter().flat_map(|result| result.answers.clone()).collect();
         let remaining: IndexMap<String, Question> =
             questions.iter().filter(|(key, _)| !held.contains_key(*key)).map(|(k, q)| (k.clone(), q.clone())).collect();
-        let result = match self.backup.evaluate(state, &remaining).await {
+        let result = match self.backup.evaluate_with_assets(state, assets, &remaining).await {
             Ok(result) => result,
             Err(JevError::RetriesExhausted(backup_error)) => {
                 let requests = error.requests + backup_error.requests;
@@ -129,6 +135,15 @@ impl JevClient for FailoverJevClient {
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
-        Box::pin(self.evaluate_paid(state, questions))
+        Box::pin(async move { self.evaluate_paid(state, &IndexMap::new(), questions).await })
+    }
+
+    fn evaluate_with_assets<'a>(
+        &'a self,
+        state: &'a Value,
+        assets: &'a IndexMap<String, ImageAsset>,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+        Box::pin(self.evaluate_paid(state, assets, questions))
     }
 }
