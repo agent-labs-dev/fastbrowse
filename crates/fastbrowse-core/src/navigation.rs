@@ -87,7 +87,7 @@ fn task_paths(task: &str) -> Vec<(usize, &str)> {
     while let Some((at, c)) = chars.next() {
         let opens =
             previous.is_none_or(|p| text::is_space(p) || matches!(p, '"' | '\'' | '`' | '(' | '[' | '<' | '*' | '_'));
-        let first = task[at + 1..].chars().next();
+        let first = task[at + c.len_utf8()..].chars().next();
         if c == '/' && opens && first.is_some_and(|f| f.is_ascii_alphanumeric() || matches!(f, '_' | '~' | '-')) {
             let body = &task[at + 1..];
             let length = body.find(ends_address).unwrap_or(body.len());
@@ -308,6 +308,15 @@ mod tests {
         for start in [format!("{ALPHA}."), format!("{ALPHA})"), format!("{ALPHA}_"), format!("{ALPHA}?q=1,2;")] {
             assert_eq!(task_urls("Return to the initial page", Some(&start), true), std::slice::from_ref(&start));
         }
+    }
+
+    #[test]
+    fn test_a_task_with_multibyte_text_names_its_paths_without_panicking() {
+        let task = "Sign in \u{2014} then open /login and review the caf\u{e9}\u{2019}s menu at /menu.";
+        assert_eq!(
+            task_urls(task, Some("http://shop.example/entry"), true),
+            ["http://shop.example/login", "http://shop.example/menu", "http://shop.example/entry"]
+        );
     }
 
     #[test]

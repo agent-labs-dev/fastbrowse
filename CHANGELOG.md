@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A task with an em dash, a curly quote or any other non-ASCII text no longer crashes the Rust core.** Since 0.8.0 reading the paths a task names ("sign in at /login") cut the task at a byte inside a multi-byte character, so a task holding one, such as an em dash before "then open /login", panicked before the run started and the caller saw only a timeout. The paths are now read on character boundaries.
+
 ## [0.8.2] - 2026-10-28
 
 - **A scoped attach takes over an empty window instead of opening a second.** Since 0.8.1 a scoped run attached to a browser with no granted window opened a blank tab of its own, so a fresh cloud browser's live view showed the run's tab beside a leftover `about:blank`. When the browser has an `about:blank` window that no page opened and that still holds the empty document, the run now takes it over; it opens a tab only when there is none. A new tab page, which can list the person's most visited sites, a blank window another page opened, and one something has written into are never taken over. Both cores carry the change.
