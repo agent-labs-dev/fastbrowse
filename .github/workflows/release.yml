@@ -181,22 +181,13 @@ jobs:
           path: ${{ runner.temp }}/builds
       # All six are made ready before the first is published, so a package that cannot be assembled or built
       # leaves npm untouched.
+      # Each carries the Rust binary and the Node addon (docs/adr/0004).
       - name: Assemble the platform packages
-        env:
-          # What the platform packages carry: `rust`, the Rust binary and the Node addon (docs/adr/0004), or
-          # `pyinstaller`, the frozen Python package. The binaries workflow builds and smoke-tests both until 0.9.0,
-          # so going back is this one word.
-          NPM_BUILD: rust
         run: |
           for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
-            if [ "$NPM_BUILD" = rust ]; then
-              build="$RUNNER_TEMP/builds/fastbrowse-rust-$target"
-              set -- "$build/fastbrowse-rust-$target.tar.gz" --rust --addon "$build/fastbrowse.node"
-            else
-              set -- "$RUNNER_TEMP/builds/fastbrowse-$target/fastbrowse-$target.tar.gz"
-            fi
-            uv run --no-project python scripts/npm_platform_package.py "$@" \
-              --target "$target" --version "$VERSION" --out "$RUNNER_TEMP/npm/$target"
+            build="$RUNNER_TEMP/builds/fastbrowse-rust-$target"
+            uv run --no-project python scripts/npm_platform_package.py "$build/fastbrowse-rust-$target.tar.gz" \
+              --addon "$build/fastbrowse.node" --target "$target" --version "$VERSION" --out "$RUNNER_TEMP/npm/$target"
           done
       - run: npm ci --ignore-scripts
       - run: npm --prefix packages/sdk run build

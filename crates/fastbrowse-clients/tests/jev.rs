@@ -1,4 +1,4 @@
-//! tests/clients/test_jev.py: both Jev wires, their validation, splits and failover.
+//! Both Jev wires, their validation, splits and failover.
 
 mod common;
 
@@ -105,6 +105,32 @@ async fn test_openrouter_uses_systemone_and_records_cost() {
         assert!((result.cost.dollars.unwrap() - cost).abs() < 1e-12);
         assert_eq!((result.input_tokens, result.cost.input_tokens), (tokens, tokens));
         assert_eq!(result.cost.output_tokens, 70);
+    }
+}
+
+/// Jev images are direct-only and the agent sends none yet, so no request on either System One route carries pixels.
+/// A run keyed only for OpenRouter keeps image input off, and the router never receives a page's pixels. An image path
+/// added later changes this test with the direct-only capability it adds, rather than turning the header or assets on
+/// for every route.
+#[tokio::test]
+async fn test_jev_requests_carry_no_image_input() {
+    for (key, base_url) in [("openrouter-key", OPENROUTER_URL), ("key", "https://direct.test")] {
+        let http = answering(move |request| {
+            assert!(
+                !request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("typesafe-danger-zone-images")),
+                "{base_url}"
+            );
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert!(body.get("assets").is_none(), "{base_url}");
+            let response = Response::json(
+                200,
+                &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}),
+            );
+            Box::pin(async move { Ok(response) })
+        });
+        let client = TypeSafeJevClient::new(key, http, base_url, OPENROUTER_MODEL);
+        let result = client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
+        assert!(matches!(result.answers["q"], Answer::Noul(_)));
     }
 }
 

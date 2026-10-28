@@ -13,7 +13,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl
 
-from fastbrowse.adapters.local_chrome import free_port
 from fastbrowse.evals.local import FIXTURES as EVAL_FIXTURES
 from fastbrowse.evals.local import Recorder
 
@@ -61,7 +60,7 @@ def _handler(recorder: Recorder) -> type[BaseHTTPRequestHandler]:
 def fixture_server() -> Generator[tuple[str, Callable[[], dict[str, list[dict[str, str]]]]]]:
     """Yield the fixture server's base URL and a reader for its POST record."""
     recorder = Recorder()
-    server = ThreadingHTTPServer(("127.0.0.1", free_port()), _handler(recorder))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(recorder))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_port}", recorder.snapshot

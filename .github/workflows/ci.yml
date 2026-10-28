@@ -36,8 +36,7 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           python-version: "${{ matrix.python }}"
-      # The browser-use arm eval imports browser_use_sdk and the MCP server imports mcp; without the extras, ty
-      # sees a different tree than we do.
+      # The eval data loaders import yaml; without the extra, ty sees a different tree than we do.
       - run: uv sync --locked --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -113,8 +112,8 @@ jobs:
         with: {node-version: "20", package-manager-cache: false}
       - run: node packages/sdk/test/node_floor.mjs .venv/bin/fastbrowse
 
-  # The Rust core (docs/adr/0001): its own checks, then the Python suites that cover it run against it, and the
-  # Node addon against cases taken from those suites.
+  # The Rust core (docs/adr/0001): its own checks, then the Node addon against cases taken from its suites. The
+  # Python suites, which reach the core through the package, run in `gate`.
   rust:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions: {contents: read}
@@ -129,16 +128,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
-      # Builds the package and its Rust core, `fastbrowse._native`.
-      - run: uv sync --locked --all-extras
-      # The browser suites go last and together: pytest collecting a file outside tests/browser between two inside it
-      # loses the fixtures tests/browser/conftest.py gives the later one.
-      - env: {FASTBROWSE_PYTHON_CORE: "0"}
-        run: >-
-          uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py
-          tests/test_retrieval.py tests/test_agent.py tests/test_native.py
-          tests/browser/test_safety.py tests/browser/test_native_parity.py tests/browser/test_native_recording.py
-          tests/browser/test_native_connect.py
+      # Builds the package and its Rust core, `fastbrowse._native`, which the SDK suite's own server runs on.
+      - run: uv sync --locked
       - run: cargo build -p fastbrowse-node --release --locked
       - run: cp target/release/libfastbrowse_node.so crates/fastbrowse-node/fastbrowse.node
       - run: node --test crates/fastbrowse-node/test/core.test.ts
@@ -147,27 +138,26 @@ jobs:
       - run: FASTBROWSE_TEST_ADDON="$PWD/crates/fastbrowse-node/fastbrowse.node" npm run check:sdk
 
   # Five builds on five runners cost more than the rest of CI together, so a pull request pays for them only
-  # when it touches what is frozen, what freezes it, what packs it for npm, or the SDK that the install smoke
-  # packs and starts it with. The eval and audit packages are not in the executable.
+  # when it touches what is built, what builds it, what packs it for npm, or the SDK that the install smoke
+  # packs and starts it with. The eval and audit packages are not in the binary.
   # Every push to `main` builds, so a change the filter misjudged is still caught before a release.
   changes:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
-      binaries: ${{ steps.frozen.outputs.binaries }}
+      binaries: ${{ steps.built.outputs.binaries }}
       aur: ${{ steps.aur.outputs.aur }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # A pull request is checked out as its merge into the base, whose first parent is the base.
         with: {fetch-depth: 2, persist-credentials: false}
-      - id: frozen
+      - id: built
         env: {EVENT: "${{ github.event_name }}"}
         run: |
           if [ "$EVENT" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- \
             src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock \
-            packaging ':!packaging/aur' \
             scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
-            scripts/npm_platform_package.py scripts/smoke_npm_install.py scripts/macos_signatures.py \
+            scripts/npm_platform_package.py scripts/smoke_npm_install.py \
             packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src \
             crates Cargo.toml Cargo.lock rust-toolchain.toml
           then echo "binaries=true" >> "$GITHUB_OUTPUT"

@@ -478,7 +478,10 @@ fn the_example_dotenv_reads_as_python_dotenv_reads_it() {
     let loaded = Settings::from_sources::<&str, &str>(&[], Some(&example)).unwrap();
     // python-dotenv reads `OPENROUTER_API_KEY=            # url` as the comment itself, since the spaces before the
     // `#` go with the `=` (checked against dotenv_values), so an example copied and never filled sends it as a key.
-    assert_eq!(loaded.openrouter_api_key.as_ref().map(|key| key.expose()), Some("# https://openrouter.ai/keys"));
+    assert_eq!(
+        loaded.openrouter_api_key.as_ref().map(|key| key.expose()),
+        Some("# the LLM, and a supported Jev text route, https://openrouter.ai/keys")
+    );
     assert_eq!(loaded.llm_source(), LLMSource::OpenRouter);
     assert!(loaded.ai_gateway_api_key.is_none());
 }

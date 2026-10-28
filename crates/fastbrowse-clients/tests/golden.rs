@@ -1,4 +1,5 @@
-//! The requests Python sent and what it returned, from `tests/golden/generate.py`, replayed against the Rust clients.
+//! The requests the Python clients sent and what they returned, fixed in `tests/golden/cases.json`, replayed against
+//! the Rust clients.
 //!
 //! Each case's scripted responses are handed back in order; every request must match Python's byte for byte (and so its
 //! canonical form, which a replay is keyed on), and every result, ledger line, collected spend and trace record must

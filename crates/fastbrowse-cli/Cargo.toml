@@ -12,7 +12,7 @@ path = "src/main.rs"
 [features]
 default = ["scripted"]
 # The stand-in runs and test servers the SDK and protocol tests start the binary with, as `--run-task NAME` and
-# FASTBROWSE_TEST_SERVER. Python ships its hidden `--run-task` too; a release build can leave them out.
+# FASTBROWSE_TEST_SERVER. A release build can leave them out.
 scripted = ["tokio/signal"]
 
 [dependencies]
