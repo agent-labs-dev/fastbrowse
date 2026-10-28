@@ -1250,7 +1250,7 @@ impl fastbrowse_core::llm::LLMClient for MeteredPlan {
 async fn test_abandoned_head_start_bills_the_finished_plan_receipt() {
     // tests/clients/test_openai_compatible.py: the plan is the only call, so an abandoned run bills its receipt once
     // and starts no follow-up.
-    let head = super::HeadStart::begin(Arc::new(MeteredPlan), "Report the price", None, None);
+    let head = super::HeadStart::begin(Arc::new(MeteredPlan), "Report the price", None, None, None);
     head.planning.wait().await;
     let costs = head.abandon().await;
     assert_eq!(costs.len(), 1);
@@ -1260,8 +1260,8 @@ async fn test_abandoned_head_start_bills_the_finished_plan_receipt() {
 #[tokio::test]
 async fn test_a_head_start_asks_for_a_shortcut_only_at_a_sites_entry_point() {
     let llm = Arc::new(ScriptedLLM);
-    let entry = super::HeadStart::begin(llm.clone(), "Find the price", Some("https://shop.test/"), None);
-    let inside = super::HeadStart::begin(llm, "Find the price", Some("https://shop.test/cart"), None);
+    let entry = super::HeadStart::begin(llm.clone(), "Find the price", Some("https://shop.test/"), None, None);
+    let inside = super::HeadStart::begin(llm, "Find the price", Some("https://shop.test/cart"), None, None);
     assert!(entry.proposing.is_some());
     assert!(inside.proposing.is_none());
     entry.discard().await;
@@ -1377,4 +1377,72 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
     assert!(result.steps.is_empty() && result.evidence.is_empty() && result.final_url.is_none());
     // The plan was asked for before the page, and what it spent is still reported.
     assert!(!result.cost.lines.is_empty());
+}
+
+#[test]
+fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
+    use super::state::Stop;
+    use fastbrowse_core::models::WallKind;
+    let mut code = Control::new("otp", "textbox", "Code from hunter2", [Operation::Fill]);
+    code.autocomplete = Some("one-time-code".into());
+    let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    let stop = |status: Status, wall: Option<WallKind>| Stop { wall, ..Stop::new(status, "stopped") };
+    for (controls, status, hint, expected) in [
+        (vec![code.clone()], Status::NeedsLogin, None, Some(WallKind::OneTimeCode)),
+        (vec![code.clone(), password.clone()], Status::NeedsLogin, None, Some(WallKind::Password)),
+        (vec![button("Sign in")], Status::NeedsLogin, None, Some(WallKind::SignIn)),
+        (vec![code.clone()], Status::Blocked, Some(WallKind::BotCheck), Some(WallKind::BotCheck)),
+        // A refusal that is not a bot check, and a run that stopped for any other reason, name no wall.
+        (vec![code.clone()], Status::Blocked, None, None),
+        (vec![code.clone()], Status::Stuck, None, None),
+    ] {
+        let agent = agent();
+        agent.seen().redactor.register("PASSWORD", "hunter2", None);
+        agent.seen().raw = Some(at("https://shop.test:443/login?next=1", &controls));
+        let wall = agent.wall(&stop(status, hint));
+        assert_eq!(wall.as_ref().map(|w| w.kind), expected, "{status:?} {controls:?}");
+        let Some(wall) = wall else { continue };
+        assert_eq!(wall.origin, "https://shop.test");
+        assert!(wall.seen_at_ms > 1_700_000_000_000);
+        let fields: Vec<String> = match wall.kind {
+            WallKind::BotCheck | WallKind::SignIn => Vec::new(),
+            WallKind::OneTimeCode => vec!["Code from [secret:PASSWORD]".into()],
+            WallKind::Password => vec!["Code from [secret:PASSWORD]".into(), "Password".into()],
+        };
+        assert_eq!(wall.fields, fields);
+    }
+}
+
+/// Declares a password for the site and then cannot produce it, as a vault that is locked does.
+struct Unresolved;
+
+impl fastbrowse_core::models::SecretResolver for Unresolved {
+    fn available(&self) -> Vec<fastbrowse_core::models::SecretRef> {
+        vec![fastbrowse_core::models::SecretRef { name: "password".into(), origins: vec!["https://b.test".into()] }]
+    }
+
+    fn resolve<'a>(&'a self, _: &'a str, _: &'a str) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async { None })
+    }
+}
+
+#[tokio::test]
+async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_needs_input() {
+    let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    password.sensitive = true;
+    password.frame_origin = Some("https://b.test".into());
+    let agent = agent().with_secrets(Some(Arc::new(Unresolved)));
+    let page = at("https://b.test/login", std::slice::from_ref(&password));
+    agent.seen().raw = Some(page.clone());
+    let mut state = run_state().await;
+    let Err(super::state::Flow::Stop(stop)) = agent.text(&mut state, &page, &password).await else {
+        panic!("the field was filled");
+    };
+    assert_eq!(stop.status, Status::NeedsLogin);
+    assert_eq!(
+        stop.error.as_deref(),
+        Some("sign-in required at https://b.test: secret password is not available there")
+    );
 }

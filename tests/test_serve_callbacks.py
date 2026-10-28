@@ -134,6 +134,7 @@ ERRORED = {
     "final_url": None,
     "would_fire": [],
     "recordings": [],
+    "wall": None,
 }
 """A run that a client's callback ended, apart from its `error`: nothing the run did before then is in it."""
 

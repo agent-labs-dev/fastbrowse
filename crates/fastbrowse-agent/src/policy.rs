@@ -164,6 +164,9 @@ pub struct StepContext {
     /// Recent reasons, diagnoses and subgoals, separate from actions actually taken.
     #[serde(default)]
     pub recovery_memory: String,
+    /// The caller's background, which Jev reads beside the task and never as a requirement.
+    #[serde(default)]
+    pub background: Option<String>,
 }
 
 impl StepContext {
@@ -183,6 +186,7 @@ impl StepContext {
             start_url: None,
             start_landing_url: None,
             recovery_memory: String::new(),
+            background: None,
         }
     }
 }
@@ -924,6 +928,9 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     state.insert("recent_actions".into(), Value::Array(context.history.iter().map(Dump::dump_exclude_none).collect()));
     state
         .insert("elements".into(), Value::Array(controls.iter().map(|c| Value::Object(element(c, compact))).collect()));
+    if let Some(background) = context.background.as_deref().map(text::strip).filter(|b| !b.is_empty()) {
+        state.insert("background".into(), background.into());
+    }
     if !context.recovery_memory.is_empty() {
         state.insert("recovery_memory".into(), context.recovery_memory.clone().into());
     }
@@ -1294,6 +1301,20 @@ mod tests {
         let context = StepContext::new("Select next month's first Friday");
         let state = build_request(&page, &[], &context, &Config::default(), false).state;
         assert_eq!(state["date"], "2026-09-26 (Saturday). In one month: October 2026; in two months: November 2026");
+    }
+
+    #[test]
+    fn test_jev_reads_the_callers_background_apart_from_the_task() {
+        let page = observation(vec![]);
+        let mut context = StepContext::new("Find the price");
+        let state = build_request(&page, &[], &context, &Config::default(), false).state;
+        assert!(state.get("background").is_none());
+        context.background = Some(" Asked by email from Ana. ".into());
+        let state = build_request(&page, &[], &context, &Config::default(), false).state;
+        assert_eq!(
+            (&state["task"], &state["background"]),
+            (&json!("Find the price"), &json!("Asked by email from Ana."))
+        );
     }
 
     #[test]

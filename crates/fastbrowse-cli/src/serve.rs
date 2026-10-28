@@ -503,6 +503,7 @@ pub fn arguments(params: &RunParams, settings: &SettingsSource, callbacks: Callb
     args.proxy_country = Some(options::proxy_country(proxy_country.as_deref()));
     args.viewport = params.viewport;
     args.cloud_allow_resizing = params.cloud_allow_resizing;
+    args.context = params.context.clone();
     args.inputs = params.inputs.clone();
     args.attachments = params
         .attachments

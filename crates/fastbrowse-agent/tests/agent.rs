@@ -292,6 +292,9 @@ fn normalized(mut outcome: Value) -> Value {
             step["duration_ms"] = 0.into();
         }
     }
+    if outcome["wall"].is_object() {
+        outcome["wall"]["seen_at_ms"] = 0.into();
+    }
     outcome
 }
 

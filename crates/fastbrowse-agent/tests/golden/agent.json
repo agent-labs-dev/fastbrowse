@@ -307,7 +307,15 @@
    "error": "sign-in required at https://shop.test: the page asks for Password",
    "final_url": "https://shop.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "password",
+    "origin": "https://shop.test",
+    "fields": [
+     "Password"
+    ],
+    "seen_at_ms": 0
+   }
   },
   "events": []
  },
@@ -598,7 +606,13 @@
    "error": "bot check at https://shop.test; it is not a sign-in and no credential passes it. Retry using an attached local browser or choose another source for this research.",
    "final_url": "https://shop.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "bot_check",
+    "origin": "https://shop.test",
+    "fields": [],
+    "seen_at_ms": 0
+   }
   },
   "events": []
  },
@@ -1029,7 +1043,13 @@
    "error": "bot check at https://shop.test; it is not a sign-in and no credential passes it. Retry using an attached local browser or choose another source for this research.",
    "final_url": "https://shop.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "bot_check",
+    "origin": "https://shop.test",
+    "fields": [],
+    "seen_at_ms": 0
+   }
   },
   "events": []
  },
@@ -1321,7 +1341,8 @@
    "error": "click 'Place order' needs confirmation",
    "final_url": "https://shop.test/cart",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -2031,7 +2052,8 @@
    "error": "Nothing left",
    "final_url": "https://shop.test/thanks",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -2915,7 +2937,8 @@
    "error": null,
    "final_url": "https://books.test/search?q=dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -3325,7 +3348,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://books.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -3449,7 +3473,8 @@
    "error": "the task names no page to start from, and none was given",
    "final_url": null,
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -3655,7 +3680,8 @@
    "error": "Could not complete the task after HTTP 404 at https://shop.test/missing in this browser session; the cause is unknown.",
    "final_url": "https://shop.test/missing",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -4037,7 +4063,8 @@
    "error": "Stuck",
    "final_url": "https://files.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -4677,7 +4704,8 @@
    "error": "Not here",
    "final_url": "https://pypi.test/project/httpx/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -5122,7 +5150,8 @@
    "error": "step limit 2 reached",
    "final_url": "https://forms.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -5638,7 +5667,8 @@
    "error": "step limit 2 reached",
    "final_url": "https://forms.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -5938,7 +5968,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://acme.test/login",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -6286,7 +6317,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://travel.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -6642,7 +6674,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://travel.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -7095,7 +7128,8 @@
    "error": null,
    "final_url": "https://wiki.test/Dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -7556,7 +7590,8 @@
    "error": null,
    "final_url": "https://wiki.test/Dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -8205,7 +8240,8 @@
    "error": "No way forward",
    "final_url": "https://wiki.test/Dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -8892,7 +8928,8 @@
    "error": "No way forward",
    "final_url": "https://wiki.test/Dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -9763,7 +9800,8 @@
    "error": null,
    "final_url": "https://air.test/fares",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -10735,7 +10773,8 @@
    "error": null,
    "final_url": "https://air.test/fares",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -11620,7 +11659,8 @@
    "error": "No way forward",
    "final_url": "https://shop.test/list?page=2",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -12021,7 +12061,8 @@
    "error": "dialog 'Discard this draft?' needs confirmation",
    "final_url": "https://mail.test/draft",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -12648,7 +12689,8 @@
    "error": "step limit 3 reached",
    "final_url": "https://books.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -13341,7 +13383,8 @@
    "error": "step limit 3 reached",
    "final_url": "https://shop.test/login",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -13737,7 +13780,8 @@
    "error": "No way forward",
    "final_url": "https://pypi.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -14047,7 +14091,13 @@
    "error": "sign-in required at https://forum.test: reading Thread found none of the requested information",
    "final_url": "https://forum.test/thread",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "sign_in",
+    "origin": "https://forum.test",
+    "fields": [],
+    "seen_at_ms": 0
+   }
   },
   "events": [
    {
@@ -14393,7 +14443,8 @@
    "error": "No way forward",
    "final_url": "https://site.test",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -15046,7 +15097,8 @@
    "error": null,
    "final_url": "https://wiki.test/Dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -15653,7 +15705,8 @@
    "error": "No way forward",
    "final_url": "https://app.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -16112,7 +16165,8 @@
    "error": "No way forward",
    "final_url": "https://app.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -16529,7 +16583,8 @@
    "error": "No way forward",
    "final_url": "https://app.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -17480,7 +17535,8 @@
    "error": "No way forward",
    "final_url": "https://app.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -17935,7 +17991,8 @@
    "error": "step limit 2 reached",
    "final_url": "https://shop.test/menu",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -18404,7 +18461,8 @@
    "error": null,
    "final_url": "https://news.test/story",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -18751,7 +18809,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://jobs.test/apply",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -19082,7 +19141,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://news.test/signup",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -19410,7 +19470,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://bank.test/login",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -19904,7 +19965,8 @@
    "error": null,
    "final_url": "https://wiki.test/Dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -20333,7 +20395,13 @@
    "error": "No way forward",
    "final_url": "https://admin.test/settings",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "sign_in",
+    "origin": "https://admin.test",
+    "fields": [],
+    "seen_at_ms": 0
+   }
   },
   "events": [
    {
@@ -20522,7 +20590,8 @@
    "error": "provider returned 500",
    "final_url": "https://shop.test/missing",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -20948,7 +21017,8 @@
    "error": "LLM call limit 3 reached",
    "final_url": "https://books.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -21279,7 +21349,8 @@
    "error": "Jev call limit 2 reached",
    "final_url": "https://app.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -21637,7 +21708,8 @@
    "error": "Could not complete the task after HTTP 503 at https://shop.test/contact/sent in this browser session; the cause is unknown.",
    "final_url": "https://shop.test/contact/sent",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -22229,7 +22301,8 @@
    "error": "No way forward",
    "final_url": "https://app.test/panel",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -23194,7 +23267,8 @@
    "error": "No way forward",
    "final_url": "https://shop.test/thanks",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -23936,7 +24010,8 @@
    "error": null,
    "final_url": "https://mirror.test/Dune",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -24295,7 +24370,13 @@
    "error": "A sign-in blocks it",
    "final_url": "https://portal.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "sign_in",
+    "origin": "https://portal.test",
+    "fields": [],
+    "seen_at_ms": 0
+   }
   },
   "events": []
  },
@@ -24597,7 +24678,13 @@
    "error": "A sign-in blocks it",
    "final_url": "https://portal.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "sign_in",
+    "origin": "https://portal.test",
+    "fields": [],
+    "seen_at_ms": 0
+   }
   },
   "events": []
  },
@@ -24898,7 +24985,8 @@
    "error": "A sign-in blocks it",
    "final_url": "https://portal.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -25136,7 +25224,15 @@
    "error": "'Password' wants a secret and none is stored",
    "final_url": "https://acme.test/login",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "password",
+    "origin": "https://acme.test",
+    "fields": [
+     "Password"
+    ],
+    "seen_at_ms": 0
+   }
   },
   "events": []
  },
@@ -25382,7 +25478,15 @@
    "error": "'Password' wants a secret and none is stored",
    "final_url": "https://acme.test/login",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": {
+    "kind": "password",
+    "origin": "https://acme.test",
+    "fields": [
+     "Password"
+    ],
+    "seen_at_ms": 0
+   }
   },
   "events": []
  },
@@ -25749,7 +25853,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://files.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -26094,7 +26199,8 @@
    "error": "spend limit $0.0025 reached",
    "final_url": "https://books.test/",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -26384,7 +26490,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://mail.test/inbox",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {
@@ -26570,7 +26677,8 @@
    "error": "the state on https://projects.test/replies exceeds Jev's input limits with no controls",
    "final_url": "https://projects.test/replies",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": []
  },
@@ -29046,7 +29154,8 @@
    "error": "No way forward",
    "final_url": "https://projects.test/project-2",
    "would_fire": [],
-   "recordings": []
+   "recordings": [],
+   "wall": null
   },
   "events": [
    {

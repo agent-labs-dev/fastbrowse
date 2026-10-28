@@ -1,9 +1,10 @@
 # The Arch package
 
 [packaging/aur](../../packaging/aur) holds the `PKGBUILD` and `.SRCINFO` of the `fastbrowse` AUR package. It
-builds two source distributions from PyPI by checksum and installs them into `/opt/fastbrowse`: fastbrowse, and cdp-use at the one exact
-version that release requires, which neither Arch nor the AUR packages. Every other dependency is Arch's own
-`python-*` package, seen from that prefix. `/usr/bin/fastbrowse` and `/usr/bin/fastbrowse-mcp` link into it.
+builds three source distributions from PyPI by checksum and installs them into `/opt/fastbrowse`: fastbrowse,
+cdp-use at the one exact version that release requires, which neither Arch nor the AUR packages, and mcp 1.x,
+which the Python core's MCP server needs while Arch's `python-mcp` is 2.x. The mcp version is `MCP` in
+`scripts/aur_package.py`. Every other dependency is Arch's own `python-*` package, seen from that prefix. `/usr/bin/fastbrowse` and `/usr/bin/fastbrowse-mcp` link into it.
 
 pacman is told the lower bound of each dependency and no upper one: an upper bound would stop a user's whole
 system upgrade on the day Arch passes it. The build check compares the ranges the installed metadata states with what Arch
@@ -25,7 +26,7 @@ The checksums exist only once PyPI holds the release, so the package moves after
 in the pull request that sets the version:
 
 ```sh
-uv run python scripts/aur_package.py --write   # pkgver, the cdp-use pin and both checksums, in both files
+uv run python scripts/aur_package.py --write   # pkgver, the cdp-use and mcp pins and all three checksums, in both files
 ```
 
 The release's `aur` job has by then built that version in the container and kept its `PKGBUILD` and `.SRCINFO`
@@ -67,7 +68,7 @@ git -C ~/fastbrowse-aur push origin master
 ### Recovering a release that published nothing
 
 A release can stop after PyPI accepted the upload but before its file host served the file; `--wait 300` now waits
-for the two source distributions themselves, so this should not recur. If the `aur` job still fails, its
+for the three source distributions themselves, so this should not recur. If the `aur` job still fails, its
 `Move the package to the release` step says which address did not answer, and re-running the failed jobs from the
 Actions page publishes again: `--publish` reads what the AUR already holds before committing, so a rerun after a
 half-finished push commits only what is still missing.

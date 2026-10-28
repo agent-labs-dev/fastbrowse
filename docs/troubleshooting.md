@@ -23,6 +23,13 @@ run also writes an answer from them, marked `Answer (unverified)`, when the task
 - The site answered HTTP 401 and recovery found no way on. The error is
   `Could not complete the task after HTTP 401 at <url> in this browser session; the cause is unknown.`
 
+`RunResult.wall` says what the wall asked for, so a caller can route it without parsing the error: `kind` is
+`password` when a field takes a password, `one_time_code` when every credential field takes a code the site sent,
+and `sign_in` when the page asks for an account name or shows only a control to sign in with. `origin` is the
+page's origin, `fields` the visible labels of the fields it asked for (redacted as the error is) and `seen_at_ms`
+when the run stopped, in UTC epoch milliseconds. A `blocked` run at a bot check carries a `wall` of kind
+`bot_check`.
+
 The CLI adds what to pass: `Pass --secret NAME=ENV_VAR@https://host with the password in that environment
 variable; credentials in task text are not used.`
 
@@ -42,7 +49,8 @@ A field is offered only the secrets declared for the origin of the frame it sits
 field ends `needs_login` with `'<label>' wants a secret and none is stored`, so a secret declared for the
 wrong origin reads the same as no secret: check the origin in `--secret` against the address the form is on.
 A secret that is declared for the origin but resolves to nothing, such as a password manager item that
-changed during the run, ends `needs_input` with `secret <name> is not available for <origin>`.
+changed during the run, ends `needs_login` too when the field takes a credential, with `sign-in required at
+<origin>: secret <name> is not available there`, and `needs_input` otherwise.
 
 ## blocked (exit 6)
 
@@ -231,9 +239,9 @@ limit. It stops rather than guess.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret
   new_password=ENV_VAR@https://host; set ENV_VAR to the new value instead of putting it in the task.`
-- A secret declared for the origin that resolves to nothing, such as a password manager item that changed
-  during the run: `secret <name> is not available for <origin>`. A secret declared for another origin ends
-  `needs_login` instead, see [needs_login](#needs_login-exit-4).
+- A field that takes no credential chose a secret declared for the origin that resolves to nothing, such as a
+  password manager item that changed during the run: `secret <name> is not available for <origin>`. A sign-in
+  field ends `needs_login` instead, see [needs_login](#needs_login-exit-4).
 - A drag with nowhere to drop: `the page offers no drop target for the drag`.
 - An address the run would open contains a resolved secret: `navigation address contains a resolved secret`.
 

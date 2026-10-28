@@ -1,9 +1,9 @@
 # Maintainer: Agent Labs <https://github.com/agent-labs-dev/fastbrowse/issues>
 #
-# Written from the PyPI release by scripts/aur_package.py, which sets pkgver, _cdp_use and sha256sums.
+# Written from the PyPI release by scripts/aur_package.py, which sets pkgver, _cdp_use, _mcp and sha256sums.
 
 pkgname=fastbrowse
-pkgver=0.7.1
+pkgver=0.7.4
 pkgrel=1
 # fastbrowse pins cdp-use to one exact version, and neither Arch nor the AUR packages it, so it is built here
 # and installed beside fastbrowse in a private prefix where no other program's upgrade can move it.
@@ -11,6 +11,10 @@ pkgrel=1
 # The prefix holds a lib/pythonX.Y directory, as every Python package on Arch does: rebuild after Arch moves
 # to a new Python minor version.
 _cdp_use=1.4.5
+# Arch's python-mcp is 2.x, and mcp 2 renamed FastMCP to MCPServer, which the Python core's MCP server cannot
+# import. The 1.x that core needs until 0.9.0 is built here beside cdp-use, for the same reason: no package in
+# the official repositories installs the version fastbrowse requires.
+_mcp=1.30.0
 pkgdesc="Browser automation with cited answers, structured output and code-controlled credentials and authorization"
 # The wheel carries the Rust core as `fastbrowse._native`, compiled here from the sdist, so the package is one per
 # architecture (docs/adr/0004).
@@ -20,31 +24,43 @@ arch=('x86_64' 'aarch64')
 options=('!lto')
 url="https://github.com/agent-labs-dev/fastbrowse"
 license=('MIT')
-# Everything else fastbrowse and cdp-use import is in the official repositories. python-mcp serves the Python
+# Everything else fastbrowse, cdp-use and mcp import is in the official repositories. mcp serves the Python
 # core's fastbrowse-mcp, which FASTBROWSE_PYTHON_CORE=1 runs until 0.9.0; the Rust one needs nothing.
 depends=(
   'python>=3.13'
+  'python-anyio'
+  'python-cryptography'
   'python-h2'
   'python-httpx>=0.28.1'
-  'python-mcp>=1.20'
+  'python-httpx-sse'
+  'python-jsonschema'
   'python-pydantic>=2.11'
   'python-pydantic-settings>=2.10'
+  'python-pyjwt'
+  'python-python-multipart'
+  'python-sse-starlette'
+  'python-starlette'
   'python-typing_extensions>=4.12.2'
+  'python-typing-inspection'
   'python-websockets>=15.0.1'
+  'uvicorn'
 )
-# maturin and cargo build fastbrowse and its Rust core; hatchling builds cdp-use.
-makedepends=('python-build' 'python-hatchling' 'python-installer' 'python-maturin' 'rust')
+# maturin and cargo build fastbrowse and its Rust core; hatchling and uv-dynamic-versioning build
+# cdp-use and mcp.
+makedepends=('python-build' 'python-hatchling' 'python-installer' 'python-maturin' 'python-uv-dynamic-versioning' 'rust')
 optdepends=(
   'chromium: a local browser for --local'
   'google-chrome: a local browser for --local'
 )
-_sources=("fastbrowse-$pkgver" "cdp_use-$_cdp_use")
+_sources=("fastbrowse-$pkgver" "cdp_use-$_cdp_use" "mcp-$_mcp")
 source=(
   "https://files.pythonhosted.org/packages/source/f/fastbrowse/${_sources[0]}.tar.gz"
   "https://files.pythonhosted.org/packages/source/c/cdp-use/${_sources[1]}.tar.gz"
+  "https://files.pythonhosted.org/packages/source/m/mcp/${_sources[2]}.tar.gz"
 )
-sha256sums=('5362cc6ca1c29ce4dbc95394175000e2e4dd146bf02baedf498596654b8a8186'
-            '0da3a32df46336a03ff5a22bc6bc442cd7d2f2d50a118fd4856f29d37f6d26a0')
+sha256sums=('3b8cc3c0bb3c2380e14f075c6e47d0e8d30895d2e2d54e08583fdbd86ba72011'
+            '0da3a32df46336a03ff5a22bc6bc442cd7d2f2d50a118fd4856f29d37f6d26a0'
+            '445414625fce5c295faa505bb11bacece661ab6f4028d57c935db57820b7a3e4')
 
 build() {
   local source
@@ -79,4 +95,6 @@ package() {
     "$pkgdir$site/fastbrowse-$pkgver.dist-info/licenses/NOTICE"
   install -Dm644 "$pkgdir$site/cdp_use-$_cdp_use.dist-info/licenses/LICENSE" \
     "$pkgdir/usr/share/licenses/$pkgname/LICENSE.cdp-use"
+  install -Dm644 "$srcdir/mcp-$_mcp/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE.mcp"
 }

@@ -48,6 +48,7 @@ from fastbrowse.models import (
     Frozen,
     LLMPurpose,
     SourceControl,
+    background_section,
 )
 from fastbrowse.page import Block, BlockKind, Capture, cut_text
 from fastbrowse.planner import FIELD_CATEGORIES, Plan, Requirement, RequirementKind
@@ -3160,6 +3161,7 @@ async def compose(
     field_outputs: bool = False,
     verified: FieldAnswer | None = None,
     independent_fields: bool = True,
+    background: str | None = None,
 ) -> Generation[ComposedAnswer]:
     fields = dict(enumerate(plan.answer_checks)) if field_outputs else {}
     if fields and verified is not None and any(check not in verified.output_claims for check in fields.values()):
@@ -3240,7 +3242,7 @@ async def compose(
     )
     if repair and not complete_collections:
         repair = cut_text(repair, 8000)
-    prefix = f"# Task\n{task}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}"
+    prefix = f"# Task\n{task}{background_section(background, '#')}\n\n# Plan\n{plan.model_dump_json()}\n\n{transaction}"
     messages = [
         Message(
             role="system",

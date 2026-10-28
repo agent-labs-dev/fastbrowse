@@ -295,6 +295,7 @@ pub fn run_params() -> Ty {
             ("run_id", Ty::NonEmptyStr, true),
             ("task", Ty::Str, true),
             ("start", optional(Ty::Str), false),
+            ("context", optional(Ty::Str), false),
             ("inputs", optional(Ty::Dict(Box::new(Ty::Str))), false),
             ("attachments", Ty::Tuple(Box::new(attachment)), false),
             ("limits", optional(limits()), false),
