@@ -798,6 +798,13 @@ class BrowserSession:
         if target_match is not None:
             pages = [t for t in pages if target_match in t["url"] or target_match in t["title"]]
         if not pages:
+            if self._grant is not None and target_match is None:
+                # Every open window is outside the grant, as a fresh cloud browser showing only about:blank is, so
+                # there is nothing the run may take over. It opens a window of its own rather than failing, owned
+                # until it is ready so a failed setup closes it, then kept like the window it stands in for.
+                target_id = await self._open_owned_tab("about:blank")
+                self._owned.discard(target_id)
+                return target_id
             seen = [f"{t['title']!r} ({t['url']})" for t in listed]
             wanted = "no page" if target_match is None else f"no page matching {target_match!r}"
             raise BrowserError(f"{wanted} to attach to; pages: {seen}")

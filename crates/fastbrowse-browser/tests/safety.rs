@@ -547,6 +547,31 @@ async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_own() {
+    let _serial = one_at_a_time().await;
+    let Some(connection) = chrome() else { return };
+    let Some(h) = harness().await else { return };
+    let sites = origin_sites();
+    // A fresh cloud browser shows only about:blank, which no grant covers; the run must still start, in a window it
+    // opens, without touching the person's foreign one.
+    h.page.navigate(&format!("{}/page", sites.foreign("127.0.0.1")), None).await.expect("navigate");
+    let s = scoped(connection, &sites.granted, true, None).await.expect("attached");
+    let opened = s.session.active_target_id();
+    assert_ne!(opened, h.session.active_target_id());
+    assert!(!testing::owned(&s.session).contains(&opened));
+    s.page.navigate(&format!("{}/ok", sites.granted), None).await.expect("navigate");
+    assert!(s.page.capture().await.expect("capture").text.contains("Granted popup"));
+    s.close().await;
+    // The window stands in for the one the run would have attached to, so it outlives the run.
+    let targets = h.session.send("Target.getTargets", json!({}), None).await.expect("targets");
+    let ids: Vec<&str> =
+        targets["targetInfos"].as_array().expect("targets").iter().filter_map(|t| t["targetId"].as_str()).collect();
+    assert!(ids.contains(&opened.as_str()), "{ids:?}");
+    h.session.send("Target.closeTarget", json!({"targetId": opened}), None).await.expect("close");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_document_the_network_never_saw_is_not_read_or_controlled() {
     let _serial = one_at_a_time().await;
     let Some(connection) = chrome() else { return };
