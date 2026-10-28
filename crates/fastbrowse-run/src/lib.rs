@@ -28,8 +28,8 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::jev::JevClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
-    ArtifactSink, Attachment, Authorization, BrowserConnection, BrowserEvent, CostBreakdown, CostLine, Event,
-    EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, UntilCheck,
+    ArtifactSink, Attachment, Authorization, BrowserConnection, BrowserEvent, CostBreakdown, CostComponent, CostLine,
+    Event, EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, UntilCheck,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::page::Page;
@@ -108,6 +108,10 @@ pub struct RunTask {
     pub cursor: bool,
     /// Read every page over HTTP and start no browser; see [`fetch`].
     pub fetch: bool,
+    /// Read over HTTP first, and start the browser only if the fetched run ends needing one: a step that would act, or
+    /// a page the static read cannot see. The browser run then begins again from the task, inside what is left of
+    /// `limits`, and its result carries what the fetched attempt spent.
+    pub fetch_first: bool,
     /// Makes a future that resolves when the caller stops the run. Python cancels the task and its `finally` closes
     /// the browser; here the run stops where it is, closes what it opened, then returns [`RunError::Cancelled`].
     pub cancel: Option<Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>>,
@@ -151,6 +155,7 @@ impl Default for RunTask {
             record: None,
             cursor: false,
             fetch: false,
+            fetch_first: false,
             cancel: None,
         }
     }
@@ -466,6 +471,25 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             "record shows whatever the tab shows, so it cannot be combined with allowed_origins".into(),
         ));
     }
+    if options.fetch && options.fetch_first {
+        return Err(RunError::Invalid(
+            "fetch reads with no browser at all and fetch_first may start one; pass one".into(),
+        ));
+    }
+    if options.fetch_first {
+        // A recording or an attached window has to exist from the first step, and the fetched attempt has neither.
+        for (flag, given) in [
+            ("record", options.record.is_some()),
+            ("attach", options.attach),
+            ("target_match", options.target_match.is_some()),
+        ] {
+            if given {
+                return Err(RunError::Invalid(format!(
+                    "fetch_first may finish with no browser, so it cannot be combined with {flag}"
+                )));
+            }
+        }
+    }
     if options.fetch {
         // None of these names anything a browserless run has, and accepting one would report a browser that was never
         // started, a file that was never written or a cursor nobody saw.
@@ -504,8 +528,24 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         Some(llm) => llm,
         None => Arc::from(settings.llm(&http)?),
     };
-    if options.fetch {
-        return fetched(task, options, config, http, jev, llm, origins).await;
+    let mut fetch_spent: Vec<CostLine> = Vec::new();
+    if options.fetch || options.fetch_first {
+        let began = std::time::Instant::now();
+        let read =
+            fetched(task, &mut options, &config, http.clone(), jev.clone(), llm.clone(), origins.clone()).await?;
+        if options.fetch || !read.needs_browser {
+            return Ok(read.result);
+        }
+        let Some(limits) = remaining(options.limits.as_ref(), &read.result.cost.lines, began.elapsed().as_secs_f64())
+        else {
+            // The attempt spent the budget a browser run would have needed, so its own blocked result is the answer.
+            return Ok(read.result);
+        };
+        http.trace.event("escalate", || {
+            Map::from_iter([("reason".into(), Value::from(read.result.error.clone().unwrap_or_default()))])
+        });
+        options.limits = limits;
+        fetch_spent = read.result.cost.lines;
     }
     let chrome = options.chrome.clone().unwrap_or_else(|| settings.local_chrome());
     let mut browser_cost: Vec<CostLine> = Vec::new();
@@ -661,8 +701,41 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         return Err(RunError::Recording(message));
     }
     result.cost.lines.extend(browser_cost);
+    fetch_spent.append(&mut result.cost.lines);
+    result.cost.lines = fetch_spent;
     result.recordings = recordings;
     Ok(result)
+}
+
+/// `limits` less what a fetched attempt spent, for the browser run that follows it, or `None` when a bound is used up.
+///
+/// A fetched page cannot act, so the attempt took no step that reached a page and `max_steps` is left whole.
+fn remaining(limits: Option<&Limits>, spent: &[CostLine], seconds: f64) -> Option<Option<Limits>> {
+    let Some(limits) = limits else { return Some(None) };
+    let calls = |component: CostComponent| spent.iter().filter(|line| line.component == component).count() as i64;
+    let dollars: f64 = spent.iter().filter_map(|line| line.dollars).sum();
+    let count = |bound: Option<i64>, used: i64| match bound {
+        Some(bound) if bound <= used => Err(()),
+        bound => Ok(bound.map(|bound| bound - used)),
+    };
+    let amount = |bound: Option<f64>, used: f64| match bound {
+        Some(bound) if bound <= used => Err(()),
+        bound => Ok(bound.map(|bound| bound - used)),
+    };
+    let left = Limits {
+        max_jev_calls: count(limits.max_jev_calls, calls(CostComponent::Jev)).ok()?,
+        max_llm_calls: count(limits.max_llm_calls, calls(CostComponent::Llm)).ok()?,
+        max_dollars: amount(limits.max_dollars, dollars).ok()?,
+        max_seconds: amount(limits.max_seconds, seconds).ok()?,
+        ..limits.clone()
+    };
+    Some(Some(left))
+}
+
+/// What a fetched run ended with, and whether it ended because the task needs a browser.
+struct Read {
+    result: RunResult,
+    needs_browser: bool,
 }
 
 /// `task` read over HTTP, with no browser started at all.
@@ -671,17 +744,17 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
 /// browser would answer a different task.
 async fn fetched(
     task: &str,
-    mut options: RunTask,
-    config: Config,
+    options: &mut RunTask,
+    config: &Config,
     http: Http,
     jev: Arc<dyn JevClient>,
     llm: Arc<dyn LLMClient>,
     origins: Option<Vec<String>>,
-) -> Result<RunResult, RunError> {
+) -> Result<Read, RunError> {
     if check_browser_access(options.check_access.as_ref()).await.is_err() {
         // The caller's own gate refused the run, which is an error result, not an error to the embedder. Python reports
         // the exception's class name.
-        return Ok(RunResult {
+        let result = RunResult {
             status: Status::Error,
             budget: None,
             answer: None,
@@ -697,7 +770,8 @@ async fn fetched(
             would_fire: Vec::new(),
             recordings: Vec::new(),
             wall: None,
-        });
+        };
+        return Ok(Read { result, needs_browser: false });
     }
     let head = HeadStart::begin(
         llm.clone(),
@@ -708,10 +782,10 @@ async fn fetched(
     );
     let head_stop = head.stopper();
     let viewport_chars = usize::try_from(config.observation.viewport_text_chars).unwrap_or_default();
-    let page: Arc<dyn Page> =
-        Arc::new(fetch::FetchedPage::new(http, origins, viewport_chars, options.check_access.clone()));
+    let fetched = Arc::new(fetch::FetchedPage::new(http, origins, viewport_chars, options.check_access.clone()));
+    let page: Arc<dyn Page> = fetched.clone();
     let agent = Agent::new(page, jev, llm)
-        .with_config(config)
+        .with_config(config.clone())
         .with_secrets(options.secrets.clone())
         .with_events(options.on_event.clone());
     let run = RunOptions {
@@ -729,7 +803,8 @@ async fn fetched(
         head_start: Some(head),
     };
     let work = agent.run(task, run);
-    let outcome = match options.cancel.take() {
+    // Cloned, not taken: a run that escalates watches the same cancel while its browser works.
+    let outcome = match options.cancel.clone() {
         None => work.await,
         Some(cancel) => tokio::select! {
             biased;
@@ -740,5 +815,43 @@ async fn fetched(
             done = work => done,
         },
     };
-    outcome.map_err(|error| RunError::Invalid(error.to_string()))
+    let result = outcome.map_err(|error| RunError::Invalid(error.to_string()))?;
+    // Read from the page rather than the message: only a refusal the page itself raised means the task needs a browser.
+    let needs_browser = result.status == Status::Blocked && fetched.needed_browser();
+    Ok(Read { result, needs_browser })
+}
+
+#[cfg(test)]
+mod tests {
+    use fastbrowse_core::models::CostBasis;
+
+    use super::*;
+
+    #[test]
+    fn a_fetched_attempt_spends_from_the_browser_runs_limits() {
+        let spent = [
+            CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.01)),
+            CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.002)),
+            CostLine::new(CostComponent::Jev, CostBasis::Metered, None),
+        ];
+        let limits = |change: fn(&mut Limits)| {
+            let mut limits = Limits { max_steps: Some(5), ..Limits::default() };
+            change(&mut limits);
+            limits
+        };
+        for (given, seconds, left) in [
+            (None, 3.0, Some(None)),
+            // Steps are left whole: a fetched page takes none.
+            (Some(limits(|_| {})), 3.0, Some(Some(limits(|_| {})))),
+            (Some(limits(|l| l.max_llm_calls = Some(3))), 3.0, Some(Some(limits(|l| l.max_llm_calls = Some(2))))),
+            (Some(limits(|l| l.max_jev_calls = Some(2))), 3.0, None),
+            (Some(limits(|l| l.max_seconds = Some(10.0))), 3.0, Some(Some(limits(|l| l.max_seconds = Some(7.0))))),
+            (Some(limits(|l| l.max_seconds = Some(3.0))), 3.0, None),
+            (Some(limits(|l| l.max_dollars = Some(0.012))), 0.0, None),
+        ] {
+            assert_eq!(remaining(given.as_ref(), &spent, seconds), left, "{given:?}");
+        }
+        let left = remaining(Some(&limits(|l| l.max_dollars = Some(0.05))), &spent, 0.0).unwrap().unwrap();
+        assert!((left.max_dollars.unwrap() - 0.038).abs() < 1e-9);
+    }
 }

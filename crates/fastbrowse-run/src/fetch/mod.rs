@@ -12,7 +12,12 @@
 
 pub mod html;
 
+use std::borrow::Cow;
+use std::io::Read;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use flate2::read::{DeflateDecoder, MultiGzDecoder, ZlibDecoder};
 
 use fastbrowse_browser::session::{CheckAccess, check_browser_access};
 use fastbrowse_browser::urlsplit::urlsplit;
@@ -172,6 +177,28 @@ fn cp1252(byte: u8) -> char {
     }
 }
 
+/// The body with its content coding removed, bounded by what it decodes to: a small body can inflate to far more than
+/// a text read takes, and that is refused before it fills memory. A coding outside the two asked for is not text.
+fn decoded<'a>(coding: Option<&str>, body: &'a [u8]) -> Result<Cow<'a, [u8]>, NotFetched> {
+    let coding = coding.map(|coding| coding.trim().to_ascii_lowercase()).unwrap_or_default();
+    let inflate = |reader: &mut dyn Read| {
+        let mut out = Vec::new();
+        reader.take(MAX_BYTES as u64 + 1).read_to_end(&mut out).map(|_| out)
+    };
+    let out = match coding.as_str() {
+        "" | "identity" => return Ok(Cow::Borrowed(body)),
+        "gzip" | "x-gzip" => inflate(&mut MultiGzDecoder::new(body)),
+        // RFC 9110's deflate is zlib-wrapped, but servers send raw deflate too, which httpx also reads.
+        "deflate" => inflate(&mut ZlibDecoder::new(body)).or_else(|_| inflate(&mut DeflateDecoder::new(body))),
+        _ => return Err(refused("the response uses a compression a browserless read does not decode")),
+    }
+    .map_err(|_| refused("the compressed response is corrupt"))?;
+    if out.len() > MAX_BYTES {
+        return Err(refused(format!("the document is past {MAX_BYTES} bytes, more than a text read takes")));
+    }
+    Ok(Cow::Owned(out))
+}
+
 /// `url` as a `Capture`, read over HTTP, or [`NotFetched`] with the reason a browser is needed.
 pub async fn fetch_capture(
     http: &Http,
@@ -180,12 +207,13 @@ pub async fn fetch_capture(
     seconds: f64,
 ) -> Result<Capture, NotFetched> {
     eligible(url, allowed_origins)?;
-    // httpx decodes gzip and deflate; this reads only what arrives uncompressed, so it says so (RFC 9110 12.5.3).
+    // The codings httpx asks for and decodes. A server may compress whatever it is asked, as python.org's CDN gzips a
+    // request for identity, so asking for these costs nothing a refusal would have saved.
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
     // 200 to one that names it, and httpx sends its own default where this sends none. The version is the crate's own.
     let headers = [
         ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
-        ("accept-encoding".to_string(), "identity".to_string()),
+        ("accept-encoding".to_string(), "gzip, deflate".to_string()),
         ("user-agent".to_string(), format!("fastbrowse/{}", env!("CARGO_PKG_VERSION"))),
     ];
     // Sent as WHATWG serializes it, the address the capture reports: hyper takes no space or non-ASCII path.
@@ -218,15 +246,12 @@ pub async fn fetch_capture(
     if response.body.len() > MAX_BYTES {
         return Err(refused(format!("the document is past {MAX_BYTES} bytes, more than a text read takes")));
     }
-    // The request asked for no compression, so a body sent compressed anyway is not text this can read.
-    if response.header("content-encoding").is_some_and(|coding| !coding.trim().eq_ignore_ascii_case("identity")) {
-        return Err(refused("the response is compressed, which a browserless read does not decode"));
-    }
+    let body = decoded(response.header("content-encoding"), &response.body)?;
     let content_type = response.header("content-type").unwrap_or_default();
     let mime = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
-    let body = decode(content_type, &response.body)?;
+    let body = decode(content_type, &body)?;
     if mime == "text/plain" {
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
@@ -253,10 +278,6 @@ pub async fn fetch_capture(
     Ok(capture(&final_url, title, found))
 }
 
-fn needs_browser(message: &str) -> BrowserError {
-    BrowserError::NeedsBrowser(message.to_string())
-}
-
 #[derive(Default)]
 struct Loaded {
     capture: Option<Capture>,
@@ -275,6 +296,7 @@ pub struct FetchedPage {
     seconds: f64,
     check_access: Option<CheckAccess>,
     loaded: Mutex<Loaded>,
+    needed_browser: AtomicBool,
 }
 
 impl FetchedPage {
@@ -291,6 +313,7 @@ impl FetchedPage {
             seconds: TIMEOUT_SECONDS,
             check_access,
             loaded: Mutex::new(Loaded::default()),
+            needed_browser: AtomicBool::new(false),
         }
     }
 
@@ -299,8 +322,19 @@ impl FetchedPage {
         check_browser_access(self.check_access.as_ref()).await.map_err(BrowserError::from)
     }
 
+    /// Whether this page refused something only a browser could do, which is what a fetch-first run escalates on.
+    pub fn needed_browser(&self) -> bool {
+        self.needed_browser.load(Ordering::Relaxed)
+    }
+
+    fn needs_browser(&self, message: impl Into<String>) -> BrowserError {
+        self.needed_browser.store(true, Ordering::Relaxed);
+        BrowserError::NeedsBrowser(message.into())
+    }
+
     fn current(&self) -> PageResult<Capture> {
-        self.loaded.lock().unwrap().capture.clone().ok_or_else(|| needs_browser("no page has been fetched yet"))
+        let capture = self.loaded.lock().unwrap().capture.clone();
+        capture.ok_or_else(|| self.needs_browser("no page has been fetched yet"))
     }
 }
 
@@ -356,7 +390,7 @@ impl Page for FetchedPage {
                 // A guessed address, not the caller's page: the loop falls back to `start` on a browser failure, and
                 // concluding that the task needs a browser here would end the run.
                 Err(NotFetched(message)) if back_to.is_some() => return Err(BrowserError::Failed(message)),
-                Err(NotFetched(message)) => return Err(BrowserError::NeedsBrowser(message)),
+                Err(NotFetched(message)) => return Err(self.needs_browser(message)),
             };
             let mut loaded = self.loaded.lock().unwrap();
             loaded.capture = Some(capture);
@@ -375,7 +409,7 @@ impl Page for FetchedPage {
     fn act<'a>(&'a self, _action: &'a Action, _observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
             self.gate().await?;
-            Err(needs_browser(
+            Err(self.needs_browser(
                 "this run reads pages over HTTP and has no controls to act on; run it again without fetch mode to use \
                  a browser",
             ))
@@ -395,7 +429,7 @@ impl Page for FetchedPage {
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move {
             self.gate().await?;
-            Err(needs_browser("a browserless run renders no pixels, so it has no screenshot to take"))
+            Err(self.needs_browser("a browserless run renders no pixels, so it has no screenshot to take"))
         })
     }
 

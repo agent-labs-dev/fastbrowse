@@ -44,6 +44,7 @@ pub struct Options {
     pub record: Option<PathBuf>,
     pub cursor: bool,
     pub fetch: bool,
+    pub fetch_first: bool,
     pub config: Option<Config>,
 }
 
@@ -102,6 +103,7 @@ impl Options {
             record: self.record,
             cursor: self.cursor,
             fetch: self.fetch,
+            fetch_first: self.fetch_first,
             config: self.config,
             ..RunTask::default()
         })

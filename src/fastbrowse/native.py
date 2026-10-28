@@ -89,6 +89,7 @@ _PLAIN = (
     "cloud_timeout_minutes",
     "cursor",
     "fetch",
+    "fetch_first",
 )
 """`run_task` arguments that are JSON already."""
 

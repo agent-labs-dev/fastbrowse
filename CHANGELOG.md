@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **`--fetch-first` reads over HTTP and starts a browser only when the run needs one.** `--fetch` is a promise that the task never needs a browser, so a step that clicks, or a page that scripts build, ends the run `blocked`. With `--fetch-first` the same run starts again in the browser instead: the run tries the cheap read, and the browser is the fallback rather than the caller's guess. Nothing is inferred from the task text; the browser is started on the fetched page's own refusal. The browser run spends from what the attempt left of `--max-dollars` and the call and time limits, and its cost lists the attempt's calls first. It cannot be combined with `--fetch`, `--record`, `--attach` or `--target-match`, which need a browser from the first step. `run_task(fetch_first=True)` does the same from Python; `serve --stdio`, the SDK and MCP take neither `fetch` nor `fetch_first`.
+
+- **A browserless read decodes a gzip or deflate response instead of refusing it.** `--fetch` asked for no compression and refused a body that arrived compressed anyway, and python.org's CDN gzips whatever it is asked, so every python.org page ended the run `blocked` as needing a browser. The Rust reader now asks for gzip and deflate and decodes them, as httpx does for the Python one, and the 5 MiB bound applies to what the body decodes to, so a small body that inflates past it is still refused. Brotli and zstd are still refused, being codings it never asks for.
+
 ## [0.8.3] - 2026-10-28
 
 - **A task with a non-ASCII character no longer crashes the Rust core.** Reading the paths a task names, the core looked one byte past each character, so a task with a long dash, an accented letter or an emoji panicked at `navigation.rs` before the run began. It now reads the next character itself.

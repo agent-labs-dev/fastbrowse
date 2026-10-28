@@ -147,6 +147,25 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
 }
 
 #[tokio::test]
+async fn test_fetch_first_keeps_the_browser_and_refuses_what_needs_one_from_the_start() {
+    let ran = cli(&["t", "--start", "https://example.com", "--fetch-first", "--local"]).await;
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let call = ran.call.unwrap();
+    assert!(call.fetch_first && !call.fetch && call.chrome.is_some());
+    for (flag, refusal) in [
+        (&["--fetch"][..], "--fetch never starts a browser and --fetch-first may start one, so pass one of them"),
+        (&["--record", "r.mp4"], "--fetch-first may finish with no browser, so it cannot be combined with --record"),
+        (&["--attach"], "--fetch-first may finish with no browser, so it cannot be combined with --attach"),
+    ] {
+        let mut argv = vec!["t", "--start", "https://example.com", "--fetch-first"];
+        argv.extend_from_slice(flag);
+        let ran = cli(&argv).await;
+        assert!(ran.call.is_none());
+        assert_eq!(ran.err, format!("fastbrowse: {refusal}\n"));
+    }
+}
+
+#[tokio::test]
 async fn test_cdp_url_refuses_flags_that_shape_a_started_browser() {
     for flag in [
         &["--local"][..],

@@ -173,3 +173,42 @@ async fn a_cancelled_run_closes_its_connection_before_it_returns() {
     let read = tokio::time::timeout(std::time::Duration::from_secs(5), socket.read_to_end(&mut rest)).await;
     assert!(read.is_ok_and(|read| read.is_ok()), "the connection was left open");
 }
+
+/// A page the static read refuses as a script-rendered shell, and a DevTools port with no discovery route.
+fn shell_and_no_devtools() -> Http {
+    Http::new(Arc::new(move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+        let response = if request.url.contains("/json/version") {
+            Response::new(404, Vec::new())
+        } else {
+            let shell = format!("<html><body><div id=root></div><script>{}</script></body></html>", "x".repeat(5000));
+            Response::new(200, shell).with_header("content-type", "text/html")
+        };
+        Box::pin(async move { Ok(response) })
+    }))
+}
+
+#[tokio::test]
+async fn test_fetch_first_goes_to_the_browser_when_the_read_needs_one() {
+    let read = |change: fn(&mut RunTask)| {
+        task(move |o| {
+            o.start = Some("https://shop.example/app".into());
+            o.http = Some(shell_and_no_devtools());
+            change(o);
+        })
+    };
+    // Fetch mode ends where the read does, naming why.
+    let result = run_task("read the page", read(|o| o.fetch = true)).await.unwrap();
+    assert_eq!(result.status, Status::Blocked, "{:?}", result.error);
+    // Fetch-first takes the same shell to the browser: the handed-over port is asked for its socket.
+    let result = run_task(
+        "read the page",
+        read(|o| {
+            o.fetch_first = true;
+            o.cdp_port = Some(9222);
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, Status::Error);
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("answered 404")), "{:?}", result.error);
+}
