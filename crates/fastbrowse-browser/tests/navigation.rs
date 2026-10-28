@@ -673,8 +673,8 @@ async fn test_a_javascript_error_is_not_read_again() {
     armed.store(true, Ordering::SeqCst);
     let failed = h.page.capture().await.expect_err("raises");
     assert!(!failed.is_context_lost(), "{failed:?}");
-    // The capture's read and its one plain fallback, never a re-read after waiting for the page.
-    assert_eq!(reads.load(Ordering::SeqCst), 2);
+    // One read, never a re-read after waiting for the page.
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
     armed.store(false, Ordering::SeqCst);
     h.close().await;
 }
