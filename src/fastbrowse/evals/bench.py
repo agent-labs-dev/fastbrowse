@@ -360,8 +360,7 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
 
 IN_PROCESS = "in-process"
 """`--agent in-process`: `fastbrowse.run_task` in the harness's own process, on the Rust core
-(`fastbrowse.native`), or on Python with FASTBROWSE_PYTHON_CORE=1. Startup is not measured, and CPU and peak RSS
-are the harness's own."""
+(`fastbrowse.native`). Startup is not measured, and CPU and peak RSS are the harness's own."""
 
 
 @dataclass(frozen=True)
@@ -373,14 +372,10 @@ class Usage:
 
 @contextmanager
 def in_process_environment(env: dict[str, str], cwd: Path) -> Generator[None]:
-    """`env` as this process's environment and `cwd` as its directory, as the agent process would have had them.
-
-    FASTBROWSE_PYTHON_CORE stays as the harness was started with it, since it picks the core under test.
-    """
+    """`env` as this process's environment and `cwd` as its directory, as the agent process would have had them."""
     saved, directory = dict(os.environ), Path.cwd()
-    core = {name: value for name, value in saved.items() if name == "FASTBROWSE_PYTHON_CORE"}
     os.environ.clear()
-    os.environ.update(env | core)
+    os.environ.update(env)
     os.chdir(cwd)
     try:
         yield
@@ -749,8 +744,7 @@ def _runtime_closure(name: str) -> list[str]:
 
 
 def python_footprint() -> dict[str, Any]:
-    """Installed bytes of fastbrowse and its runtime dependencies in this environment, and the frozen binary's
-    directory when `pyinstaller packaging/fastbrowse.spec` has built one."""
+    """Installed bytes of fastbrowse and its runtime dependencies in this environment."""
     packages: dict[str, int] = {}
     for name in _runtime_closure("fastbrowse"):
         dist = distribution(name)
@@ -766,11 +760,9 @@ def python_footprint() -> dict[str, Any]:
             if located.is_file() and "__pycache__" not in located.parts:
                 total += located.stat().st_size
         packages[name] = total
-    frozen = ROOT / "dist" / "fastbrowse"
     return {
         "site_packages_bytes": sum(packages.values()),
         "packages": dict(sorted(packages.items(), key=lambda item: -item[1])),
-        "pyinstaller_bytes": _directory_bytes(frozen) if frozen.exists() else None,
         "npm_darwin_arm64_unpacked_bytes": 52_900_000,
     }
 
@@ -868,8 +860,6 @@ def markdown(summary: dict[str, Any]) -> str:
     if footprint:
         lines += ["## Footprint", "", "| what | MiB |", "|---|---:|"]
         lines.append(f"| site-packages, fastbrowse and runtime deps | {_mib(footprint['site_packages_bytes'])} |")
-        if footprint.get("pyinstaller_bytes"):
-            lines.append(f"| PyInstaller directory | {_mib(footprint['pyinstaller_bytes'])} |")
         lines.append(f"| npm package, darwin-arm64, unpacked | {_mib(footprint['npm_darwin_arm64_unpacked_bytes'])} |")
         for path, size in footprint.get("installed", {}).items():
             lines.append(f"| {path} | {_mib(size)} |")

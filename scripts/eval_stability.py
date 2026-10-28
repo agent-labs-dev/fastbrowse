@@ -19,10 +19,10 @@ import argparse
 import json
 import sys
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from fastbrowse.clients.environment import ConfigurationError, JevSource, Settings, load_settings
+from fastbrowse.evals.harness import environment
 
 
 def rows(path: Path) -> list[dict[str, object]]:
@@ -41,29 +41,26 @@ def rates(rows: Sequence[dict[str, object]]) -> list[tuple[str, str, int, int]]:
     return [(suite, task, passed[(suite, task)], seen[(suite, task)]) for suite, task in sorted(seen)]
 
 
-_JEV_SECRET = {
-    JevSource.OPENROUTER: "OPENROUTER_API_KEY",
-    JevSource.TYPESAFE: "TYPESAFE_API_KEY",
-    JevSource.GATEWAY: "AI_GATEWAY_API_KEY",
-}
+# Each Jev source and its key, in the order the core picks the first keyed one when FASTBROWSE_JEV_SOURCE is unset.
+_JEV_SECRET = {"typesafe": "TYPESAFE_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}
 
 
-def provider_gaps(settings: Settings) -> list[str]:
-    """The model settings a fixture run needs but the environment does not supply, each naming the setting.
+def jev_source(env: Mapping[str, str]) -> str:
+    """The source Jev starts on: FASTBROWSE_JEV_SOURCE, else the first keyed one, else the gateway."""
+    if chosen := env.get("FASTBROWSE_JEV_SOURCE"):
+        if chosen not in _JEV_SECRET:
+            raise ValueError(f"FASTBROWSE_JEV_SOURCE is {chosen!r}, not one of {', '.join(_JEV_SECRET)}")
+        return chosen
+    return next((source for source, key in _JEV_SECRET.items() if env.get(key)), "gateway")
 
-    It asks `jev_route` for the first route rather than repeating the choice, so a route the environment
-    changes is the route this checks.
-    """
+
+def provider_gaps(env: Mapping[str, str]) -> list[str]:
+    """The model settings a fixture run needs but `env` does not supply, each naming the setting."""
     gaps: dict[str, str] = {}
-    if not settings.openrouter_api_key and not settings.ai_gateway_api_key:
+    if not env.get("OPENROUTER_API_KEY") and not env.get("AI_GATEWAY_API_KEY"):
         gaps["OPENROUTER_API_KEY or AI_GATEWAY_API_KEY"] = "the LLM needs a configured provider"
-    source, _backup = settings.jev_route()
-    keyed = {
-        JevSource.OPENROUTER: settings.openrouter_api_key,
-        JevSource.TYPESAFE: settings.typesafe_api_key,
-        JevSource.GATEWAY: settings.ai_gateway_api_key,
-    }
-    if not keyed[source]:
+    source = jev_source(env)
+    if not env.get(_JEV_SECRET[source]):
         gaps.setdefault(_JEV_SECRET[source], f"Jev starts on the {source} route")
     return [f"{setting}: {reason}" for setting, reason in gaps.items()]
 
@@ -95,17 +92,17 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.check_providers:
         try:
-            settings = load_settings()
-        except ConfigurationError as error:
+            gaps = provider_gaps(env := environment())
+        except ValueError as error:
             print(f"invalid settings: {error}")
             return 1
-        gaps = provider_gaps(settings)
         if gaps:
             print("the fixture suites cannot call their models:")
             for gap in gaps:
                 print(f"- {gap}")
             return 1
-        print(f"model providers ready: {settings.providers()}")
+        llm = "OpenRouter" if env.get("OPENROUTER_API_KEY") else "the gateway"
+        print(f"model providers ready: Jev {jev_source(env)}; LLM via {llm}")
         return 0
     if args.rows is None:
         parser.error("rows is required unless --check-providers is given")

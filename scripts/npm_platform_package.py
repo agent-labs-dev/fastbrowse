@@ -1,15 +1,13 @@
-"""Assemble one npm platform package, `@fastbrowse/<os>-<arch>`, from one frozen build or one Rust binary.
+"""Assemble one npm platform package, `@fastbrowse/<os>-<arch>`, from one Rust binary.
 
-    python scripts/npm_platform_package.py dist/fastbrowse --target darwin-arm64 --version 0.6.0 --out pkg
-    python scripts/npm_platform_package.py fastbrowse-linux-x64.tar.gz --target linux-x64 --version 0.6.0 --out pkg
-    python scripts/npm_platform_package.py target/release-small/fastbrowse --rust --target darwin-arm64 \\
+    python scripts/npm_platform_package.py target/release-small/fastbrowse --target darwin-arm64 \\
         --version 0.6.0 --out pkg [--addon fastbrowse.node]
+    python scripts/npm_platform_package.py fastbrowse-rust-linux-x64.tar.gz --target linux-x64 --version 0.6.0 --out pkg
 
-The build is PyInstaller's output directory, or the archive of it that the binaries workflow uploads. With
-`--rust` it is the single `fastbrowse` executable of `crates/fastbrowse-cli`, or an archive holding it under
-`fastbrowse/`; the package then carries it twice, as `fastbrowse` and as `fastbrowse-mcp`, because the binary
-serves MCP when it is started under that name and npm packs no symbolic link. `--addon` adds the Node addon of
-`crates/fastbrowse-node` as `fastbrowse.node`, which the SDK loads for `inProcess`.
+The build is the single `fastbrowse` executable of `crates/fastbrowse-cli`, or the archive the binaries workflow
+uploads, holding it under `fastbrowse/`. The package carries it twice, as `fastbrowse` and as `fastbrowse-mcp`,
+because the binary serves MCP when it is started under that name and npm packs no symbolic link. `--addon` adds
+the Node addon of `crates/fastbrowse-node` as `fastbrowse.node`, which the SDK loads for `inProcess`.
 
 The directory written to `--out` is what `npm publish` takes: a manifest, the licence files, a README, and the
 build under `fastbrowse/`.
@@ -76,16 +74,7 @@ def manifest(target: str, version: str, *, addon: bool = False) -> dict[str, obj
     }
 
 
-def _check(tree: Path, target: str, version: str) -> None:
-    executable = tree / executable_name(target)
-    if not executable.is_file() or not (tree / "_internal").is_dir():
-        raise Refused(f"{tree} is not a {target} build: it needs {executable.name} and _internal/ beside it")
-    held = sorted(path.name.removesuffix(".dist-info") for path in (tree / "_internal").glob("fastbrowse-*.dist-info"))
-    if held != [f"fastbrowse-{version}"]:
-        raise Refused(f"the build holds {', '.join(held) or 'no fastbrowse metadata'}, and was to be version {version}")
-
-
-def _check_rust(executable: Path, target: str, version: str) -> None:
+def _check(executable: Path, target: str, version: str) -> None:
     if not executable.is_file():
         raise Refused(f"{executable} is not a {target} build: it needs to be the fastbrowse executable")
     # The binary cannot be run here when it was built for another target, and the version it reports is a
@@ -95,23 +84,9 @@ def _check_rust(executable: Path, target: str, version: str) -> None:
         raise Refused(f"{executable} holds no version {version}, and was to be that version")
 
 
-def _unpacked(frozen: Path, unpacked: str) -> Path:
-    if frozen.is_dir():
-        return frozen
-    if tarfile.is_tarfile(frozen):
-        with tarfile.open(frozen) as archive:
-            archive.extractall(unpacked, filter="data")
-        return Path(unpacked) / "fastbrowse"
-    raise Refused(f"{frozen} is neither a build directory nor an archive of one")
-
-
-def assemble(
-    frozen: Path, target: str, version: str, out: Path, *, rust: bool = False, addon: Path | None = None
-) -> None:
-    """Write the package for `target` to `out` from the build at `frozen`, a directory or a `.tar.gz` of one.
-
-    With `rust`, `frozen` is the executable itself, or a `.tar.gz` holding it under `fastbrowse/`.
-    """
+def assemble(build: Path, target: str, version: str, out: Path, *, addon: Path | None = None) -> None:
+    """Write the package for `target` to `out` from `build`, the executable or a `.tar.gz` holding it under
+    `fastbrowse/`."""
     if target not in TARGETS:
         raise Refused(f"{target} is not a target: {', '.join(TARGETS)}")
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
@@ -119,28 +94,19 @@ def assemble(
     if addon is not None and not addon.is_file():
         raise Refused(f"{addon} is not a Node addon")
     with tempfile.TemporaryDirectory() as unpacked:
-        if rust:
-            executable = frozen
-            if frozen.is_file() and tarfile.is_tarfile(frozen):
-                executable = _unpacked(frozen, unpacked) / executable_name(target)
-            _check_rust(executable, target, version)
-            out.mkdir(parents=True, exist_ok=True)
-            (out / "fastbrowse").mkdir()
-            for name in ("fastbrowse", "fastbrowse-mcp"):
-                shutil.copyfile(executable, out / "fastbrowse" / executable_name(target, name))
-        else:
-            if not frozen.exists():
-                raise Refused(f"{frozen} is neither a build directory nor an archive of one")
-            tree = _unpacked(frozen, unpacked)
-            _check(tree, target, version)
-            out.mkdir(parents=True, exist_ok=True)
-            # npm packs no symbolic link, and PyInstaller links a library it would otherwise carry twice, so
-            # each link is copied as the file it points to. npm packs no `._<file>` either, which is how macOS
-            # tar archives a file's extended attributes and what they unpack to here.
-            shutil.copytree(tree, out / "fastbrowse", symlinks=False, ignore=shutil.ignore_patterns("._*"))
+        executable = build
+        if build.is_file() and tarfile.is_tarfile(build):
+            with tarfile.open(build) as archive:
+                archive.extractall(unpacked, filter="data")
+            executable = Path(unpacked) / "fastbrowse" / executable_name(target)
+        _check(executable, target, version)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "fastbrowse").mkdir()
+        for name in ("fastbrowse", "fastbrowse-mcp"):
+            shutil.copyfile(executable, out / "fastbrowse" / executable_name(target, name))
     if not target.startswith("win32-"):
         # npm keeps the mode a file is packed with, and these are the files the SDK and an MCP client execute.
-        for name in ("fastbrowse", "fastbrowse-mcp") if rust else ("fastbrowse",):
+        for name in ("fastbrowse", "fastbrowse-mcp"):
             (out / "fastbrowse" / executable_name(target, name)).chmod(0o755)
     if addon is not None:
         shutil.copyfile(addon, out / "fastbrowse.node")
@@ -154,15 +120,14 @@ def assemble(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("frozen", type=Path, help="the build directory or executable, or a .tar.gz of fastbrowse/")
+    parser.add_argument("build", type=Path, help="the fastbrowse executable, or a .tar.gz of fastbrowse/")
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--version", required=True, help="the version to publish, which the build must hold")
     parser.add_argument("--out", required=True, type=Path, help="the package directory to write")
-    parser.add_argument("--rust", action="store_true", help="the build is the single Rust fastbrowse executable")
     parser.add_argument("--addon", type=Path, help="the Node addon to carry as fastbrowse.node")
     args = parser.parse_args()
     try:
-        assemble(args.frozen, args.target, args.version, args.out, rust=args.rust, addon=args.addon)
+        assemble(args.build, args.target, args.version, args.out, addon=args.addon)
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1

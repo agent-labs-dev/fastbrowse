@@ -1,7 +1,7 @@
 //! The fastbrowse core, ported module by module from `src/fastbrowse`.
 //!
 //! URLs follow the WHATWG URL Standard (the `url` crate, UTS #46 hosts), as Chrome parses them, rather than
-//! CPython's `urlsplit`. scripts/rust_core_diff.py reports where the two disagree.
+//! CPython's `urlsplit`.
 //!
 //! Anything that crosses a seam serializes to the bytes Python writes: [`py`] holds what pydantic and the standard
 //! library do implicitly, and [`schema`] writes JSON Schema as pydantic does.

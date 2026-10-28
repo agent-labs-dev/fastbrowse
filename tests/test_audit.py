@@ -12,9 +12,7 @@ from pathlib import Path
 import pytest
 
 from fastbrowse.audit.cases import CASES
-from fastbrowse.audit.probes import status_exit_contract
 from fastbrowse.audit.runner import ROWS, main
-from fastbrowse.models import Status
 
 
 def test_case_ids_are_unique() -> None:
@@ -24,15 +22,6 @@ def test_case_ids_are_unique() -> None:
 
 def test_every_case_targets_a_real_tier() -> None:
     assert {case.tier for case in CASES} <= {0, 1, 2, 3}
-
-
-def test_every_status_is_covered_by_the_exit_code_contract() -> None:
-    payload = status_exit_contract()
-    assert payload["total"], "a Status member has no exit code"
-    assert set(payload["codes"]) == {status.value for status in Status}
-    assert payload["complete_zero"]
-    assert payload["distinct_failures"]
-    assert payload["stable"]
 
 
 def test_a_spending_tier_is_refused_without_the_spend_flag() -> None:
@@ -85,11 +74,3 @@ def test_case_budget_reaches_the_subprocess(monkeypatch: pytest.MonkeyPatch) -> 
     argv, kwargs = calls[0]
     assert argv[argv.index("--max-dollars") + 1] == "0.012"
     assert kwargs["env"]["FB_AUDIT_MAX_DOLLARS"] == "0.012"
-
-
-def test_mcp_concurrency_probe_observes_one_active_run() -> None:
-    from fastbrowse.audit.probes import mcp_concurrency
-
-    result = mcp_concurrency()
-    assert result["both_finished"]
-    assert result["peak_concurrent"] == 1

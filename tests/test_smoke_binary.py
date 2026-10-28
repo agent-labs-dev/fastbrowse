@@ -1,6 +1,6 @@
-"""The frozen binary's smoke script, run here against the checkout's own `fastbrowse` command.
+"""The binary's smoke script, run here against the checkout's own `fastbrowse` command.
 
-CI runs it against each frozen build. Running it here keeps the script and the scripted models honest between
+CI runs it against each built binary and wheel. Running it here keeps the script and the scripted models honest between
 builds, and shows that a broken executable fails it.
 """
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from fastbrowse.adapters.local_chrome import find_chrome
+from fastbrowse.evals.harness import find_chrome
 
 REPO = Path(__file__).resolve().parent.parent
 SMOKE = REPO / "scripts" / "smoke_binary.py"
@@ -35,7 +35,7 @@ def test_the_checkout_passes_the_handshake_case() -> None:
 
 
 def test_the_checkout_completes_the_scripted_run_on_local_chrome() -> None:
-    if find_chrome(None) is None:
+    if find_chrome() is None:
         pytest.skip("Chrome is not installed")
 
     done = _smoke(_command(), "--case", "run")

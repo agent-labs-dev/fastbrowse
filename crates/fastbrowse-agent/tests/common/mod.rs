@@ -1,5 +1,5 @@
-//! Replays what `tests/golden/generate.py` recorded: each request a ported function makes is compared byte for byte
-//! with the one Python made at that point, and answered with what Python's fake answered.
+//! Replays the fixed recordings in `tests/golden`: each request a function makes is compared byte for byte with the one
+//! the Python implementation the core replaced made at that point, and answered with what its fake answered.
 
 #![allow(dead_code)]
 

@@ -1,23 +1,23 @@
 {
   "assets": {
     "assets/architecture-dark.svg": {
-      "surface": "f41feec47efe6fad8a4aa47cc94c6e980d394b3e862f8803f4e38f70af1af95c",
+      "surface": "349a801557567334eb4fb0ee1c61a71fb4cf1be201a02830b79f77d7bb8bfea1",
       "shows": "The plan, the step loop and the gates, as the code runs them."
     },
     "assets/architecture.svg": {
-      "surface": "f41feec47efe6fad8a4aa47cc94c6e980d394b3e862f8803f4e38f70af1af95c",
+      "surface": "349a801557567334eb4fb0ee1c61a71fb4cf1be201a02830b79f77d7bb8bfea1",
       "shows": "The plan, the step loop and the gates, as the code runs them."
     },
     "assets/wordmark-dark.svg": {
-      "surface": "f41feec47efe6fad8a4aa47cc94c6e980d394b3e862f8803f4e38f70af1af95c",
+      "surface": "349a801557567334eb4fb0ee1c61a71fb4cf1be201a02830b79f77d7bb8bfea1",
       "shows": "The fastbrowse wordmark."
     },
     "assets/wordmark.svg": {
-      "surface": "f41feec47efe6fad8a4aa47cc94c6e980d394b3e862f8803f4e38f70af1af95c",
+      "surface": "349a801557567334eb4fb0ee1c61a71fb4cf1be201a02830b79f77d7bb8bfea1",
       "shows": "The fastbrowse wordmark."
     },
     "docs/assets/demo.gif": {
-      "surface": "f41feec47efe6fad8a4aa47cc94c6e980d394b3e862f8803f4e38f70af1af95c",
+      "surface": "349a801557567334eb4fb0ee1c61a71fb4cf1be201a02830b79f77d7bb8bfea1",
       "shows": "A run signing in to saucedemo, adding two products, filling the shipping form, placing the order and reporting the total with its quotes.",
       "command": "uv run fastbrowse \"...\" --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --local --record",
       "recorded_at": "2026-10-27"

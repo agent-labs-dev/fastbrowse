@@ -1,7 +1,7 @@
 """`fastbrowse serve` as a subprocess on local Chrome: one run with the real `run_task`, and what is left after.
 
-The models are the scripted ones in `fastbrowse.scripted`, reached through the hidden `--run-task` option, so
-the run needs no key. Everything else is what a client gets: the command, its pipes and a Chrome it starts.
+The models are the scripted ones the binary carries, reached through the hidden `--run-task` option, so the run
+needs no key. Everything else is what a client gets: the command, its pipes and a Chrome it starts.
 """
 
 import json
@@ -19,7 +19,7 @@ from typing import IO, Any
 
 import pytest
 
-from fastbrowse.adapters.local_chrome import find_chrome
+from fastbrowse.evals.harness import find_chrome
 from tests.browser.conftest import SITES, _handler_for
 
 # Windows has no `ps`, and the process tree is how a test finds the Chrome that the server started.
@@ -38,7 +38,7 @@ GONE_WITHIN = 15.0
 
 @pytest.fixture
 def chrome() -> None:
-    if find_chrome(None) is None:
+    if find_chrome() is None:
         pytest.skip("Chrome is not installed")
 
 
@@ -164,9 +164,7 @@ def serving(tmp_path: Path) -> Generator[Client]:
         stderr.open("wb") as log,
         subprocess.Popen(
             [
-                sys.executable,
-                "-c",
-                "from fastbrowse.cli import main; main()",
+                str(Path(sys.executable).with_name("fastbrowse")),
                 "serve",
                 "--stdio",
                 "--run-task",

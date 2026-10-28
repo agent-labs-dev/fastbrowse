@@ -1,5 +1,5 @@
-// The server the SDK is tested against: `fastbrowse serve --stdio` from the repository's uv environment, or the Rust
-// binary FASTBROWSE_TEST_RUST_BINARY names, which carries the same altered servers behind FASTBROWSE_TEST_SERVER.
+// The server the SDK is tested against: `fastbrowse serve --stdio` from the repository's uv environment, or the
+// binary FASTBROWSE_TEST_RUST_BINARY names. Both carry the altered servers behind FASTBROWSE_TEST_SERVER.
 
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,6 @@ const suffix = process.platform === 'win32' ? '.exe' : '';
 
 const rust = process.env.FASTBROWSE_TEST_RUST_BINARY;
 export const serverBinary = rust ?? join(repository, '.venv', scripts, `fastbrowse${suffix}`);
-const python = join(repository, '.venv', scripts, `python${suffix}`);
 
 export interface Launcher {
   /** What `binaryPath` takes. */
@@ -49,13 +48,10 @@ export function launcher(...command: string[]): Launcher {
   };
 }
 
-/** One of the scripts in `servers/`. Each is the real server with one thing about it changed. */
+/** One of the altered servers FASTBROWSE_TEST_SERVER names: the real server with one thing about it changed. */
 export function scriptedServer(name: string, ...args: string[]): Launcher {
-  if (rust) {
-    const run = args.length > 0 ? [`FASTBROWSE_TEST_RUN=${args[0]}`] : [];
-    return launcher('/usr/bin/env', `FASTBROWSE_TEST_SERVER=${name}`, ...run, rust);
-  }
-  return launcher(python, fileURLToPath(new URL(`./servers/${name}.py`, import.meta.url)), ...args);
+  const run = args.length > 0 ? [`FASTBROWSE_TEST_RUN=${args[0]}`] : [];
+  return launcher('/usr/bin/env', `FASTBROWSE_TEST_SERVER=${name}`, ...run, serverBinary);
 }
 
 /**
@@ -68,8 +64,8 @@ const addon = process.env.FASTBROWSE_TEST_ADDON;
 export const processOnly = addon ? 'a test of the fastbrowse process, and this run of the suite is in-process' : false;
 
 /**
- * What `Fastbrowse.start` takes to get the real server with `run`, one of the runs in `servers/scripted_run.py`,
- * in place of the agent.
+ * What `Fastbrowse.start` takes to get the real server with `run`, one of the stand-in runs the server carries
+ * behind FASTBROWSE_TEST_SERVER=scripted_run, in place of the agent.
  */
 export function scriptedRun(run: string): StartOptions & { env: Record<string, string> } {
   // `--record` is refused without an ffmpeg to encode with, and the machine running the tests may have none.

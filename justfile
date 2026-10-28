@@ -20,13 +20,13 @@ evals-publish rows:
 evals-docs *args:
     uv run python -m fastbrowse.evals.versions --docs {{args}}
 
-# Check the Rust workspace, build its Python module and Node addon, and run the suites that cover it.
+# Check the Rust workspace, build its Python module and Node addon, and run the Python and SDK suites against them.
 rust:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     uv sync --all-extras
-    FASTBROWSE_PYTHON_CORE=0 uv run --no-sync pytest -q tests/test_citations.py tests/test_page.py tests/test_safety.py tests/test_retrieval.py tests/test_agent.py tests/test_native.py tests/browser/test_safety.py tests/browser/test_native_parity.py tests/browser/test_native_recording.py tests/browser/test_native_connect.py
+    uv run --no-sync pytest -q
     cargo build -p fastbrowse-node --release
     cp target/release/libfastbrowse_node.$(test "$(uname)" = Darwin && echo dylib || echo so) crates/fastbrowse-node/fastbrowse.node
     node --test crates/fastbrowse-node/test/core.test.ts

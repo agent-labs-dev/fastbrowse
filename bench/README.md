@@ -30,8 +30,8 @@ asked.
 
 Every command takes `--agent "<command>"`. The default is this checkout's `.venv/bin/fastbrowse serve --stdio`;
 a Rust build is `--agent "target/release/fastbrowse serve --stdio"`. `--agent in-process` calls `fastbrowse.run_task`
-in the harness's own process instead: on the Rust core through
-`fastbrowse.native`, or with `FASTBROWSE_PYTHON_CORE=1` on Python. It measures no startup, and its CPU and peak RSS are the harness's.
+in the harness's own process instead, on the Rust core through
+`fastbrowse.native`. It measures no startup, and its CPU and peak RSS are the harness's.
 
 ```sh
 # Record every task against OpenRouter. Only the proxy gets the key; the agent gets a placeholder.
@@ -77,7 +77,7 @@ diffs are labelled timing-sensitive. Every other task gave the same result in th
 | CPU | user plus system time of the agent process and anything it waited for, from `wait4` |
 | peak RSS | `ru_maxrss` of the agent process, from `wait4` |
 | steps | steps in the result |
-| installed size | fastbrowse's source and its runtime dependencies in the venv, without extras or bytecode; plus `dist/fastbrowse` when PyInstaller has built it |
+| installed size | fastbrowse's source and its runtime dependencies in the venv, without extras or bytecode |
 
 Timings come from a shared laptop and vary run to run. Compare medians from runs on the same machine.
 

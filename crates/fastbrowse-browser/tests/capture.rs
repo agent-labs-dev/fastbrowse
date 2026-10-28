@@ -499,11 +499,11 @@ async fn test_navigation_headings_do_not_identify_main_content() {
     }
 }
 
-// -- test_snapshot_golden.py: snapshot.js output on fixed pages, against the JSON it produced when last reviewed --
+// -- snapshot.js output on fixed pages, against the JSON it produced when last reviewed ----------------------------
 //
 // A speedup to snapshot.js has to leave every byte the snapshot reports alone, and these files are where a change in
-// what it reports shows up as a diff. The golden files are Python's own (benchmarks/golden); after an intended change,
-// rewrite them with `FASTBROWSE_UPDATE_GOLDEN=1 uv run pytest tests/browser/test_snapshot_golden.py -q`.
+// what it reports shows up as a diff. After an intended change, rewrite benchmarks/golden and review the diff:
+// `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrowse-browser --test capture test_snapshot_matches_golden`.
 
 mod benchmark {
     use std::io::{BufRead, BufReader, Write};
@@ -520,7 +520,7 @@ mod benchmark {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks")
     }
 
-    /// benchmarks/fixtures.py's `PAGES`: page name to (golden n, benchmark n).
+    /// Page name to (golden n, benchmark n), as benchmarks/fixtures.py's `PAGES`.
     pub const PAGES: [(&str, u32); 5] = [("links", 40), ("cards", 8), ("calendar", 2), ("forms", 4), ("frames", 6)];
 
     /// Every frame has finished loading, so the snapshot sees the same-origin frame's controls.
@@ -616,6 +616,27 @@ mod benchmark {
 
     /// The snapshot as the golden file records it. The document's time origin is a clock reading, and the digests
     /// hash the fixture server's port, so the guards are recorded whole in their place.
+    /// `view` as the golden files are written: one-space indents and sorted keys, ending in a newline.
+    pub fn write_golden(path: &Path, view: &Value) {
+        fn sorted(value: &Value) -> Value {
+            match value {
+                Value::Object(map) => {
+                    let mut keys: Vec<_> = map.keys().collect();
+                    keys.sort();
+                    Value::Object(keys.into_iter().map(|k| (k.clone(), sorted(&map[k]))).collect())
+                }
+                Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+                other => other.clone(),
+            }
+        }
+        let mut written = Vec::new();
+        let mut serializer =
+            serde_json::Serializer::with_formatter(&mut written, serde_json::ser::PrettyFormatter::with_indent(b" "));
+        serde::Serialize::serialize(&sorted(view), &mut serializer).expect("golden JSON");
+        written.push(b'\n');
+        std::fs::write(path, written).expect("golden file");
+    }
+
     pub fn golden_view(result: Value, guards: Value, fingerprint: Value, origin: &str) -> Value {
         let Value::Object(mut view) = result else { panic!("snapshot is not an object: {result}") };
         for digest in ["document_key", "page_key", "retarget_keys"] {
@@ -668,6 +689,9 @@ async fn test_snapshot_matches_golden() {
         let fingerprint = benchmark::fingerprint(&h.page).await;
         let view = benchmark::golden_view(result, raw, fingerprint, origin);
         let golden_path = benchmark::root().join("golden").join(format!("{name}.json"));
+        if std::env::var("FASTBROWSE_UPDATE_GOLDEN").as_deref() == Ok("1") {
+            benchmark::write_golden(&golden_path, &view);
+        }
         let golden: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&golden_path).expect("golden file")).expect("golden JSON");
         assert!(

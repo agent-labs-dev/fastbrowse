@@ -25,8 +25,8 @@ from pathlib import Path
 import httpx
 from pydantic import JsonValue
 
-from fastbrowse.clients.environment import Settings
-from fastbrowse.jev import JevError, NoulAnswer, NoulQuestion
+from fastbrowse.evals.judge import Judge, jev_from_environment
+from fastbrowse.jev import NoulAnswer, NoulQuestion
 
 ROOT = Path(__file__).resolve().parent.parent
 # The gateway sheds large requests with 503s (see `TokenBudget.batch_tokens`), so each question goes alone with
@@ -111,24 +111,33 @@ def changes(span: str) -> tuple[str, bool, dict[str, str]]:
     return code_diff, visible, {p: text for p, text in prose.items() if text.strip() or p == "CHANGELOG.md"}
 
 
+async def _ask(jev: Judge, state: JsonValue, key: str, question: NoulQuestion) -> NoulAnswer | None:
+    """Jev's answer to one question, or None when the provider failed or answered without it."""
+    wire: JsonValue = {
+        "instructions": question.instructions,
+        "type": "noul",
+        "criteria": {"true": question.true, "false": question.false},
+    }
+    try:
+        probabilities = await jev.evaluate(state, {key: wire})
+        return NoulAnswer(probability=probabilities[key])
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        return None
+
+
 async def review(base: str, head: str = "HEAD") -> str:
-    settings = Settings()
-    if not (settings.openrouter_api_key or settings.typesafe_api_key or settings.ai_gateway_api_key):
-        return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
-    code_diff, visible, prose = changes(f"{base}...{head}")
-    asked = questions(prose, user_visible=visible)
-    if not asked:
-        return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
-    state: JsonValue = {"code_diff": _clip(code_diff, _CODE_CHARS) or "(no code changes)"}
     async with httpx.AsyncClient(timeout=120) as http:
-        jev = settings.jev(http)
-        results = await asyncio.gather(
-            *(jev.evaluate(state, {key: question}) for key, question in asked.items()), return_exceptions=True
-        )
-    if raised := next((r for r in results if isinstance(r, BaseException) and not isinstance(r, JevError)), None):
-        raise raised
-    answered = [r for r in results if not isinstance(r, BaseException)]
-    answers = {key: a for r in answered for key, a in r.answers.items() if isinstance(a, NoulAnswer)}
+        try:
+            jev = jev_from_environment(http)
+        except RuntimeError:
+            return "### Jev review (advisory)\n\nSkipped: no Jev key is set.\n"
+        code_diff, visible, prose = changes(f"{base}...{head}")
+        asked = questions(prose, user_visible=visible)
+        if not asked:
+            return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
+        state: JsonValue = {"code_diff": _clip(code_diff, _CODE_CHARS) or "(no code changes)"}
+        results = await asyncio.gather(*(_ask(jev, state, key, question) for key, question in asked.items()))
+    answers = {key: answer for key, answer in zip(asked, results, strict=True) if answer is not None}
     text, warnings = report(answers)
     if missing := [key for key in asked if key not in answers]:
         text += f"\nJev did not answer for {', '.join(f'`{key}`' for key in missing)}.\n"

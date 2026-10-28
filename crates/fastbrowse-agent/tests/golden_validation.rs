@@ -1,5 +1,4 @@
-//! Response validation against what pydantic answered, valid and invalid, as `tests/golden/generate_validation.py`
-//! recorded it. A re-ask carries pydantic's error text in its body, so the text has to match byte for byte.
+//! Response validation against what pydantic answered, valid and invalid, as `tests/golden/validation.json` holds it. A re-ask carries pydantic's error text in its body, so the text has to match byte for byte.
 
 mod common;
 

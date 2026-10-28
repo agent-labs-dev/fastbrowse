@@ -56,8 +56,13 @@ def _status_repo(tmp_path: Path) -> Path:
         '    X = "x"\n',
         encoding="utf-8",
     )
-    cli = tmp_path / "src" / "fastbrowse" / "cli.py"
-    cli.write_text("EXIT_CODES = {\n    Status.COMPLETE: 0,\n    Status.STUCK: 9,\n}\n", encoding="utf-8")
+    cli = tmp_path / "crates" / "fastbrowse-cli" / "src" / "cli.rs"
+    cli.parent.mkdir(parents=True)
+    cli.write_text(
+        "pub fn exit_code(status: Status) -> i32 {\n    match status {\n        Status::Complete => 0,\n"
+        "        Status::Stuck => 9,\n    }\n}\n",
+        encoding="utf-8",
+    )
     return tmp_path
 
 
@@ -87,13 +92,16 @@ def test_an_exit_code_that_drifted_from_the_cli_is_reported(tmp_path: Path) -> N
 
 def test_a_status_with_no_exit_code_is_reported(tmp_path: Path) -> None:
     root = _status_repo(tmp_path)
-    cli = root / "src" / "fastbrowse" / "cli.py"
-    cli.write_text("EXIT_CODES = {\n    Status.COMPLETE: 0,\n}\n", encoding="utf-8")
+    cli = root / "crates" / "fastbrowse-cli" / "src" / "cli.rs"
+    cli.write_text(
+        "pub fn exit_code(status: Status) -> i32 {\n    match status {\n        Status::Complete => 0,\n    }\n}\n",
+        encoding="utf-8",
+    )
     copy = {
         "README.md": "| `complete` | 0 |\n| `stuck` | 9 |\n",
         "docs/troubleshooting.md": "## stuck (exit 9)\n",
     }
-    assert check_statuses(root, copy) == ["src/fastbrowse/cli.py: `stuck` has no exit code in EXIT_CODES"]
+    assert check_statuses(root, copy) == ["crates/fastbrowse-cli/src/cli.rs: `stuck` has no exit code in `exit_code`"]
 
 
 def test_a_troubleshooting_section_that_drifted_is_reported(tmp_path: Path) -> None:
@@ -147,7 +155,8 @@ def test_a_recording_of_a_surface_we_no_longer_ship_is_reported(tmp_path: Path) 
     (tmp_path / "docs/assets/media.json").write_text('{"assets": {"docs/assets/demo.gif": {"surface": "old"}}}\n')
     (tmp_path / "src/fastbrowse").mkdir(parents=True)
     (tmp_path / "src/fastbrowse/models.py").write_text('class Status(StrEnum):\n    COMPLETE = "complete"\n')
-    (tmp_path / "src/fastbrowse/cli.py").write_text("EXIT = {Status.COMPLETE: 0}\n")
+    (tmp_path / "crates/fastbrowse-cli/src").mkdir(parents=True)
+    (tmp_path / "crates/fastbrowse-cli/src/cli.rs").write_text("pub fn exit_code(status: Status) -> i32 {\n}\n")
     copy = {"README.md": "![a demo](docs/assets/demo.gif)\n"}
     problems = check_media(tmp_path, copy)
     assert any("Re-record it" in problem for problem in problems)

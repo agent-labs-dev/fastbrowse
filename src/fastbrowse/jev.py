@@ -7,11 +7,6 @@ from pydantic import Field, JsonValue
 
 from fastbrowse.models import CostLine, Frozen, Unavailable
 
-JEV_MODEL = "jev-1.13.0"
-MAX_CHOICE_OPTIONS = 255
-JEV_DOLLARS_PER_INPUT_TOKEN = 0.042 / 1_000_000
-"""Input price; output is free."""
-
 
 class ChoiceQuestion(Frozen):
     type: Literal["choice"] = "choice"

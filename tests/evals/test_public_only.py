@@ -1,4 +1,4 @@
-"""The evals reach fastbrowse only as an embedder does, so they measure whichever core the package runs."""
+"""The evals reach fastbrowse only as an embedder does, so they measure what the package runs."""
 
 import ast
 from pathlib import Path
@@ -11,8 +11,8 @@ SOURCES = sorted([*(ROOT / "src" / "fastbrowse" / "evals").rglob("*.py"), *(ROOT
 PUBLIC_MODULES = {"fastbrowse.models", "fastbrowse.config", "fastbrowse.protocol"}
 """The pydantic models and `Config` a `run_task` call is made of, and the `serve` protocol's messages."""
 
-CORE_LIBRARIES = ("cdp_use", "tests")
-"""The Python core's CDP library and the core's own test helpers."""
+CORE_LIBRARIES = ("tests",)
+"""The test suite's own helpers."""
 
 
 def _reach_ins(path: Path) -> list[str]:
