@@ -87,7 +87,7 @@ fn task_paths(task: &str) -> Vec<(usize, &str)> {
     while let Some((at, c)) = chars.next() {
         let opens =
             previous.is_none_or(|p| text::is_space(p) || matches!(p, '"' | '\'' | '`' | '(' | '[' | '<' | '*' | '_'));
-        let first = task[at + 1..].chars().next();
+        let first = chars.peek().map(|&(_, next)| next);
         if c == '/' && opens && first.is_some_and(|f| f.is_ascii_alphanumeric() || matches!(f, '_' | '~' | '-')) {
             let body = &task[at + 1..];
             let length = body.find(ends_address).unwrap_or(body.len());
@@ -287,6 +287,7 @@ mod tests {
             ("Read the / page".into(), vec![]),
             ("Open //other.example.test/login".into(), vec![]),
             ("Read the review at /entry".into(), vec![]),
+            ("Sign in \u{2014} then read the team page".into(), vec![]),
             (format!("Open {ALPHA}/issues"), vec![format!("{ALPHA}/issues")]),
         ] {
             assert_eq!(navigation_urls(&task, ENTRY, Some(ENTRY), None, false), expected, "{task}");
