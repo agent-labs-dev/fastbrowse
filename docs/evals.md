@@ -26,8 +26,8 @@ judge and browser protocol; missing reference configuration is disclosed rather 
 
 Local and mock suites exercise real browsers, completion rules and authorization gates. They are regression
 checks, not claims about performance across the web. `.github/workflows/evals.yml` runs them on a schedule,
-on demand, and on every release tag, which the release workflow calls it for. A release publishes only on a
-green fixture run on its exact build.
+on demand, and on every minor or major release tag, which the release workflow calls it for. Such a release
+publishes only on a green fixture run on its exact build; a patch release skips the run.
 
 The recorded run: `uv run python -m fastbrowse.evals.runner --suite local --repeat 1` exercises real local Chrome and grades
 what the fixture server recorded: **6/6 passed** (recorded 2026-10-15). The receipt for the release fixture
