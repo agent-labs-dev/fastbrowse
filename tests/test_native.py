@@ -5,6 +5,7 @@ The runs need `fastbrowse._native`, which `uv sync` builds.
 
 import asyncio
 import base64
+import gzip
 import inspect
 import json
 import os
@@ -213,7 +214,9 @@ class Counted:
 
         def page(request: httpx.Request) -> httpx.Response:
             self.requests.append(str(request.url))
-            return httpx.Response(200, text=PAGE, headers={"content-type": "text/html; charset=utf-8"})
+            # Compressed, as a server answers the gzip the reader asks for: httpx decodes it before the core reads it.
+            headers = {"content-type": "text/html; charset=utf-8", "content-encoding": "gzip"}
+            return httpx.Response(200, content=gzip.compress(PAGE.encode()), headers=headers)
 
         self.http = httpx.AsyncClient(transport=httpx.MockTransport(page))
 

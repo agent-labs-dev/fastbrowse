@@ -1,6 +1,7 @@
 //! A page read over HTTP has to produce the blocks a browser capture produces, or quotes break. `golden/fetch.json`
 //! holds the blocks the Python reader made of every fixture page, which the Rust one must still make.
 
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -247,15 +248,42 @@ async fn test_an_address_is_sent_as_whatwg_serializes_it() {
     assert_eq!(capture.url, "https://a.example/caf%C3%A9%20menu");
 }
 
+fn gzipped(body: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(body).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn compressed(coding: &'static str, body: Vec<u8>) -> Http {
+    serving(move |request| {
+        assert_eq!(request.header("accept-encoding"), Some("gzip, deflate"), "the request asks for what it decodes");
+        Response::new(200, body.clone())
+            .with_header("content-type", "text/html")
+            .with_header("content-encoding", coding)
+    })
+}
+
 #[tokio::test]
-async fn test_a_compressed_body_is_refused_rather_than_quoted() {
-    let http = serving(|request| {
-        assert_eq!(request.header("accept-encoding"), Some("identity"), "the request asks for no compression");
-        Response::new(200, vec![0x1f, 0x8b, 0x08])
-            .with_header("content-type", "text/plain")
-            .with_header("content-encoding", "gzip")
-    });
-    assert!(fetched(&http, "https://a.example/").await.unwrap_err().0.contains("compressed"));
+async fn test_a_compressed_body_is_read_as_the_page() {
+    // python.org's CDN gzips a response whatever the request asks for, and a refusal left its pages to the browser.
+    let page = fetched(&compressed("gzip", gzipped(PAGE.as_bytes())), "https://a.example/").await.expect("fetched");
+    assert_eq!(page.blocks, fetched(&html(PAGE), "https://a.example/").await.expect("fetched").blocks);
+    let mut zlib = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    zlib.write_all(PAGE.as_bytes()).unwrap();
+    let page = fetched(&compressed("deflate", zlib.finish().unwrap()), "https://a.example/").await.expect("fetched");
+    assert!(page.text.contains("The total of the orders is 251.00."));
+}
+
+#[tokio::test]
+async fn test_a_compressed_body_is_bounded_by_what_it_decodes_to() {
+    // Five megabytes of spaces gzip to a few kilobytes, which the transport's bound on the received body never sees.
+    let bomb = gzipped(&vec![b' '; 5 * 1024 * 1024 + 1]);
+    let refusal = fetched(&compressed("gzip", bomb), "https://a.example/").await.unwrap_err();
+    assert!(refusal.0.contains("bytes"), "{refusal}");
+    let refusal = fetched(&compressed("br", vec![0x0b]), "https://a.example/").await.unwrap_err();
+    assert!(refusal.0.contains("compression"), "{refusal}");
+    let refusal = fetched(&compressed("gzip", vec![0x1f, 0x8b, 0x08]), "https://a.example/").await.unwrap_err();
+    assert!(refusal.0.contains("corrupt"), "{refusal}");
 }
 
 #[tokio::test]
