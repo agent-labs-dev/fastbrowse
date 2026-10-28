@@ -534,8 +534,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     let mut fetch_spent: Vec<CostLine> = Vec::new();
     if options.fetch || options.fetch_first {
         let began = std::time::Instant::now();
-        let read =
-            fetched(task, &mut options, &config, http.clone(), jev.clone(), llm.clone(), origins.clone()).await?;
+        let read = fetched(task, &options, &config, http.clone(), jev.clone(), llm.clone(), origins.clone()).await?;
         if options.fetch || !read.needs_browser {
             return Ok(read.result);
         }
@@ -766,7 +765,7 @@ struct Read {
 /// browser would answer a different task.
 async fn fetched(
     task: &str,
-    options: &mut RunTask,
+    options: &RunTask,
     config: &Config,
     http: Http,
     jev: Arc<dyn JevClient>,
