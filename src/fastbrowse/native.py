@@ -356,7 +356,12 @@ def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
             return ("transient", type(exc).__name__)
         except httpx.HTTPError as exc:
             return ("fatal", type(exc).__name__)
-        return ("ok", response.status_code, list(response.headers.multi_items()), content)
+        # httpx has decoded the body already, so the coding it was sent with no longer describes these bytes, and a
+        # core that decodes what is named would inflate them a second time.
+        headers = [
+            (name, value) for name, value in response.headers.multi_items() if name.lower() != "content-encoding"
+        ]
+        return ("ok", response.status_code, headers, content)
 
     return send
 
