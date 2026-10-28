@@ -103,6 +103,7 @@ pub fn parser() -> Parser {
             Opt::flag("--json"),
             Opt::value("--record"),
             Opt::flag("--fetch"),
+            Opt::flag("--fetch-first"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
         ],
@@ -136,6 +137,7 @@ pub struct Args {
     pub json: bool,
     pub record: Option<PathBuf>,
     pub fetch: bool,
+    pub fetch_first: bool,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     pub cursor: bool,
@@ -183,6 +185,7 @@ pub fn parse(argv: &[String]) -> Result<Args, Exit> {
         json: parsed.flag("--json"),
         record: path("--record"),
         fetch: parsed.flag("--fetch"),
+        fetch_first: parsed.flag("--fetch-first"),
         trace: text("--trace"),
         cursor: parsed.flag("--cursor"),
     })
@@ -281,6 +284,26 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 
 /// `cli.run(args)`: the exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
+    // Flags that contradict each other are named before anything about the machine, such as a missing ffmpeg.
+    if args.fetch && args.fetch_first {
+        return Err(ConfigurationError(
+            "--fetch never starts a browser and --fetch-first may start one, so pass one of them".into(),
+        ));
+    }
+    if args.fetch_first {
+        // A recording or an attached window has to exist from the first step, and the fetched attempt has neither.
+        for (flag, asked) in [
+            ("--record", args.record.is_some()),
+            ("--attach", args.attach),
+            ("--target-match", args.target_match.is_some()),
+        ] {
+            if asked {
+                return Err(ConfigurationError(format!(
+                    "--fetch-first may finish with no browser, so it cannot be combined with {flag}"
+                )));
+            }
+        }
+    }
     options::recording(args.record.as_deref())?;
     let limits = limits(args)?;
     // The operator's own flags are checked before the browser key: with the cloud browser the default, a missing key
@@ -359,6 +382,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     call.record = args.record.clone();
     call.cursor = args.cursor;
     call.fetch = args.fetch;
+    call.fetch_first = args.fetch_first;
     let mut result = match context.runner.run(call).await {
         Ok(result) => result,
         Err(RunError::Configuration(message)) => return Err(ConfigurationError(message)),
