@@ -30,7 +30,7 @@ use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     ArtifactSink, Attachment, Authorization, BrowserConnection, BrowserEvent, BudgetResource, BudgetStop,
     CostBreakdown, CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status,
-    UntilCheck,
+    UntilCheck, WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::page::Page;
@@ -840,9 +840,12 @@ async fn fetched(
         },
     };
     let result = outcome.map_err(|error| RunError::Invalid(error.to_string()))?;
-    // Read from the page rather than the message: only a refusal the page itself raised means the task needs a browser.
-    // It ends the run blocked, or unverified when the refusal was the screenshot an ending frame asked for.
-    let needs_browser = matches!(result.status, Status::Blocked | Status::Unverified) && fetched.needed_browser();
+    // Read from the page rather than the message: a refusal the page itself raised means the task needs a browser. It
+    // ends the run blocked, or unverified when the refusal was the screenshot an ending frame asked for. A bot check Jev
+    // saw in the document is the other: its script clears it only in a browser.
+    let bot_check = result.wall.as_ref().is_some_and(|wall| wall.kind == WallKind::BotCheck);
+    let needs_browser =
+        matches!(result.status, Status::Blocked | Status::Unverified) && (fetched.needed_browser() || bot_check);
     let spent = ledger.state().clone();
     Ok(Read { result, needs_browser, spent })
 }
