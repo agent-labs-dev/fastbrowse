@@ -67,25 +67,32 @@ pub(crate) fn hides(style: &str) -> bool {
 /// Class names a stylesheet rule hides, such as `.gone { display: none }`.
 ///
 /// Not a renderer: it reads the plain class rules a page uses to keep a template, an alternate layout or a stale value
-/// off the screen, and nothing that depends on a cascade it cannot compute.
+/// off the screen, and nothing that depends on a cascade it cannot compute. A rule inside an at-rule block such as
+/// `@media print` holds only under its condition, so it hides nothing here.
 pub(crate) fn hidden_classes(rules: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut at = 0;
-    // `re.findall(r"([^{}]+)\{([^{}]*)\}", rules)`: a selector runs up to a `{`, and its declaration to the next brace,
-    // which has to be a `}`.
+    // A selector runs up to a `{`, and its declaration to the next brace when that is a `}`. A `{` followed by
+    // another `{` opens an at-rule block, which its own `}` closes.
+    let mut depth = 0usize;
     while let Some(offset) = rules[at..].find(['{', '}']) {
         let brace = at + offset;
-        if rules[brace..].starts_with('{')
-            && brace > at
-            && let Some(close) = rules[brace + 1..].find(['{', '}']).map(|offset| brace + 1 + offset)
-            && rules[close..].starts_with('}')
-        {
-            if hides(&rules[brace + 1..close]) {
-                names.extend(selector_classes(&rules[at..brace]));
-            }
-            at = close + 1;
-        } else {
+        if rules[brace..].starts_with('}') {
+            depth = depth.saturating_sub(1);
             at = brace + 1;
+            continue;
+        }
+        match rules[brace + 1..].find(['{', '}']).map(|offset| brace + 1 + offset) {
+            Some(close) if rules[close..].starts_with('}') => {
+                if depth == 0 && hides(&rules[brace + 1..close]) {
+                    names.extend(selector_classes(&rules[at..brace]));
+                }
+                at = close + 1;
+            }
+            _ => {
+                depth += 1;
+                at = brace + 1;
+            }
         }
     }
     names
@@ -838,7 +845,8 @@ mod tests {
     #[test]
     fn a_class_is_hidden_only_by_a_rule_that_hides_it() {
         assert_eq!(hidden_classes(".gone, p.x-y { Display : None } .kept { color: red }"), ["gone", "x-y"]);
-        assert_eq!(hidden_classes("@media print { .a { visibility:hidden } }"), ["a"]);
+        assert!(hidden_classes("@media print { .a { visibility:hidden } }").is_empty());
+        assert_eq!(hidden_classes("@media print { .a { color: red } } .b { display: none }"), ["b"]);
         assert!(hides("color:red; display: none"));
         assert!(!hides("display: block"));
     }

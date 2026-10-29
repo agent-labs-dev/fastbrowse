@@ -21,12 +21,10 @@ use super::helpers::{
 };
 use super::reading::covered;
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
-use super::{
-    Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, SHORTCUT_WAIT_SECONDS, WALL_QUOTE_CHARS,
-};
+use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, SHORTCUT_WAIT_SECONDS};
 use crate::planner::RequirementKind;
 use crate::policy::{Decision, HistoryEntry, decide};
-use crate::retrieval::leading_quotes;
+use crate::retrieval::page_quotes;
 use crate::shortcut::{accept, accept_start, propose_start};
 use crate::verification::RecordSchema;
 
@@ -1183,7 +1181,7 @@ impl Agent {
             if self.observe().await?.page_key != wall.page_key {
                 return Ok::<_, Flow>(Vec::new());
             }
-            Ok(leading_quotes(&capture, WALL_QUOTE_CHARS))
+            Ok(page_quotes(&capture))
         };
         quoted.await.unwrap_or_default()
     }

@@ -628,17 +628,26 @@ fn leaves(
 /// The reply to a [`flat_optional_objects`] schema folded back into `schema`, the one it was flattened from. An
 /// optional object comes back `null` when every leaf is, or when a field it requires is: the original schema allows
 /// no object there, but not half of one, and a partial `comparison` or tally `field` used to fail validation twice
-/// and end the run.
-pub fn nest_flat_objects(schema: &Value, value: Value) -> Value {
+/// and end the run. The path of each half-answered object set to `null` is returned beside the value, for the trace.
+pub fn nest_flat_objects(schema: &Value, value: Value) -> (Value, Vec<String>) {
     let defs = schema.get("$defs").cloned().unwrap_or(Value::Null);
-    nest(value, schema, &defs)
+    let mut dropped = Vec::new();
+    let nested = nest(value, schema, &defs, "", &mut dropped);
+    (nested, dropped)
 }
 
-fn nest(value: Value, node: &Value, defs: &Value) -> Value {
+fn nest(value: Value, node: &Value, defs: &Value, path: &str, dropped: &mut Vec<String>) -> Value {
+    let at = |key: &str| if path.is_empty() { key.to_string() } else { format!("{path}.{key}") };
     match value {
         Value::Array(items) => {
             let item = items_schema(node, defs).unwrap_or(&Value::Null);
-            Value::Array(items.into_iter().map(|value| nest(value, item, defs)).collect())
+            Value::Array(
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, value)| nest(value, item, defs, &at(&i.to_string()), dropped))
+                    .collect(),
+            )
         }
         Value::Object(map) => {
             let properties = object_schema(node, defs)
@@ -649,7 +658,7 @@ fn nest(value: Value, node: &Value, defs: &Value) -> Value {
             let mut grouped: Vec<String> = Vec::new();
             for (key, value) in map {
                 let Some((head, rest)) = key.split_once(FLAT) else {
-                    let value = nest(value, properties.get(&key).unwrap_or(&Value::Null), defs);
+                    let value = nest(value, properties.get(&key).unwrap_or(&Value::Null), defs, &at(&key), dropped);
                     result.insert(key, value);
                     continue;
                 };
@@ -664,8 +673,15 @@ fn nest(value: Value, node: &Value, defs: &Value) -> Value {
             for head in grouped {
                 let field = properties.get(&head).unwrap_or(&Value::Null);
                 if let Some(slot) = result.get_mut(&head) {
-                    let nested = nest(slot.take(), field, defs);
-                    *slot = if all_null(&nested) || !complete(&nested, field, defs) { Value::Null } else { nested };
+                    let nested = nest(slot.take(), field, defs, &at(&head), dropped);
+                    *slot = if all_null(&nested) {
+                        Value::Null
+                    } else if !complete(&nested, field, defs) {
+                        dropped.push(at(&head));
+                        Value::Null
+                    } else {
+                        nested
+                    };
                 }
             }
             Value::Object(result)

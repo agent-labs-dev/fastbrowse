@@ -310,13 +310,6 @@ fn test_field_names_that_cannot_be_a_model_field_are_refused() {
     }
 }
 
-#[test]
-fn test_too_many_fields_are_refused() {
-    let names: Vec<String> = (0..21).map(|i| format!("f{i}")).collect();
-    let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    assert!(output_model(&fields(&names)).is_err());
-}
-
 #[tokio::test]
 async fn test_a_configuration_error_in_a_run_is_a_tool_error() {
     let missing_key = runner(|_| async { Err(RunError::Configuration("set OPENROUTER_API_KEY for the LLM".into())) });

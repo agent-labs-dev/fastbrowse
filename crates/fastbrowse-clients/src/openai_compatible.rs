@@ -21,9 +21,6 @@ use crate::validation::{
     json_object, object_value, post_with_retry, retryable, token_count, with_discarded,
 };
 
-/// How much larger the output cap is on the one retry after a response ran into it.
-const TRUNCATION_RETRY_FACTOR: i64 = 4;
-
 /// OpenRouter routing: an endpoint that ignores response_format would treat the schema as a hint, so none is routed
 /// to. OpenRouter's default routing sent gemini-3.8-flash reads to Vertex at a 2.4s median where AI Studio answered the
 /// same read in 1.3s; sorting by latency keeps fallbacks and follows the faster endpoint.
@@ -47,7 +44,7 @@ pub fn gateway_provider_routing() -> Value {
 }
 
 /// Request fields fastbrowse sets itself. An extra body that named one would replace the schema, the messages or the
-/// output cap the truncation retry grows, so the run would fail far from the setting that caused it.
+/// output cap, so the run would fail far from the setting that caused it.
 pub const RESERVED_BODY_KEYS: [&str; 6] =
     ["max_tokens", "messages", "model", "provider", "reasoning", "response_format"];
 
@@ -129,30 +126,15 @@ fn short_of_cap(payload: &Map<String, Value>, cap: i64) -> Option<i64> {
     (0 < written && written < cap).then_some(written)
 }
 
-/// Make room for a response that ran into the output cap, or report it as truncated when it did so again.
+/// A response that ran into its output cap, named as truncation so it is never read as a bad answer.
 ///
-/// Repairing the JSON would send the same prompt under the same cap and be cut off again, so the one retry is spent on
-/// more room instead, and a second truncation is reported as what it is.
-fn grow_cap(
-    body: &mut Map<String, Value>,
-    field: &str,
-    attempt: usize,
-    cap: i64,
-    purpose: LLMPurpose,
-) -> Result<(), LLMError> {
-    if attempt == 1 {
-        let ceiling = body.get(field).map_or_else(|| "no cap".to_string(), |value| value.to_string());
-        return Err(LLMError::Failed(format!("LLM response truncated at the {ceiling} token output cap ({purpose})")));
-    }
-    // No cap was sent, so there is nothing to grow: the model stopped on its own, and asking again under a larger
-    // ceiling would only spend the one retry on the same reply. The caller's repair turn is the next move.
-    if cap <= 0 && body.get(field).is_none() {
-        return Err(LLMError::Failed(format!(
-            "LLM response was cut off with no output cap set ({purpose}); it ended before the JSON did"
-        )));
-    }
-    body.insert(field.into(), (cap * TRUNCATION_RETRY_FACTOR).into());
-    Ok(())
+/// The cap is the caller's own setting, so it is not raised for a second attempt: the same prompt under the same cap
+/// would be cut off again.
+fn truncation(body: &Map<String, Value>, field: &str, purpose: LLMPurpose) -> LLMError {
+    LLMError::Failed(match body.get(field) {
+        Some(cap) => format!("LLM response truncated at the {cap} token output cap ({purpose})"),
+        None => format!("LLM response was cut off with no output cap set ({purpose}); it ended before the JSON did"),
+    })
 }
 
 /// Never fails: usage we cannot read is an unknown cost, which a dollar cap treats as unaffordable.
@@ -259,8 +241,7 @@ fn bound(cost: CostLine, ceiling: Ceiling, body: &Map<String, Value>) -> CostLin
 
 /// How much hidden reasoning a model may spend before it answers, in OpenRouter's normalized terms.
 ///
-/// `None` turns reasoning off. A model that reasons at every effort and does not scale it to `max_tokens`, such as
-/// DeepSeek V4.1 Flash, spends a verdict's whole 400-token cap thinking and answers nothing, so it needs this.
+/// `None` turns reasoning off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReasoningEffort {
     None,
@@ -675,7 +656,7 @@ impl OpenAICompatibleLLM {
                 max_output_tokens,
                 self.reasoning_effort,
             )?;
-            return self.billed(body, purpose, schema, max_output_tokens, ledger, model).await;
+            return self.billed(body, purpose, schema, ledger, model).await;
         }
         let json_schema = if deepseek(model) { flat_optional_objects(&json_schema) } else { json_schema };
         let response_format = match self.output_format {
@@ -708,7 +689,7 @@ impl OpenAICompatibleLLM {
         if let Some(effort) = self.reasoning_effort {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
-        self.billed(body, purpose, schema, max_output_tokens, ledger, model).await
+        self.billed(body, purpose, schema, ledger, model).await
     }
 
     /// Run a generation's turns over a built request body, recording what it was billed however it ends.
@@ -717,7 +698,6 @@ impl OpenAICompatibleLLM {
         mut body: Map<String, Value>,
         purpose: LLMPurpose,
         schema: &dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&Ledger>,
         model: &str,
     ) -> Result<Generation<Value>, LLMError> {
@@ -731,7 +711,7 @@ impl OpenAICompatibleLLM {
             in_flight: None,
             armed: true,
         };
-        let outcome = self.turns(&mut body, purpose, schema, max_output_tokens, ledger, &mut billing).await;
+        let outcome = self.turns(&mut body, purpose, schema, ledger, &mut billing).await;
         billing.armed = false;
         match outcome {
             Ok(data) => Ok(Generation { data: data.0, cost: data.1 }),
@@ -750,7 +730,6 @@ impl OpenAICompatibleLLM {
         body: &mut Map<String, Value>,
         purpose: LLMPurpose,
         schema: &dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&Ledger>,
         billing: &mut Billing<'_>,
     ) -> Result<(Value, CostLine), LLMError> {
@@ -783,8 +762,7 @@ impl OpenAICompatibleLLM {
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
             if truncated(&payload).map_err(LLMError::Failed)? {
-                grow_cap(body, self.output_cap_field, attempt, max_output_tokens, purpose)?;
-                continue;
+                return Err(truncation(body, self.output_cap_field, purpose));
             }
             let content = match content(&payload) {
                 Ok(content) if self.output_format == OutputFormat::JsonObject => unfenced(&content).to_string(),
@@ -804,7 +782,16 @@ impl OpenAICompatibleLLM {
                     error.classify() == serde_json::error::Category::Eof,
                 ),
                 Ok(value) => match schema.validate_json(&if deepseek(&billing.model) {
-                    nest_flat_objects(&schema.json_schema(), value).to_string()
+                    let (nested, dropped) = nest_flat_objects(&schema.json_schema(), value);
+                    if !dropped.is_empty() {
+                        self.http.trace.event("half_objects_dropped", || {
+                            Map::from_iter([
+                                ("purpose".into(), purpose.as_str().into()),
+                                ("paths".into(), json!(dropped)),
+                            ])
+                        });
+                    }
+                    nested.to_string()
                 } else {
                     content.clone()
                 }) {
@@ -822,10 +809,8 @@ impl OpenAICompatibleLLM {
             // it read, so it is scrubbed too.
             let detail = self.scrubbed(&detail);
             if ends_mid_json {
-                // With no ceiling sent there is no cap to compare against, and `short_of_cap` answers None, which
-                // grows a cap that is not there: the reply ended mid-JSON on its own and is reported, not retried
-                // under a ceiling nobody asked for.
-                let cap = body.get(self.output_cap_field).and_then(Value::as_i64).unwrap_or(max_output_tokens);
+                // With no ceiling sent the reply ended mid-JSON on its own, and it is reported rather than retried.
+                let cap = body.get(self.output_cap_field).and_then(Value::as_i64).unwrap_or_default();
                 if cap <= 0 {
                     return Err(LLMError::Failed(format!(
                         "LLM response ended mid-JSON with no output cap set ({purpose}); it wrote {written} tokens",
@@ -837,7 +822,7 @@ impl OpenAICompatibleLLM {
                     )));
                 }
                 match short_of_cap(&payload, cap) {
-                    None => grow_cap(body, self.output_cap_field, attempt, max_output_tokens, purpose)?,
+                    None => return Err(truncation(body, self.output_cap_field, purpose)),
                     Some(written) if short_retried => {
                         return Err(LLMError::RetriesExhausted(format!(
                             "LLM response ended mid-JSON at {written} of {cap} output tokens twice"
@@ -848,10 +833,7 @@ impl OpenAICompatibleLLM {
                 continue;
             }
             if attempt == 1 {
-                return Err(LLMError::Failed(format!(
-                    "LLM schema validation failed after one retry: {}",
-                    text::prefix(&detail, 1000)
-                )));
+                return Err(LLMError::Failed(format!("LLM schema validation failed after one retry: {detail}")));
             }
             if let Some(Value::Array(messages)) = body.get_mut("messages") {
                 messages.push(json!({"role": "assistant", "content": content}));

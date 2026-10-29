@@ -512,17 +512,14 @@ async fn test_a_local_endpoint_gets_the_reasoning_effort_that_was_asked_for() {
 }
 
 #[tokio::test]
-async fn test_openrouter_gets_reasoning_turned_off_by_default() {
-    let (seen, _) = llm_requests(&[("OPENROUTER_API_KEY", "o")], Some(0.0001)).await;
-    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "none"}));
-}
-
-#[tokio::test]
-async fn test_another_model_keeps_its_providers_reasoning_by_default() {
-    // Gemini 3 answers `none` with HTTP 400, so turning reasoning off is for DeepSeek only.
-    let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_MODEL", "google/gemini-3.8-flash")];
-    let (seen, _) = llm_requests(&env, Some(0.0001)).await;
-    assert!(body(&seen[0]).get("reasoning").is_none());
+async fn test_openrouter_keeps_each_models_own_reasoning_by_default() {
+    for env in [
+        vec![("OPENROUTER_API_KEY", "o")],
+        vec![("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_MODEL", "google/gemini-3.8-flash")],
+    ] {
+        let (seen, _) = llm_requests(&env, Some(0.0001)).await;
+        assert!(body(&seen[0]).get("reasoning").is_none(), "{env:?}");
+    }
 }
 
 #[tokio::test]

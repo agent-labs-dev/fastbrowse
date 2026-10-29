@@ -57,13 +57,6 @@ use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 /// every purpose (docs/evals.md has the measurements).
 pub const DEFAULT_LLM: &str = "deepseek/deepseek-v4.1-flash-1017";
 
-/// The effort a model gets on OpenRouter or the gateway when no FASTBROWSE_LLM_REASONING setting names one. DeepSeek
-/// V4.1 Flash reasons at every effort and does not scale it to the output allowance, so it gets `none`; any other
-/// model is sent no effort and keeps its provider's default.
-fn default_reasoning(model: &str) -> Option<ReasoningEffort> {
-    model.starts_with("deepseek/").then_some(ReasoningEffort::None)
-}
-
 pub const LLM_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 pub const LLM_GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v1";
 
@@ -662,11 +655,8 @@ impl Settings {
             },
         };
         if preset.wire == Wire::AnthropicMessages {
-            // Claude thinks by default, and on a short output cap a default effort can spend the cap before the
-            // answer, so the effort is always sent, low unless FASTBROWSE_LLM_REASONING says otherwise.
             let models = self.preset_models(&preset)?;
-            let effort = self.llm_reasoning.unwrap_or(ReasoningEffort::Low);
-            return AnthropicLLM::new(key, http.clone(), &base_url, models, Some(effort), self.extra_body()?)
+            return AnthropicLLM::new(key, http.clone(), &base_url, models, self.llm_reasoning, self.extra_body()?)
                 .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
                 .map_err(ConfigurationError);
         }
@@ -736,7 +726,7 @@ impl Settings {
         http: &Http,
     ) -> Result<Box<dyn LLMClient>, ConfigurationError> {
         let options = LLMOptions {
-            reasoning_effort: self.llm_reasoning.or_else(|| default_reasoning(&self.model())),
+            reasoning_effort: self.llm_reasoning,
             provider_routing: Some(routing),
             ..LLMOptions::default()
         };

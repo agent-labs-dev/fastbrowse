@@ -68,8 +68,6 @@ const REDRAW_WATCH_SECONDS: f64 = 10.0;
 /// Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page takes
 /// many scrolls, each of which shows something new.
 const REPEATS_BEFORE_CYCLE: i64 = 2;
-/// How much of a wall's text a blocked result quotes: enough for its message, not a whole page.
-const WALL_QUOTE_CHARS: i64 = 600;
 /// The choice a field's text is written for when no input or secret is the answer.
 const GENERATE: &str = "generate";
 

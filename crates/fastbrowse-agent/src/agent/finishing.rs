@@ -33,8 +33,7 @@ use crate::retrieval::{
 use crate::support::generate;
 use crate::verification::{
     CheckOptions, DoneCheck, DoneOptions, DoneVerdict, ExtractOptions, Extraction, LLMVerdict, RecordSchema,
-    VERDICT_TOKENS, VerifyOptions, check_claims, check_done, extract, verify_cache_key, verify_messages,
-    visual_only_state,
+    VerifyOptions, check_claims, check_done, extract, verify_cache_key, verify_messages, visual_only_state,
 };
 
 /// An answer whose claims passed, or what a composer sent beside the verifier came back with.
@@ -588,13 +587,7 @@ impl Agent {
         let mut invented: Vec<String> = state.invented.iter().cloned().collect();
         invented.sort();
         let shown = visited(&state.visited, |url| self.redact(url));
-        let options = VerifyOptions {
-            doubted: &check.doubted,
-            invented: &invented,
-            visited: &shown,
-            config: self.config.clone(),
-            ledger: None,
-        };
+        let options = VerifyOptions { doubted: &check.doubted, invented: &invented, visited: &shown, ledger: None };
         let messages =
             verify_messages(&state.task, state.plan(), fresh, &screenshots, &state.notes, &state.history, &options)?;
         let key = verify_cache_key(&messages);
@@ -616,8 +609,7 @@ impl Agent {
             return Ok((request.key, reused));
         }
         let judged =
-            generate::<LLMVerdict>(&*self.llm, LLMPurpose::Verify, &request.messages, VERDICT_TOKENS, Some(&ledger))
-                .await?;
+            generate::<LLMVerdict>(&*self.llm, LLMPurpose::Verify, &request.messages, 0, Some(&ledger)).await?;
         ledger.record([judged.cost.clone()])?;
         Ok((request.key, judged))
     }

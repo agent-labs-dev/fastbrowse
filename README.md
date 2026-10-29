@@ -166,8 +166,8 @@ restart it without the flag, when you are done.
 
 ### Models
 
-The LLM defaults to `deepseek/deepseek-v4.1-flash-1017` with reasoning off for every purpose. Any other model is
-sent no reasoning effort unless `FASTBROWSE_LLM_REASONING` sets one, so it keeps its provider's default.
+The LLM defaults to `deepseek/deepseek-v4.1-flash-1017` for every purpose. No reasoning effort is sent unless
+`FASTBROWSE_LLM_REASONING` sets one, so each model keeps its provider's default.
 
 | Setting | Effect |
 |:--|:--|
