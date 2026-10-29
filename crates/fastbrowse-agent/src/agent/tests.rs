@@ -1475,3 +1475,59 @@ async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
     let (clicked, page, jev) = click_where_seen(false, 0.9).await;
     assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && jev.asked.lock().unwrap().is_empty());
 }
+
+// -- Jev reads a step as text, and sees the page only when that leaves it unsure ---------------------------------------
+
+/// The scripted Jev, its every choice held at the given confidence from text and at 0.9 once shown the page, and the
+/// number of images each request carried.
+struct Looks(ScriptedJev, f64, std::sync::Mutex<Vec<usize>>);
+
+impl DecisionClient for Looks {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.evaluate_images(state, questions, &fastbrowse_core::decision::NO_IMAGES)
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.2.lock().unwrap().push(images.len());
+        let confidence = if images.is_empty() { self.1 } else { 0.9 };
+        let answered = self.0.evaluate(state, questions);
+        Box::pin(async move {
+            let mut evaluation = answered.await?;
+            for answer in evaluation.answers.values_mut() {
+                if let Answer::Choice(choice) = answer {
+                    choice.confidence = confidence;
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { images: true, ..DecisionProfile::jev() }
+    }
+}
+
+#[tokio::test]
+async fn test_jev_sees_the_page_only_when_its_text_pick_is_unsure() {
+    for (text, images, confidence) in [(0.9, vec![0], 0.9), (0.3, vec![0, 1], 0.9)] {
+        let next = || crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None };
+        let jev = Arc::new(Looks(ScriptedJev::new(vec![next(), next()]), text, Default::default()));
+        let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), Arc::new(Recoverer::default()));
+        let state = run_state().await;
+        let context = agent.context(&state, Vec::new(), false, true).expect("a step context");
+        let decision =
+            agent.decide_looking(&state, &observation(&[button("Next")]), &context).await.expect("a decision");
+        assert_eq!(*jev.2.lock().unwrap(), images, "text pick at {text}");
+        assert!((decision.confidence() - confidence).abs() < 1e-9, "{}", decision.confidence());
+        assert_eq!(decision.cost.len(), images.len());
+    }
+}
