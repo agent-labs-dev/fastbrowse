@@ -417,7 +417,7 @@ fn block_containing<'a>(page: &Page<'a>, at: i64) -> Option<&'a Block> {
 /// The one place in this chunk that literally holds `excerpt`, for a claim that quoted it without naming its
 /// blocks. A passage occurring more than once names no single record, and is refused as a cited excerpt that
 /// matched twice is: two records' values, or the same price under two products, cannot be told apart.
-fn locate_excerpt<'a>(page: &Page<'_>, part: &Chunk, raw: &str) -> Option<Evidence> {
+fn locate_excerpt(page: &Page<'_>, part: &Chunk, raw: &str) -> Option<Evidence> {
     let excerpt: &str = text::strip(raw);
     if excerpt.is_empty() {
         return None;
