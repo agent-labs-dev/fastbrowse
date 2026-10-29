@@ -43,7 +43,7 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-pub use helpers::{next_page_control, next_page_notice, read_question};
+pub use helpers::{next_page_control, read_question};
 use helpers::{partition_proof, recovery_memory};
 use state::{Flow, RunState, Spawned, Step};
 
@@ -455,11 +455,10 @@ impl Agent {
             None => (Vec::new(), Default::default()),
             Some(opening) => self.open(task, opening, &ledger, head.proposing.clone()).await?,
         };
-        let mut fell_back = false;
         if let (None, Some(opening)) = (start, &opening) {
             // The caller gave a goal and no page, so this address was worked out from the task too.
             invented.insert(opening.clone());
-            fell_back = self.front_page_if_blank(opening).await?;
+            self.front_page_if_blank(opening).await?;
         }
         let mut state = RunState::new(
             task.to_string(),
@@ -477,10 +476,6 @@ impl Agent {
             state.start_landing_url = Some(self.page.address().await?);
         }
         state.history.extend(opened);
-        // The run begins on the guess only if the guess is still the page open: a guessed path that opened nothing was
-        // left for the site's front page, and a form there led back to the same path with every read of it held
-        // guessed.
-        state.guessing = !invented.is_empty() && !fell_back;
         state.invented = invented;
         if let Some(opening) = &opening {
             // A shortcut leaves the start page before the loop observes anything.

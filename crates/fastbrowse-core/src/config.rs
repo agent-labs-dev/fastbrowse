@@ -21,16 +21,7 @@ pub struct Thresholds {
     pub bot_check_above: f64,
     #[serde(deserialize_with = "lax::float")]
     pub irreversible_above: f64,
-    #[serde(deserialize_with = "lax::float")]
-    pub done_accept_from: f64,
-    /// With every action requirement confirmed, the holistic done answer that accepts without the LLM verifier.
-    /// Jev scores a right page 0.49 to 0.91 as done and a near miss 0.04 or less.
-    #[serde(deserialize_with = "lax::float")]
-    pub done_confirmed_from: f64,
-    /// A requirement's "not satisfied" answer under which it counts as confirmed; near misses scored 0.65 or more.
-    #[serde(deserialize_with = "lax::float")]
-    pub requirement_confirmed_below: f64,
-    /// Any "yes = something is wrong" answer check above this rejects the claim.
+    /// An action requirement's "not satisfied" answer above this keeps the run working.
     #[serde(deserialize_with = "lax::float")]
     pub claim_problem_above: f64,
     /// Jev's agreement that the task or notes hold a field's value, under which a NEEDS_INPUT stop stands.
@@ -49,9 +40,6 @@ impl Default for Thresholds {
             login_required_above: 0.70,
             bot_check_above: 0.70,
             irreversible_above: 0.50,
-            done_accept_from: 0.85,
-            done_confirmed_from: 0.50,
-            requirement_confirmed_below: 0.30,
             claim_problem_above: 0.70,
             value_stated_above: 0.50,
             rewrite_from: 0.30,

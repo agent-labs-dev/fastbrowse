@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::decision::{
     Answer, BoxAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images, NoulAnswer, Question,
 };
@@ -30,17 +29,16 @@ use serde_json::json;
 use super::Agent;
 use super::driving::edit_progress;
 use super::helpers::{
-    access_inspection, answer_evidence, answered, code_decision, doubted, follow_recovery, guessed, guessed_page,
-    next_page_control, next_value, plan_ids, unread, verified, visited,
+    access_inspection, answer_evidence, answered, code_decision, follow_recovery, next_page_control, next_value,
+    unread, visited,
 };
 use super::reading::covered;
 use super::state::{RunState, Spawned, TransactionCandidate};
-use crate::memory::{Fact, Notes, Tally, fact_id};
+use crate::memory::{Fact, Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
 use crate::scripted::{ScriptedJev, ScriptedLLM};
-use crate::verification::{LLMVerdict, grounding};
 
 const INFO: RequirementKind = RequirementKind::Information;
 
@@ -142,10 +140,6 @@ fn at(url: &str, controls: &[Control]) -> Observation {
     Observation { url: url.into(), page_key: url.into(), ..observation(controls) }
 }
 
-fn entry(url: &str, entry: Option<&str>) -> Observation {
-    Observation { history_entry: entry.map(String::from), ..at(url, &[]) }
-}
-
 fn field(label: &str) -> Control {
     let mut control = Control::new("field", "combobox", label, [Operation::Fill, Operation::Click, Operation::Enter]);
     control.value = Some("Bath".into());
@@ -187,14 +181,6 @@ fn block_evidence(page: &Capture, source_id: &str) -> Evidence {
     .unwrap()
 }
 
-fn fare(url: &str, sha: &str) -> Fact {
-    Fact::read(Some("r1"), "$320", Evidence { url: url.into(), ..evidence(sha, 0, 4) }, FactReader::Llm)
-}
-
-fn fare_plan() -> Plan {
-    Plan::new(vec![Requirement::new("r1", "Fare", INFO)], true)
-}
-
 fn executed(operation: Option<Operation>, target: Option<&str>, page_changed: bool) -> HistoryEntry {
     HistoryEntry::new(operation, target, StepOutcome::Executed, page_changed)
 }
@@ -205,12 +191,6 @@ fn typed(target: &str, text: &str) -> HistoryEntry {
 
 fn set(ids: &[&str]) -> HashSet<String> {
     ids.iter().map(|id| id.to_string()).collect()
-}
-
-/// An executed step; `moved` is whether the page reported that the step itself took it elsewhere.
-fn did(state: &mut RunState, operation: Option<Operation>, target: Option<&str>, moved: bool) {
-    state.history.push(executed(operation, target, true));
-    state.moved_by_action = moved;
 }
 
 #[tokio::test]
@@ -281,265 +261,6 @@ fn test_a_steps_identity_ignores_a_timer_but_not_its_heading() {
     };
     assert_eq!(step_key(&on, &shown("Review", "00:01")), step_key(&on, &shown("Review", "00:07")));
     assert_ne!(step_key(&on, &shown("Review", "00:01")), step_key(&on, &shown("Submit", "00:01")));
-}
-
-fn verdict(complete: bool, missing: &[&str], ungrounded: &[&str]) -> LLMVerdict {
-    LLMVerdict {
-        complete,
-        missing: missing.iter().map(|id| id.to_string()).collect(),
-        ungrounded: ungrounded.iter().map(|id| id.to_string()).collect(),
-    }
-}
-
-#[test]
-fn test_the_verifiers_doubt_holds_whatever_the_notes_cite() {
-    let plan = Plan::new(
-        vec![
-            Requirement::new("httpx", "Find httpx's latest release date", INFO),
-            Requirement::new("compare", "Compare the two dates", INFO),
-        ],
-        true,
-    );
-    for (complete, missing, ungrounded, accepted) in [
-        (true, &[][..], &[][..], true),
-        (false, &["compare"][..], &[][..], false),
-        (true, &[][..], &["httpx"][..], false),
-        (false, &[][..], &[][..], false),
-        // A verdict naming something the plan never asked for says nothing about this run.
-        (true, &["invented-id"][..], &[][..], true),
-    ] {
-        let doubt = verdict(complete, missing, ungrounded);
-        assert_eq!(verified(&doubt, &plan), accepted, "{complete} {missing:?} {ungrounded:?}");
-    }
-    assert_eq!(doubted(&verdict(false, &["Compare"], &["httpx", "compare"]), &plan), ["compare", "httpx"]);
-}
-
-#[tokio::test]
-async fn test_identical_text_at_another_address_does_not_free_a_guessed_reading() {
-    let (guess, own) = ("https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=set");
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[guess]), true);
-    let plan = fare_plan();
-    state.lineage.read("same", &[guess.to_string()], true);
-    let on_guess = fare(guess, "same");
-    state.notes.add(on_guess.clone());
-    let judge = Arc::new(guessed_page(&state.invented, Some(&state.lineage), false));
-    state.notes.discredit(["r1"], judge);
-
-    state.guessing = false;
-    state.lineage.read("same", &[own.to_string()], false);
-    state.notes.add(on_guess);
-    assert_eq!(state.notes.unresolved(&plan), plan.requirements);
-    let on_own = fare(own, "same");
-    state.notes.add(on_own.clone());
-    let supporting: HashSet<String> = state.notes.supporting("r1").into_iter().map(|(key, _)| key).collect();
-    assert_eq!(supporting, HashSet::from([fact_id(&on_own)]));
-}
-
-const GUESS: &str = "https://example.test/flights?q=BRS+to+YRK";
-const START: &str = "https://example.test/flights";
-const OTHER_GUESS: &str = "https://example.test/flights?q=BRS+to+YRK+one+way";
-
-/// One step of a lineage case: the operation and its target, where it landed, the history entry and whether the
-/// action itself moved the page.
-type LineageStep = (Option<Operation>, Option<&'static str>, String, Option<&'static str>, bool);
-
-#[tokio::test]
-async fn test_lineage_follows_the_browser_history_entry() {
-    use Operation::{Back, Click, Navigate, SwitchTab};
-    let step = |operation, target, url: &str, entry| -> LineageStep { (operation, target, url.into(), entry, false) };
-    let moved = |operation, target, url: &str, entry| -> LineageStep { (operation, target, url.into(), entry, true) };
-    let cases: Vec<(&str, Vec<LineageStep>, bool)> = vec![
-        // Back to an entry made on the guess restores it; Forward to one made off it restores that.
-        (
-            "back-to-guess",
-            vec![step(Some(Navigate), Some(START), START, Some("t:2")), step(Some(Back), None, GUESS, Some("t:1"))],
-            true,
-        ),
-        (
-            "forward-off-guess",
-            vec![
-                step(Some(Navigate), Some(START), START, Some("t:2")),
-                step(Some(Back), None, GUESS, Some("t:1")),
-                step(None, None, START, Some("t:2")),
-            ],
-            false,
-        ),
-        // Back past the start loads the caller's page afresh; it was never built.
-        ("back-past-start", vec![step(Some(Back), None, START, Some("t:0"))], false),
-        // A reload or a redraw is the same entry.
-        ("reload-on-guess", vec![step(Some(Click), None, GUESS, Some("t:1"))], true),
-        (
-            "reload-off-guess",
-            vec![step(Some(Navigate), Some(START), START, Some("t:2")), step(Some(Click), None, START, Some("t:2"))],
-            false,
-        ),
-        // A redirect is the navigation it follows: what the run asked for decides, as well as where it landed.
-        ("redirect-of-guess", vec![step(Some(Navigate), Some(GUESS), "https://example.test/moved", Some("t:2"))], true),
-        ("redirect-of-own", vec![step(Some(Navigate), Some(START), "https://example.test/home", Some("t:2"))], false),
-        // An entry the run's action on the site's controls itself made is the site's, whatever its path, unless it
-        // is a built address again; any other the page made, even just after an action, inherits the page.
-        ("site-search", vec![moved(Some(Click), Some("Search"), &format!("{START}?q=BRS+to+LDS"), Some("t:2"))], false),
-        ("site-sort", vec![moved(Some(Click), None, &format!("{GUESS}&sort=price"), Some("t:2"))], false),
-        ("site-resubmits-guess", vec![moved(Some(Click), Some("Search"), GUESS, Some("t:2"))], true),
-        ("page-pushstate-on-guess", vec![step(None, None, &format!("{GUESS}&page=2"), Some("t:2"))], true),
-        ("page-pushstate-after-click", vec![step(Some(Click), None, &format!("{GUESS}&ts=1"), Some("t:2"))], true),
-        // A NAVIGATE to another address the run built is still a guess.
-        ("navigate-to-other-guess", vec![step(Some(Navigate), Some(OTHER_GUESS), OTHER_GUESS, Some("t:2"))], true),
-        (
-            "pushstate-off-guess",
-            vec![step(Some(Navigate), Some(START), START, Some("t:2")), step(Some(Click), None, GUESS, Some("t:3"))],
-            false,
-        ),
-        // replaceState keeps the entry: the page rewriting its own address keeps its lineage, and the site moving it
-        // elsewhere after the run's action is the site's.
-        ("page-replacestate", vec![step(None, None, "https://example.test/other", Some("t:1"))], true),
-        ("site-replacestate", vec![moved(Some(Click), None, "https://example.test/other", Some("t:1"))], false),
-        (
-            "page-replacestate-after-click",
-            vec![step(Some(Click), None, "https://example.test/other", Some("t:1"))],
-            true,
-        ),
-        // A tab the page opened by itself inherits the page that opened it, one the run's click opened is the
-        // site's, and switching back restores the opener's entry.
-        ("page-popup-from-guess", vec![step(None, None, "https://example.test/popup", Some("u:1"))], true),
-        ("site-popup", vec![moved(Some(Click), None, "https://example.test/popup", Some("u:1"))], false),
-        (
-            "switch-back-to-guess",
-            vec![
-                step(Some(Navigate), Some(START), START, Some("t:2")),
-                step(Some(Click), None, "https://example.test/popup", Some("u:1")),
-                step(Some(SwitchTab), None, GUESS, Some("t:1")),
-            ],
-            true,
-        ),
-        // A browser that names no entry is judged as a new entry each time.
-        ("no-entry", vec![step(Some(Navigate), Some(START), START, None)], false),
-    ];
-    let agent = agent();
-    for (id, steps, guessing) in cases {
-        let mut state = run_state().await;
-        (state.invented, state.guessing) = (set(&[GUESS, OTHER_GUESS]), true);
-        agent.note_effect(&mut state, &entry(GUESS, Some("t:1")));
-        for (operation, target, url, history_entry, moved) in steps {
-            did(&mut state, operation, target, moved);
-            agent.note_effect(&mut state, &entry(&url, history_entry));
-        }
-        assert_eq!(state.guessing, guessing, "{id}");
-    }
-}
-
-#[tokio::test]
-async fn test_back_to_a_search_rebuilt_at_the_guessed_address_stays_the_runs_own() {
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[GUESS]), true);
-    agent.note_effect(&mut state, &entry(GUESS, Some("t:1")));
-    state.lineage.read("guess", &[GUESS.to_string()], state.guessing);
-    for (operation, target, url, history_entry) in [
-        (Operation::Navigate, Some(START), START, "t:2"),
-        (Operation::Click, Some("Search"), GUESS, "t:3"),
-        (Operation::Click, Some("Cheapest result"), "https://example.test/flights/result/1", "t:4"),
-        (Operation::Back, None, GUESS, "t:3"),
-    ] {
-        did(&mut state, Some(operation), target, false);
-        agent.note_effect(&mut state, &entry(url, Some(history_entry)));
-    }
-    assert!(!state.guessing);
-    state.lineage.read("rebuilt", &[GUESS.to_string()], state.guessing);
-    let plan = fare_plan();
-    let judged = |sha| guessed(&plan, &Notes::new([fare(GUESS, sha)]), &state.invented, false, Some(&state.lineage));
-    assert_eq!(judged("rebuilt"), set(&[]));
-    assert_eq!(judged("guess"), set(&["r1"]));
-}
-
-#[tokio::test]
-async fn test_a_corrected_search_kept_in_the_fragment_is_the_runs_own() {
-    let (old, new) = ("https://example.test/search#from=BRS&to=YRK", "https://example.test/search#from=BRS&to=LDS");
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[old]), true);
-    agent.note_effect(&mut state, &entry(old, Some("t:1")));
-    state.lineage.read("old", &[old.to_string()], state.guessing);
-    did(&mut state, Some(Operation::Navigate), Some(new), false);
-    agent.note_effect(&mut state, &entry(new, Some("t:2")));
-    assert!(!state.guessing);
-    state.lineage.read("new", &[new.to_string()], state.guessing);
-    let plan = fare_plan();
-    let new_fare = Notes::new([fare(new, "new")]);
-    assert_eq!(guessed(&plan, &new_fare, &state.invented, false, Some(&state.lineage)), set(&[]));
-    did(&mut state, Some(Operation::Navigate), Some(old), false);
-    agent.note_effect(&mut state, &entry(old, Some("t:3")));
-    assert!(state.guessing);
-    did(&mut state, Some(Operation::Click), None, false);
-    agent.note_effect(&mut state, &entry(old, Some("t:3")));
-    assert!(state.guessing);
-    let old_fare = Notes::new([fare(old, "old")]);
-    assert_eq!(guessed(&plan, &old_fare, &state.invented, false, Some(&state.lineage)), set(&["r1"]));
-}
-
-#[tokio::test]
-async fn test_a_guessed_address_reached_again_by_the_run_itself_is_judged_by_that_visit() {
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[GUESS]), true);
-    agent.note_effect(&mut state, &at(GUESS, &[]));
-    state.lineage.read("guess", &[GUESS.to_string()], state.guessing);
-    for (operation, landed) in [(Operation::Navigate, START), (Operation::Click, GUESS)] {
-        state.history.push(executed(Some(operation), None, true));
-        agent.note_effect(&mut state, &at(landed, &[]));
-    }
-    state.lineage.read("fresh", &[GUESS.to_string()], state.guessing);
-    let plan = fare_plan();
-    let judged = |sha| guessed(&plan, &Notes::new([fare(GUESS, sha)]), &state.invented, false, Some(&state.lineage));
-    assert_eq!(judged("fresh"), set(&[]));
-    assert_eq!(judged("guess"), set(&["r1"]));
-    // A redraw of the page the run is on, with no new arrival, keeps the judgement it arrived with.
-    agent.note_effect(&mut state, &at(GUESS, &[]));
-    assert_eq!(state.lineage.address(&search_address(GUESS)), Some(false));
-}
-
-#[tokio::test]
-async fn test_a_refused_reading_is_freed_when_the_run_reads_the_same_text_off_the_guess() {
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[GUESS]), true);
-    let plan = fare_plan();
-    agent.note_effect(&mut state, &at(GUESS, &[]));
-    state.lineage.read("same", &[GUESS.to_string()], state.guessing);
-    let read = fare(GUESS, "same");
-    state.notes.add(read.clone());
-    let judge = Arc::new(guessed_page(&state.invented, Some(&state.lineage), false));
-    state.notes.discredit(["r1"], judge);
-    state.notes.add(read.clone());
-    assert_eq!(state.notes.unresolved(&plan), plan.requirements);
-
-    for (operation, landed) in [(Operation::Navigate, START), (Operation::Click, GUESS)] {
-        state.history.push(executed(Some(operation), None, true));
-        agent.note_effect(&mut state, &at(landed, &[]));
-    }
-    state.lineage.read("same", &[GUESS.to_string()], state.guessing);
-    state.notes.add(read);
-    assert!(state.notes.unresolved(&plan).is_empty());
-    assert_eq!(guessed(&plan, &state.notes, &state.invented, false, Some(&state.lineage)), set(&[]));
-}
-
-#[tokio::test]
-async fn test_leaving_a_guess_for_the_callers_page_by_any_navigation_makes_later_reads_the_runs_own() {
-    let set_url = "https://example.test/flights?tfs=set";
-    for left_by in [Operation::Navigate, Operation::Back] {
-        let agent = agent();
-        let mut state = run_state().await;
-        (state.invented, state.guessing) = (set(&[GUESS]), true);
-        agent.note_effect(&mut state, &at(GUESS, &[]));
-        for (operation, landed) in [(left_by, START), (Operation::Click, set_url)] {
-            state.history.push(executed(Some(operation), None, true));
-            agent.note_effect(&mut state, &at(landed, &[]));
-        }
-        state.lineage.read("set", &[set_url.to_string()], state.guessing);
-        let notes = Notes::new([fare(set_url, "set")]);
-        assert_eq!(guessed(&fare_plan(), &notes, &state.invented, false, Some(&state.lineage)), set(&[]), "{left_by}");
-    }
 }
 
 #[test]
@@ -642,32 +363,6 @@ fn test_a_secret_is_compared_by_the_length_the_page_reveals() {
 #[test]
 fn test_an_upload_is_judged_by_the_page_not_by_a_value() {
     assert_eq!(progress("a.pdf", None, false, Operation::Upload, &[]), None);
-}
-
-#[test]
-fn test_tallies_keep_guessed_sources_subject_to_verification() {
-    let source = Evidence {
-        quote: "A quote by Ada".into(),
-        url: "https://example.test/quotes?tag=ada".into(),
-        ..evidence("capture", 0, 4)
-    };
-    let quote = Fact::read(None, &source.quote, source.clone(), FactReader::Llm);
-    let mut notes = Notes::new([quote.clone()]);
-    notes.add_tally(Tally { requirement_id: "r".into(), key: "Ada".into(), records: vec![fact_id(&quote)] }).unwrap();
-    notes.complete_tallies("r");
-    let plan = Plan::new(vec![Requirement::new("r", "Count quotes", INFO)], true);
-    assert_eq!(guessed(&plan, &notes, &set(&[&source.url]), false, None), set(&["r"]));
-    assert!(grounding(&notes, &plan, &[]).contains(&source.url));
-}
-
-#[test]
-fn test_a_verifier_naming_a_requirement_by_another_spelling_names_that_requirement() {
-    let plan = Plan::new(
-        vec![Requirement::new("req-1", "a", INFO), Requirement::new("req-2", "b", RequirementKind::Action)],
-        true,
-    );
-    let named: Vec<String> = ["req_1", "2", "REQ-2", "req-9", "summary"].map(String::from).to_vec();
-    assert_eq!(plan_ids(&named, &plan), set(&["req-1", "req-2"]));
 }
 
 #[test]

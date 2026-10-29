@@ -124,12 +124,10 @@ summarises how concentrated the distribution is; it is not the chosen option's p
 ([Confidence](https://docs.typesafe.ai/confidence)). Noul has no separate confidence: its probability is
 the answer.
 
-Every threshold in `crates/fastbrowse-core/src/config.rs` (`recover_below` 0.55, `done_accept_from` 0.85, `claim_problem_above` 0.70)
+Every threshold in `crates/fastbrowse-core/src/config.rs` (`recover_below` 0.55, `claim_problem_above` 0.70)
 and in `crates/fastbrowse-agent/src/retrieval/` (the 0.90 read cut; a record on a later page of a filtered count or comparison matches from
 0.70 and is rejected at 0.20 or below) is **ours**. None is a Typesafe recommendation. Each is set per
-question on the evals, and the gates behind them (VERIFY, the claim check, the LLM fallback) mean a
-miscalibrated threshold tends to cost seconds rather than a wrong answer. Not always: a completion
-judged at or above `done_accept_from` skips VERIFY, so a confidently wrong DONE is not caught there.
+question on the evals.
 
 ## How the questions are written
 

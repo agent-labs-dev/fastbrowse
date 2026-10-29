@@ -652,7 +652,7 @@
  },
  {
   "model": "_RecordsResponse",
-  "schema": "{\"$defs\": {\"NumericComparison\": {\"additionalProperties\": false, \"properties\": {\"order\": {\"enum\": [\"lowest\", \"highest\"], \"title\": \"Order\", \"type\": \"string\"}, \"limit\": {\"minimum\": 1, \"title\": \"Limit\", \"type\": \"integer\"}, \"label\": {\"$ref\": \"#/$defs/QuotedField\"}, \"value\": {\"$ref\": \"#/$defs/QuotedField\"}}, \"required\": [\"order\", \"limit\", \"label\", \"value\"], \"title\": \"NumericComparison\", \"type\": \"object\"}, \"QuotedField\": {\"additionalProperties\": false, \"properties\": {\"prefix\": {\"title\": \"Prefix\", \"type\": \"string\"}, \"suffix\": {\"title\": \"Suffix\", \"type\": \"string\"}}, \"required\": [\"prefix\", \"suffix\"], \"title\": \"QuotedField\", \"type\": \"object\"}, \"_Cite\": {\"additionalProperties\": false, \"properties\": {\"first\": {\"description\": \"The first source block the claim reads, by label without brackets (main/:12 for a line shown as\\n[main/:12]); never an evidence id.\", \"title\": \"First\", \"type\": \"string\"}, \"last\": {\"description\": \"The last source block it reads: the same label for one block, a later one for a run of blocks.\", \"title\": \"Last\", \"type\": \"string\"}}, \"required\": [\"first\", \"last\"], \"title\": \"_Cite\", \"type\": \"object\"}, \"_RecordSet\": {\"additionalProperties\": false, \"properties\": {\"requirement_id\": {\"title\": \"Requirement Id\", \"type\": \"string\"}, \"comparison\": {\"anyOf\": [{\"$ref\": \"#/$defs/NumericComparison\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"For a lowest/highest/top-N ranking by one numeric field whose requested output is only record labels and values: the order, number of results, and literal delimiters around each record's label and displayed value (including its currency). Empty delimiter means the quote boundary. Use only when these fields occur exactly once in every matching record, and all remaining pages are needed. Apply the task's filters in records as usual. Null for counts, calculations, extra output fields, tie rules or values requiring unit conversion. Related requirements asking for the same winners' labels or values use the same comparison and records.\"}, \"through_end\": {\"default\": false, \"description\": \"True only when the task needs every remaining page of this list. False when the task bounds the pages (such as this page and the next), or the rest is behind an expander rather than a pager.\", \"title\": \"Through End\", \"type\": \"boolean\"}, \"tallies\": {\"default\": [], \"description\": \"For every count of matching records, including filtered counts, or ranking by count. Group matching records by their stated label, or use key=null for an ungrouped count. Use explicit record ranges when matches are not contiguous. Leave records empty.\", \"items\": {\"$ref\": \"#/$defs/_TallyGroup\"}, \"title\": \"Tallies\", \"type\": \"array\"}, \"records\": {\"default\": [], \"description\": \"For comparisons of record values, not counts: every matching record as source block ranges including the compared value and attributes that show it matches. Counts belong in tallies.\", \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Records\", \"type\": \"array\"}}, \"required\": [\"requirement_id\"], \"title\": \"_RecordSet\", \"type\": \"object\"}, \"_TallyField\": {\"additionalProperties\": false, \"properties\": {\"span\": {\"$ref\": \"#/$defs/_Cite\"}, \"prefix\": {\"description\": \"Exact literal record text before the grouped value, excluding source metadata.\", \"title\": \"Prefix\", \"type\": \"string\"}, \"suffix\": {\"description\": \"Exact literal record text after the grouped value, excluding source metadata.\", \"title\": \"Suffix\", \"type\": \"string\"}}, \"required\": [\"span\", \"prefix\", \"suffix\"], \"title\": \"_TallyField\", \"type\": \"object\"}, \"_TallyGroup\": {\"additionalProperties\": false, \"properties\": {\"key\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"The label stated in each record, such as its author; null for an ungrouped count.\", \"title\": \"Key\"}, \"records\": {\"default\": [], \"description\": \"The source block ranges of matching records only. Use explicit ranges when a filter excludes records between matches; a field range cannot filter them. Empty when none match this page.\", \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Records\", \"type\": \"array\"}, \"field\": {\"anyOf\": [{\"$ref\": \"#/$defs/_TallyField\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Instead of enumerating records: a range containing only complete record blocks, each counted once, grouped by the text between the exact prefix and suffix in each record. Use only when every record in the range matches the task. Set key=null and records=[] when using field.\"}}, \"required\": [\"key\"], \"title\": \"_TallyGroup\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"continues\": {\"items\": {\"$ref\": \"#/$defs/_RecordSet\"}, \"title\": \"Continues\", \"type\": \"array\"}, \"context\": {\"default\": [], \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Context\", \"type\": \"array\"}, \"requested_scope_complete\": {\"default\": [], \"description\": \"Requirement ids whose requested bounded page scope is complete, even if another pager remains. Do not use for physical list exhaustion.\", \"items\": {\"type\": \"string\"}, \"title\": \"Requested Scope Complete\", \"type\": \"array\"}, \"ended\": {\"default\": [], \"description\": \"Requirement ids whose requested list this capture shows reaching its end. Empty for a partial list, a loading page, an unrelated page, or a list continuing behind any control.\", \"items\": {\"type\": \"string\"}, \"title\": \"Ended\", \"type\": \"array\"}}, \"required\": [\"continues\"], \"title\": \"_RecordsResponse\", \"type\": \"object\"}",
+  "schema": "{\"$defs\": {\"NumericComparison\": {\"additionalProperties\": false, \"properties\": {\"order\": {\"enum\": [\"lowest\", \"highest\"], \"title\": \"Order\", \"type\": \"string\"}, \"limit\": {\"minimum\": 1, \"title\": \"Limit\", \"type\": \"integer\"}, \"label\": {\"$ref\": \"#/$defs/QuotedField\"}, \"value\": {\"$ref\": \"#/$defs/QuotedField\"}}, \"required\": [\"order\", \"limit\", \"label\", \"value\"], \"title\": \"NumericComparison\", \"type\": \"object\"}, \"QuotedField\": {\"additionalProperties\": false, \"properties\": {\"prefix\": {\"title\": \"Prefix\", \"type\": \"string\"}, \"suffix\": {\"title\": \"Suffix\", \"type\": \"string\"}}, \"required\": [\"prefix\", \"suffix\"], \"title\": \"QuotedField\", \"type\": \"object\"}, \"_Cite\": {\"additionalProperties\": false, \"properties\": {\"first\": {\"description\": \"The first source block the claim reads, by label without brackets (main/:12 for a line shown as\\n[main/:12]); never an evidence id.\", \"title\": \"First\", \"type\": \"string\"}, \"last\": {\"description\": \"The last source block it reads: the same label for one block, a later one for a run of blocks.\", \"title\": \"Last\", \"type\": \"string\"}}, \"required\": [\"first\", \"last\"], \"title\": \"_Cite\", \"type\": \"object\"}, \"_RecordSet\": {\"additionalProperties\": false, \"properties\": {\"requirement_id\": {\"title\": \"Requirement Id\", \"type\": \"string\"}, \"comparison\": {\"anyOf\": [{\"$ref\": \"#/$defs/NumericComparison\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"For a lowest/highest/top-N ranking by one numeric field whose requested output is only record labels and values: the order, number of results, and literal delimiters around each record's label and displayed value (including its currency). Empty delimiter means the quote boundary. Use only when these fields occur exactly once in every matching record, and all remaining pages are needed. Apply the task's filters in records as usual. Null for counts, calculations, extra output fields, tie rules or values requiring unit conversion. Related requirements asking for the same winners' labels or values use the same comparison and records.\"}, \"through_end\": {\"default\": false, \"description\": \"True only when the task needs every remaining page of this list. False when the task bounds the pages (such as this page and the next), or the rest is behind an expander rather than a pager.\", \"title\": \"Through End\", \"type\": \"boolean\"}, \"tallies\": {\"default\": [], \"description\": \"For every count of matching records, including filtered counts, or ranking by count. Group matching records by their stated label, or use key=null for an ungrouped count. Use explicit record ranges when matches are not contiguous. Leave records empty.\", \"items\": {\"$ref\": \"#/$defs/_TallyGroup\"}, \"title\": \"Tallies\", \"type\": \"array\"}, \"records\": {\"default\": [], \"description\": \"For comparisons of record values, not counts: every matching record as source block ranges including the compared value and attributes that show it matches. Counts belong in tallies.\", \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Records\", \"type\": \"array\"}}, \"required\": [\"requirement_id\"], \"title\": \"_RecordSet\", \"type\": \"object\"}, \"_TallyField\": {\"additionalProperties\": false, \"properties\": {\"span\": {\"$ref\": \"#/$defs/_Cite\"}, \"prefix\": {\"description\": \"Exact literal record text before the grouped value, excluding source metadata.\", \"title\": \"Prefix\", \"type\": \"string\"}, \"suffix\": {\"description\": \"Exact literal record text after the grouped value, excluding source metadata.\", \"title\": \"Suffix\", \"type\": \"string\"}}, \"required\": [\"span\", \"prefix\", \"suffix\"], \"title\": \"_TallyField\", \"type\": \"object\"}, \"_TallyGroup\": {\"additionalProperties\": false, \"properties\": {\"key\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"The label stated in each record, such as its author; null for an ungrouped count.\", \"title\": \"Key\"}, \"records\": {\"default\": [], \"description\": \"The source block ranges of matching records only. Use explicit ranges when a filter excludes records between matches; a field range cannot filter them. Empty when none match this page.\", \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Records\", \"type\": \"array\"}, \"field\": {\"anyOf\": [{\"$ref\": \"#/$defs/_TallyField\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Instead of enumerating records: a range containing only complete record blocks, each counted once, grouped by the text between the exact prefix and suffix in each record. Use only when every record in the range matches the task. Set key=null and records=[] when using field.\"}}, \"required\": [\"key\"], \"title\": \"_TallyGroup\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"continues\": {\"items\": {\"$ref\": \"#/$defs/_RecordSet\"}, \"title\": \"Continues\", \"type\": \"array\"}, \"context\": {\"default\": [], \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Context\", \"type\": \"array\"}, \"ended\": {\"default\": [], \"description\": \"Requirement ids whose requested list this capture shows reaching its end. Empty for a partial list, a loading page, an unrelated page, or a list continuing behind any control.\", \"items\": {\"type\": \"string\"}, \"title\": \"Ended\", \"type\": \"array\"}}, \"required\": [\"continues\"], \"title\": \"_RecordsResponse\", \"type\": \"object\"}",
   "input": "{\"continues\": [{\"requirement_id\": \"r1\", \"records\": [{\"first\": \"main/:1\", \"last\": \"main/:2\"}]}], \"ended\": [\"r1\"]}",
   "result": {
    "ok": {
@@ -671,19 +671,10 @@
      }
     ],
     "context": [],
-    "requested_scope_complete": [],
     "ended": [
      "r1"
     ]
    }
-  }
- },
- {
-  "model": "_RecordsResponse",
-  "schema": "{\"$defs\": {\"NumericComparison\": {\"additionalProperties\": false, \"properties\": {\"order\": {\"enum\": [\"lowest\", \"highest\"], \"title\": \"Order\", \"type\": \"string\"}, \"limit\": {\"minimum\": 1, \"title\": \"Limit\", \"type\": \"integer\"}, \"label\": {\"$ref\": \"#/$defs/QuotedField\"}, \"value\": {\"$ref\": \"#/$defs/QuotedField\"}}, \"required\": [\"order\", \"limit\", \"label\", \"value\"], \"title\": \"NumericComparison\", \"type\": \"object\"}, \"QuotedField\": {\"additionalProperties\": false, \"properties\": {\"prefix\": {\"title\": \"Prefix\", \"type\": \"string\"}, \"suffix\": {\"title\": \"Suffix\", \"type\": \"string\"}}, \"required\": [\"prefix\", \"suffix\"], \"title\": \"QuotedField\", \"type\": \"object\"}, \"_Cite\": {\"additionalProperties\": false, \"properties\": {\"first\": {\"description\": \"The first source block the claim reads, by label without brackets (main/:12 for a line shown as\\n[main/:12]); never an evidence id.\", \"title\": \"First\", \"type\": \"string\"}, \"last\": {\"description\": \"The last source block it reads: the same label for one block, a later one for a run of blocks.\", \"title\": \"Last\", \"type\": \"string\"}}, \"required\": [\"first\", \"last\"], \"title\": \"_Cite\", \"type\": \"object\"}, \"_RecordSet\": {\"additionalProperties\": false, \"properties\": {\"requirement_id\": {\"title\": \"Requirement Id\", \"type\": \"string\"}, \"comparison\": {\"anyOf\": [{\"$ref\": \"#/$defs/NumericComparison\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"For a lowest/highest/top-N ranking by one numeric field whose requested output is only record labels and values: the order, number of results, and literal delimiters around each record's label and displayed value (including its currency). Empty delimiter means the quote boundary. Use only when these fields occur exactly once in every matching record, and all remaining pages are needed. Apply the task's filters in records as usual. Null for counts, calculations, extra output fields, tie rules or values requiring unit conversion. Related requirements asking for the same winners' labels or values use the same comparison and records.\"}, \"through_end\": {\"default\": false, \"description\": \"True only when the task needs every remaining page of this list. False when the task bounds the pages (such as this page and the next), or the rest is behind an expander rather than a pager.\", \"title\": \"Through End\", \"type\": \"boolean\"}, \"tallies\": {\"default\": [], \"description\": \"For every count of matching records, including filtered counts, or ranking by count. Group matching records by their stated label, or use key=null for an ungrouped count. Use explicit record ranges when matches are not contiguous. Leave records empty.\", \"items\": {\"$ref\": \"#/$defs/_TallyGroup\"}, \"title\": \"Tallies\", \"type\": \"array\"}, \"records\": {\"default\": [], \"description\": \"For comparisons of record values, not counts: every matching record as source block ranges including the compared value and attributes that show it matches. Counts belong in tallies.\", \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Records\", \"type\": \"array\"}}, \"required\": [\"requirement_id\"], \"title\": \"_RecordSet\", \"type\": \"object\"}, \"_TallyField\": {\"additionalProperties\": false, \"properties\": {\"span\": {\"$ref\": \"#/$defs/_Cite\"}, \"prefix\": {\"description\": \"Exact literal record text before the grouped value, excluding source metadata.\", \"title\": \"Prefix\", \"type\": \"string\"}, \"suffix\": {\"description\": \"Exact literal record text after the grouped value, excluding source metadata.\", \"title\": \"Suffix\", \"type\": \"string\"}}, \"required\": [\"span\", \"prefix\", \"suffix\"], \"title\": \"_TallyField\", \"type\": \"object\"}, \"_TallyGroup\": {\"additionalProperties\": false, \"properties\": {\"key\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"The label stated in each record, such as its author; null for an ungrouped count.\", \"title\": \"Key\"}, \"records\": {\"default\": [], \"description\": \"The source block ranges of matching records only. Use explicit ranges when a filter excludes records between matches; a field range cannot filter them. Empty when none match this page.\", \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Records\", \"type\": \"array\"}, \"field\": {\"anyOf\": [{\"$ref\": \"#/$defs/_TallyField\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Instead of enumerating records: a range containing only complete record blocks, each counted once, grouped by the text between the exact prefix and suffix in each record. Use only when every record in the range matches the task. Set key=null and records=[] when using field.\"}}, \"required\": [\"key\"], \"title\": \"_TallyGroup\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"continues\": {\"items\": {\"$ref\": \"#/$defs/_RecordSet\"}, \"title\": \"Continues\", \"type\": \"array\"}, \"context\": {\"default\": [], \"items\": {\"$ref\": \"#/$defs/_Cite\"}, \"title\": \"Context\", \"type\": \"array\"}, \"requested_scope_complete\": {\"default\": [], \"description\": \"Requirement ids whose requested bounded page scope is complete, even if another pager remains. Do not use for physical list exhaustion.\", \"items\": {\"type\": \"string\"}, \"title\": \"Requested Scope Complete\", \"type\": \"array\"}, \"ended\": {\"default\": [], \"description\": \"Requirement ids whose requested list this capture shows reaching its end. Empty for a partial list, a loading page, an unrelated page, or a list continuing behind any control.\", \"items\": {\"type\": \"string\"}, \"title\": \"Ended\", \"type\": \"array\"}}, \"required\": [\"continues\"], \"title\": \"_RecordsResponse\", \"type\": \"object\"}",
-  "input": "{\"continues\": [{\"records\": [{\"first\": \"main/:1\", \"last\": \"main/:2\"}]}], \"requested_scope_complete\": \"r1\", \"context\": [1]}",
-  "result": {
-   "errors": "[{\"type\":\"missing\",\"loc\":[\"continues\",0,\"requirement_id\"],\"msg\":\"Field required\"},{\"type\":\"model_type\",\"loc\":[\"context\",0],\"msg\":\"Input should be an object\",\"ctx\":{\"class_name\":\"_Cite\"}},{\"type\":\"tuple_type\",\"loc\":[\"requested_scope_complete\"],\"msg\":\"Input should be a valid array\"}]"
   }
  },
  {
@@ -716,52 +707,6 @@
   "input": "{\"fields\": null}",
   "result": {
    "errors": "[{\"type\":\"tuple_type\",\"loc\":[\"fields\"],\"msg\":\"Input should be a valid array\"}]"
-  }
- },
- {
-  "model": "_ListOrder",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"confirmed\": {\"title\": \"Confirmed\", \"type\": \"boolean\"}}, \"required\": [\"confirmed\"], \"title\": \"_ListOrder\", \"type\": \"object\"}",
-  "input": "{\"confirmed\": true}",
-  "result": {
-   "ok": {
-    "confirmed": true
-   }
-  }
- },
- {
-  "model": "_ListOrder",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"confirmed\": {\"title\": \"Confirmed\", \"type\": \"boolean\"}}, \"required\": [\"confirmed\"], \"title\": \"_ListOrder\", \"type\": \"object\"}",
-  "input": "{\"confirmed\": \"false\"}",
-  "result": {
-   "ok": {
-    "confirmed": false
-   }
-  }
- },
- {
-  "model": "_ListOrder",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"confirmed\": {\"title\": \"Confirmed\", \"type\": \"boolean\"}}, \"required\": [\"confirmed\"], \"title\": \"_ListOrder\", \"type\": \"object\"}",
-  "input": "{\"confirmed\": \"nah\"}",
-  "result": {
-   "errors": "[{\"type\":\"bool_parsing\",\"loc\":[\"confirmed\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\"}]"
-  }
- },
- {
-  "model": "_ListOrder",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"confirmed\": {\"title\": \"Confirmed\", \"type\": \"boolean\"}}, \"required\": [\"confirmed\"], \"title\": \"_ListOrder\", \"type\": \"object\"}",
-  "input": "{\"confirmed\": 0}",
-  "result": {
-   "ok": {
-    "confirmed": false
-   }
-  }
- },
- {
-  "model": "_ListOrder",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"confirmed\": {\"title\": \"Confirmed\", \"type\": \"boolean\"}}, \"required\": [\"confirmed\"], \"title\": \"_ListOrder\", \"type\": \"object\"}",
-  "input": "{}",
-  "result": {
-   "errors": "[{\"type\":\"missing\",\"loc\":[\"confirmed\"],\"msg\":\"Field required\"}]"
   }
  },
  {
@@ -831,48 +776,6 @@
   "input": "{\"output_0\": [], \"output_1\": [], \"output_2\": []}",
   "result": {
    "errors": "[{\"type\":\"extra_forbidden\",\"loc\":[\"output_1\"],\"msg\":\"Extra inputs are not permitted\"}]"
-  }
- },
- {
-  "model": "LLMVerdict",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"missing\": {\"description\": \"Requirement ids the page or notes do not show as satisfied.\", \"items\": {\"type\": \"string\"}, \"title\": \"Missing\", \"type\": \"array\"}, \"ungrounded\": {\"default\": [], \"description\": \"Requirement ids whose facts were read from a page that is not the one the task described: a summary, preview or default listing reached by a guessed address, or a page that does not show the task's own query, filters, dates, sort or category in force. Name one here even when it has evidence, because the evidence is from the wrong page.\", \"items\": {\"type\": \"string\"}, \"title\": \"Ungrounded\", \"type\": \"array\"}, \"complete\": {\"description\": \"Whether the evidence shows that every task requirement is satisfied.\", \"title\": \"Complete\", \"type\": \"boolean\"}}, \"required\": [\"missing\", \"complete\"], \"title\": \"LLMVerdict\", \"type\": \"object\"}",
-  "input": "{\"missing\": [], \"complete\": true}",
-  "result": {
-   "ok": {
-    "missing": [],
-    "ungrounded": [],
-    "complete": true
-   }
-  }
- },
- {
-  "model": "LLMVerdict",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"missing\": {\"description\": \"Requirement ids the page or notes do not show as satisfied.\", \"items\": {\"type\": \"string\"}, \"title\": \"Missing\", \"type\": \"array\"}, \"ungrounded\": {\"default\": [], \"description\": \"Requirement ids whose facts were read from a page that is not the one the task described: a summary, preview or default listing reached by a guessed address, or a page that does not show the task's own query, filters, dates, sort or category in force. Name one here even when it has evidence, because the evidence is from the wrong page.\", \"items\": {\"type\": \"string\"}, \"title\": \"Ungrounded\", \"type\": \"array\"}, \"complete\": {\"description\": \"Whether the evidence shows that every task requirement is satisfied.\", \"title\": \"Complete\", \"type\": \"boolean\"}}, \"required\": [\"missing\", \"complete\"], \"title\": \"LLMVerdict\", \"type\": \"object\"}",
-  "input": "{\"missing\": [], \"ungrounded\": [\"r1\"], \"complete\": true}",
-  "result": {
-   "ok": {
-    "missing": [],
-    "ungrounded": [
-     "r1"
-    ],
-    "complete": true
-   }
-  }
- },
- {
-  "model": "LLMVerdict",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"missing\": {\"description\": \"Requirement ids the page or notes do not show as satisfied.\", \"items\": {\"type\": \"string\"}, \"title\": \"Missing\", \"type\": \"array\"}, \"ungrounded\": {\"default\": [], \"description\": \"Requirement ids whose facts were read from a page that is not the one the task described: a summary, preview or default listing reached by a guessed address, or a page that does not show the task's own query, filters, dates, sort or category in force. Name one here even when it has evidence, because the evidence is from the wrong page.\", \"items\": {\"type\": \"string\"}, \"title\": \"Ungrounded\", \"type\": \"array\"}, \"complete\": {\"description\": \"Whether the evidence shows that every task requirement is satisfied.\", \"title\": \"Complete\", \"type\": \"boolean\"}}, \"required\": [\"missing\", \"complete\"], \"title\": \"LLMVerdict\", \"type\": \"object\"}",
-  "input": "{\"missing\": \"r1\", \"complete\": \"unsure\"}",
-  "result": {
-   "errors": "[{\"type\":\"tuple_type\",\"loc\":[\"missing\"],\"msg\":\"Input should be a valid array\"},{\"type\":\"bool_parsing\",\"loc\":[\"complete\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\"}]"
-  }
- },
- {
-  "model": "LLMVerdict",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"missing\": {\"description\": \"Requirement ids the page or notes do not show as satisfied.\", \"items\": {\"type\": \"string\"}, \"title\": \"Missing\", \"type\": \"array\"}, \"ungrounded\": {\"default\": [], \"description\": \"Requirement ids whose facts were read from a page that is not the one the task described: a summary, preview or default listing reached by a guessed address, or a page that does not show the task's own query, filters, dates, sort or category in force. Name one here even when it has evidence, because the evidence is from the wrong page.\", \"items\": {\"type\": \"string\"}, \"title\": \"Ungrounded\", \"type\": \"array\"}, \"complete\": {\"description\": \"Whether the evidence shows that every task requirement is satisfied.\", \"title\": \"Complete\", \"type\": \"boolean\"}}, \"required\": [\"missing\", \"complete\"], \"title\": \"LLMVerdict\", \"type\": \"object\"}",
-  "input": "{\"complete\": true}",
-  "result": {
-   "errors": "[{\"type\":\"missing\",\"loc\":[\"missing\"],\"msg\":\"Field required\"}]"
   }
  }
 ]

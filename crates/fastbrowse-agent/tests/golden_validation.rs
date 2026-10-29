@@ -6,7 +6,6 @@ use common::*;
 use fastbrowse_agent::planner::Plan;
 use fastbrowse_agent::retrieval;
 use fastbrowse_agent::shortcut::{Shortcut, StartPage};
-use fastbrowse_agent::verification;
 use fastbrowse_core::llm::{ResponseSchema, Typed};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::schema::Schema;
@@ -40,7 +39,6 @@ fn responses_validate_as_pydantic_validates_them() {
             "Plan" => check::<Plan>(&case),
             "Shortcut" => check::<Shortcut>(&case),
             "StartPage" => check::<StartPage>(&case),
-            "LLMVerdict" => check::<verification::LLMVerdict>(&case),
             name if retrieval::response_schema(name).is_some() => {
                 check_schema(&retrieval::response_schema(name).unwrap(), &case)
             }

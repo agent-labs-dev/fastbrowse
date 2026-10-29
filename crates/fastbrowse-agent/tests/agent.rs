@@ -13,8 +13,8 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostComponent, CostLine, Decider, Event, EventHandler, LLMPurpose, Limits, Operation,
-    RunResult, SecretValue, StepOutcome, UntilCheck,
+    Artifact, Authorization, CostComponent, CostLine, Event, EventHandler, LLMPurpose, Limits, Operation, RunResult,
+    SecretValue, StepOutcome, UntilCheck,
 };
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
 use fastbrowse_core::py::dump::Dump;
@@ -378,17 +378,4 @@ async fn whole_loops_match_python() {
     for case in cases() {
         replay(case).await;
     }
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_page_turned_by_code_is_credited_to_code() {
-    let name = "a list that goes on is paged by code, read to its end and left unverified by its audit";
-    let case = cases().into_iter().find(|case| case["name"] == name).expect("paging case");
-    let result = replay(case).await;
-    let turn = result.steps.iter().find(|step| step.operation == Operation::Click).expect("a page turn");
-    assert_eq!(turn.target.as_deref(), Some("Next"));
-    assert_eq!(turn.decided_by, Decider::Code);
-    assert_eq!(turn.confidence, None);
-    // The read of the page it opened is taken by the same rule.
-    assert_eq!(result.steps[turn.index as usize + 1].decided_by, Decider::Code);
 }

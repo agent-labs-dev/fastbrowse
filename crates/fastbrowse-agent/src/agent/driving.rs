@@ -17,8 +17,7 @@ use serde_json::Map;
 use super::helpers::{
     STALE_LINK_FAILURES, access_inspection, answer_evidence, answered, caller_link, code_decision, decision_label,
     describe, dialog_question, drew_something, follow_recovery, join, link_key, lookup, navigation_question, netloc_of,
-    not_acting, paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, site_action, stale_link_key,
-    unread,
+    not_acting, paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, stale_link_key, unread,
 };
 use super::reading::covered;
 use super::recovery::{READ, withheld};
@@ -774,7 +773,6 @@ impl Agent {
                 typed = Some(if action.secret { "<secret>".to_string() } else { self.mask(text) });
             }
             changed = result.page_changed;
-            state.moved_by_action = result.outcome == StepOutcome::Executed && result.moved;
             if result.outcome == StepOutcome::Executed {
                 let typing = matches!(decision.operation, Operation::Fill | Operation::Select) && !changed;
                 let here = seen(observation);
@@ -1021,47 +1019,6 @@ impl Agent {
         }
     }
 
-    /// Set whether the run is on the guess from the history entry the page is.
-    ///
-    /// Only an address the run built is a guess, and a page leaves it only by a move the run can show it made. See the
-    /// table on `Agent._note_lineage` in `agent.py`.
-    pub(super) fn note_lineage(state: &mut RunState, observation: &Observation) {
-        let last = state.history.last();
-        let executed = last.is_some_and(|entry| entry.outcome == StepOutcome::Executed);
-        let address = fastbrowse_core::addresses::search_address(&observation.url);
-        let built: HashSet<String> =
-            state.invented.iter().map(|url| fastbrowse_core::addresses::search_address(url)).collect();
-        // Only a move the action itself made is the site's answer. The same address again, reached through the site's
-        // controls, is the guess resubmitted, not a new search.
-        let caused = std::mem::take(&mut state.moved_by_action);
-        let last_operation = last.and_then(|entry| entry.operation);
-        let site = executed && last_operation.is_some_and(site_action) && caused && !built.contains(&address);
-        let entry = observation.history_entry.clone();
-        match entry.as_ref().and_then(|entry| state.lineage.entries.get(entry).copied()) {
-            Some(lineage) => {
-                let moved = state.lineage.entry_addresses.get(entry.as_ref().expect("matched")) != Some(&address);
-                state.guessing = if site && moved { false } else { lineage };
-            }
-            None => {
-                if executed && last_operation == Some(Operation::Navigate) {
-                    // A redirect is the same navigation: what the run asked for decides, as well as where it landed.
-                    let asked = last.and_then(|entry| entry.target.clone()).unwrap_or_default();
-                    state.guessing =
-                        built.contains(&address) || built.contains(&fastbrowse_core::addresses::search_address(&asked));
-                } else if executed && last_operation == Some(Operation::Back) {
-                    state.guessing = built.contains(&address);
-                } else if site {
-                    state.guessing = false;
-                }
-            }
-        }
-        if let Some(entry) = entry {
-            state.lineage.entries.insert(entry.clone(), state.guessing);
-            state.lineage.entry_addresses.insert(entry, address.clone());
-        }
-        state.lineage.set_address(address, state.guessing);
-    }
-
     /// Record on the last action what it did, which the next choice and recovery both read.
     pub(super) fn note_effect(&self, state: &mut RunState, observation: &Observation) {
         if let Some(candidate) = state.transaction_candidates.last_mut()
@@ -1070,7 +1027,6 @@ impl Agent {
             candidate.landed_url = Some(observation.url.clone());
             candidate.landed_status = observation.response_status;
         }
-        Agent::note_lineage(state, observation);
         // An error document has the requested address too, but never proves the destination loaded.
         if observation.response_status.is_some_and(|status| status >= 400) {
             state.visited.shift_remove(&observation.url);

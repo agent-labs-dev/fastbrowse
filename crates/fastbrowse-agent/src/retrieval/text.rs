@@ -370,18 +370,6 @@ pub(crate) fn alnum_runs(value: &str) -> Vec<String> {
     runs
 }
 
-/// `re.findall(r"\b\d[\d,]*\b", text)`.
-pub(crate) fn numbers(value: &str) -> Vec<String> {
-    let chars: Vec<char> = value.chars().collect();
-    let pattern = Pat::Seq(vec![
-        Pat::Boundary,
-        Pat::class(is_digit),
-        Pat::star(Pat::class(|c| is_digit(c) || c == ',')),
-        Pat::Boundary,
-    ]);
-    pattern.find_iter(&chars).into_iter().map(|(start, end)| chars[start..end].iter().collect()).collect()
-}
-
 /// `re.fullmatch(r"[^\n()]*[^\s()]\s*\(\s*(\d+)\s*\)\s*", title)`: a heading that states its count, and the count.
 pub(crate) fn counted_heading(title: &str) -> Option<String> {
     let chars: Vec<char> = title.chars().collect();
