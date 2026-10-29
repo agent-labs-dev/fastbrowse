@@ -16,7 +16,9 @@
 //! implementation makes no discovery calls.
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, Question};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, Question,
+};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -116,5 +118,9 @@ impl DecisionClient for VercelGatewayJevClient {
             MODEL,
             PRICE,
         ))
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::for_model(MODEL)
     }
 }

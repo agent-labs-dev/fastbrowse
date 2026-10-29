@@ -806,8 +806,7 @@ async fn fetched(
     );
     let head_stop = head.stopper();
     let ledger = head.ledger.clone();
-    let viewport_chars = usize::try_from(config.observation.viewport_text_chars).unwrap_or_default();
-    let fetched = Arc::new(fetch::FetchedPage::new(http, origins, viewport_chars, options.check_access.clone()));
+    let fetched = Arc::new(fetch::FetchedPage::new(http, origins, options.check_access.clone()));
     let page: Arc<dyn Page> = fetched.clone();
     let agent = Agent::new(page, jev, llm)
         .with_config(config.clone())

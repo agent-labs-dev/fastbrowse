@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use fastbrowse_core::config::ObservationLimits;
 use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::effects::{SETTING_ROLES, state_key};
 use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
@@ -25,7 +24,6 @@ use crate::retrieval::{names_subject, subject_words};
 use crate::verification::LLMVerdict;
 
 pub(crate) const STALE_LINK_FAILURES: i64 = 2;
-pub(crate) const RECOVERY_CHARS: usize = 240;
 
 /// Operations that do not act on the page: a read changes nothing, and DONE is judged again by the finish.
 pub(crate) fn not_acting(operation: Operation) -> bool {
@@ -327,17 +325,6 @@ pub(crate) fn verified(
     doubted.is_empty() && (verdict.complete || !named.is_empty())
 }
 
-/// The recent actions in full, after the earlier ones without the effects that make an entry long.
-pub(crate) fn history(entries: &[HistoryEntry], limits: &ObservationLimits) -> Vec<HistoryEntry> {
-    let split = entries.len() as i64 - limits.history_entries;
-    let from = (split - limits.earlier_history_entries).max(0) as usize;
-    let to = split.max(0) as usize;
-    let mut shown: Vec<HistoryEntry> =
-        entries[from.min(to)..to].iter().map(|entry| HistoryEntry { effect: None, ..entry.clone() }).collect();
-    shown.extend(entries[to..].iter().cloned());
-    shown
-}
-
 /// The kind of value the field declares it takes, when the text cannot be one, else None.
 pub(crate) fn misfit(target: &Control, text: &str) -> Option<&'static str> {
     let autocomplete = target.autocomplete.as_deref().unwrap_or_default().to_lowercase();
@@ -402,25 +389,8 @@ pub(crate) fn redrawn_read(state: &mut RunState, observation: &Observation) -> b
         && !state.history[state.recovered_at.min(state.history.len())..].iter().any(|entry| entry.read_progress)
 }
 
-/// The recent actions, after every value typed or set before them: a correction is judged against the first value,
-/// and a form's checkbox against its tick, both of which a long wizard can push out of the recent window.
-pub(crate) fn record(entries: &[HistoryEntry], limits: &ObservationLimits) -> Vec<HistoryEntry> {
-    let recent = history(entries, limits);
-    let mut kept: Vec<HistoryEntry> = entries[..entries.len() - recent.len()]
-        .iter()
-        .filter(|e| e.text.is_some() || e.setting == Some(true))
-        .map(|e| HistoryEntry { effect: None, ..e.clone() })
-        .collect();
-    kept.extend(recent);
-    kept
-}
-
-/// Where the run began, then the addresses it has been on since, as many as the actions shown with them.
-pub(crate) fn visited(
-    addresses: &IndexMap<String, ()>,
-    limits: &ObservationLimits,
-    redact: impl Fn(&str) -> String,
-) -> Vec<String> {
+/// Where the run began, then every address it has been on since, each once.
+pub(crate) fn visited(addresses: &IndexMap<String, ()>, redact: impl Fn(&str) -> String) -> Vec<String> {
     let mut urls: Vec<String> = Vec::new();
     for url in addresses.keys() {
         let shown = redact(url);
@@ -428,13 +398,7 @@ pub(crate) fn visited(
             urls.push(shown);
         }
     }
-    let shown = (limits.history_entries + limits.earlier_history_entries).max(0) as usize;
-    let mut out: Vec<String> = urls.iter().take(1).cloned().collect();
-    let from = 1.max(urls.len().saturating_sub(shown));
-    if from < urls.len() {
-        out.extend(urls[from..].iter().cloned());
-    }
-    out
+    urls
 }
 
 pub(crate) fn field_corrections(state: &RunState) -> String {
@@ -457,8 +421,7 @@ pub(crate) fn field_corrections(state: &RunState) -> String {
 }
 
 pub(crate) fn recovery_text(value: &str) -> String {
-    let squashed: Vec<&str> = text::split(value).collect();
-    text::prefix(&squashed.join(" "), RECOVERY_CHARS).to_string()
+    text::split(value).collect::<Vec<&str>>().join(" ")
 }
 
 /// One bounded account for both models, without presenting a proposed subgoal as an executed action.
@@ -885,7 +848,7 @@ fn words(value: &str) -> HashSet<String> {
     found
 }
 
-pub(crate) fn recovery_routes(state: &RunState, max_chars: i64) -> String {
+pub(crate) fn recovery_routes(state: &RunState) -> String {
     if state.open_answer_outputs.is_empty() {
         return "[]".into();
     }
@@ -902,21 +865,17 @@ pub(crate) fn recovery_routes(state: &RunState, max_chars: i64) -> String {
     };
     // A stable sort, as Python's `sorted` is.
     links.sort_by_key(|link| score(link));
-    let mut offered = Vec::new();
-    let mut used = 2;
-    for link in links {
-        let mut entry = match link.dump() {
-            Value::Object(map) => map,
-            _ => serde_json::Map::new(),
-        };
-        entry.insert("read".into(), read.contains(&link.url).into());
-        let entry = Value::Object(entry);
-        let size = text::len(&dumps(&entry)) as i64 + 2;
-        if used + size <= max_chars {
-            offered.push(entry);
-            used += size;
-        }
-    }
+    let offered: Vec<Value> = links
+        .into_iter()
+        .map(|link| {
+            let mut entry = match link.dump() {
+                Value::Object(map) => map,
+                _ => serde_json::Map::new(),
+            };
+            entry.insert("read".into(), read.contains(&link.url).into());
+            Value::Object(entry)
+        })
+        .collect();
     dumps(&Value::Array(offered))
 }
 

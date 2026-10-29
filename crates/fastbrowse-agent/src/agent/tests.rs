@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
-use fastbrowse_core::config::ObservationLimits;
 use fastbrowse_core::effects::step_key;
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
@@ -28,8 +27,8 @@ use serde_json::json;
 use super::Agent;
 use super::driving::edit_progress;
 use super::helpers::{
-    access_inspection, answer_evidence, answered, code_decision, follow_recovery, guessed, guessed_page, history,
-    next_page_control, next_value, plan_ids, record, try_unsure, unread, unread_output_section, verified, visited,
+    access_inspection, answer_evidence, answered, code_decision, follow_recovery, guessed, guessed_page,
+    next_page_control, next_value, plan_ids, try_unsure, unread, unread_output_section, verified, visited,
     without_missing,
 };
 use super::reading::covered;
@@ -223,30 +222,6 @@ fn did(state: &mut RunState, operation: Option<Operation>, target: Option<&str>,
     state.moved_by_action = moved;
 }
 
-#[test]
-fn test_a_value_typed_before_the_recent_window_stays_in_the_record() {
-    let first = typed("Name", "Ada");
-    let click = executed(Some(Operation::Click), Some("Next"), true);
-    let limits = ObservationLimits { history_entries: 2, earlier_history_entries: 1, ..ObservationLimits::default() };
-    let mut entries = vec![first];
-    entries.extend(std::iter::repeat_n(click, 5));
-    let kept = record(&entries, &limits);
-    assert_eq!(kept[0].text.as_deref(), Some("Ada"));
-    assert_eq!(kept.len(), 4);
-}
-
-#[test]
-fn test_a_box_ticked_before_the_recent_window_stays_in_the_record() {
-    let tick = HistoryEntry { setting: Some(true), ..executed(Some(Operation::Click), Some("Newsletter"), true) };
-    let click = executed(Some(Operation::Click), Some("Next"), true);
-    let limits = ObservationLimits { history_entries: 2, earlier_history_entries: 1, ..ObservationLimits::default() };
-    let mut entries = vec![tick];
-    entries.extend(std::iter::repeat_n(click, 5));
-    let kept = record(&entries, &limits);
-    assert_eq!(kept[0].target.as_deref(), Some("Newsletter"));
-    assert_eq!(kept.len(), 4);
-}
-
 #[tokio::test]
 async fn test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_the_rest_of_the_run() {
     let plan = Plan::new(Vec::new(), false);
@@ -337,29 +312,6 @@ async fn test_a_named_action_is_not_taken_over_a_confident_choice_or_on_a_contro
     assert!(follow_recovery(&mut state, &observation(&[search]), &decision, false).is_none());
     state.directed = Some((Operation::Click, Some("search".into())));
     assert!(follow_recovery(&mut state, &observation(&[]), &decision, true).is_none());
-}
-
-#[test]
-fn test_earlier_actions_stay_in_view_without_their_effects() {
-    let entries: Vec<HistoryEntry> = (0..10)
-        .map(|i| HistoryEntry {
-            effect: Some("e".into()),
-            ..executed(Some(Operation::Fill), Some(&format!("field {i}")), true)
-        })
-        .collect();
-    let limits = |recent, earlier| ObservationLimits {
-        history_entries: recent,
-        earlier_history_entries: earlier,
-        ..ObservationLimits::default()
-    };
-    let shown = history(&entries, &limits(3, 4));
-    let targets: Vec<String> = shown.iter().map(|entry| entry.target.clone().unwrap()).collect();
-    assert_eq!(targets, (3..10).map(|i| format!("field {i}")).collect::<Vec<_>>());
-    let effects: Vec<Option<&str>> = shown.iter().map(|entry| entry.effect.as_deref()).collect();
-    assert_eq!(effects, [None, None, None, None, Some("e"), Some("e"), Some("e")]);
-    let defaults = ObservationLimits { history_entries: 3, ..ObservationLimits::default() };
-    assert_eq!(history(&entries[..2], &defaults), entries[..2]);
-    assert!(history(&entries, &limits(0, 0)).is_empty());
 }
 
 #[test]
@@ -667,7 +619,7 @@ async fn test_leaving_a_guess_for_the_callers_page_by_any_navigation_makes_later
 }
 
 #[test]
-fn test_visited_addresses_are_redacted_when_shown_and_keep_where_the_run_began() {
+fn test_every_visited_address_is_shown_redacted() {
     let mut redactor = Redactor::new();
     let mut addresses: IndexMap<String, ()> = IndexMap::new();
     addresses.insert("https://a.test/?user=ada".into(), ());
@@ -675,9 +627,9 @@ fn test_visited_addresses_are_redacted_when_shown_and_keep_where_the_run_began()
         addresses.insert(format!("https://a.test/{i}"), ());
     }
     redactor.register("username", "ada", None);
-    let limits = ObservationLimits { history_entries: 1, earlier_history_entries: 1, ..ObservationLimits::default() };
-    let shown = visited(&addresses, &limits, |url| redactor.redact(url));
-    assert_eq!(shown, ["https://a.test/?user=[secret:username]", "https://a.test/3", "https://a.test/4"]);
+    let shown = visited(&addresses, |url| redactor.redact(url));
+    assert_eq!(shown[0], "https://a.test/?user=[secret:username]");
+    assert_eq!(shown[1..], (0..5).map(|i| format!("https://a.test/{i}")).collect::<Vec<_>>());
 }
 
 #[test]

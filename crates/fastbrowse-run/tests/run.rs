@@ -19,6 +19,10 @@ use tokio::net::TcpListener;
 struct Silent;
 
 impl DecisionClient for Silent {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         _: &'a Value,

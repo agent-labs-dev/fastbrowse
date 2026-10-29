@@ -2581,13 +2581,11 @@
     },
     {
      "op": "render_for_navigation",
-     "max_chars": 1000,
      "quotes": false,
      "result": "\"Another span\" requirements=- source=1 url=\"https://example.test\"\n\"Another capture \u00e9\u6771\" requirements=- source=1\n\"First fact\\nSame span, another requirement\" requirements=r1,r2 source=1"
     },
     {
      "op": "render_for_navigation",
-     "max_chars": 1000,
      "quotes": true,
      "result": "\"Another span\" requirements=- source=1 url=\"https://example.test\" quote=\"fact\"\n\"Another capture \u00e9\u6771\" requirements=- source=1 quote=\"fact\"\n\"First fact\\nSame span, another requirement\" requirements=r1,r2 source=1 quote=\"fact\""
     },
@@ -2621,13 +2619,11 @@
     },
     {
      "op": "render_for_navigation",
-     "max_chars": 400,
      "quotes": false,
      "result": "\"Another span\" requirements=- source=1 url=\"https://example.test\"\n\"Another capture \u00e9\u6771\" requirements=- source=1\n\"First fact\\nSame span, another requirement\" requirements=r1,r2 source=1"
     },
     {
      "op": "render_for_navigation",
-     "max_chars": 400,
      "quotes": true,
      "result": "\"Another span\" requirements=- source=1 url=\"https://example.test\" quote=\"fact\"\n\"Another capture \u00e9\u6771\" requirements=- source=1 quote=\"fact\"\n\"First fact\\nSame span, another requirement\" requirements=r1,r2 source=1 quote=\"fact\""
     },
@@ -2654,18 +2650,6 @@
        "capture:0:4:f1e2c7da767e6e0f"
       ]
      }
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 200,
-     "quotes": false,
-     "result": "\"Another span\" requirements=- source=1 url=\"https://example.test\"\n\"Another capture \u00e9\u6771\" requirements=- source=1\n[1 facts omitted]"
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 200,
-     "quotes": true,
-     "result": "\"Another span\" requirements=- source=1 url=\"https://example.test\" quote=\"fact\"\n\"Another capture \u00e9\u6771\" requirements=- source=1 quote=\"fact\"\n[1 facts omitted]"
     },
     {
      "op": "render_with_ids",
@@ -2687,18 +2671,6 @@
      }
     },
     {
-     "op": "render_for_navigation",
-     "max_chars": 20,
-     "quotes": false,
-     "result": "[3 facts omitted]"
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 20,
-     "quotes": true,
-     "result": "[3 facts omitted]"
-    },
-    {
      "op": "render_with_ids",
      "max_chars": 1,
      "options": {},
@@ -2717,22 +2689,6 @@
      }
     },
     {
-     "op": "render_for_navigation",
-     "max_chars": 1,
-     "quotes": false,
-     "result": {
-      "error": "ValueError"
-     }
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 1,
-     "quotes": true,
-     "result": {
-      "error": "ValueError"
-     }
-    },
-    {
      "op": "render_with_ids",
      "max_chars": 0,
      "options": {},
@@ -2748,30 +2704,6 @@
      },
      "result": {
       "error": "NotesTooLarge"
-     }
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 0,
-     "quotes": false,
-     "result": {
-      "error": "ValueError"
-     }
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 0,
-     "quotes": true,
-     "result": {
-      "error": "ValueError"
-     }
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": -1,
-     "quotes": false,
-     "result": {
-      "error": "ValueError"
      }
     }
    ]
@@ -12162,12 +12094,6 @@
      ]
     },
     {
-     "op": "render_for_navigation",
-     "max_chars": 700,
-     "quotes": false,
-     "result": "\"Ports: two USB-C\" requirements=- source=1 url_prefix=\"https://shop.test/product?tracking=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n\"Power: 65W\" requirements=- source=1\n\"Price: GBP20\" requirements=- source=1\n\"Title: Charger A\" requirements=- source=1"
-    },
-    {
      "op": "render_with_ids",
      "max_chars": 2100,
      "options": {
@@ -12184,12 +12110,6 @@
      }
     },
     {
-     "op": "render_for_navigation",
-     "max_chars": 400,
-     "quotes": false,
-     "result": "\"Ports: two USB-C\" requirements=- source=1 url_prefix=\"https://shop.test/product?tracking=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n\"Power: 65W\" requirements=- source=1\n[2 facts omitted]"
-    },
-    {
      "op": "render_with_ids",
      "max_chars": 1200,
      "options": {
@@ -12204,12 +12124,6 @@
        "capture:3:4:19e7177fdeeb8084"
       ]
      }
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 200,
-     "quotes": false,
-     "result": "[4 facts omitted]"
     },
     {
      "op": "render_with_ids",
@@ -12267,18 +12181,6 @@
        "reader": "llm"
       }
      ]
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 500,
-     "quotes": false,
-     "result": "\"The first charger has been checked.\" requirements=-\n[1 facts omitted]"
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 900,
-     "quotes": true,
-     "result": "\"catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue catalogue \" requirements=- source=1 url=\"https://example.test\"\n[1 facts omitted]"
     }
    ]
   },
@@ -12322,18 +12224,6 @@
        "reader": "llm"
       }
      ]
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 500,
-     "quotes": false,
-     "result": "\"The first charger has been checked.\" requirements=-\n[1 facts omitted]"
-    },
-    {
-     "op": "render_for_navigation",
-     "max_chars": 900,
-     "quotes": true,
-     "result": "\"The first charger has been checked.\" requirements=-\n[1 facts omitted]"
     }
    ]
   },

@@ -310,7 +310,7 @@
    "masked": "see https://practice.expandtesting.com. then \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 \u6771\u4eac \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
   }
  ],
- "effect": "went to https://example.test/next; HTTP 404: destination did not load successfully; changed Where from? value: Lond -> London; Where from? expanded: True -> False; Direct only checked: False -> True; showed 1 control: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026; removed 1 control: Next \u203a",
+ "effect": "went to https://example.test/next; HTTP 404: destination did not load successfully; changed Where from? value: Lond -> London; Where from? expanded: True -> False; Direct only checked: False -> True; showed 1 control: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; removed 1 control: Next \u203a",
  "task_urls": [
   {
    "task": "Visit https://alpha.example.test/project, then https://beta.example.test/p?tab=1#top.",

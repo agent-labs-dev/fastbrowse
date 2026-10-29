@@ -188,7 +188,7 @@ mod tests {
 
     fn one_per_batch() -> TokenBudget {
         // Room for one question per request, so every question is its own batch.
-        TokenBudget { state_plus_largest_question: 40, state_plus_all_questions: 40, ..TokenBudget::default() }
+        TokenBudget { state_plus_largest_question: 80, state_plus_all_questions: 80, ..TokenBudget::default() }
     }
 
     fn questions(names: &[(&str, &str)]) -> IndexMap<String, Question> {
@@ -306,6 +306,10 @@ mod tests {
     struct Failing;
 
     impl DecisionClient for Failing {
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
+        }
+
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,

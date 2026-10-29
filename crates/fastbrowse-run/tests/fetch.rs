@@ -169,7 +169,7 @@ async fn test_a_redirect_inside_the_grant_is_followed() {
 
 #[tokio::test]
 async fn test_a_fetched_page_reads_but_cannot_act() {
-    let page = FetchedPage::new(html(PAGE), None, 6000, None);
+    let page = FetchedPage::new(html(PAGE), None, None);
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
     assert_eq!(observation.url, "https://shop.example.com/orders");
@@ -188,7 +188,7 @@ async fn test_a_fetched_page_reads_but_cannot_act() {
 
 #[tokio::test]
 async fn test_a_page_that_cannot_be_fetched_needs_the_browser_unless_it_was_a_guess() {
-    let page = FetchedPage::new(client("gone", 404, "text/html"), None, 6000, None);
+    let page = FetchedPage::new(client("gone", 404, "text/html"), None, None);
     let error = page.navigate("https://shop.example.com/missing", None).await.unwrap_err();
     assert!(error.needs_browser(), "{error}");
     // A guessed address falls back to the start page, as a browser failure does.
@@ -306,7 +306,7 @@ async fn test_access_withdrawn_after_the_navigation_stops_the_read() {
         let open = gate.load(Ordering::SeqCst);
         Box::pin(async move { if open { Ok(()) } else { Err("withdrawn".into()) } })
     });
-    let page = FetchedPage::new(html(PAGE), None, 6000, Some(check));
+    let page = FetchedPage::new(html(PAGE), None, Some(check));
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
     page.observe().await.expect("observe");
     allowed.store(false, Ordering::SeqCst);

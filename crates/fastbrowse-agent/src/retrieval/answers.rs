@@ -512,11 +512,10 @@ pub async fn compose(
     Ok(Generation { data: answer, cost: result.cost })
 }
 
-const PARTIAL_NOTICE: &str =
-    "Partial evidence only. Remaining coverage and any facts that do not fit are omitted; totals may be incomplete.";
+const PARTIAL_NOTICE: &str = "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.";
 
-/// `partial_answer`: what a stopped run collected, within `max_chars`, without another model call.
-pub fn partial_answer(notes: &Notes, max_chars: i64) -> ComposedAnswer {
+/// `partial_answer`: everything a stopped run collected, without another model call.
+pub fn partial_answer(notes: &Notes) -> ComposedAnswer {
     let facts = notes.facts();
     let mut claims: Vec<Claim> = Vec::new();
     let mut counted: HashSet<String> = HashSet::new();
@@ -543,7 +542,6 @@ pub fn partial_answer(notes: &Notes, max_chars: i64) -> ComposedAnswer {
         ranks.insert(source, rank + 1);
     }
     ranked.sort_by_key(|(rank, _)| *rank);
-    let notice_len = text::len(PARTIAL_NOTICE) as i64;
     for fact in tallies.into_iter().chain(ranked.into_iter().map(|(_, fact)| fact)) {
         let key = fact_id(fact);
         if counted.contains(&key) {
@@ -555,13 +553,8 @@ pub fn partial_answer(notes: &Notes, max_chars: i64) -> ComposedAnswer {
             fact.evidence.as_ref().map(|evidence| evidence.quote.clone()).unwrap_or_default()
         };
         let claim = Claim::new(&claim_text, vec![key]);
-        let mut trial = claims.clone();
-        trial.push(claim.clone());
-        let composed = assemble_answer(&trial, notes, &[], 0);
-        if text::len(&composed.linked_answer) as i64 + notice_len + 2 <= max_chars {
-            counted.extend(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)));
-            claims.push(claim);
-        }
+        counted.extend(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)));
+        claims.push(claim);
     }
     let result = assemble_answer(&claims, notes, &[], 0);
     ComposedAnswer {

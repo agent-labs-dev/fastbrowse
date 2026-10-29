@@ -26,7 +26,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::Artifact;
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, BrowserError, Capture, Observation, Page, PageResult, Tab, cut_text,
+    ActResult, Action, Block, BlockKind, BrowserError, Capture, Observation, Page, PageResult, Tab,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
@@ -292,7 +292,6 @@ struct Loaded {
 pub struct FetchedPage {
     http: Http,
     origins: Option<Vec<String>>,
-    viewport_chars: usize,
     seconds: f64,
     check_access: Option<CheckAccess>,
     loaded: Mutex<Loaded>,
@@ -300,16 +299,10 @@ pub struct FetchedPage {
 }
 
 impl FetchedPage {
-    pub fn new(
-        http: Http,
-        allowed_origins: Option<Vec<String>>,
-        viewport_text_chars: usize,
-        check_access: Option<CheckAccess>,
-    ) -> FetchedPage {
+    pub fn new(http: Http, allowed_origins: Option<Vec<String>>, check_access: Option<CheckAccess>) -> FetchedPage {
         FetchedPage {
             http,
             origins: allowed_origins,
-            viewport_chars: viewport_text_chars,
             seconds: TIMEOUT_SECONDS,
             check_access,
             loaded: Mutex::new(Loaded::default()),
@@ -357,7 +350,7 @@ impl Page for FetchedPage {
                 document_key: capture.sha256.clone(),
                 controls: Vec::new(),
                 omitted_controls: 0,
-                viewport_text: cut_text(&capture.text, self.viewport_chars, false),
+                viewport_text: capture.text.clone(),
                 visual_content: false,
                 // Nothing here can be scrolled, clicked or looked at, so no step may be chosen to do it.
                 tabs: vec![Tab {
