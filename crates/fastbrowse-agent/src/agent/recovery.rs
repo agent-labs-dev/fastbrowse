@@ -107,6 +107,25 @@ impl Agent {
         reason: &str,
         gives_up_as: Status,
     ) -> Step {
+        self.ask_recovery(state, observation, reason, gives_up_as, true).await
+    }
+
+    /// Recovery asked for the next step on a page the run is not stuck on: Jev was unsure, not stalled. Being stuck
+    /// is one rule, the page unchanged for `stall.unchanged_actions` steps, so a consult neither spends the recovery
+    /// budget nor clears that rule's evidence. On The Pi Hut Jev was unsure on most steps of a cart walk, and the
+    /// consults on pages revisited between items spent the budget and ended five of eleven runs stuck mid-cart.
+    pub(super) async fn consult(&self, state: &mut RunState, observation: &Observation, reason: &str) -> Step {
+        self.ask_recovery(state, observation, reason, Status::Stuck, false).await
+    }
+
+    async fn ask_recovery(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        reason: &str,
+        gives_up_as: Status,
+        stalled: bool,
+    ) -> Step {
         state.form_values.clear();
         let reason = self.redact(reason);
         if observation.dialog.is_none()
@@ -186,16 +205,18 @@ impl Agent {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        state.recoveries += 1;
-        // Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
-        state.unchanged = 0;
+        if stalled {
+            state.recoveries += 1;
+            // Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
+            state.unchanged = 0;
+        }
         state.recovered_at = state.history.len();
         // Recovery that could not see a release's address clicked its download link to look for it, in a task that
         // said not to download. Asked before the controls are listed, a link the task rules out is never offered.
         if observation.controls.iter().any(starts_download) {
             self.downloads_forbidden(state).await?;
         }
-        if state.recoveries > self.config.stall.max_recoveries {
+        if stalled && state.recoveries > self.config.stall.max_recoveries {
             if let Some(failure) = &state.http_failure
                 && gives_up_as != Status::NeedsInput
             {
