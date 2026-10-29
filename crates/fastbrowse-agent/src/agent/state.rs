@@ -10,7 +10,6 @@ use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, St
 use fastbrowse_core::page::{BrowserError, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
-use serde::Serialize;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -151,14 +150,6 @@ pub(crate) struct TransactionCandidate {
     pub landed_status: Option<i64>,
     pub committing: Option<bool>,
     pub outcome_read: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct ObservedLink {
-    pub source: String,
-    pub title: String,
-    pub label: String,
-    pub url: String,
 }
 
 /// Whether the page was on the guess, kept per browser history entry and per read, never per address.
@@ -414,8 +405,6 @@ pub(crate) struct RunState {
     pub first_url: Option<String>,
     /// Addresses observed without an HTTP error, in order, including the starting address.
     pub visited: IndexMap<String, ()>,
-    pub observed_links: IndexMap<String, ObservedLink>,
-    pub read_urls: HashSet<String>,
     /// By document, the text of every capture a full read has already read there, whitespace-normalised. A page that
     /// redraws within one document can carry nothing this does not already hold, which is what tells an owed read
     /// that the notes still describe the page.
@@ -546,8 +535,6 @@ impl RunState {
             start_landing_url: None,
             first_url: None,
             visited: IndexMap::new(),
-            observed_links: IndexMap::new(),
-            read_urls: HashSet::new(),
             read_coverage: HashMap::new(),
             read_shas: HashMap::new(),
             redecided: false,

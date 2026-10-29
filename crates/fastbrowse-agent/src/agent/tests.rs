@@ -1300,7 +1300,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
 #[tokio::test]
 async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
     use fastbrowse_core::safety::irreversible_question;
-    for (requested, acts) in [(0.76, true), (0.2, false)] {
+    for (requested, acts) in [(0.97, true), (0.76, false), (0.40, false)] {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(Gatekeeper(requested)), Arc::new(ScriptedLLM));
         let mut state = run_state().await;
         state.task = "Check out and finish the order.".into();
