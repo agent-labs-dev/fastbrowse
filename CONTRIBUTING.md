@@ -29,6 +29,11 @@ commands).
 `uv sync` builds the package's Rust core, `fastbrowse._native`, so it needs a Rust toolchain: install
 [rustup](https://rustup.rs), and it reads the pinned version from `rust-toolchain.toml`.
 
+The dev and test profiles keep line tables and no other debug info, so a backtrace still names its file and
+line and `cargo test --workspace --no-run` compiles in about 40 s rather than 60 s. A debugger cannot read
+values from that build; ask for them for one command when you need them:
+`CARGO_PROFILE_DEV_DEBUG=2 cargo test -p fastbrowse-agent`.
+
 Run the gate before you push. CI runs the same checks, and `main` requires them:
 
 ```sh
