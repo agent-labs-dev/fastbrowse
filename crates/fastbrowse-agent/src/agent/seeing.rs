@@ -54,7 +54,7 @@ impl Agent {
             return Ok(None);
         };
         let bar = self.config.thresholds.recover_below;
-        if shown.probability < bar || found.confidence < bar {
+        if shown.probability < bar || found.confidence.is_some_and(|confidence| confidence < bar) {
             return Ok(None);
         }
         let (x, y) = found.edges.centre();

@@ -729,7 +729,11 @@ pub fn parse_answers(
                 if edges.top > edges.bottom || edges.left > edges.right {
                     return Err(format!("box edges cross for {key}"));
                 }
-                Answer::Box(BoxAnswer { kind: Default::default(), edges, confidence: probability(confidence_value)? })
+                let confidence = match confidence_value {
+                    None | Some(Value::Null) => None,
+                    value => Some(probability(value)?),
+                };
+                Answer::Box(BoxAnswer { kind: Default::default(), edges, confidence })
             }
         };
         answers.insert(key.clone(), parsed);

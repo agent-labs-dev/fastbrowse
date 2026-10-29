@@ -248,8 +248,9 @@ pub struct BoxAnswer {
     pub kind: BoxTag,
     #[serde(rename = "box")]
     pub edges: Edges,
-    #[serde(deserialize_with = "lax::float_unit")]
-    pub confidence: f64,
+    /// TypeSafe documents this as null when the model gives no confidence for the box.
+    #[serde(default, deserialize_with = "lax::opt_float_unit")]
+    pub confidence: Option<f64>,
 }
 
 /// `ChoiceAnswer | NoulAnswer | ScoreAnswer | BoxAnswer`, discriminated by `type`.
