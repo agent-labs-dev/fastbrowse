@@ -11,7 +11,7 @@ use indexmap::IndexMap;
 use url::Url;
 
 use crate::BoxFuture;
-use crate::jev::NoulQuestion;
+use crate::decision::NoulQuestion;
 use crate::models::{Operation, SecretRef, SecretResolver, SecretValue, UNTRUSTED, WallKind};
 use crate::page::Control;
 use crate::py::json::write_string;

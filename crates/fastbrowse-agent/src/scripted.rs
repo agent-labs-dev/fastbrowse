@@ -15,8 +15,9 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{
-    Answer, ChoiceAnswer, ChoiceQuestion, ChoiceTag, Evaluation, JevClient, JevError, NoulAnswer, NoulTag, Question,
+use fastbrowse_core::decision::{
+    Answer, ChoiceAnswer, ChoiceQuestion, ChoiceTag, DecisionClient, DecisionError, Evaluation, NoulAnswer, NoulTag,
+    Question,
 };
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose, Operation};
@@ -101,12 +102,12 @@ impl ScriptedJev {
     }
 }
 
-impl JevClient for ScriptedJev {
+impl DecisionClient for ScriptedJev {
     fn evaluate<'a>(
         &'a self,
         _: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, std::result::Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
         let mut script = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if questions.contains_key("operation") {
             // The page is asked about once per step, so this question is what moves the script on.
@@ -136,7 +137,8 @@ impl JevClient for ScriptedJev {
                     answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability }));
                 }
                 Question::Score(_) => {
-                    failure = Some(JevError::Failed(format!("the scripted Jev has no answer for {}", text::repr(key))));
+                    failure =
+                        Some(DecisionError::Failed(format!("the scripted Jev has no answer for {}", text::repr(key))));
                     break;
                 }
             }
@@ -201,7 +203,7 @@ impl LLMClient for ScriptedLLM {
 #[cfg(test)]
 mod tests {
     //! The scripted model clients the binary's smoke run uses, asked what a run would ask them.
-    use fastbrowse_core::jev::NoulQuestion;
+    use fastbrowse_core::decision::NoulQuestion;
 
     use super::*;
     use crate::planner::Plan;

@@ -4,8 +4,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use fastbrowse_core::config::ObservationLimits;
+use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::effects::{SETTING_ROLES, state_key};
-use fastbrowse_core::jev::NoulQuestion;
 use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Capture, Control, Dialog, Observation, pager_link};

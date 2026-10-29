@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_agent::agent::{Agent, RunOptions};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::Config;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, Authorization, CostComponent, CostLine, Event, EventHandler, LLMPurpose, Limits, Operation, SecretValue,
@@ -231,12 +231,12 @@ fn jev_key(state: &str, questions: &str) -> String {
 
 struct ReplayJev(Replies);
 
-impl JevClient for ReplayJev {
+impl DecisionClient for ReplayJev {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let written: serde_json::Map<String, Value> =
             questions.iter().map(|(key, question)| (key.clone(), question.dump())).collect();
         let key = jev_key(&write(state, Style::HTTPX), &write(&Value::Object(written), Style::HTTPX));

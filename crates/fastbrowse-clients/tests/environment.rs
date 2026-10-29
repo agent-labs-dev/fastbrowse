@@ -7,9 +7,9 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{Script, answer_model, answering};
-use fastbrowse_clients::environment::{ConfigurationError, JevSource, LLMSource, Settings, default_model};
+use fastbrowse_clients::environment::{ConfigurationError, DecisionSource, LLMSource, Settings, default_model};
 use fastbrowse_clients::http::{Http, Request, Response};
-use fastbrowse_core::jev::{JevError, NoulQuestion, Question};
+use fastbrowse_core::decision::{DecisionError, NoulQuestion, Question};
 use fastbrowse_core::llm::{Generation, Message};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, LLMPurpose};
 use indexmap::IndexMap;
@@ -50,30 +50,30 @@ async fn test_jev_requests_go_to_the_chosen_source() {
             "https://api.typesafe.ai/v1/systemone",
         ),
         (
-            &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_JEV_SOURCE", "openrouter")],
+            &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_DECISION_SOURCE", "openrouter")],
             "https://openrouter.ai/api/v1/systemone",
         ),
         (&[("TYPESAFE_API_KEY", "t"), ("AI_GATEWAY_API_KEY", "g")], "https://api.typesafe.ai/v1/systemone"),
         (
-            &[("TYPESAFE_API_KEY", "t"), ("AI_GATEWAY_API_KEY", "g"), ("FASTBROWSE_JEV_SOURCE", "gateway")],
+            &[("TYPESAFE_API_KEY", "t"), ("AI_GATEWAY_API_KEY", "g"), ("FASTBROWSE_DECISION_SOURCE", "gateway")],
             "https://ai-gateway.vercel.sh/v4/ai/evaluation-model",
         ),
         (
-            &[("AI_GATEWAY_API_KEY", "g"), ("FASTBROWSE_JEV_BASE_URL", "http://proxy:8080/")],
+            &[("AI_GATEWAY_API_KEY", "g"), ("FASTBROWSE_DECISION_BASE_URL", "http://proxy:8080/")],
             "http://proxy:8080/v4/ai/evaluation-model",
         ),
         (
-            &[("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_JEV_BASE_URL", "http://proxy:8080")],
+            &[("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_DECISION_BASE_URL", "http://proxy:8080")],
             "http://proxy:8080/v1/systemone",
         ),
         (
-            &[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_JEV_BASE_URL", "http://proxy:8080/")],
+            &[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_DECISION_BASE_URL", "http://proxy:8080/")],
             "http://proxy:8080/v1/systemone",
         ),
     ];
     for (env, expected) in cases {
         let (http, seen) = urls(400);
-        let jev = settings(env).jev(&http).unwrap();
+        let jev = settings(env).decision(&http).unwrap();
         assert!(jev.evaluate(&json!("page"), &question()).await.is_err());
         assert_eq!(*seen.lock().unwrap(), [expected], "{env:?}");
     }
@@ -84,49 +84,50 @@ fn test_a_chosen_source_without_its_key_is_a_configuration_error() {
     let keys = ["OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY"];
     for (source, missing) in [("openrouter", keys[0]), ("typesafe", keys[1]), ("gateway", keys[2])] {
         let mut env: Vec<(&str, &str)> = keys.iter().filter(|key| **key != missing).map(|key| (*key, "key")).collect();
-        env.push(("FASTBROWSE_JEV_SOURCE", source));
+        env.push(("FASTBROWSE_DECISION_SOURCE", source));
         let (http, _) = urls(400);
-        assert!(config_error(settings(&env).jev(&http)).contains(missing), "{source}");
+        assert!(config_error(settings(&env).decision(&http)).contains(missing), "{source}");
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn test_failover_requires_both_keys_and_default_routing() {
-    for source in JevSource::ALL {
+    for source in DecisionSource::ALL {
         for restriction in ["one_key", "proxy", "model", "default_model"] {
-            let mut env = vec![("FASTBROWSE_JEV_SOURCE", source.as_str())];
+            let mut env = vec![("FASTBROWSE_DECISION_SOURCE", source.as_str())];
             for (key, owner) in [
-                ("TYPESAFE_API_KEY", JevSource::TypeSafe),
-                ("AI_GATEWAY_API_KEY", JevSource::Gateway),
-                ("OPENROUTER_API_KEY", JevSource::OpenRouter),
+                ("TYPESAFE_API_KEY", DecisionSource::TypeSafe),
+                ("AI_GATEWAY_API_KEY", DecisionSource::Gateway),
+                ("OPENROUTER_API_KEY", DecisionSource::OpenRouter),
             ] {
                 if restriction != "one_key" || source == owner {
                     env.push((key, "k"));
                 }
             }
             if restriction == "proxy" {
-                env.push(("FASTBROWSE_JEV_BASE_URL", "https://proxy.test"));
+                env.push(("FASTBROWSE_DECISION_BASE_URL", "https://proxy.test"));
             }
             let default_pin = match source {
-                JevSource::OpenRouter => "jev-1.13",
-                JevSource::TypeSafe => "jev-1.13.0",
-                JevSource::Gateway => "typesafe-ai/jev",
+                DecisionSource::OpenRouter => "jev-1.13",
+                DecisionSource::TypeSafe => "jev-1.13.0",
+                DecisionSource::Gateway => "typesafe-ai/jev",
             };
             match restriction {
-                "model" => env.push(("FASTBROWSE_JEV_MODEL", "custom-jev")),
-                "default_model" => env.push(("FASTBROWSE_JEV_MODEL", default_pin)),
+                "model" => env.push(("FASTBROWSE_DECISION_MODEL", "custom-jev")),
+                "default_model" => env.push(("FASTBROWSE_DECISION_MODEL", default_pin)),
                 _ => {}
             }
             let (http, seen) = urls(503);
-            let error = settings(&env).jev(&http).unwrap().evaluate(&json!("page"), &question()).await.unwrap_err();
-            assert!(matches!(error, JevError::RetriesExhausted(_)), "{source} {restriction}: {error}");
+            let error =
+                settings(&env).decision(&http).unwrap().evaluate(&json!("page"), &question()).await.unwrap_err();
+            assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{source} {restriction}: {error}");
             let host = match (restriction, source) {
                 ("proxy", _) => "proxy.test",
-                (_, JevSource::OpenRouter) => "openrouter.ai/api",
-                (_, JevSource::TypeSafe) => "api.typesafe.ai",
-                (_, JevSource::Gateway) => "ai-gateway.vercel.sh",
+                (_, DecisionSource::OpenRouter) => "openrouter.ai/api",
+                (_, DecisionSource::TypeSafe) => "api.typesafe.ai",
+                (_, DecisionSource::Gateway) => "ai-gateway.vercel.sh",
             };
-            let path = if source == JevSource::Gateway { "/v4/ai/evaluation-model" } else { "/v1/systemone" };
+            let path = if source == DecisionSource::Gateway { "/v4/ai/evaluation-model" } else { "/v1/systemone" };
             assert_eq!(*seen.lock().unwrap(), vec![format!("https://{host}{path}"); 6], "{source} {restriction}");
         }
     }
@@ -141,11 +142,12 @@ async fn test_source_model_defaults_and_explicit_pins() {
         ("typesafe", Some("jev-latest"), "jev-latest"),
     ] {
         let script = Script::new([common::text(400, "")]);
-        let mut env = vec![("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_JEV_SOURCE", source)];
+        let mut env =
+            vec![("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_DECISION_SOURCE", source)];
         if let Some(pin) = pin {
-            env.push(("FASTBROWSE_JEV_MODEL", pin));
+            env.push(("FASTBROWSE_DECISION_MODEL", pin));
         }
-        assert!(settings(&env).jev(&script.http()).unwrap().evaluate(&json!("page"), &question()).await.is_err());
+        assert!(settings(&env).decision(&script.http()).unwrap().evaluate(&json!("page"), &question()).await.is_err());
         assert_eq!(script.bodies()[0]["model"], expected);
     }
 }
@@ -467,7 +469,7 @@ fn a_dotenv_file_is_read_as_python_dotenv_reads_it() {
 export OPENROUTER_API_KEY=\"o-key\"  # quoted, exported
 FASTBROWSE_LLM_MODEL=qwen   # trailing comment
 FASTBROWSE_LLM_STRICT='0'
-FASTBROWSE_JEV_MODEL=jev#1
+FASTBROWSE_DECISION_MODEL=jev#1
 
 FASTBROWSE_LLM_EXTRA_BODY={\"top_k\": 20}
 ";
@@ -476,8 +478,22 @@ FASTBROWSE_LLM_EXTRA_BODY={\"top_k\": 20}
     assert_eq!(loaded.llm_model.as_deref(), Some("qwen"));
     assert!(!loaded.llm_strict);
     // A `#` with no space before it is part of the value.
-    assert_eq!(loaded.jev_model.as_deref(), Some("jev#1"));
+    assert_eq!(loaded.decision_model.as_deref(), Some("jev#1"));
     assert_eq!(loaded.llm_extra_body.as_deref(), Some("{\"top_k\": 20}"));
+}
+
+#[test]
+fn a_decision_setting_is_still_read_under_its_former_jev_name() {
+    let former = settings(&[
+        ("FASTBROWSE_JEV_SOURCE", "gateway"),
+        ("FASTBROWSE_JEV_BASE_URL", "http://proxy:8080"),
+        ("FASTBROWSE_JEV_MODEL", "nimble"),
+    ]);
+    assert_eq!(former.decision_source, Some(DecisionSource::Gateway));
+    assert_eq!(former.decision_base_url.as_deref(), Some("http://proxy:8080"));
+    assert_eq!(former.decision_model.as_deref(), Some("nimble"));
+    let both = settings(&[("FASTBROWSE_JEV_MODEL", "old"), ("FASTBROWSE_DECISION_MODEL", "new")]);
+    assert_eq!(both.decision_model.as_deref(), Some("new"));
 }
 
 #[test]

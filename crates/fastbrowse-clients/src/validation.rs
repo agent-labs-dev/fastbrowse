@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{
-    Answer, ChoiceAnswer, Evaluation, JevError, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
+use fastbrowse_core::decision::{
+    Answer, ChoiceAnswer, DecisionError, Evaluation, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 use fastbrowse_core::py::json::{dumps, float_str};
@@ -164,9 +164,9 @@ pub fn describe(response: &Response) -> String {
     scrubbed(response, &text)
 }
 
-pub fn response_error(response: &Response, detail: &str) -> JevError {
+pub fn response_error(response: &Response, detail: &str) -> DecisionError {
     // `detail` can quote the body, as a validation error's input does.
-    JevError::Failed(format!("{}; {}", text::prefix(&scrubbed(response, detail), 300), describe(response)))
+    DecisionError::Failed(format!("{}; {}", text::prefix(&scrubbed(response, detail), 300), describe(response)))
 }
 
 /// About 22s in all. With 6s, a Jev 503 ended 5 of 311 eval runs, and each time the next run, started 0 to 15s later,
@@ -438,22 +438,22 @@ async fn send(
 /// Why one Jev request failed: an error to report, or a batch to split.
 #[derive(Debug)]
 pub(crate) enum AskError {
-    Jev(JevError),
+    Jev(DecisionError),
     Split { start_attempt: usize, usage: RequestUsage },
 }
 
-impl From<JevError> for AskError {
-    fn from(error: JevError) -> Self {
+impl From<DecisionError> for AskError {
+    fn from(error: DecisionError) -> Self {
         AskError::Jev(error)
     }
 }
 
 impl AskError {
-    fn into_jev(self) -> JevError {
+    fn into_jev(self) -> DecisionError {
         match self {
             AskError::Jev(error) => error,
             // Only a batch asked with `split_batch` splits, and asking_split catches that one.
-            AskError::Split { .. } => JevError::Failed("Jev batch split outside asking_split".into()),
+            AskError::Split { .. } => DecisionError::Failed("Jev batch split outside asking_split".into()),
         }
     }
 }
@@ -513,7 +513,7 @@ pub(crate) async fn post(
     // Priced before sending, so a split single or a retry cannot carry the run past its dollar cap.
     let estimate = body_dollars(body, price);
     let check = || check_jev_spend(spend.as_ref(), estimate);
-    check().map_err(JevError::Budget)?;
+    check().map_err(DecisionError::Budget)?;
     let started = Instant::now();
     let mut auth = vec![("Authorization".to_string(), format!("Bearer {api_key}"))];
     auth.extend(headers.iter().map(|(name, value)| (name.to_string(), value.to_string())));
@@ -529,9 +529,9 @@ pub(crate) async fn post(
     cancelled.armed = false;
     let response = match sent {
         Ok(response) => response,
-        Err(RetryStop::Budget(error)) => return Err(JevError::Budget(error).into()),
+        Err(RetryStop::Budget(error)) => return Err(DecisionError::Budget(error).into()),
         Err(RetryStop::Fatal(name)) => {
-            return Err(JevError::Failed(format!("Jev request could not be sent ({name})")).into());
+            return Err(DecisionError::Failed(format!("Jev request could not be sent ({name})")).into());
         }
         Err(RetryStop::Split { start_attempt, usage }) => return Err(AskError::Split { start_attempt, usage }),
     };
@@ -548,7 +548,7 @@ pub(crate) async fn post(
     let usage = usage.snapshot();
     let Some(response) = response else {
         let last = usage.failures.last().cloned().unwrap_or_default();
-        return Err(JevError::TransportFailed(format!(
+        return Err(DecisionError::TransportFailed(format!(
             "Jev transport failed after {}; last: {last}",
             usage.history(seconds)
         ))
@@ -556,7 +556,7 @@ pub(crate) async fn post(
     };
     if retryable(&response) {
         let last = describe(&response);
-        return Err(JevError::RetriesExhausted(Box::new(RetriesExhausted {
+        return Err(DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message: exhausted(usage.requests, seconds, &last),
             seconds,
             unaccounted_requests: usage.unaccounted_requests,
@@ -568,7 +568,7 @@ pub(crate) async fn post(
     }
     let text = response.text();
     if response.status == 400 && ["max_tokens_exceeded", "request body too large"].iter().any(|r| text.contains(r)) {
-        return Err(JevError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
+        return Err(DecisionError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
     }
     if !response.is_success() {
         return Err(response_error(&response, "Jev request failed").into());
@@ -910,7 +910,7 @@ pub(crate) async fn asking_split(
     questions: IndexMap<String, Question>,
     ask: &Ask<'_>,
     price: Option<f64>,
-) -> Result<Evaluation, JevError> {
+) -> Result<Evaluation, DecisionError> {
     if questions.len() < 2 {
         return ask(questions, 0, false).await.map_err(AskError::into_jev);
     }
@@ -933,7 +933,7 @@ pub(crate) async fn asking_split(
                 RETRY_DELAYS_SECONDS.len().min((start_attempt + result.requests as usize).saturating_sub(1));
             answered.push(result);
         }
-        Ok::<(), JevError>(())
+        Ok::<(), DecisionError>(())
     })
     .await;
     guard.armed = false;
@@ -941,11 +941,11 @@ pub(crate) async fn asking_split(
         if let Some(parent) = &guard.parent {
             parent.record(paid.lines());
         }
-        if let JevError::RetriesExhausted(exhausted_error) = &error {
+        if let DecisionError::RetriesExhausted(exhausted_error) = &error {
             let requests =
                 usage.requests + answered.iter().map(|result| result.requests).sum::<i64>() + exhausted_error.requests;
             let seconds = started.elapsed().as_secs_f64();
-            return Err(JevError::RetriesExhausted(Box::new(RetriesExhausted {
+            return Err(DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
                 message: exhausted(requests, seconds, &exhausted_error.last),
                 seconds,
                 unaccounted_requests: exhausted_error.unaccounted_requests + usage.unaccounted_requests,
@@ -983,9 +983,9 @@ pub(crate) async fn asking_open<F>(
     ask: impl FnOnce(IndexMap<String, Question>) -> F,
     model: &str,
     price: Option<f64>,
-) -> Result<Evaluation, JevError>
+) -> Result<Evaluation, DecisionError>
 where
-    F: Future<Output = Result<Evaluation, JevError>>,
+    F: Future<Output = Result<Evaluation, DecisionError>>,
 {
     let forced: IndexMap<String, Answer> = questions
         .iter()

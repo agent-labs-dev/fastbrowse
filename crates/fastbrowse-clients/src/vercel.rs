@@ -16,7 +16,7 @@
 //! implementation makes no discovery calls.
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, JevClient, JevError, Question};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, Question};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -99,12 +99,12 @@ impl VercelGatewayJevClient {
     }
 }
 
-impl JevClient for VercelGatewayJevClient {
+impl DecisionClient for VercelGatewayJevClient {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(asking_open(
             questions,
             move |asked| async move {

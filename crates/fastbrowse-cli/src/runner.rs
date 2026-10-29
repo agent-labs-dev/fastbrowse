@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::JevClient;
+use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     Attachment, Authorization, EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, UntilCheck,
@@ -169,7 +169,7 @@ async fn run_task(args: RunArgs) -> Result<RunResult, RunError> {
 /// takes `jev=` and `llm=`.
 pub async fn run_task_with(
     args: RunArgs,
-    jev: Option<Arc<dyn JevClient>>,
+    jev: Option<Arc<dyn DecisionClient>>,
     llm: Option<Arc<dyn LLMClient>>,
 ) -> Result<RunResult, RunError> {
     let options = run_options(&args)?;

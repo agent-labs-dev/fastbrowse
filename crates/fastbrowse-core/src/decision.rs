@@ -1,5 +1,6 @@
-//! Port of `src/fastbrowse/jev.py`: the contract for Jev (TypeSafe System One), typed questions in and calibrated
-//! answers out, and the client trait the TypeSafe, OpenRouter and Vercel clients implement.
+//! The contract for a decision model, first ported from `src/fastbrowse/jev.py` for Jev (TypeSafe System One): typed
+//! questions in and calibrated answers out, each model's [`DecisionProfile`], and the client trait every provider's
+//! client implements.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -284,7 +285,7 @@ pub struct RetriesExhausted {
 
 /// Transport or validation failure; the request may be retried only if it caused no browser action.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum JevError {
+pub enum DecisionError {
     #[error("{0}")]
     Failed(String),
     /// The provider rejected the request for exceeding its input token limits.
@@ -300,9 +301,9 @@ pub enum JevError {
     Budget(#[from] BudgetExceeded),
 }
 
-impl MaybeUnavailable for JevError {
+impl MaybeUnavailable for DecisionError {
     fn is_unavailable(&self) -> bool {
-        matches!(self, JevError::TransportFailed(_) | JevError::RetriesExhausted(_))
+        matches!(self, DecisionError::TransportFailed(_) | DecisionError::RetriesExhausted(_))
     }
 }
 
@@ -416,13 +417,13 @@ impl DecisionProfile {
     }
 }
 
-pub trait JevClient: Send + Sync {
-    /// Answer every question against one state. Fails with `InputTooLarge` or another `JevError`.
+pub trait DecisionClient: Send + Sync {
+    /// Answer every question against one state. Fails with `InputTooLarge` or another `DecisionError`.
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>>;
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>>;
 
     /// The model this client asks. A client that does not say is taken to ask Jev.
     fn profile(&self) -> DecisionProfile {

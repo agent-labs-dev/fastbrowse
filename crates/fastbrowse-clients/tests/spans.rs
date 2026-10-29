@@ -9,7 +9,7 @@ use common::{Script, Step, answer_model, reply, text};
 use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM};
 use fastbrowse_clients::typesafe::TypeSafeJevClient;
 use fastbrowse_clients::vercel::VercelGatewayJevClient;
-use fastbrowse_core::jev::{JevClient, NoulQuestion, Question};
+use fastbrowse_core::decision::{DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
 use fastbrowse_core::models::LLMPurpose;
 use fastbrowse_core::telemetry::Trace;

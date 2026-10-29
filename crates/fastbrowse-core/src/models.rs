@@ -854,7 +854,7 @@ pub type UntilCheck = Arc<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sy
 mod tests {
     //! tests/test_contracts.py, and the parts of tests/test_page.py about `BrowserConnection`.
     use super::*;
-    use crate::jev::{Answer, Evaluation};
+    use crate::decision::{Answer, Evaluation};
 
     #[test]
     fn test_evaluation_parses_mixed_answer_types_by_discriminator() {

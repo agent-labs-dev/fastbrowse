@@ -12,7 +12,7 @@ use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_clients::typesafe::TypeSafeJevClient;
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
-use fastbrowse_core::jev::{JEV_DOLLARS_PER_INPUT_TOKEN, JevClient, JevError, NoulQuestion, Question};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulQuestion, Question};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, MaybeUnavailable};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::telemetry::Trace;
@@ -73,13 +73,13 @@ async fn test_a_batch_splits_into_singles_and_shares_the_retry_budget() {
                 let status = if number <= earlier_failures { 429 } else { 503 };
                 Box::pin(async move { Ok(Response::new(status, "")) })
             });
-            let client: Box<dyn JevClient> = if gateway_route {
+            let client: Box<dyn DecisionClient> = if gateway_route {
                 Box::new(VercelGatewayJevClient::new("key", http, GATEWAY_URL))
             } else {
                 Box::new(direct(http))
             };
             let error = client.evaluate(&json!("page"), &pair()).await.unwrap_err();
-            let JevError::RetriesExhausted(error) = error else { panic!("exhausted") };
+            let DecisionError::RetriesExhausted(error) = error else { panic!("exhausted") };
             let sent = sent.lock().unwrap();
             let batch_requests = earlier_failures + 2;
             let both = vec!["a".to_string(), "b".to_string()];
@@ -114,7 +114,7 @@ async fn test_an_exhausted_split_counts_every_request_it_sent() {
             };
             Box::pin(async move { Ok(response) })
         });
-        let client: Box<dyn JevClient> = if gateway_route {
+        let client: Box<dyn DecisionClient> = if gateway_route {
             Box::new(VercelGatewayJevClient::new("key", http, GATEWAY_URL))
         } else {
             Box::new(direct(http))
@@ -171,7 +171,7 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
     let script = Script::new(steps);
     let client = TypeSafeJevClient::direct("secret-key", script.http());
     let error = client.evaluate(&json!("page"), &one()).await.unwrap_err();
-    let JevError::RetriesExhausted(exhausted) = &error else { panic!("exhausted") };
+    let DecisionError::RetriesExhausted(exhausted) = &error else { panic!("exhausted") };
     assert_eq!(exhausted.unaccounted_requests, 1);
     assert!(exhausted.seconds > 0.0);
     assert!(!error.to_string().contains("secret-key"));

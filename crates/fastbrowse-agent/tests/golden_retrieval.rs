@@ -8,7 +8,7 @@ use fastbrowse_agent::memory::Notes;
 use fastbrowse_agent::planner::{Plan, Requirement};
 use fastbrowse_agent::retrieval::{self, *};
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{ChoiceAnswer, MAX_CHOICE_OPTIONS};
+use fastbrowse_core::decision::{ChoiceAnswer, MAX_CHOICE_OPTIONS};
 use fastbrowse_core::page::{Block, Capture};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -294,7 +294,10 @@ fn replay(case: &Value) -> Result<(), String> {
                 max_chars: opt(args, "max_chars"),
                 tokens: tokens.clone(),
                 ledger: ledger.as_ref(),
-                jev: args.get("jev").filter(|j| !j.is_null()).map(|_| &jev as &dyn fastbrowse_core::jev::JevClient),
+                jev: args
+                    .get("jev")
+                    .filter(|j| !j.is_null())
+                    .map(|_| &jev as &dyn fastbrowse_core::decision::DecisionClient),
                 requirements: opt(args, "requirements").unwrap_or_default(),
                 notice: args.get("notice").and_then(Value::as_str).unwrap_or("").to_string(),
                 continuing: strings(args.get("continuing").unwrap_or(&Value::Null)),

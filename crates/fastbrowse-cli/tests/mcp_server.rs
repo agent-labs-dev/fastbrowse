@@ -14,7 +14,7 @@ use fastbrowse_cli::mcp::{
     parse,
 };
 use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
-use fastbrowse_clients::environment::{JevSource, Secret, Settings};
+use fastbrowse_clients::environment::{DecisionSource, Secret, Settings};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -396,7 +396,7 @@ fn test_configure_refuses_a_setup_that_cannot_work() {
             &["--local"],
             |s| {
                 s.ai_gateway_api_key = None;
-                s.jev_source = Some(JevSource::Gateway);
+                s.decision_source = Some(DecisionSource::Gateway);
             },
             "AI_GATEWAY_API_KEY",
         ),

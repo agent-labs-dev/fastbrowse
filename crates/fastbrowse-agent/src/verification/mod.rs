@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 
 use fastbrowse_core::config::{Config, Thresholds, TokenBudget};
-use fastbrowse_core::jev::{Answer, JevClient, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::{Bytes, CostLine, Evidence, LLMPurpose, SourceControl, UNTRUSTED};
 use fastbrowse_core::output_schema::OutputModel;
@@ -269,7 +269,7 @@ fn probability(answers: &IndexMap<String, Answer>, key: &str) -> f64 {
 /// Judge completion, and whether `draft` answers the task as written, in the one Jev call.
 #[allow(clippy::too_many_arguments)]
 pub async fn check_done(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     task: &str,
     plan: &Plan,
     observation: &Observation,
@@ -1024,7 +1024,7 @@ fn outputs_grounded(composed: &ComposedAnswer, notes: &Notes, checks: &[String],
 const OMITTED: &str = "requirement_omitted";
 
 async fn ask(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     composed: &ComposedAnswer,
     questions: &IndexMap<String, NoulQuestion>,
     ledger: Option<&Ledger>,
@@ -1043,7 +1043,7 @@ async fn ask(
 /// failed three runs in four of a correct sign-in answer. Removing a doubted claim asserts nothing new, so it is honest
 /// as long as the rest still answers: the omission check is asked again of what remains.
 pub async fn check_claims(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     composed: &ComposedAnswer,
     notes: &Notes,
     thresholds: &Thresholds,
@@ -1285,7 +1285,7 @@ pub struct ExtractOptions<'a> {
 /// Text fields are proposed by the LLM and kept only when quoted verbatim from the page; other scalars are copied from
 /// the typed spans Jev points at. A field with no supported value fails the extraction.
 pub async fn extract(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     llm: &dyn LLMClient,
     task: &str,
     capture: &Capture,
@@ -1486,14 +1486,14 @@ mod tests {
     /// `_Jev` in tests/test_done_check.py: answers each question it is asked from a table of probabilities.
     struct TableJev(Vec<(&'static str, f64)>);
 
-    impl JevClient for TableJev {
+    impl DecisionClient for TableJev {
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,
             questions: &'a IndexMap<String, Question>,
         ) -> fastbrowse_core::BoxFuture<
             'a,
-            std::result::Result<fastbrowse_core::jev::Evaluation, fastbrowse_core::jev::JevError>,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
         > {
             let answers: Map<String, Value> = self
                 .0

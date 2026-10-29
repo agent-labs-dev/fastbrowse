@@ -5,7 +5,7 @@ mod common;
 use common::*;
 use fastbrowse_agent::scripted::{ScriptedJev, steps};
 use fastbrowse_agent::shortcut::{accept, accept_start, propose_shortcut, propose_start};
-use fastbrowse_core::jev::{JevClient, Question};
+use fastbrowse_core::decision::{DecisionClient, Question};
 use fastbrowse_core::models::Limits;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Ledger;

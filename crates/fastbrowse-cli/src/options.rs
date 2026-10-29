@@ -362,7 +362,7 @@ pub fn check_model_keys(settings: &Settings) -> Result<(), ConfigurationError> {
     }
     let http = Http::new(std::sync::Arc::new(Unsent));
     settings.llm(&http)?;
-    settings.jev(&http)?;
+    settings.decision(&http)?;
     Ok(())
 }
 

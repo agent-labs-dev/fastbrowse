@@ -1343,6 +1343,8 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Hash
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {
     target.ok_or_else(|| {
-        Flow::from(fastbrowse_core::jev::JevError::Failed("operation needs a target and Jev offered none".into()))
+        Flow::from(fastbrowse_core::decision::DecisionError::Failed(
+            "operation needs a target and Jev offered none".into(),
+        ))
     })
 }

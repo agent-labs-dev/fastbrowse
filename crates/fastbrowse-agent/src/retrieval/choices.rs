@@ -2,7 +2,7 @@
 //! narrows a page too large to offer whole.
 
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{Answer, ChoiceQuestion, JevClient, MAX_CHOICE_OPTIONS, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, MAX_CHOICE_OPTIONS, NoulQuestion, Question};
 use fastbrowse_core::models::{CostComponent, CostLine, FactReader, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::dump::Dump;
@@ -165,7 +165,7 @@ fn read_fits(state: &Value, questions: &IndexMap<String, Question>, tokens: &Tok
 
 /// `_focus`: the blocks Jev should choose from, or none when the page cannot be narrowed without risking the answer.
 async fn focus<'a>(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     page: &Page<'a>,
     requirements: &[Requirement],
     tokens: &TokenBudget,
@@ -248,7 +248,7 @@ async fn focus<'a>(
 /// `_read_choices`: Jev's scalar choice, its judgement that the page holds nothing, or the reader for the rest.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn read_choices(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     page: &Page<'_>,
     requirements: &[Requirement],
     tokens: &TokenBudget,

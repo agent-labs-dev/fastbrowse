@@ -25,7 +25,7 @@ use fastbrowse_clients::http::Http;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::artifacts::DirectorySink;
 use fastbrowse_core::config::Config;
-use fastbrowse_core::jev::JevClient;
+use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     ArtifactSink, Attachment, Authorization, BrowserConnection, BrowserEvent, BudgetResource, BudgetStop,
@@ -87,7 +87,7 @@ pub struct RunTask {
     pub cloud_allow_resizing: bool,
     pub cloud_extensions: Vec<String>,
     pub cloud_timeout_minutes: u32,
-    pub jev: Option<Arc<dyn JevClient>>,
+    pub jev: Option<Arc<dyn DecisionClient>>,
     pub llm: Option<Arc<dyn LLMClient>>,
     pub output_schema: Option<Arc<RecordSchema>>,
     /// What the caller knows about the task: background for the planner, recovery, the composer and Jev, never a
@@ -522,9 +522,9 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
     if options.jev.is_none() && options.llm.is_none() {
         http.trace.event("route", || Map::from_iter([("providers".into(), Value::from(settings.providers()))]));
     }
-    let jev: Arc<dyn JevClient> = match options.jev.take() {
+    let jev: Arc<dyn DecisionClient> = match options.jev.take() {
         Some(jev) => jev,
-        None => Arc::from(settings.jev(&http)?),
+        None => Arc::from(settings.decision(&http)?),
     };
     let profile = jev.profile();
     if !profile.validated() {
@@ -772,7 +772,7 @@ async fn fetched(
     options: &RunTask,
     config: &Config,
     http: Http,
-    jev: Arc<dyn JevClient>,
+    jev: Arc<dyn DecisionClient>,
     llm: Arc<dyn LLMClient>,
     origins: Option<Vec<String>>,
 ) -> Result<Read, RunError> {

@@ -6,11 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use common::answering;
-use fastbrowse_clients::environment::{JevSource, Settings};
+use fastbrowse_clients::environment::{DecisionSource, Settings};
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_clients::validation::{RETRY_DELAYS_SECONDS, RETRYABLE_STATUS};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Answer, JEV_DOLLARS_PER_INPUT_TOKEN, JevError, NoulAnswer, NoulQuestion, Question};
+use fastbrowse_core::decision::{
+    Answer, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulAnswer, NoulQuestion, Question,
+};
 use fastbrowse_core::models::CostBasis;
 use indexmap::IndexMap;
 use serde_json::json;
@@ -25,17 +27,17 @@ fn yes() -> IndexMap<String, Answer> {
     IndexMap::from([("q".to_string(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 1.0 }))])
 }
 
-fn source(request: &Request) -> JevSource {
+fn source(request: &Request) -> DecisionSource {
     match url::Url::parse(&request.url).unwrap().host_str().unwrap() {
-        "openrouter.ai" => JevSource::OpenRouter,
-        "api.typesafe.ai" => JevSource::TypeSafe,
-        "ai-gateway.vercel.sh" => JevSource::Gateway,
+        "openrouter.ai" => DecisionSource::OpenRouter,
+        "api.typesafe.ai" => DecisionSource::TypeSafe,
+        "ai-gateway.vercel.sh" => DecisionSource::Gateway,
         other => panic!("unexpected host {other}"),
     }
 }
 
-fn answer(provider: JevSource) -> Response {
-    if provider != JevSource::Gateway {
+fn answer(provider: DecisionSource) -> Response {
+    if provider != DecisionSource::Gateway {
         return Response::json(
             200,
             &json!({"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100, "output_tokens": 7}}),
@@ -51,7 +53,7 @@ fn answer(provider: JevSource) -> Response {
     )
 }
 
-fn settings(primary: Option<JevSource>, direct_key: bool) -> Settings {
+fn settings(primary: Option<DecisionSource>, direct_key: bool) -> Settings {
     let mut env = vec![("AI_GATEWAY_API_KEY", "gateway-key"), ("OPENROUTER_API_KEY", "openrouter-key")];
     if direct_key {
         env.push(("TYPESAFE_API_KEY", "direct-key"));
@@ -62,16 +64,19 @@ fn settings(primary: Option<JevSource>, direct_key: bool) -> Settings {
     Settings::from_sources(&env, None).unwrap()
 }
 
-fn backup_of(primary: JevSource) -> JevSource {
-    if primary == JevSource::Gateway { JevSource::TypeSafe } else { JevSource::Gateway }
+fn backup_of(primary: DecisionSource) -> DecisionSource {
+    if primary == DecisionSource::Gateway { DecisionSource::TypeSafe } else { DecisionSource::Gateway }
 }
 
-type Seen = Arc<Mutex<Vec<JevSource>>>;
+type Seen = Arc<Mutex<Vec<DecisionSource>>>;
 
 /// A transport that records which provider each request reached and answers with `respond`.
 fn recording<F>(seen: &Seen, respond: F) -> Http
 where
-    F: Fn(JevSource, usize, &Request) -> BoxFuture<'static, Result<Response, TransportError>> + Send + Sync + 'static,
+    F: Fn(DecisionSource, usize, &Request) -> BoxFuture<'static, Result<Response, TransportError>>
+        + Send
+        + Sync
+        + 'static,
 {
     let seen = seen.clone();
     answering(move |request| {
@@ -94,28 +99,28 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
     let routes = [
         (None, true),
         (None, false),
-        (Some(JevSource::OpenRouter), true),
-        (Some(JevSource::TypeSafe), true),
-        (Some(JevSource::Gateway), true),
-        (Some(JevSource::Gateway), false),
+        (Some(DecisionSource::OpenRouter), true),
+        (Some(DecisionSource::TypeSafe), true),
+        (Some(DecisionSource::Gateway), true),
+        (Some(DecisionSource::Gateway), false),
     ];
     for (setting, direct_key) in routes {
         for status in RETRYABLE_STATUS {
-            let fallback = if direct_key { JevSource::TypeSafe } else { JevSource::OpenRouter };
+            let fallback = if direct_key { DecisionSource::TypeSafe } else { DecisionSource::OpenRouter };
             let primary = setting.unwrap_or(fallback);
-            let backup = if primary == JevSource::Gateway { fallback } else { JevSource::Gateway };
+            let backup = if primary == DecisionSource::Gateway { fallback } else { DecisionSource::Gateway };
             let seen = Seen::default();
             let http = recording(&seen, move |provider, _, request| {
                 let expected = match provider {
-                    JevSource::OpenRouter => "openrouter-key",
-                    JevSource::TypeSafe => "direct-key",
-                    JevSource::Gateway => "gateway-key",
+                    DecisionSource::OpenRouter => "openrouter-key",
+                    DecisionSource::TypeSafe => "direct-key",
+                    DecisionSource::Gateway => "gateway-key",
                 };
                 assert_eq!(request.header("authorization"), Some(format!("Bearer {expected}").as_str()));
                 ready(if provider == primary { Response::new(status, "") } else { answer(provider) })
             });
             let configured = settings(setting, direct_key);
-            let client = configured.jev(&http).unwrap();
+            let client = configured.decision(&http).unwrap();
             let first = client.evaluate(&json!("page"), &questions()).await.unwrap();
             let second = client.evaluate(&json!("page"), &questions()).await.unwrap();
             let mut expected = vec![primary; ATTEMPTS];
@@ -125,7 +130,7 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
             assert_eq!(second.answers, yes());
             assert_eq!(first.cost.dollars, second.cost.dollars);
             // A new run starts on the primary again.
-            configured.jev(&http).unwrap().evaluate(&json!("page"), &questions()).await.unwrap();
+            configured.decision(&http).unwrap().evaluate(&json!("page"), &questions()).await.unwrap();
             expected.extend(vec![primary; ATTEMPTS]);
             expected.push(backup);
             assert_eq!(*seen.lock().unwrap(), expected);
@@ -135,7 +140,7 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
 
 #[tokio::test(start_paused = true)]
 async fn test_simultaneous_failures_stay_on_backup() {
-    for primary in JevSource::ALL {
+    for primary in DecisionSource::ALL {
         let seen = Seen::default();
         let (started, _) = tokio::sync::watch::channel(false);
         let started = Arc::new(started);
@@ -152,7 +157,7 @@ async fn test_simultaneous_failures_stay_on_backup() {
                 Ok(Response::new(503, ""))
             })
         });
-        let client = settings(Some(primary), true).jev(&http).unwrap();
+        let client = settings(Some(primary), true).decision(&http).unwrap();
         let (asked, first_state, second_state) = (questions(), json!("first"), json!("second"));
         let (first, second) =
             tokio::join!(client.evaluate(&first_state, &asked), client.evaluate(&second_state, &asked));
@@ -167,11 +172,11 @@ async fn test_simultaneous_failures_stay_on_backup() {
 
 #[tokio::test(start_paused = true)]
 async fn test_request_errors_and_malformed_responses_do_not_switch() {
-    for primary in JevSource::ALL {
+    for primary in DecisionSource::ALL {
         for status in [400, 401, 403, 404, 422, 200] {
             let seen = Seen::default();
             let http = recording(&seen, move |_, _, _| ready(Response::json(status, &json!({"error": "invalid"}))));
-            let client = settings(Some(primary), true).jev(&http).unwrap();
+            let client = settings(Some(primary), true).decision(&http).unwrap();
             for _ in 0..2 {
                 assert!(client.evaluate(&json!("page"), &questions()).await.is_err());
             }
@@ -182,7 +187,7 @@ async fn test_request_errors_and_malformed_responses_do_not_switch() {
 
 #[tokio::test(start_paused = true)]
 async fn test_input_limits_and_transport_errors_do_not_switch() {
-    for primary in JevSource::ALL {
+    for primary in DecisionSource::ALL {
         let seen = Seen::default();
         let http = recording(&seen, |_, count, _| {
             Box::pin(async move {
@@ -193,11 +198,11 @@ async fn test_input_limits_and_transport_errors_do_not_switch() {
                 }
             })
         });
-        let client = settings(Some(primary), true).jev(&http).unwrap();
+        let client = settings(Some(primary), true).decision(&http).unwrap();
         let first = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
-        assert!(matches!(first, JevError::InputTooLarge(_)), "{first}");
+        assert!(matches!(first, DecisionError::InputTooLarge(_)), "{first}");
         let second = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
-        assert!(matches!(second, JevError::TransportFailed(_)), "{second}");
+        assert!(matches!(second, DecisionError::TransportFailed(_)), "{second}");
         assert!(second.to_string().contains("transport failed"));
         assert_eq!(*seen.lock().unwrap(), vec![primary; 1 + ATTEMPTS]);
     }
@@ -205,12 +210,12 @@ async fn test_input_limits_and_transport_errors_do_not_switch() {
 
 #[tokio::test(start_paused = true)]
 async fn test_recovery_within_retry_budget_keeps_primary() {
-    for primary in JevSource::ALL {
+    for primary in DecisionSource::ALL {
         let seen = Seen::default();
         let http = recording(&seen, move |_, count, _| {
             ready(if count < ATTEMPTS { Response::new(503, "") } else { answer(primary) })
         });
-        let client = settings(Some(primary), true).jev(&http).unwrap();
+        let client = settings(Some(primary), true).decision(&http).unwrap();
         client.evaluate(&json!("page"), &questions()).await.unwrap();
         client.evaluate(&json!("page"), &questions()).await.unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![primary; ATTEMPTS + 1]);
@@ -221,7 +226,7 @@ async fn test_recovery_within_retry_budget_keeps_primary() {
 async fn test_backup_exhaustion_does_not_switch_back() {
     // Python pins the clock to check `seconds` exactly (5 and 4); tokio's paused clock also counts the backoff, so
     // only the request counts and the last failure are compared here.
-    for primary in JevSource::ALL {
+    for primary in DecisionSource::ALL {
         let seen = Seen::default();
         let http = recording(&seen, move |provider, count, _| {
             Box::pin(async move {
@@ -231,10 +236,10 @@ async fn test_backup_exhaustion_does_not_switch_back() {
                 Ok(Response::new(if provider == primary { 503 } else { 429 }, ""))
             })
         });
-        let client = settings(Some(primary), true).jev(&http).unwrap();
+        let client = settings(Some(primary), true).decision(&http).unwrap();
         let first = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
         let second = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
-        let (JevError::RetriesExhausted(first), JevError::RetriesExhausted(second)) = (first, second) else {
+        let (DecisionError::RetriesExhausted(first), DecisionError::RetriesExhausted(second)) = (first, second) else {
             panic!("both calls exhaust their retries");
         };
         assert!(first.message.contains("HTTP 429") && second.message.contains("HTTP 429"));
@@ -257,7 +262,7 @@ impl Drop for Dropped {
 
 #[tokio::test(start_paused = true)]
 async fn test_cancellation_cleans_up_and_keeps_the_selected_provider() {
-    for primary in JevSource::ALL {
+    for primary in DecisionSource::ALL {
         for after_switch in [false, true] {
             let seen = Seen::default();
             let cancelled = Arc::new(AtomicBool::new(false));
@@ -277,7 +282,7 @@ async fn test_cancellation_cleans_up_and_keeps_the_selected_provider() {
                     std::future::pending().await
                 })
             });
-            let client = settings(Some(primary), true).jev(&http).unwrap();
+            let client = settings(Some(primary), true).decision(&http).unwrap();
             let questions = questions();
             let state = json!("page");
             tokio::select! {
@@ -299,7 +304,7 @@ async fn test_cancellation_cleans_up_and_keeps_the_selected_provider() {
 async fn test_failover_accounts_for_each_providers_unanswered_requests() {
     // Python ticks a fake clock once per request to check `seconds` (ATTEMPTS + 2 and 1); the paused tokio clock also
     // counts the backoff, so those two assertions are left out and every token and dollar count kept.
-    for primary in JevSource::ALL {
+    for primary in DecisionSource::ALL {
         let seen = Seen::default();
         let http = recording(&seen, move |provider, count, _| {
             Box::pin(async move {
@@ -309,7 +314,7 @@ async fn test_failover_accounts_for_each_providers_unanswered_requests() {
                 Ok(if provider == primary { Response::new(503, "") } else { answer(provider) })
             })
         });
-        let client = settings(Some(primary), true).jev(&http).unwrap();
+        let client = settings(Some(primary), true).decision(&http).unwrap();
         let first = client.evaluate(&json!("page"), &questions()).await.unwrap();
         let second = client.evaluate(&json!("page"), &questions()).await.unwrap();
         assert_eq!(first.cost.basis, CostBasis::Estimated);

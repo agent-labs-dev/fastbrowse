@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use common::{Script, Step, answer_model, plan_model, result_model};
 use fastbrowse_clients::environment::Settings;
-use fastbrowse_clients::failover::FailoverJevClient;
+use fastbrowse_clients::failover::FailoverDecisionClient;
 use fastbrowse_clients::http::{Http, Response, TransportError};
 use fastbrowse_clients::openai_compatible::{
     LLMOptions, OpenAICompatibleLLM, ReasoningEffort, gateway_provider_routing, openrouter_provider_routing,
@@ -22,7 +22,7 @@ use fastbrowse_clients::openai_compatible::{
 use fastbrowse_clients::typesafe::TypeSafeJevClient;
 use fastbrowse_clients::validation::{Lines, Paid, jev_spend};
 use fastbrowse_clients::vercel::VercelGatewayJevClient;
-use fastbrowse_core::jev::{JevClient, JevError, Question};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{Bytes, CostLine, LLMPurpose, Limits};
 use fastbrowse_core::py::base64;
@@ -61,10 +61,10 @@ fn step(value: &Value) -> Step {
 
 enum Client {
     Llm(Box<dyn LLMClient>),
-    Jev(Box<dyn JevClient>),
+    Jev(Box<dyn DecisionClient>),
 }
 
-fn jev(spec: &Value, http: &Http) -> Box<dyn JevClient> {
+fn jev(spec: &Value, http: &Http) -> Box<dyn DecisionClient> {
     match build(spec, http) {
         Client::Jev(client) => client,
         Client::Llm(_) => panic!("expected a Jev client"),
@@ -111,7 +111,7 @@ fn build(spec: &Value, http: &Http) -> Client {
             http.clone(),
             &text("base_url", ""),
         ))),
-        "failover" => Client::Jev(Box::new(FailoverJevClient::new(
+        "failover" => Client::Jev(Box::new(FailoverDecisionClient::new(
             jev(&spec["primary"], http),
             jev(&spec["backup"], http),
             http.clone(),
@@ -125,7 +125,7 @@ fn build(spec: &Value, http: &Http) -> Client {
                 .collect();
             let settings = Settings::from_sources(&env, None).unwrap();
             if spec["which"] == "jev" {
-                Client::Jev(settings.jev(http).unwrap())
+                Client::Jev(settings.decision(http).unwrap())
             } else {
                 Client::Llm(settings.llm(http).unwrap())
             }
@@ -149,16 +149,16 @@ fn llm_error(error: &LLMError) -> Value {
     json!({"error": {"type": kind, "message": normalized(&error.to_string())}})
 }
 
-fn jev_error(error: &JevError) -> Value {
+fn jev_error(error: &DecisionError) -> Value {
     let kind = match error {
-        JevError::Failed(_) => "JevError",
-        JevError::InputTooLarge(_) => "JevInputTooLarge",
-        JevError::TransportFailed(_) => "JevTransportFailed",
-        JevError::RetriesExhausted(_) => "JevRetriesExhausted",
-        JevError::Budget(_) => "BudgetExceeded",
+        DecisionError::Failed(_) => "JevError",
+        DecisionError::InputTooLarge(_) => "JevInputTooLarge",
+        DecisionError::TransportFailed(_) => "JevTransportFailed",
+        DecisionError::RetriesExhausted(_) => "JevRetriesExhausted",
+        DecisionError::Budget(_) => "BudgetExceeded",
     };
     let mut dumped = json!({"type": kind, "message": normalized(&error.to_string())});
-    if let JevError::RetriesExhausted(exhausted) = error {
+    if let DecisionError::RetriesExhausted(exhausted) = error {
         dumped["requests"] = exhausted.requests.into();
         dumped["unaccounted_requests"] = exhausted.unaccounted_requests.into();
         dumped["answered"] =

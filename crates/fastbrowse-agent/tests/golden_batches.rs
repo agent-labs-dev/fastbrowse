@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use common::*;
 use fastbrowse_agent::batches::evaluate_batches;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{Answer, Question};
+use fastbrowse_core::decision::{Answer, Question};
 use fastbrowse_core::py::dump::Dump;
 use indexmap::IndexMap;
 use serde_json::json;

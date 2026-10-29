@@ -1,7 +1,7 @@
 //! Port of `clients/typesafe.py`: TypeSafe System One transport for OpenRouter and the direct API.
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{DecisionProfile, Evaluation, JEV_MODEL, JevClient, JevError, Question};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, JEV_MODEL, Question};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -92,12 +92,12 @@ impl TypeSafeJevClient {
     }
 }
 
-impl JevClient for TypeSafeJevClient {
+impl DecisionClient for TypeSafeJevClient {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let price = self.profile.dollars_per_input_token;
         Box::pin(asking_open(
             questions,

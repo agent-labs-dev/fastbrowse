@@ -211,7 +211,7 @@ def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:
     env = agent_environment("http://127.0.0.1:9")
     assert "real" not in env.values()
     assert "FASTBROWSE_LLM_MODEL_PLAN" not in env and "AI_GATEWAY_API_KEY" not in env
-    assert env["FASTBROWSE_JEV_BASE_URL"] == "http://127.0.0.1:9/jev"
+    assert env["FASTBROWSE_DECISION_BASE_URL"] == "http://127.0.0.1:9/jev"
     assert env["FASTBROWSE_LLM_BASE_URL"] == "http://127.0.0.1:9/llm"
 
 

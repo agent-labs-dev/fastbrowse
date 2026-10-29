@@ -111,8 +111,8 @@ def agent_environment(proxy: str) -> dict[str, str]:
     }
     return env | {
         "OPENROUTER_API_KEY": PLACEHOLDER_KEY,
-        "FASTBROWSE_JEV_SOURCE": "openrouter",
-        "FASTBROWSE_JEV_BASE_URL": proxy + JEV_MOUNT,
+        "FASTBROWSE_DECISION_SOURCE": "openrouter",
+        "FASTBROWSE_DECISION_BASE_URL": proxy + JEV_MOUNT,
         "FASTBROWSE_LLM_BASE_URL": proxy + LLM_MOUNT,
         "FASTBROWSE_LLM_API_KEY": PLACEHOLDER_KEY,
         "FASTBROWSE_LLM_MODEL": LLM,

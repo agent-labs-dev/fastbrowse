@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use fastbrowse_clients::validation::{Lines, jev_spend};
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::config::Config;
-use fastbrowse_core::jev::JevClient;
+use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::{Generation, LLMClient};
 use fastbrowse_core::models::{
     Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler, Evidence,
@@ -236,7 +236,7 @@ struct Seen {
 
 pub struct Agent {
     page: Arc<dyn Page>,
-    jev: Arc<dyn JevClient>,
+    jev: Arc<dyn DecisionClient>,
     llm: Arc<dyn LLMClient>,
     config: Config,
     secrets: Option<Arc<dyn SecretResolver>>,
@@ -246,7 +246,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(page: Arc<dyn Page>, jev: Arc<dyn JevClient>, llm: Arc<dyn LLMClient>) -> Agent {
+    pub fn new(page: Arc<dyn Page>, jev: Arc<dyn DecisionClient>, llm: Arc<dyn LLMClient>) -> Agent {
         let config = jev.profile().fit(None);
         Agent {
             page,
