@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -28,6 +29,9 @@ internal sealed class Connection
     private readonly Action<string, JsonElement> _notify;
     private readonly Func<string, JsonElement, Task<object?>> _serve;
     private long _nextId;
+    // Guards _ended and adding to _pending, so a call is either refused at once or answered by End: never left out of
+    // the snapshot End takes.
+    private readonly object _gate = new();
     private Exception? _ended;
 
     public Connection(Stream output, Action<string, JsonElement> notify, Func<string, JsonElement, Task<object?>> serve)
@@ -132,14 +136,16 @@ internal sealed class Connection
     public Task<JsonElement> CallAsync(string method, object? parameters)
     {
         var waiting = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Exception? reason = Volatile.Read(ref _ended);
-        if (reason is not null)
-        {
-            waiting.SetException(reason);
-            return waiting.Task;
-        }
         long id = Interlocked.Increment(ref _nextId);
-        _pending[id] = waiting;
+        lock (_gate)
+        {
+            if (_ended is not null)
+            {
+                waiting.SetException(_ended);
+                return waiting.Task;
+            }
+            _pending[id] = waiting;
+        }
         var request = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -149,12 +155,6 @@ internal sealed class Connection
         };
         // Written before this returns, so a later call is written after it.
         Send(request);
-        // A process that ended between the check above and the add has no one left to answer.
-        reason = Volatile.Read(ref _ended);
-        if (reason is not null && _pending.TryRemove(id, out _))
-        {
-            waiting.TrySetException(reason);
-        }
         return waiting.Task;
     }
 
@@ -182,12 +182,17 @@ internal sealed class Connection
     /// </summary>
     public void End(Exception reason)
     {
-        if (Interlocked.CompareExchange(ref _ended, reason, null) is not null)
+        List<TaskCompletionSource<JsonElement>> waiting;
+        lock (_gate)
         {
-            return;
+            if (_ended is not null)
+            {
+                return;
+            }
+            _ended = reason;
+            waiting = [.. _pending.Values];
+            _pending.Clear();
         }
-        var waiting = _pending.Values;
-        _pending.Clear();
         _delivery.Writer.TryWrite(() =>
         {
             foreach (var each in waiting)
