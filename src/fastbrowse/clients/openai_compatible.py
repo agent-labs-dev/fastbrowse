@@ -139,8 +139,17 @@ def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int, purpose: LLMPu
     Repairing the JSON would send the same prompt under the same cap and be cut off again, so the one retry is
     spent on more room instead, and a second truncation is reported as what it is.
     """
+    ceiling = body.get("max_tokens")
     if attempt == 1:
-        raise LLMError(f"LLM response truncated at the {body['max_tokens']} token output cap ({purpose.value})")
+        raise LLMError(
+            f"LLM response truncated at the {ceiling if ceiling is not None else 'no'} token output cap ({purpose.value})"
+        )
+    # No cap was sent, so there is nothing to grow: the model stopped on its own, and asking again under a larger
+    # ceiling would only spend the one retry on the same reply. The caller's repair turn is the next move.
+    if ceiling is None:
+        raise LLMError(
+            f"LLM response was cut off with no output cap set ({purpose.value}); it ended before the JSON did"
+        )
     body["max_tokens"] = cap * _TRUNCATION_RETRY_FACTOR
 
 
@@ -416,7 +425,6 @@ class OpenAICompatibleLLM:
         body: dict[str, JsonValue] = {
             **self._extra_body,
             "model": model,
-            "max_tokens": max_output_tokens,
             "messages": wire_messages,
             "response_format": {
                 "type": "json_schema",
@@ -433,6 +441,12 @@ class OpenAICompatibleLLM:
                 },
             },
         }
+        # Zero is the caller saying no ceiling: fastbrowse never caps, truncates or crops an output token, so the
+        # field is left off the request entirely rather than sent as a limit of zero.
+        if max_output_tokens > 0:
+            body["max_tokens"] = max_output_tokens
+        else:
+            body.pop("max_tokens", None)
         if self._provider_routing is not None:
             body["provider"] = self._provider_routing
         if self._reasoning_effort is not None:
@@ -501,11 +515,13 @@ class OpenAICompatibleLLM:
                     # be anything it read, so it is scrubbed too.
                     detail = self._scrubbed(error_detail(error))
                     if _ends_mid_json(error):
-                        if (written := _short_of_cap(payload, body["max_tokens"])) is None:
+                        if (written := _short_of_cap(payload, body.get("max_tokens"))) is None:
                             _grow_cap(body, attempt, max_output_tokens, purpose)
                         elif short_retried:
+                            ceiling = body.get("max_tokens")
                             raise LLMRetriesExhausted(
-                                f"LLM response ended mid-JSON at {written} of {body['max_tokens']} output tokens twice"
+                                f"LLM response ended mid-JSON at {written} of {ceiling if ceiling is not None else 'no'}"
+                                " output tokens twice"
                             ) from None
                         else:
                             short_retried = True

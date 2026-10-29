@@ -17,7 +17,7 @@ from fastbrowse.safety import origin_of
 from fastbrowse.telemetry import Ledger
 
 # A shortcut returns one URL or null; a prose-sized response would spend tokens on an invalid answer.
-_URL_OUTPUT_TOKENS = 200
+_URL_OUTPUT_TOKENS = 0
 
 
 class Shortcut(Frozen):

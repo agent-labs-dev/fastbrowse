@@ -146,7 +146,7 @@ async def partition_plan(
                 Message(role="user", content=json.dumps({"task": task, "plan": plan.model_dump()})),
             ],
             _FinishOutputs,
-            max_output_tokens=8000,
+            max_output_tokens=0,
             ledger=ledger,
         )
         ledger.record(generated.cost)
@@ -275,7 +275,7 @@ async def make_plan(
         ],
         Plan,
         # Output checks repeat their entity and scope, so a compound task can exceed the old prose-plan budget.
-        max_output_tokens=8000,
+        max_output_tokens=0,
         ledger=ledger,
     )
 

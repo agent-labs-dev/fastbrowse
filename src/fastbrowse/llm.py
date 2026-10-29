@@ -8,8 +8,9 @@ from pydantic import BaseModel
 from fastbrowse.models import CostLine, Frozen, LLMPurpose, Unavailable
 from fastbrowse.telemetry import Ledger
 
-# Planning and field responses are short; readers and composers pass their larger configured caps.
-DEFAULT_MAX_OUTPUT_TOKENS = 2000
+# Fastbrowse never caps, truncates or crops an output token: 0 means no ceiling, so the client leaves the field off
+# the request and the schema and the model's own maximum are the only bounds.
+DEFAULT_MAX_OUTPUT_TOKENS = 0
 
 
 class Message(Frozen):

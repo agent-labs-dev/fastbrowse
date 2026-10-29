@@ -67,9 +67,9 @@ class TokenBudget(Frozen):
     token request failed five of eight times, 4k never), so a batch of questions is split small and sent in parallel."""
     chars_per_token: float = Field(default=3.0, gt=0)
     """Local estimate for prompt budgeting; Jev also has a separate dense JSON safety bound."""
-    read_output_tokens: int = Field(default=8000, gt=0)
+    read_output_tokens: int = Field(default=0, ge=0)
     """A page of records needs room for each value and its verbatim quote in the reader's JSON."""
-    compose_output_tokens: int = Field(default=8000, gt=0)
+    compose_output_tokens: int = Field(default=0, ge=0)
     """A long answer repeats citation ids for every claim, so it needs more room than a planning response."""
 
     def input_chars(self, questions: Sequence[str] = (), *, jev: bool = False) -> int:
