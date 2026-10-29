@@ -84,7 +84,8 @@ is supported for Jev text when `OPENROUTER_API_KEY` is set and no direct key is 
 recommended: it puts another service between fastbrowse and TypeSafe, and it never receives Jev image
 input. A gateway key on its own also serves Jev, as a last resort rather than the recommended route; with
 `AI_GATEWAY_API_KEY` beside another key, the gateway is the backup. `FASTBROWSE_DECISION_SOURCE` overrides
-automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
+automatic selection, and also picks another decision model's host: `telnyx`, a local `ollama`, or any `custom`
+System One server ([other hosts](docs/jev.md#other-system-one-hosts)); see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
 `OPENROUTER_API_KEY` is set, otherwise the Vercel AI Gateway's OpenAI-compatible chat completions.
 
 `uvx` runs the published package in an isolated cached environment. `uv tool install fastbrowse` keeps it on your

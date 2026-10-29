@@ -8,8 +8,8 @@ evals rather than taken from Typesafe.
 
 | | Documented | Where fastbrowse relies on it |
 |:--|:--|:--|
-| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `crates/fastbrowse-clients/src/typesafe.rs` with base URL `https://openrouter.ai/api`; a supported Jev text route when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended, and never sent Jev image input |
-| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `crates/fastbrowse-clients/src/typesafe.rs`, selected with `FASTBROWSE_DECISION_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route, and the only one that may receive Jev image input |
+| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `crates/fastbrowse-clients/src/system_one.rs` with base URL `https://openrouter.ai/api`; a supported Jev text route when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended, and never sent Jev image input |
+| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `crates/fastbrowse-clients/src/system_one.rs`, selected with `FASTBROWSE_DECISION_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route, and the only one that may receive Jev image input |
 | Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `crates/fastbrowse-clients/src/vercel.rs`, used with `AI_GATEWAY_API_KEY` as a backup for an outage or the last resort when no other Jev key is supplied. A last resort rather than the recommended Jev route, and it receives no Jev image input. `FASTBROWSE_DECISION_BASE_URL` retargets the selected source |
 | Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `crates/fastbrowse-clients/src/validation.rs` decodes each shape separately; `crates/fastbrowse-agent/src/policy.rs` asks one per control to filter a dense page |
 | Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `crates/fastbrowse-agent/src/policy.rs` (operation and target), `crates/fastbrowse-agent/src/retrieval/` (field and short-fact reads) |
@@ -35,6 +35,22 @@ One](https://pydantic.dev/docs/ai/models/system-one/)). It has no list price, so
 unknown cost, which a dollar limit treats as unaffordable. Its thresholds are Jev's, which no eval has checked against
 it, and the run's trace says so with a `decision_unvalidated` event. A Jev release other than 1.13 keeps Jev's limits
 and price but is unvalidated too.
+
+### Other System One hosts
+
+`FASTBROWSE_DECISION_SOURCE` picks one of these instead of a Jev source. Each is sent only its own key, never
+`TYPESAFE_API_KEY`, `OPENROUTER_API_KEY` or `AI_GATEWAY_API_KEY`, and none has a backup: an outage past its
+retries ends the run. They all speak the System One API through `crates/fastbrowse-clients/src/system_one.rs`.
+
+| Source | Host | Key | Model | Limits |
+|:--|:--|:--|:--|:--|
+| `telnyx` | `https://api.telnyx.com/v2/ai/typesafe` ([Telnyx](https://developers.telnyx.com/api-reference/decision-models/evaluate-decision-models-typesafe-compatible)) | `TELNYX_API_KEY` | `telnyx/decision-flash`, or `telnyx/decision-pro` | 64 questions a request, 64 options a choice or levels a score; no published price |
+| `ollama` | `http://localhost:11434` ([Ollama](https://pydantic.dev/docs/ai/models/system-one/#ollama)) | none, or `FASTBROWSE_DECISION_API_KEY` | `FASTBROWSE_DECISION_MODEL`, such as `nimble` or `tev1` | 26 options, 26 levels, 64 questions and 64 KiB a request |
+| `custom` | `FASTBROWSE_DECISION_BASE_URL` | `FASTBROWSE_DECISION_API_KEY`, if it takes one | `FASTBROWSE_DECISION_MODEL` | The profile of a model fastbrowse knows, otherwise the unknown model's |
+
+`FASTBROWSE_DECISION_BASE_URL` also retargets `telnyx` and `ollama`. Telnyx answers an oversized body with HTTP
+413, which fastbrowse reads as input too large rather than as an outage. Telnyx says its scores are relative
+preference rather than calibrated probability, so no Jev threshold is known to hold on it.
 
 ## Choosing a provider
 

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use common::{Script, answering, reply, text};
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
-use fastbrowse_clients::typesafe::TypeSafeJevClient;
+use fastbrowse_clients::system_one::SystemOneClient;
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{DecisionClient, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulQuestion, Question};
@@ -41,8 +41,8 @@ fn answered() -> Response {
     Response::json(200, &json!({"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100}}))
 }
 
-fn direct(http: Http) -> TypeSafeJevClient {
-    TypeSafeJevClient::direct("key", http)
+fn direct(http: Http) -> SystemOneClient {
+    SystemOneClient::direct("key", http)
 }
 
 fn events(trace: &Trace, kind: &str) -> Vec<Value> {
@@ -169,7 +169,7 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
     let mut steps = vec![common::Step::Fail(TransportError::Timeout("ReadTimeout"))];
     steps.extend((0..5).map(|_| text(503, &format!("secret-key{}", "x".repeat(1000)))));
     let script = Script::new(steps);
-    let client = TypeSafeJevClient::direct("secret-key", script.http());
+    let client = SystemOneClient::direct("secret-key", script.http());
     let error = client.evaluate(&json!("page"), &one()).await.unwrap_err();
     let DecisionError::RetriesExhausted(exhausted) = &error else { panic!("exhausted") };
     assert_eq!(exhausted.unaccounted_requests, 1);
@@ -183,7 +183,7 @@ async fn test_a_request_that_can_never_be_sent_is_not_an_outage() {
     // Retrying it would fail the same way every time, and an eval would re-run the task forever.
     let script = Script::new([common::Step::Fail(TransportError::Fatal("UnsupportedProtocol"))]);
     let error =
-        TypeSafeJevClient::direct("secret-key", script.http()).evaluate(&json!("page"), &one()).await.unwrap_err();
+        SystemOneClient::direct("secret-key", script.http()).evaluate(&json!("page"), &one()).await.unwrap_err();
     assert!(error.to_string().contains("could not be sent"), "{error}");
     assert_eq!(script.requests().len(), 1);
     assert!(!error.is_unavailable());

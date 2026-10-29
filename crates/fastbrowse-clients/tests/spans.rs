@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use common::{Script, Step, answer_model, reply, text};
 use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM};
-use fastbrowse_clients::typesafe::TypeSafeJevClient;
+use fastbrowse_clients::system_one::SystemOneClient;
 use fastbrowse_clients::vercel::VercelGatewayJevClient;
 use fastbrowse_core::decision::{DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
@@ -53,7 +53,7 @@ async fn test_jev_calls_are_traced_when_they_fail_are_cancelled_or_answer_invali
     let question: IndexMap<String, Question> =
         IndexMap::from([("q".to_string(), NoulQuestion::new("Is it?", Some("Yes."), Some("No.")).into())]);
     let state = json!({});
-    let direct = |script: &Script| TypeSafeJevClient::new("key", script.traced(&trace), "https://jev.test", "jev");
+    let direct = |script: &Script| SystemOneClient::new("key", script.traced(&trace), "https://jev.test", "jev");
     let unauthorized = Script::new([text(401, "")]);
     assert!(direct(&unauthorized).evaluate(&state, &question).await.is_err());
     let invalid = Script::new([reply(200, json!({"answers": "x"}))]);

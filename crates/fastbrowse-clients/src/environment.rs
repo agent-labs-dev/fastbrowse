@@ -37,7 +37,9 @@ use crate::openai_compatible::{
     LLMOptions, OpenAICompatibleLLM, ReasoningEffort, gateway_provider_routing, openrouter_provider_routing,
     reserved_clashes,
 };
-use crate::typesafe::{OPENROUTER_MODEL, OPENROUTER_URL, TYPESAFE_URL, TypeSafeJevClient};
+use crate::system_one::{
+    OLLAMA_URL, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient, TELNYX_MODEL, TELNYX_URL, TYPESAFE_URL,
+};
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
 /// The default is the model the live suite passes on. gemini-3.5-flash-lite is two to three times faster a call but
@@ -68,18 +70,41 @@ pub enum DecisionSource {
     OpenRouter,
     TypeSafe,
     Gateway,
+    /// Telnyx's own decision models over the System One API.
+    Telnyx,
+    /// A local Ollama serving a decision model over the System One API.
+    Ollama,
+    /// Any other System One host, at FASTBROWSE_DECISION_BASE_URL.
+    Custom,
 }
 
 impl DecisionSource {
-    pub const ALL: [DecisionSource; 3] =
-        [DecisionSource::OpenRouter, DecisionSource::TypeSafe, DecisionSource::Gateway];
+    pub const ALL: [DecisionSource; 6] = [
+        DecisionSource::OpenRouter,
+        DecisionSource::TypeSafe,
+        DecisionSource::Gateway,
+        DecisionSource::Telnyx,
+        DecisionSource::Ollama,
+        DecisionSource::Custom,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             DecisionSource::OpenRouter => "openrouter",
             DecisionSource::TypeSafe => "typesafe",
             DecisionSource::Gateway => "gateway",
+            DecisionSource::Telnyx => "telnyx",
+            DecisionSource::Ollama => "ollama",
+            DecisionSource::Custom => "custom",
         }
+    }
+
+    /// The sources that serve Jev, so any one can stand in for another in an outage.
+    pub const JEV: [DecisionSource; 3] =
+        [DecisionSource::OpenRouter, DecisionSource::TypeSafe, DecisionSource::Gateway];
+
+    fn serves_jev(self) -> bool {
+        DecisionSource::JEV.contains(&self)
     }
 
     pub fn parse(value: &str) -> Option<DecisionSource> {
@@ -170,6 +195,9 @@ pub struct Settings {
     pub decision_source: Option<DecisionSource>,
     pub decision_base_url: Option<String>,
     pub decision_model: Option<String>,
+    /// Bearer token for the `ollama` and `custom` sources. Optional: a local server usually takes none.
+    pub decision_api_key: Option<Secret>,
+    pub telnyx_api_key: Option<Secret>,
     pub llm_model: Option<String>,
     pub llm_model_plan: Option<String>,
     pub llm_model_read: Option<String>,
@@ -216,6 +244,8 @@ impl Default for Settings {
             decision_source: None,
             decision_base_url: None,
             decision_model: None,
+            decision_api_key: None,
+            telnyx_api_key: None,
             llm_model: None,
             llm_model_plan: None,
             llm_model_read: None,
@@ -252,7 +282,7 @@ const FORMERLY: [(&str, &str); 3] = [
 ];
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 31] = [
+const FIELDS: [(&str, &str); 33] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -261,6 +291,8 @@ const FIELDS: [(&str, &str); 31] = [
     ("decision_source", "fastbrowse_decision_source"),
     ("decision_base_url", "fastbrowse_decision_base_url"),
     ("decision_model", "fastbrowse_decision_model"),
+    ("decision_api_key", "fastbrowse_decision_api_key"),
+    ("TELNYX_API_KEY", "telnyx_api_key"),
     ("llm_model", "fastbrowse_llm_model"),
     ("llm_model_plan", "fastbrowse_llm_model_plan"),
     ("llm_model_read", "fastbrowse_llm_model_read"),
@@ -379,6 +411,8 @@ impl Settings {
             "decision_source" => self.decision_source = Some(DecisionSource::parse(value).ok_or(())?),
             "decision_base_url" => self.decision_base_url = text(),
             "decision_model" => self.decision_model = text(),
+            "decision_api_key" => self.decision_api_key = secret(),
+            "TELNYX_API_KEY" => self.telnyx_api_key = secret(),
             "llm_model" => self.llm_model = text(),
             "llm_model_plan" => self.llm_model_plan = text(),
             "llm_model_read" => self.llm_model_read = text(),
@@ -473,7 +507,10 @@ impl Settings {
             DecisionSource::Gateway
         });
         // A proxy may be a routing boundary, and the gateway cannot honour a direct-API model pin.
-        if self.decision_base_url.as_ref().is_some_and(|url| !url.is_empty()) || self.decision_model.is_some() {
+        if !source.serves_jev()
+            || self.decision_base_url.as_ref().is_some_and(|url| !url.is_empty())
+            || self.decision_model.is_some()
+        {
             return (source, None);
         }
         let backup = match source {
@@ -482,6 +519,7 @@ impl Settings {
             }
             DecisionSource::Gateway if set(&self.typesafe_api_key) => Some(DecisionSource::TypeSafe),
             DecisionSource::Gateway => set(&self.openrouter_api_key).then_some(DecisionSource::OpenRouter),
+            DecisionSource::Telnyx | DecisionSource::Ollama | DecisionSource::Custom => None,
         };
         (source, backup)
     }
@@ -533,13 +571,13 @@ impl Settings {
             _ => Err(ConfigurationError(message.to_string())),
         };
         Ok(match source {
-            DecisionSource::OpenRouter => Box::new(TypeSafeJevClient::new(
+            DecisionSource::OpenRouter => Box::new(SystemOneClient::new(
                 key(&self.openrouter_api_key, "set OPENROUTER_API_KEY for Jev via OpenRouter")?,
                 http.clone(),
                 &base_url(OPENROUTER_URL),
                 &model(OPENROUTER_MODEL),
             )),
-            DecisionSource::TypeSafe => Box::new(TypeSafeJevClient::new(
+            DecisionSource::TypeSafe => Box::new(SystemOneClient::new(
                 key(&self.typesafe_api_key, "set TYPESAFE_API_KEY for Jev via the direct API")?,
                 http.clone(),
                 &base_url(TYPESAFE_URL),
@@ -553,6 +591,32 @@ impl Settings {
                 http.clone(),
                 &base_url(GATEWAY_URL),
             )),
+            DecisionSource::Telnyx => Box::new(SystemOneClient::new(
+                key(&self.telnyx_api_key, "set TELNYX_API_KEY for decisions via Telnyx")?,
+                http.clone(),
+                &base_url(TELNYX_URL),
+                &model(TELNYX_MODEL),
+            )),
+            // Only this source's own key: a TypeSafe, OpenRouter or gateway key must never reach another host.
+            DecisionSource::Ollama | DecisionSource::Custom => {
+                let base_url = match (source, &self.decision_base_url) {
+                    (_, Some(url)) if !url.is_empty() => url.clone(),
+                    (DecisionSource::Ollama, _) => OLLAMA_URL.to_string(),
+                    _ => {
+                        return Err(ConfigurationError(
+                            "set FASTBROWSE_DECISION_BASE_URL to the System One host for the custom source".into(),
+                        ));
+                    }
+                };
+                let Some(model) = self.decision_model.as_deref().map(str::trim).filter(|model| !model.is_empty())
+                else {
+                    return Err(ConfigurationError(format!(
+                        "set FASTBROWSE_DECISION_MODEL to the decision model the {source} source serves"
+                    )));
+                };
+                let key = self.decision_api_key.as_ref().map(|key| key.expose().trim().to_string()).unwrap_or_default();
+                Box::new(SystemOneClient::new(key, http.clone(), &base_url, model))
+            }
         })
     }
 

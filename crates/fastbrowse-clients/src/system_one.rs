@@ -1,4 +1,6 @@
-//! Port of `clients/typesafe.py`: TypeSafe System One transport for OpenRouter and the direct API.
+//! The System One API (`POST /v1/systemone`), first ported from `clients/typesafe.py`: direct TypeSafe and OpenRouter
+//! serve Jev over it, Telnyx its own decision models, and Ollama any it runs locally. A host with no key is sent no
+//! Authorization header.
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, JEV_MODEL, Question};
@@ -15,8 +17,13 @@ use crate::validation::{
 pub const TYPESAFE_URL: &str = "https://api.typesafe.ai";
 pub const OPENROUTER_URL: &str = "https://openrouter.ai/api";
 pub const OPENROUTER_MODEL: &str = "jev-1.13";
+/// The SDK base URL Telnyx documents; it serves only its own models, and rejects a request that names none.
+pub const TELNYX_URL: &str = "https://api.telnyx.com/v2/ai/typesafe";
+pub const TELNYX_MODEL: &str = "telnyx/decision-flash";
+/// Ollama 0.35 and later, with no `/v1` suffix and no key.
+pub const OLLAMA_URL: &str = "http://localhost:11434";
 
-pub struct TypeSafeJevClient {
+pub struct SystemOneClient {
     api_key: String,
     http: Http,
     base_url: String,
@@ -24,9 +31,9 @@ pub struct TypeSafeJevClient {
     profile: DecisionProfile,
 }
 
-impl TypeSafeJevClient {
-    pub fn new(api_key: impl Into<String>, http: Http, base_url: &str, model: &str) -> TypeSafeJevClient {
-        TypeSafeJevClient {
+impl SystemOneClient {
+    pub fn new(api_key: impl Into<String>, http: Http, base_url: &str, model: &str) -> SystemOneClient {
+        SystemOneClient {
             api_key: api_key.into(),
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -36,8 +43,8 @@ impl TypeSafeJevClient {
     }
 
     /// The direct API with its default model.
-    pub fn direct(api_key: impl Into<String>, http: Http) -> TypeSafeJevClient {
-        TypeSafeJevClient::new(api_key, http, TYPESAFE_URL, JEV_MODEL)
+    pub fn direct(api_key: impl Into<String>, http: Http) -> SystemOneClient {
+        SystemOneClient::new(api_key, http, TYPESAFE_URL, JEV_MODEL)
     }
 
     async fn ask(
@@ -92,7 +99,7 @@ impl TypeSafeJevClient {
     }
 }
 
-impl DecisionClient for TypeSafeJevClient {
+impl DecisionClient for SystemOneClient {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
