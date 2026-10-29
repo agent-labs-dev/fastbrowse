@@ -48,8 +48,6 @@ OPENROUTER_PROVIDER_ROUTING = {"require_parameters": True, "sort": "latency"}
 MISS_STATUS = 404
 """Not a status the clients retry, so a miss ends the call at once instead of costing a backoff."""
 
-MAX_DIFF_LINES = 200
-
 
 class Latency(StrEnum):
     ZERO = "zero"
@@ -187,7 +185,7 @@ def describe_request(path: str, body: Any) -> tuple[str, str | None]:
     names = sorted(questions) if isinstance(questions, dict) else []
     if isinstance(questions, list):
         names = sorted(str(q.get("id") or q.get("name") or "?") for q in questions if isinstance(q, dict))
-    return f"jev:{','.join(names)[:120]}", model
+    return f"jev:{','.join(names)}", model
 
 
 def _pretty(body: Any) -> list[str]:
@@ -198,14 +196,11 @@ def _pretty(body: Any) -> list[str]:
         return keyed.splitlines()
 
 
-def miss_diff(body: Any, nearest: Any | None, *, limit: int = MAX_DIFF_LINES) -> str:
-    """A unified diff from the nearest recorded body to the one that missed, cut at `limit` lines."""
+def miss_diff(body: Any, nearest: Any | None) -> str:
+    """A unified diff from the nearest recorded body to the one that missed."""
     if nearest is None:
         return "(nothing recorded on this path)"
-    lines = list(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
-    if len(lines) > limit:
-        lines = [*lines[:limit], f"... {len(lines) - limit} more lines"]
-    return "\n".join(lines)
+    return "\n".join(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
 
 
 def nearest_body(body: Any, candidates: Iterable[Any]) -> Any | None:
