@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **No output token ceiling by default.** Recovery, the field writer, the reader and the composer used to send `max_tokens` of 2,000 or 8,000, which could cut a reply off mid-JSON. They now send no cap, and the model's own maximum and the answer schema bound the reply. `read_output_tokens` and `compose_output_tokens` default to `0`, which means no ceiling, and a reply that still ends mid-JSON with no cap set is reported with the tokens it wrote instead of being retried under a cap nobody asked for.
+
 - **A .NET client.** `dotnet add package Fastbrowse` runs tasks from .NET over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. Cancelling the `CancellationToken` stops a run once its browser has closed. The package carries each platform's binary. .NET 10 or newer.
 
 - **A Java client, for Kotlin too.** `dev.agentlabs:fastbrowse` on Maven Central runs tasks from the JVM over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. `run` returns a `CompletableFuture`, and cancelling it stops the run. Each platform's binary ships in a `natives-<platform>` jar beside the client, unpacked once into the user cache directory. Java 17 or newer.
