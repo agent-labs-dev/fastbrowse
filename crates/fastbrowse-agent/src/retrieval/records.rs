@@ -416,7 +416,7 @@ mod tests {
     use std::sync::Mutex;
 
     use fastbrowse_core::BoxFuture;
-    use fastbrowse_core::decision::{DecisionError, Evaluation, NoulAnswer, NoulTag};
+    use fastbrowse_core::decision::{DecisionError, DecisionProfile, Evaluation, NoulAnswer, NoulTag};
     use fastbrowse_core::llm::{Generation, LLMError, ResponseSchema};
     use fastbrowse_core::models::{CostBasis, CostComponent, LLMPurpose};
     use serde_json::Value;
@@ -435,6 +435,10 @@ mod tests {
     }
 
     impl DecisionClient for Jev {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,

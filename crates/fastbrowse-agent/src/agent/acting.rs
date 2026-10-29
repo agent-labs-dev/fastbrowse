@@ -131,17 +131,17 @@ impl Agent {
         let target = decision.target.as_ref();
         match decision.operation {
             Operation::Navigate => {
-                let observed = decision.directed
-                    && decision.url.as_ref().is_some_and(|url| state.observed_links.contains_key(url));
-                let Some(url) = decision.url.clone().filter(|url| {
-                    task_urls(&state.task, state.caller_start.as_deref(), true).contains(url) || observed
-                }) else {
+                let Some(url) = decision
+                    .url
+                    .clone()
+                    .filter(|url| task_urls(&state.task, state.caller_start.as_deref(), true).contains(url))
+                else {
                     return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
                 };
                 if self.reveals_text(&url) {
                     return Err(Stop::new(Status::NeedsInput, "navigation address contains a resolved secret").into());
                 }
-                if gate && !observed {
+                if gate {
                     state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
                     let question = NoulQuestion::new(
                         "Does the caller ask the browser to open this address for the task?",
@@ -159,8 +159,6 @@ impl Agent {
                             Unsure::new("the supplied address is not confidently a browsing destination").into()
                         );
                     }
-                }
-                if gate {
                     self.gate_download(state, observation, decision, decided_by, &caller_link(&url)).await?;
                     let question = navigation_question(&state.task, &url);
                     self.gate_question(state, observation, decision, decided_by, &url, question, false).await?;
@@ -385,7 +383,10 @@ impl Agent {
             if probability.is_some_and(|p| p <= thresholds.irreversible_above) {
                 return Ok(());
             }
-            if requested.is_some_and(|p| p >= thresholds.sensitive_act_from)
+            // Jev's yes that the task names this action is read against the same line as its irreversible answer, and
+            // its pick against the confidence any pick is taken at: Finish on a checkout the task asks to finish
+            // scored 0.73 to 0.79 as a pick, under the bar a pick the task does not name is held to.
+            if requested.is_some_and(|p| p > thresholds.irreversible_above)
                 && decision.confidence() >= thresholds.recover_below
             {
                 return Ok(());
@@ -1087,7 +1088,7 @@ impl Agent {
         let options = StepOptions { capture: Some(capture), ..StepOptions::default() };
         if Box::pin(self.step(state, observation, &reading, Decider::Code, options)).await? {
             let reason = read_exhausted(state);
-            Box::pin(self.recover(state, observation, &reason, Status::Stuck)).await?;
+            Box::pin(self.recover(state, observation, &reason, Status::Stuck, super::recovery::READ)).await?;
         }
         Ok(true)
     }

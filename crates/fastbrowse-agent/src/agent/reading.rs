@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use fastbrowse_core::decision::DecisionClient;
-use fastbrowse_core::effects::{state_key, step_key};
+use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult};
 use fastbrowse_core::page::{BlockKind, Capture, Control, Observation};
@@ -17,7 +17,6 @@ use super::Agent;
 use super::driving::StepOptions;
 use super::helpers::{
     answer_evidence, code_decision, describe, lookup, next_page_control, next_page_notice, read_question, sources,
-    without_failed_links,
 };
 use super::state::{Flow, ReadKey, RunState, Spawned, Step};
 use crate::comparison::complete_comparison;
@@ -330,9 +329,6 @@ impl Agent {
         for candidate in &mut state.transaction_candidates {
             candidate.outcome_read = true;
         }
-        if let Some(observation) = observation {
-            state.read_step = Some(step_key(observation, &capture));
-        }
         for requirement in &wanted {
             state.notes.supersede(&requirement.id, &capture.url, &capture.sha256, &capture.text);
         }
@@ -535,7 +531,7 @@ impl Agent {
         let mut target: Option<Control> = None;
         let walked = async {
             loop {
-                target = next_page_control(&without_failed_links(state, &observation));
+                target = next_page_control(&observation);
                 let Some(next) = target.clone() else { break };
                 if state.pages >= self.config.max_pages {
                     break;

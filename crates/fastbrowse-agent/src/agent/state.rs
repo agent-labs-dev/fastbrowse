@@ -19,7 +19,7 @@ use crate::comparison::NumericComparison;
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{OutputTarget, Plan};
-use crate::policy::{HistoryEntry, RelevanceCache};
+use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::{AnswerCorrection, ComposedAnswer, TallyReader};
 use crate::verification::LLMVerdict;
 
@@ -331,11 +331,11 @@ pub(crate) struct RunState {
     pub hint: Option<String>,
     /// The operation and control id recovery named, taken when Jev is still unsure of the next step.
     pub directed: Option<(Operation, Option<String>)>,
-    /// An observed output section must be opened and read before another model chooses an action.
-    pub section_read: bool,
-    pub recovery_sections: HashSet<String>,
-    /// Guessed opening pages the run already left for the caller's start page, so it leaves each once.
-    pub left_guesses: HashSet<String>,
+    /// Jev's pick when asked again after a stall or an unsure pick, by the page state it was asked on, taken as the
+    /// next decision there.
+    pub picked: Option<(String, Decision)>,
+    /// Actions that changed nothing from their page state since the run last made progress.
+    pub idle: HashSet<Signature>,
     /// The commit an authorized run was last refused as unsure it is the one the task means.
     pub unsure_commit: Option<Commit>,
     /// That refused commit once recovery, shown the page and the task, named it as the next step. It covers the next
@@ -347,11 +347,6 @@ pub(crate) struct RunState {
     pub written: HashMap<String, HashSet<String>>,
     pub recoveries: i64,
     pub recovered_requirements: HashSet<String>,
-    pub terminal_verification_attempted: bool,
-    /// Steps, by `step_key`, whose reader a finish refused for an unread requirement asked once more.
-    pub unread_rereads: HashSet<String>,
-    /// The `step_key` of the capture the last read read.
-    pub read_step: Option<String>,
     pub blank_opening_checked: bool,
     pub recovery_log: VecDeque<String>,
     /// `history.len()` when a tripwire last recovered the run. Evidence a recovery already acted on is spent:
@@ -382,8 +377,6 @@ pub(crate) struct RunState {
     pub owes_read: bool,
     /// This page has been read since it last changed.
     pub read_here: bool,
-    /// Page states where an unsure pick has been acted on instead of recovering; the next one there recovers.
-    pub tried_unsure: HashSet<String>,
     /// The fields, settings and submit controls each address has shown.
     pub form_controls_at: HashMap<String, HashSet<String>>,
     /// Attempted reads by document, exact content and outstanding requirements, independent of URL edits.
@@ -507,18 +500,14 @@ impl RunState {
             http_seen: HashSet::new(),
             hint: None,
             directed: None,
-            section_read: false,
-            recovery_sections: HashSet::new(),
-            left_guesses: HashSet::new(),
+            picked: None,
+            idle: HashSet::new(),
             unsure_commit: None,
             confirmed_commit: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
             recovered_requirements: HashSet::new(),
-            terminal_verification_attempted: false,
-            unread_rereads: HashSet::new(),
-            read_step: None,
             blank_opening_checked: false,
             recovery_log: VecDeque::new(),
             recovered_at: 0,
@@ -536,7 +525,6 @@ impl RunState {
             downloads_forbidden: None,
             owes_read: false,
             read_here: false,
-            tried_unsure: HashSet::new(),
             form_controls_at: HashMap::new(),
             reads: HashSet::new(),
             record_read_documents: HashSet::new(),

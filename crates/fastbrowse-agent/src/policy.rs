@@ -171,6 +171,15 @@ pub struct StepContext {
     /// The caller's background, which Jev reads beside the task and never as a requirement.
     #[serde(default)]
     pub background: Option<String>,
+    /// Why Jev is asked again on this page: a stall or an unsure pick, and the action withheld for it.
+    #[serde(default)]
+    pub problem: Option<String>,
+    /// Page operations not offered this time, because the problem is that they changed nothing.
+    #[serde(default)]
+    pub withheld: Vec<Operation>,
+    /// Fields the task gives no value for: filling one ends the run needing input.
+    #[serde(default)]
+    pub no_value_fields: Vec<String>,
     /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_actions: usize,
@@ -199,6 +208,9 @@ impl StepContext {
             recovery_memory: String::new(),
             background: None,
             omitted_actions: 0,
+            problem: None,
+            withheld: Vec::new(),
+            no_value_fields: Vec::new(),
         }
     }
 }
@@ -723,6 +735,7 @@ fn offered_operations(
     Operation::ALL
         .iter()
         .copied()
+        .filter(|operation| !context.withheld.contains(operation))
         .filter(|operation| match operation {
             Operation::Navigate => !urls.is_empty(),
             Operation::Click
@@ -762,15 +775,14 @@ pub fn build_request(
     compact: bool,
 ) -> Request {
     let indexed = index_controls(controls);
-    // Back from a form's result can land on a browser error page that asks to resubmit and has nothing to click, and
-    // the caller's start address, held back so a working form is not reopened and emptied, was then reachable only
-    // after recovery proposed it. A page with no controls, offered or omitted, has no form to lose.
+    // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls,
+    // offered or omitted, has no form to lose, and a run asked again because it is stuck may need to start over.
     let urls = navigation_urls(
         &context.task,
         &observation.url,
         context.start_url.as_deref(),
         context.start_landing_url.as_deref(),
-        observation.controls.is_empty() && observation.omitted_controls == 0,
+        (observation.controls.is_empty() && observation.omitted_controls == 0) || context.problem.is_some(),
     );
     let offered = offered_operations(observation, &indexed, context, &urls);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
@@ -1064,6 +1076,12 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     }
     if !context.recovery_memory.is_empty() {
         state.insert("recovery_memory".into(), context.recovery_memory.clone().into());
+    }
+    if let Some(problem) = &context.problem {
+        state.insert("problem".into(), problem.clone().into());
+    }
+    if !context.no_value_fields.is_empty() {
+        state.insert("fields_the_task_gives_no_value".into(), json!(context.no_value_fields));
     }
     if !context.secrets.is_empty() {
         state.insert("stored_secrets".into(), json!(context.secrets));

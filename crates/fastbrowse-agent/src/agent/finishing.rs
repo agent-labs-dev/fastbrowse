@@ -17,9 +17,10 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::helpers::{
-    EvidenceKey, answer_evidence, blocked_action, guessed, guessed_page, lookup, misread, not_acting, partition_proof,
+    EvidenceKey, answer_evidence, doubted, guessed, guessed_page, lookup, misread, not_acting, partition_proof,
     path_of, unread, verified, visited,
 };
+use super::recovery::DONE;
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate};
 use super::{Agent, Outcome};
 use crate::batches::evaluate_batches;
@@ -127,7 +128,7 @@ impl Agent {
         {
             let fresh = self.observe().await?;
             let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
             return Ok(None);
         }
         let mut missing: Vec<String> = Vec::new();
@@ -269,7 +270,7 @@ impl Agent {
             state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
             let fresh = self.observe().await?;
             self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Llm).await?;
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
             return Ok(None);
         }
         let mut claims: Vec<Claim> = Vec::new();
@@ -294,7 +295,8 @@ impl Agent {
             };
             if !until(url).await {
                 let fresh = self.observe().await?;
-                Box::pin(self.recover(state, &fresh, "Completion condition not satisfied", Status::Stuck)).await?;
+                Box::pin(self.recover(state, &fresh, "Completion condition not satisfied", Status::Stuck, DONE))
+                    .await?;
                 return Ok(None);
             }
         }
@@ -336,7 +338,7 @@ impl Agent {
                 state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
             }
             let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
             return Ok(None);
         }
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -456,13 +458,7 @@ impl Agent {
                 Some(Err(other)) => return Err(other),
                 None => None,
             };
-            // After a covered or failed action, a requirement Jev did not confirm is not excused by its quote: an ad
-            // covered a new window's link, and the run cited the heading of the page it was on.
-            let mut held_unmet = check.unmet.clone();
-            if blocked_action(&state.history) {
-                held_unmet.extend(check.doubted.iter().cloned());
-            }
-            accepted = verified(&judged.data, &plan, &state.notes, &state.invented, Some(&state.lineage), &held_unmet);
+            accepted = verified(&judged.data, &plan);
             // Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
             // requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is undone.
             let idle = !state.history.iter().any(|h| {
@@ -472,7 +468,7 @@ impl Agent {
             let undone =
                 plan.requirements.iter().any(|r| r.kind == RequirementKind::Action && check.unmet.contains(&r.id));
             accepted = accepted && !(idle && undone);
-            missing = judged.data.missing.clone();
+            missing = doubted(&judged.data, &plan);
             misread_ids = misread(&judged.data, &plan, &state.notes, &state.invented, Some(&state.lineage));
         }
         if accepted {
@@ -541,6 +537,15 @@ impl Agent {
         let judge = guessed_page(&state.invented, Some(&state.lineage), false);
         state.notes.discredit(misread_ids.iter().map(String::as_str), Arc::new(judge));
         unmet.extend(state.missing_answer_outputs.iter().map(|output| format!("Answer output not verified: {output}")));
+        if unmet.is_empty() {
+            // A verifier that calls the run incomplete without naming a requirement leaves every one in doubt, and
+            // recovery needs a target to work toward.
+            let open =
+                if check.doubted.is_empty() { requirements.keys().cloned().collect() } else { check.doubted.clone() };
+            unmet.extend(
+                open.iter().map(|key| format!("{key}: {} (not confirmed)", requirements.get(key).unwrap_or(key))),
+            );
+        }
         let joined = if unmet.is_empty() { "completion not confirmed".to_string() } else { unmet.join("; ") };
         let reason = self.redact(&format!("DONE rejected: {joined}"));
         state.history.push(crate::policy::HistoryEntry {
@@ -551,30 +556,18 @@ impl Agent {
         let judge = if check.verdict == DoneVerdict::Verify { Decider::Llm } else { Decider::Jev };
         self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, judge).await?;
         let gives_up_as = if state.missing_answer_outputs.is_empty() { Status::Stuck } else { Status::Unverified };
-        Box::pin(self.recover(state, &fresh, &reason, gives_up_as)).await?;
+        Box::pin(self.recover(state, &fresh, &reason, gives_up_as, DONE)).await?;
         Ok(None)
     }
 
     /// The verdict the run acts on: Jev judges the notes, not where they were read, so guessed searches go to the
-    /// verifier, and a doubted lookup with every requirement cited needs none.
+    /// verifier.
     fn doubt(&self, state: &RunState, check: &DoneCheck) -> DoneVerdict {
         let plan = state.plan();
-        let lineage = Some(&state.lineage);
-        let guessed_ids = guessed(plan, &state.notes, &state.invented, false, lineage);
         if check.verdict == DoneVerdict::Accept
-            && !guessed(plan, &state.notes, &state.invented, true, lineage).is_empty()
+            && !guessed(plan, &state.notes, &state.invented, true, Some(&state.lineage)).is_empty()
         {
             DoneVerdict::Verify
-        } else if check.verdict == DoneVerdict::Verify
-            && check.unmet.is_empty()
-            && guessed_ids.is_empty()
-            && lookup(plan)
-            && !blocked_action(&state.history)
-        {
-            // A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited requirement,
-            // so all it could still do was refuse naming nothing, which it never did in 76 0.5.7 verifications. A run
-            // with a covered or failed action is the exception: it may be reading the page it meant to leave.
-            DoneVerdict::Accept
         } else {
             check.verdict
         }
