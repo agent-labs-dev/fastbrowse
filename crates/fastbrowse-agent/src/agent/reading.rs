@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use fastbrowse_core::decision::DecisionClient;
+use fastbrowse_core::decision::{DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::LLMClient;
-use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult};
+use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult, UNTRUSTED};
 use fastbrowse_core::page::{BlockKind, Capture, Control, Observation};
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::origin_of;
@@ -117,6 +117,24 @@ async fn page_records(
         // saved capture before merging anything, while the browser continues paging.
         retried = true;
     }
+}
+
+/// Jev's yes or no on whether a page shows a value one of the task's actions must carry to another page. Jev can settle
+/// every requirement a page is read for and still leave such a value unquoted: a sign-in read on the Phone page found
+/// nothing for the orders it was asked about, so the code it showed never reached the notes, and the run went back for
+/// it three times. On 16 labelled pages (codes, a discount, a reference, an address and a key, against sign-in forms,
+/// listings and unrelated pages) every page holding such a value scored 0.92 or more and every other 0.21 or less.
+fn context_question(task: &str, actions: &[&str]) -> Question {
+    let listed: Vec<String> = actions.iter().map(|action| format!("- {action}")).collect();
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\n\n# Task\n{task}\n\n# Actions still to take\n{}\n\nDoes this page show a value one of these actions needs, such as a code, reference, address or key, that the agent must carry to another page?",
+            listed.join("\n")
+        ),
+        Some("Yes: the page shows a value an action needs."),
+        Some("No: no value on this page is needed by these actions."),
+    )
+    .into()
 }
 
 impl Agent {
@@ -247,8 +265,9 @@ impl Agent {
                 &format!("\nStill missing or unsupported answer outputs: {}", state.open_answer_outputs.join("; "));
         }
         question += &super::helpers::field_corrections(state);
-        let needs_context = plan.requirements.iter().any(|r| r.kind == RequirementKind::Action);
-        if needs_context {
+        let actions: Vec<&str> =
+            plan.requirements.iter().filter(|r| r.kind == RequirementKind::Action).map(|r| r.text.as_str()).collect();
+        if !actions.is_empty() {
             question += "\nAlso keep quotes containing values needed for the task's remaining actions, even when they do not answer an information requirement. Give these context claims a null requirement_id.";
         }
         let before = state.notes.facts().len();
@@ -260,6 +279,7 @@ impl Agent {
             ledger: Some(&state.ledger),
             // What Jev cannot quote, and the context the remaining actions need, still go to the LLM reader.
             jev: Some(&*self.jev),
+            context_question: (!actions.is_empty()).then(|| context_question(&state.task, &actions)),
             requirements: wanted.clone(),
             targets: Some(plan.requirements.iter().filter(information).cloned().collect()),
             // Rebinding old quotes during output recovery does not make revisiting their page a fresh source.
