@@ -49,7 +49,7 @@ cache-keys = [
     { file = "rust-toolchain.toml" },
     { file = "crates/**/*.rs" },
     { file = "crates/**/Cargo.toml" },
-    { file = "src/**/*.js" },
+    { file = "crates/fastbrowse-browser/js/**/*.js" },
 ]
 
 [dependency-groups]

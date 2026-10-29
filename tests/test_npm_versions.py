@@ -142,7 +142,19 @@ def test_a_crate_pinned_to_another_version_fails_and_is_named(tmp_path: Path) ->
     done = _run(_checkout(tmp_path, crate_pin="1.2.2"))
 
     assert done.returncode == 1
-    assert "fastbrowse-core is pinned to 1.2.2" in done.stderr
+    assert "fastbrowse-core is pinned to =1.2.2" in done.stderr
+
+
+def test_a_crate_pin_without_the_equals_sign_is_a_range_and_fails(tmp_path: Path) -> None:
+    # Cargo reads a bare `1.2.3` as `^1.2.3`, which lets a crate resolve a later sibling than its own release.
+    root = _checkout(tmp_path)
+    cargo = root / "Cargo.toml"
+    cargo.write_text(cargo.read_text().replace('version = "=1.2.3"', 'version = "1.2.3"'))
+
+    done = _run(root)
+
+    assert done.returncode == 1
+    assert "fastbrowse-core is pinned to 1.2.3" in done.stderr
 
 
 def test_write_moves_the_rust_workspace_and_its_own_lock_entries_only(tmp_path: Path) -> None:

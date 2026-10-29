@@ -60,10 +60,10 @@ def workspace_version(cargo: str) -> object:
 
 
 def pins(cargo: str) -> dict[str, object]:
-    """Each crate's version as `[workspace.dependencies]` pins it, without the `=`."""
+    """Each crate's version requirement in `[workspace.dependencies]`, such as `=0.8.3`."""
     dependencies = tomllib.loads(cargo).get("workspace", {}).get("dependencies", {})
     return {
-        name: str(entry.get("version", "")).removeprefix("=")
+        name: entry.get("version")
         for name, entry in dependencies.items()
         if name.startswith("fastbrowse") and isinstance(entry, dict) and "path" in entry
     }
@@ -116,7 +116,7 @@ def main() -> int:
     found.extend(
         f"{cargo}: {name} is pinned to {pinned}"
         for name, pinned in pins(cargo.read_text(encoding="utf-8")).items()
-        if pinned != version
+        if pinned != f"={version}"
     )
     if found:
         print(f"pyproject.toml is {version}, and in", file=sys.stderr)
