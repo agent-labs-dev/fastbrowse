@@ -92,16 +92,9 @@ pub fn reversible_toggle(control: &Control) -> bool {
         .is_some_and(|context| !context.is_empty() && text::find_word(context, COMMITTED_NOUN).is_some())
 }
 
-pub fn irreversible_question(
-    task: &str,
-    operation: Operation,
-    control: &Control,
-    destination: Option<&Control>,
-) -> NoulQuestion {
-    let mut instructions = format!(
-        "{UNTRUSTED}\nThe agent is about to {operation} the element labelled {} while doing this task: {task}\n",
-        text::repr(&control.label)
-    );
+/// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
+/// submits and the address it links to.
+fn describe_control(instructions: &mut String, operation: Operation, control: &Control, destination: Option<&Control>) {
     if let Some(context) = control.context.as_deref().filter(|c| !c.is_empty()) {
         instructions.push_str(&format!("It sits under {} on the page.\n", text::repr(context)));
     }
@@ -122,6 +115,19 @@ pub fn irreversible_question(
     {
         instructions.push_str(&format!("It is a link to {href}\n"));
     }
+}
+
+pub fn irreversible_question(
+    task: &str,
+    operation: Operation,
+    control: &Control,
+    destination: Option<&Control>,
+) -> NoulQuestion {
+    let mut instructions = format!(
+        "{UNTRUSTED}\nThe agent is about to {operation} the element labelled {} while doing this task: {task}\n",
+        text::repr(&control.label)
+    );
+    describe_control(&mut instructions, operation, control, destination);
     instructions.push_str(
         "Would doing so commit something that cannot be undone, such as placing an order or spending money, sending a \
          message, submitting an application, changing or resetting an account password or credentials, or deleting or \
@@ -131,6 +137,29 @@ pub fn irreversible_question(
         instructions,
         Some("It commits an irreversible or externally visible change."),
         Some("It only navigates, filters, reveals or edits a draft that can still be changed."),
+    )
+}
+
+/// Whether the task itself asks for this commit, asked beside [`irreversible_question`] when the run is authorized.
+///
+/// Told "Finish the order", Jev picked Finish at 0.86, under `sensitive_act_from`, and the refusal cost a 4.5s LLM
+/// recovery that only read the task back. Jev agreeing the task names the action is that second opinion.
+///
+/// A page can have several controls labelled Submit or Finish, so the question carries what tells this one apart, as
+/// the irreversible one does.
+pub fn requested_question(task: &str, operation: Operation, control: &Control) -> NoulQuestion {
+    let mut instructions = format!(
+        "{UNTRUSTED}\nThe agent is doing this task: {task}\nIt is about to {operation} the element labelled {}.\n",
+        text::repr(&control.label)
+    );
+    describe_control(&mut instructions, operation, control, None);
+    instructions.push_str(
+        "Does the task itself tell the agent to take this exact action, not merely allow it or lead up to it?",
+    );
+    NoulQuestion::new(
+        instructions,
+        Some("The task names this action as one the user wants done now."),
+        Some("The task does not ask for it, asks for something else, or says not to."),
     )
 }
 
@@ -782,6 +811,16 @@ mod tests {
         assert!(question.instructions.starts_with(&format!(
             "{UNTRUSTED}\nThe agent is about to click the element labelled \"Yes, I'm sure\" while doing this task: Tidy up\nIt sits under 'Delete \"all\"' on the page.\n"
         )));
+    }
+
+    #[test]
+    fn test_the_requested_question_tells_two_submit_buttons_apart() {
+        let mut target = button("Submit");
+        target.context = Some("Delete account".into());
+        target.submit_semantics = Some("POST /account/delete".into());
+        let question = requested_question("Update my newsletter preferences", Operation::Click, &target);
+        assert!(question.instructions.contains("It sits under 'Delete account' on the page.\n"));
+        assert!(question.instructions.contains("The action submits this form: POST /account/delete\n"));
     }
 
     #[test]

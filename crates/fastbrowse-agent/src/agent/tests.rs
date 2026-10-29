@@ -1444,3 +1444,59 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
         Some("sign-in required at https://b.test: secret password is not available there")
     );
 }
+
+// -- An authorized run whose task names the commit acts on it without a recovery ----------------------------------
+
+/// A Jev that judges every commit irreversible and answers `requested` as given.
+struct Gatekeeper(f64);
+
+impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        use fastbrowse_core::decision::{Answer, NoulAnswer};
+        let answers = questions
+            .keys()
+            .map(|key| {
+                let probability = if key == "requested" { self.0 } else { 0.95 };
+                (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability }))
+            })
+            .collect();
+        Box::pin(async move {
+            Ok(fastbrowse_core::decision::Evaluation {
+                model: "jev".into(),
+                answers,
+                input_tokens: 0,
+                cost: free(),
+                requests: 1,
+            })
+        })
+    }
+
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
+    use fastbrowse_core::safety::irreversible_question;
+    for (requested, acts) in [(0.97, true), (0.40, false)] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(Gatekeeper(requested)), Arc::new(ScriptedLLM));
+        let mut state = run_state().await;
+        state.task = "Check out and finish the order.".into();
+        state.authorization = Authorization { irreversible_actions: true };
+        let finish = button("Finish");
+        let observation = observation(std::slice::from_ref(&finish));
+        // Jev's pick on the Sauce Demo overview page: Finish at 0.86, under sensitive_act_from.
+        let decision = Decision {
+            operation_confidence: 0.86,
+            ..super::helpers::code_decision(Operation::Click, Some(finish.clone()))
+        };
+        let question = irreversible_question(&state.task, Operation::Click, &finish, None);
+        let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, false).await;
+        assert_eq!(gated.is_ok(), acts, "requested {requested}");
+    }
+}

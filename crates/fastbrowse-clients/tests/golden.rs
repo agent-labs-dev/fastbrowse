@@ -145,6 +145,7 @@ fn llm_error(error: &LLMError) -> Value {
     let kind = match error {
         LLMError::Failed(_) => "LLMError",
         LLMError::RetriesExhausted(_) => "LLMRetriesExhausted",
+        LLMError::Rejected(_) => "LLMRejected",
         LLMError::Budget(_) => "BudgetExceeded",
     };
     json!({"error": {"type": kind, "message": normalized(&error.to_string())}})
@@ -156,6 +157,7 @@ fn jev_error(error: &DecisionError) -> Value {
         DecisionError::InputTooLarge(_) => "JevInputTooLarge",
         DecisionError::TransportFailed(_) => "JevTransportFailed",
         DecisionError::RetriesExhausted(_) => "JevRetriesExhausted",
+        DecisionError::Rejected(_) => "JevRejected",
         DecisionError::Budget(_) => "BudgetExceeded",
     };
     let mut dumped = json!({"type": kind, "message": normalized(&error.to_string())});

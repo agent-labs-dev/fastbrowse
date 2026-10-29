@@ -296,6 +296,9 @@ pub enum DecisionError {
     TransportFailed(String),
     #[error("{}", .0.message)]
     RetriesExhausted(Box<RetriesExhausted>),
+    /// The provider refused the key (HTTP 401 or 403), which no retry on that provider can change.
+    #[error("{0}")]
+    Rejected(String),
     /// A request would break a limit, so it was not sent. Python raises `BudgetExceeded` through `evaluate` itself.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),
@@ -491,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_pinned_or_routed_jev_is_jev() {
-        for model in ["jev-1.13", "jev-1.13.0", "typesafe/jev-1.13", "typesafe-ai/jev"] {
+        for model in ["jev-1.13", "jev-1.13.0", "typesafe/jev-1.13", "typesafe-ai/jev", "typesafe-ai/jev-1.13.0"] {
             assert!(DecisionProfile::for_model(model).validated(), "{model}");
         }
         assert!(!DecisionProfile::for_model("nimble").validated());

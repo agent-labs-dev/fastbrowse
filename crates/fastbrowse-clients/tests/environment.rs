@@ -110,7 +110,7 @@ async fn test_failover_requires_both_keys_and_default_routing() {
             let default_pin = match source {
                 DecisionSource::OpenRouter => "jev-1.13",
                 DecisionSource::TypeSafe => "jev-1.13.0",
-                DecisionSource::Gateway => "typesafe-ai/jev",
+                DecisionSource::Gateway => "typesafe-ai/jev-1.13.0",
                 _ => unreachable!(),
             };
             match restriction {

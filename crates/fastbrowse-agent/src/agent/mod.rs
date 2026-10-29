@@ -411,9 +411,13 @@ impl Agent {
             result.cost = ledger.breakdown();
             return Ok(result);
         }
-        // Startup calls can settle during teardown, after the loop has made its last budget check.
+        // Startup calls can settle during teardown, after the loop has made its last budget check. A run that already
+        // failed keeps its error: a refused Jev key cancelled the plan in flight, and its unpriced line reported the
+        // run as over a spend limit instead of naming the key.
         if let Err(error) = ledger.check_spend(0.0) {
-            if result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds) {
+            if result.status != Status::Error
+                && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
+            {
                 result.status = Status::BudgetExceeded;
                 result.error = Some(error.to_string());
                 result.budget = Some(error.budget);

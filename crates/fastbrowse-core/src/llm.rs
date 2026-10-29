@@ -63,6 +63,9 @@ pub enum LLMError {
     /// A retryable HTTP status or a transport failure outlasted the provider's retry budget.
     #[error("{0}")]
     RetriesExhausted(String),
+    /// The provider refused the key (HTTP 401 or 403), which no retry on that provider can change.
+    #[error("{0}")]
+    Rejected(String),
     /// The client's reservation, or the receipt it recorded, broke a limit.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),
