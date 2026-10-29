@@ -48,8 +48,9 @@ Rules that hold across the table:
 - **A model is named, or the run does not start.** Without a default, the run stops before its first request and
   asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on the first plan instead.
   `FASTBROWSE_LLM_MODEL_<PURPOSE>` pins one purpose as it does on OpenRouter.
-- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` is set**, except on OpenRouter, the
-  gateway and Anthropic, which default to `low`. A provider whose OpenAI-compatible API takes no effort stops the run with a
+- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` or `FASTBROWSE_LLM_REASONING_<PURPOSE>` is
+  set**, except on OpenRouter, the gateway and Anthropic, which default to `low`. A purpose's own effort goes in the
+  same field as the global one, for that purpose alone. A provider whose OpenAI-compatible API takes no effort stops the run with a
   configuration error, rather than drop a setting you asked for.
 - **`FASTBROWSE_LLM_STRICT` overrides the preset's strictness, and `FASTBROWSE_LLM_EXTRA_BODY` applies to every
   preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, including

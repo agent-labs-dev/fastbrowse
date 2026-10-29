@@ -660,7 +660,7 @@ impl OpenAICompatibleLLM {
                 messages,
                 &json_schema,
                 max_output_tokens,
-                self.reasoning_effort,
+                self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort),
             )?;
             return self.billed(body, purpose, schema, max_output_tokens, ledger, model).await;
         }

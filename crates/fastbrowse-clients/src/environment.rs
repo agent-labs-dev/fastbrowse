@@ -790,6 +790,7 @@ impl Settings {
                 &base_url,
                 models,
                 Some(self.llm_reasoning),
+                self.purpose_reasoning(),
                 self.extra_body()?,
             )
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
