@@ -16,8 +16,9 @@ use crate::models::{Bytes, CostLine, LLMPurpose, MaybeUnavailable};
 use crate::schema::{Schema, Ty, json_schema};
 use crate::telemetry::{BudgetExceeded, Ledger};
 
-/// Planning and field responses are short; readers and composers pass their larger configured caps.
-pub const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 2000;
+/// No ceiling by default: fastbrowse never caps an output token, so zero is uncapped and the cap field is left off
+/// the request. A caller that genuinely wants a limit passes one; nothing here sets one on the caller's behalf.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 0;
 
 literal_enum! {
     pub enum Role {

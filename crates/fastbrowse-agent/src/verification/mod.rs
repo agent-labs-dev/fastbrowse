@@ -69,10 +69,11 @@ pub struct DoneCheck {
     pub cost: CostLine,
 }
 
-/// A verdict is three short lists and a boolean. Measured on a live count-pagination run, an uncapped verdict spent
-/// 1166 output tokens and 13.7s restating the answer it was judging; the cap bounds that pathology while leaving room
-/// for every requirement id on a long plan.
-pub const VERDICT_TOKENS: i64 = 400;
+/// No ceiling: a verdict is asked for as a reply the model ends itself, exactly like the read, compose, recover and
+/// field_text budgets. Zero means uncapped everywhere, so the field is left off the request entirely. A cap here cut
+/// DeepSeek's verdict at 400, retried it at 1600 and truncated it again, which ended a checkout run on a truncation
+/// error instead of a verdict. The schema, not a token count, bounds the reply.
+pub const VERDICT_TOKENS: i64 = 0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

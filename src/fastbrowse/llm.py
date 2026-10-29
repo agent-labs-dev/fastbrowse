@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from fastbrowse.models import CostLine, Frozen, LLMPurpose, Unavailable
 from fastbrowse.telemetry import Ledger
 
-# The cap when a caller names none. 0 sends no ceiling; readers, composers, field text and recovery pass 0.
-DEFAULT_MAX_OUTPUT_TOKENS = 2000
+# The cap when a caller names none. 0 sends no ceiling, and nothing here sets one on the caller's behalf.
+DEFAULT_MAX_OUTPUT_TOKENS = 0
 
 
 class Message(Frozen):
