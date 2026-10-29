@@ -544,6 +544,40 @@ async fn test_a_response_without_cost_or_receipt_is_bounded() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
+    // The gateway's endpoints payload as it serves one: a dearer priority tier on one endpoint, a peak multiplier on
+    // the other. The dearest is 0.000004 at peak against 0.0000045 on the priority tier.
+    let looked_up = Arc::new(Mutex::new(Vec::new()));
+    let record = looked_up.clone();
+    let http = answering(move |request| {
+        if request.url.ends_with("/endpoints") {
+            record.lock().unwrap().push(url::Url::parse(&request.url).unwrap().path().to_string());
+            return ok(Response::json(
+                200,
+                &json!({"data": {"endpoints": [
+                    {"context_length": 1000, "pricing": {"prompt": "0.0000003", "completion": "0.0000025", "request": "0",
+                        "discount": 0, "service_tiers": {"priority": {"prompt": "0.00000054", "completion": "0.0000045"}}}},
+                    {"context_length": 2000, "pricing": {"prompt": "0.0000005", "completion": "0.000002", "web_search": "0",
+                        "peak_pricing": {"multiplier": 2, "windows": [{"start_minute_utc": 60, "end_minute_utc": 240}]}}},
+                ]}}),
+            ));
+        }
+        if request.method.as_str() == "GET" {
+            return ok(Response::json(404, &json!({"error": "Usage event not found"})));
+        }
+        ok(Response::json(200, &without_cost("gen_1")))
+    });
+    let ledger = capped(Some(28.0));
+    let llm = client(http, "https://ai-gateway.vercel.sh/v1", LLMPurpose::Plan, "google/writer");
+    let result = generate(&llm, LLMPurpose::Plan, &[], 2000, Some(&ledger)).await.unwrap();
+    ledger.record([result.cost.clone()]).unwrap();
+    assert_eq!(*looked_up.lock().unwrap(), ["/v1/models/google/writer/endpoints"]);
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.0000045 * 1.05));
+    ledger.check(0.0).unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn test_a_price_with_no_ceiling_keeps_the_spend_guard() {
     for price in [json!("-1"), json!("free"), Value::Null] {
         let lookups = Arc::new(AtomicUsize::new(0));
