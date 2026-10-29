@@ -486,18 +486,24 @@ impl Settings {
             _ => Err(ConfigurationError(message.to_string())),
         };
         Ok(match source {
-            DecisionSource::OpenRouter => Box::new(SystemOneClient::new(
-                key(&self.openrouter_api_key, "set OPENROUTER_API_KEY for Jev via OpenRouter")?,
-                http.clone(),
-                &base_url(OPENROUTER_URL),
-                &model(OPENROUTER_MODEL),
-            )),
-            DecisionSource::TypeSafe => Box::new(SystemOneClient::new(
-                key(&self.typesafe_api_key, "set TYPESAFE_API_KEY for Jev via the direct API")?,
-                http.clone(),
-                &base_url(TYPESAFE_URL),
-                &model(JEV_MODEL),
-            )),
+            DecisionSource::OpenRouter => Box::new(
+                SystemOneClient::new(
+                    key(&self.openrouter_api_key, "set OPENROUTER_API_KEY for Jev via OpenRouter")?,
+                    http.clone(),
+                    &base_url(OPENROUTER_URL),
+                    &model(OPENROUTER_MODEL),
+                )
+                .long_context(),
+            ),
+            DecisionSource::TypeSafe => Box::new(
+                SystemOneClient::new(
+                    key(&self.typesafe_api_key, "set TYPESAFE_API_KEY for Jev via the direct API")?,
+                    http.clone(),
+                    &base_url(TYPESAFE_URL),
+                    &model(JEV_MODEL),
+                )
+                .typesafe(),
+            ),
             DecisionSource::Gateway => Box::new(VercelGatewayJevClient::new(
                 key(
                     &self.ai_gateway_api_key,
@@ -526,6 +532,8 @@ impl Settings {
                     Box::new(OpenAIDecisionsClient::new(key, http.clone(), &base_url(AIMLAPI_URL), &model).unpriced())
                 } else {
                     let client = SystemOneClient::new(key, http.clone(), &base_url(AIMLAPI_URL), &model);
+                    // AIMLAPI lists every typesafe/ model at Jev's long context.
+                    let client = if model.starts_with("typesafe/") { client.long_context() } else { client };
                     Box::new(client.at(DECISIONS_PATH).unpriced())
                 }
             }

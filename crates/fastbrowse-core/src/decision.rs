@@ -17,6 +17,9 @@ pub const JEV_MODEL: &str = "jev-1.14.0";
 pub const MAX_CHOICE_OPTIONS: usize = 255;
 /// Input price; output is free.
 pub const JEV_DOLLARS_PER_INPUT_TOKEN: f64 = 0.042 / 1_000_000.0;
+/// Jev's context for a request and for each question with TypeSafe's long-context header, which OpenRouter and AIMLAPI
+/// also document as Jev's context on their routes.
+pub const JEV_LONG_CONTEXT_TOKENS: i64 = 262_144;
 
 literal_tag!(ChoiceTag = "choice");
 literal_tag!(NoulTag = "noul");
@@ -403,14 +406,14 @@ impl DecisionProfile {
                 ..DecisionProfile::unknown()
             },
             // OpenAI documents 400 questions a request, 2 to 10 levels, $0.10 per million input tokens and image input;
-            // Pydantic AI's profile caps a choice at 255 options. No token limit is stated, so the configured budget
-            // stands.
+            // Pydantic AI's profile caps a choice at 255 options. No token limit is stated, so a request keeps Jev's
+            // default budget.
             "gpt-6-luna" => DecisionProfile {
                 max_choice_options: 255,
                 max_score_levels: 10,
                 max_questions: Some(400),
-                max_largest_tokens: 1_000_000,
-                max_total_tokens: 1_000_000,
+                max_largest_tokens: 32_000,
+                max_total_tokens: 64_000,
                 max_request_bytes: None,
                 dollars_per_input_token: Some(0.10 / 1_000_000.0),
                 images: true,
@@ -430,6 +433,15 @@ impl DecisionProfile {
         }
     }
 
+    /// This model at Jev's long context, for a route that serves it.
+    pub fn long_context(self) -> DecisionProfile {
+        DecisionProfile {
+            max_largest_tokens: JEV_LONG_CONTEXT_TOKENS,
+            max_total_tokens: JEV_LONG_CONTEXT_TOKENS,
+            ..self
+        }
+    }
+
     /// Whether the thresholds a run would start from were measured on this model.
     pub fn validated(&self) -> bool {
         self.thresholds.is_some()
@@ -440,6 +452,7 @@ impl DecisionProfile {
     pub fn fit(&self, config: Option<Config>) -> Config {
         let mut config = config
             .unwrap_or_else(|| Config { thresholds: self.thresholds.clone().unwrap_or_default(), ..Config::default() });
+        let given = config.tokens.clone();
         let observation = &mut config.observation;
         observation.group_size = observation.group_size.min(self.max_choice_options.max(2) as i64);
         let mut total = self.max_total_tokens;
@@ -450,6 +463,14 @@ impl DecisionProfile {
         let tokens = &mut config.tokens;
         tokens.state_plus_largest_question = tokens.state_plus_largest_question.min(largest).max(1);
         tokens.state_plus_all_questions = tokens.state_plus_all_questions.min(total).max(1);
+        // A budget is written against Jev's default context, so a route that documents more scales it to its own;
+        // an LLM prompt keeps the budget as given.
+        let scale = self.max_largest_tokens as f64 / DecisionProfile::jev().max_largest_tokens as f64;
+        tokens.decision_chars = (scale > 1.0).then(|| {
+            let fitted =
+                |budget: i64, limit: i64| ((budget as f64 * scale).min(limit as f64) * JSON_CHARS_PER_TOKEN) as i64;
+            (fitted(given.state_plus_largest_question, largest), fitted(given.state_plus_all_questions, total))
+        });
         config
     }
 
@@ -474,10 +495,23 @@ pub trait DecisionClient: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::TokenBudget;
 
     #[test]
     fn jev_leaves_the_default_config_as_it_is() {
         assert_eq!(DecisionProfile::jev().fit(None), Config::default());
+    }
+
+    #[test]
+    fn long_context_fits_a_decision_request_to_it_and_leaves_the_llm_budget() {
+        let long = DecisionProfile::jev().long_context();
+        let fitted = long.fit(None);
+        assert_eq!(fitted.tokens.decision_chars, Some((393_216, 393_216)));
+        assert_eq!(fitted.tokens, TokenBudget { decision_chars: fitted.tokens.decision_chars, ..Default::default() });
+        // A caller's smaller budget stays as much smaller on the longer route.
+        let mut given = Config::default();
+        given.tokens.state_plus_largest_question = 2500;
+        assert_eq!(long.fit(Some(given)).tokens.decision_chars.unwrap().0, 30_720);
     }
 
     #[test]
@@ -493,7 +527,7 @@ mod tests {
         assert_eq!(DecisionProfile::for_model("openai/gpt-6-luna").max_questions, Some(400));
         let flash = DecisionProfile::for_model("perplexity/pplx-decider-flash-latest");
         assert_eq!((flash.max_questions, flash.dollars_per_input_token), (Some(128), Some(0.01 / 1_000_000.0)));
-        assert_eq!(DecisionProfile::for_model("gpt-6-luna").fit(None), Config::default());
+        assert_eq!(DecisionProfile::for_model("gpt-6-luna").fit(None), DecisionProfile::jev().fit(None));
         let later = DecisionProfile::for_model("typesafe/jev-1.15");
         assert_eq!((later.validated(), later.max_choice_options), (false, MAX_CHOICE_OPTIONS));
     }

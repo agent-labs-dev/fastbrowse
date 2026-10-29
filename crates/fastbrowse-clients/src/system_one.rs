@@ -29,6 +29,8 @@ pub const PERPLEXITY_URL: &str = "https://api.perplexity.ai";
 /// Pinned rather than `pplx-decider-latest`.
 pub const PERPLEXITY_MODEL: &str = "pplx-decider-v1.2";
 pub const SYSTEM_ONE_PATH: &str = "/v1/systemone";
+/// TypeSafe's opt-in to Jev's long context, sent on each request that needs it.
+pub const LONG_CONTEXT_HEADER: (&str, &str) = ("TypeSafe-Danger-Zone-Long-Context", "true");
 /// Where AIMLAPI and Perplexity take a System One body.
 pub const DECISIONS_PATH: &str = "/v1/decisions";
 
@@ -39,6 +41,7 @@ pub struct SystemOneClient {
     model: String,
     profile: DecisionProfile,
     path: &'static str,
+    headers: Vec<(&'static str, &'static str)>,
 }
 
 impl SystemOneClient {
@@ -50,7 +53,20 @@ impl SystemOneClient {
             model: model.to_string(),
             profile: DecisionProfile::for_model(model),
             path: SYSTEM_ONE_PATH,
+            headers: Vec::new(),
         }
+    }
+
+    /// A route that documents Jev's long context, so a request is fitted to it rather than to 32k a question.
+    pub fn long_context(mut self) -> SystemOneClient {
+        self.profile = self.profile.long_context();
+        self
+    }
+
+    /// TypeSafe's own API, which grants long context only to a request carrying its header.
+    pub fn typesafe(mut self) -> SystemOneClient {
+        self.headers.push(LONG_CONTEXT_HEADER);
+        self.long_context()
     }
 
     /// The same body sent to `path` instead of `/v1/systemone`.
@@ -67,7 +83,7 @@ impl SystemOneClient {
 
     /// The direct API with its default model.
     pub fn direct(api_key: impl Into<String>, http: Http) -> SystemOneClient {
-        SystemOneClient::new(api_key, http, TYPESAFE_URL, JEV_MODEL)
+        SystemOneClient::new(api_key, http, TYPESAFE_URL, JEV_MODEL).typesafe()
     }
 
     async fn ask(
@@ -94,7 +110,8 @@ impl SystemOneClient {
         let url = format!("{}{}", self.base_url, self.path);
         let price = self.profile.dollars_per_input_token;
         let response =
-            post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch, price).await?;
+            post(&self.http, &url, &self.api_key, &body, &self.headers, &sent, start_attempt, split_batch, price)
+                .await?;
         let sent = sent.snapshot();
         let parsed = (|| {
             let payload = json_object(&response)?;

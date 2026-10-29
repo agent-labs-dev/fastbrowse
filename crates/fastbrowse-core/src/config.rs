@@ -101,6 +101,11 @@ pub struct TokenBudget {
     /// The composer's output ceiling; 0 sends none, so a long answer citing every claim is never cut short.
     #[serde(deserialize_with = "lax::int_ge0")]
     pub compose_output_tokens: i64,
+    /// Characters a decision request may spend on its state plus largest question and on its state plus every
+    /// question, set by `DecisionProfile::fit` from the budget above and the route's limits. Jev with long context
+    /// takes a state far past what the budget allows an LLM prompt.
+    #[serde(skip)]
+    pub decision_chars: Option<(i64, i64)>,
 }
 
 impl Default for TokenBudget {
@@ -114,6 +119,7 @@ impl Default for TokenBudget {
             // maximum and the answer schema are the only bounds.
             read_output_tokens: 0,
             compose_output_tokens: 0,
+            decision_chars: None,
         }
     }
 }
@@ -122,9 +128,13 @@ impl TokenBudget {
     /// Characters of state that fit beside `questions`, measured as Python measures them, in code points.
     pub fn input_chars<S: AsRef<str>>(&self, questions: &[S], jev: bool) -> i64 {
         let sizes: Vec<f64> = questions.iter().map(|q| text::len(q.as_ref()) as f64).collect();
-        let ratio = if jev { JSON_CHARS_PER_TOKEN } else { self.chars_per_token };
-        let largest = self.state_plus_largest_question as f64 * ratio;
-        let total = self.state_plus_all_questions as f64 * ratio;
+        let (largest, total) = match (jev, self.decision_chars) {
+            (true, Some((most, all))) => (most as f64, all as f64),
+            _ => {
+                let ratio = if jev { JSON_CHARS_PER_TOKEN } else { self.chars_per_token };
+                (self.state_plus_largest_question as f64 * ratio, self.state_plus_all_questions as f64 * ratio)
+            }
+        };
         let biggest = sizes.iter().copied().fold(0.0_f64, f64::max);
         let room = (largest - biggest).min(total - crate::py::sum(sizes.iter().copied()));
         // `int()` truncates toward zero before the floor at zero.
