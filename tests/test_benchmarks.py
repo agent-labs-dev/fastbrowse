@@ -329,6 +329,7 @@ def test_fixture_claims_are_checked_against_the_actual_artifact(candidate, monke
         target.write_text("\n".join(json.dumps(r) for r in rows))
 
     monkeypatch.setattr(benchmarks.subprocess, "run", download)
+    candidate["fixture"].update(passed=len(rows), total=len(rows))
     parsed = Candidate.model_validate(candidate)
     benchmarks.check_fixture(parsed)
     rows[0]["passed"] = False
@@ -368,6 +369,7 @@ def test_a_fixture_receipt_from_another_branch_counts_only_at_a_main_commit_it_m
         target.write_text("\n".join(json.dumps(r) for r in rows))
 
     monkeypatch.setattr(benchmarks.subprocess, "run", download)
+    candidate["fixture"].update(passed=len(rows), total=len(rows))
     parsed = Candidate.model_validate(candidate)
     benchmarks.check_fixture(parsed)
     run["head_sha"] = "b" * 40
