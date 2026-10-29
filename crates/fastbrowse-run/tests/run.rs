@@ -5,7 +5,7 @@ use std::sync::Arc;
 use fastbrowse_clients::environment::Settings;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{LLMPurpose, Status};
 use fastbrowse_core::telemetry::Ledger;
@@ -18,13 +18,13 @@ use tokio::net::TcpListener;
 /// Clients no test here gets far enough to need.
 struct Silent;
 
-impl JevClient for Silent {
+impl DecisionClient for Silent {
     fn evaluate<'a>(
         &'a self,
         _: &'a Value,
         _: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
-        Box::pin(async { Err(JevError::Failed("not scripted".into())) })
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async { Err(DecisionError::Failed("not scripted".into())) })
     }
 }
 

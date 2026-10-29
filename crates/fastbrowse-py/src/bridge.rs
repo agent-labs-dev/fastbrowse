@@ -16,7 +16,7 @@ use fastbrowse_cli::embed::{HostCall, HostResolve};
 use fastbrowse_cli::runner::Cancel;
 use fastbrowse_clients::http::{Request, Response, Transport, TransportError};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question, RetriesExhausted};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question, RetriesExhausted};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{BudgetStop, CostComponent, CostLine, LLMPurpose, SecretRef, SecretResolver};
 use fastbrowse_core::protocol::Base64Bytes;
@@ -91,19 +91,20 @@ fn reply<T: for<'de> Deserialize<'de>>(text: &str) -> Result<Result<T, Fault>, S
     }
 }
 
-/// The caller's `JevClient`.
+/// The caller's `DecisionClient`.
 pub struct HostJev {
     pub call: HostCall<(String, String), String>,
 }
 
-impl JevClient for HostJev {
+impl DecisionClient for HostJev {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(async move {
-            let questions = serde_json::to_string(questions).map_err(|error| JevError::Failed(error.to_string()))?;
+            let questions =
+                serde_json::to_string(questions).map_err(|error| DecisionError::Failed(error.to_string()))?;
             let answered = match (self.call)((state.to_string(), questions)).await {
                 Ok(text) => reply::<Evaluation>(&text),
                 Err(message) => Err(message),
@@ -111,20 +112,20 @@ impl JevClient for HostJev {
             match answered {
                 Ok(Ok(evaluation)) => Ok(evaluation),
                 Ok(Err(fault)) => Err(jev_error(fault)),
-                Err(message) => Err(JevError::Failed(message)),
+                Err(message) => Err(DecisionError::Failed(message)),
             }
         })
     }
 }
 
-fn jev_error(fault: Fault) -> JevError {
+fn jev_error(fault: Fault) -> DecisionError {
     if let Some(budget) = fault.budget() {
-        return JevError::Budget(budget);
+        return DecisionError::Budget(budget);
     }
     match fault.kind.as_str() {
-        "input_too_large" => JevError::InputTooLarge(fault.message),
-        "transport_failed" => JevError::TransportFailed(fault.message),
-        "retries_exhausted" => JevError::RetriesExhausted(Box::new(RetriesExhausted {
+        "input_too_large" => DecisionError::InputTooLarge(fault.message),
+        "transport_failed" => DecisionError::TransportFailed(fault.message),
+        "retries_exhausted" => DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message: fault.message,
             seconds: fault.seconds,
             unaccounted_requests: fault.unaccounted_requests,
@@ -132,7 +133,7 @@ fn jev_error(fault: Fault) -> JevError {
             answered: fault.answered,
             last: fault.last,
         })),
-        _ => JevError::Failed(fault.message),
+        _ => DecisionError::Failed(fault.message),
     }
 }
 

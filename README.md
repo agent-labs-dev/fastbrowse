@@ -83,7 +83,7 @@ Jev uses direct TypeSafe when `TYPESAFE_API_KEY` is supplied. That is the recomm
 is supported for Jev text when `OPENROUTER_API_KEY` is set and no direct key is supplied, but it is not
 recommended: it puts another service between fastbrowse and TypeSafe, and it never receives Jev image
 input. A gateway key on its own also serves Jev, as a last resort rather than the recommended route; with
-`AI_GATEWAY_API_KEY` beside another key, the gateway is the backup. `FASTBROWSE_JEV_SOURCE` overrides
+`AI_GATEWAY_API_KEY` beside another key, the gateway is the backup. `FASTBROWSE_DECISION_SOURCE` overrides
 automatic selection; see [provider routing](docs/jev.md#provider-failover). The LLM uses OpenRouter when
 `OPENROUTER_API_KEY` is set, otherwise the Vercel AI Gateway's OpenAI-compatible chat completions.
 

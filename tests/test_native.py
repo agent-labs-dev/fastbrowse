@@ -536,7 +536,9 @@ async def test_a_run_names_the_providers_it_calls_in_its_trace(monkeypatch: pyte
     """The fixture runner records the route each run took from the run's own trace."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
-    for name in [name for name in os.environ if name.startswith(("FASTBROWSE_LLM", "FASTBROWSE_JEV"))]:
+    for name in [
+        name for name in os.environ if name.startswith(("FASTBROWSE_LLM", "FASTBROWSE_DECISION", "FASTBROWSE_JEV"))
+    ]:
         monkeypatch.delenv(name)
     refused = httpx.MockTransport(lambda _: httpx.Response(401, json={"error": "no"}))
     async with httpx.AsyncClient(transport=refused) as http:

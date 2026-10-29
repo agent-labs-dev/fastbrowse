@@ -41,15 +41,16 @@ def rates(rows: Sequence[dict[str, object]]) -> list[tuple[str, str, int, int]]:
     return [(suite, task, passed[(suite, task)], seen[(suite, task)]) for suite, task in sorted(seen)]
 
 
-# Each Jev source and its key, in the order the core picks the first keyed one when FASTBROWSE_JEV_SOURCE is unset.
+# Each Jev source and its key, in the order the core picks the first keyed one when FASTBROWSE_DECISION_SOURCE is unset.
 _JEV_SECRET = {"typesafe": "TYPESAFE_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}
 
 
 def jev_source(env: Mapping[str, str]) -> str:
-    """The source Jev starts on: FASTBROWSE_JEV_SOURCE, else the first keyed one, else the gateway."""
-    if chosen := env.get("FASTBROWSE_JEV_SOURCE"):
+    """The source Jev starts on: FASTBROWSE_DECISION_SOURCE (formerly FASTBROWSE_JEV_SOURCE), else the first keyed
+    one, else the gateway."""
+    if chosen := env.get("FASTBROWSE_DECISION_SOURCE") or env.get("FASTBROWSE_JEV_SOURCE"):
         if chosen not in _JEV_SECRET:
-            raise ValueError(f"FASTBROWSE_JEV_SOURCE is {chosen!r}, not one of {', '.join(_JEV_SECRET)}")
+            raise ValueError(f"FASTBROWSE_DECISION_SOURCE is {chosen!r}, not one of {', '.join(_JEV_SECRET)}")
         return chosen
     return next((source for source, key in _JEV_SECRET.items() if env.get(key)), "gateway")
 

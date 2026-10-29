@@ -7,14 +7,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use common::{Script, answering, reply, text};
-use fastbrowse_clients::failover::FailoverJevClient;
+use fastbrowse_clients::failover::FailoverDecisionClient;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_clients::typesafe::{OPENROUTER_MODEL, OPENROUTER_URL, TypeSafeJevClient};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spend};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
-use fastbrowse_core::jev::{
-    Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, JevClient, JevError, NoulAnswer,
-    NoulQuestion, Question, ScoreQuestion,
+use fastbrowse_core::decision::{
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN,
+    NoulAnswer, NoulQuestion, Question, ScoreQuestion,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, Limits};
 use fastbrowse_core::telemetry::Ledger;
@@ -64,7 +64,7 @@ fn gateway(http: Http) -> VercelGatewayJevClient {
 }
 
 /// Both clients behind the trait, for a test that runs against each.
-fn both(http: &Http) -> [(bool, Box<dyn JevClient>); 2] {
+fn both(http: &Http) -> [(bool, Box<dyn DecisionClient>); 2] {
     [(false, Box::new(direct(http.clone()))), (true, Box::new(gateway(http.clone())))]
 }
 
@@ -276,7 +276,7 @@ async fn test_http_failures_and_token_limits() {
         });
         for (_, client) in both(&http) {
             let error = client.evaluate(&json!("state"), &questions([("q", choice())])).await.unwrap_err();
-            assert_eq!(matches!(error, JevError::InputTooLarge(_)), too_large, "{status}");
+            assert_eq!(matches!(error, DecisionError::InputTooLarge(_)), too_large, "{status}");
             assert!(error.to_string().contains(&status.to_string()));
             assert!(error.to_string().len() < 600);
         }
@@ -309,7 +309,7 @@ async fn test_a_refusal_over_an_input_limit_is_input_too_large() {
     for reason in ["max_tokens_exceeded", "request body too large"] {
         let http = always(400, gateway_error(400, reason, false));
         let error = gateway(http).evaluate(&json!("state"), &questions([("q", choice())])).await.unwrap_err();
-        assert!(matches!(error, JevError::InputTooLarge(_)) && error.to_string().contains("input too large"));
+        assert!(matches!(error, DecisionError::InputTooLarge(_)) && error.to_string().contains("input too large"));
     }
 }
 
@@ -318,7 +318,7 @@ async fn test_a_gateway_failure_names_what_the_provider_said() {
     // The wrapper repeats the gateway's own status, so the reason worth reading is the one nested inside it.
     let http = always(503, gateway_error(503, "the model is unavailable", true));
     let error = gateway(http).evaluate(&json!("state"), &questions([("q", choice())])).await.unwrap_err();
-    assert!(matches!(error, JevError::RetriesExhausted(_)));
+    assert!(matches!(error, DecisionError::RetriesExhausted(_)));
     assert!(error.to_string().contains("the model is unavailable"));
     assert!(error.to_string().contains("via typesafe-ai"));
 }
@@ -437,7 +437,7 @@ async fn test_transport_error_is_wrapped_without_exposing_key() {
     // A transport error is named by its type alone, so nothing it carried can reach the message.
     let http = answering(|_| Box::pin(async { Err(TransportError::Transient("ConnectError")) }));
     let error = direct(http).evaluate(&json!("state"), &questions([("q", choice())])).await.unwrap_err();
-    assert!(matches!(error, JevError::TransportFailed(_)));
+    assert!(matches!(error, DecisionError::TransportFailed(_)));
     assert!(error.to_string().contains("transport failed"), "{error}");
 }
 
@@ -491,7 +491,7 @@ async fn test_an_echoed_key_never_reaches_the_error() {
     ];
     for (status, payload) in bodies {
         let http = always(status, payload);
-        let clients: [Box<dyn JevClient>; 2] = [
+        let clients: [Box<dyn DecisionClient>; 2] = [
             Box::new(TypeSafeJevClient::direct(key.clone(), http.clone())),
             Box::new(VercelGatewayJevClient::new(key.clone(), http.clone(), GATEWAY_URL)),
         ];
@@ -518,7 +518,7 @@ async fn test_a_choice_of_one_option_is_answered_without_asking() {
             );
             Box::pin(async move { Ok(response) })
         });
-        let client: Box<dyn JevClient> = if gateway_route {
+        let client: Box<dyn DecisionClient> = if gateway_route {
             Box::new(VercelGatewayJevClient::new("key", http, "https://gateway.test"))
         } else {
             Box::new(TypeSafeJevClient::new("key", http, "https://direct.test", "jev-1.13.0"))
@@ -586,12 +586,12 @@ async fn test_failed_batch_splits_with_only_remaining_attempts() {
                     };
                     Box::pin(async move { Ok(response) })
                 });
-                let client: Box<dyn JevClient> =
+                let client: Box<dyn DecisionClient> =
                     if gateway_route { Box::new(gateway(http)) } else { Box::new(direct(http)) };
                 let asked: IndexMap<String, Question> = (0..10).map(|i| (format!("q{i}"), noul("x"))).collect();
                 let total = || seen.lock().unwrap().values().sum::<usize>();
                 match client.evaluate(&json!("page"), &asked).await {
-                    Err(JevError::RetriesExhausted(error)) => {
+                    Err(DecisionError::RetriesExhausted(error)) => {
                         assert!(exhaust || retried_questions > ATTEMPTS - 3);
                         assert_eq!(error.requests as usize, total());
                     }
@@ -636,7 +636,7 @@ async fn test_failover_exhaustion_preserves_answered_singles_and_request_counts(
         };
         Box::pin(async move { Ok(response) })
     });
-    let client = FailoverJevClient::new(
+    let client = FailoverDecisionClient::new(
         Box::new(TypeSafeJevClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0")),
         Box::new(TypeSafeJevClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0")),
         http,
@@ -644,7 +644,7 @@ async fn test_failover_exhaustion_preserves_answered_singles_and_request_counts(
     let paid = Paid::default();
     let asked = questions([("a", noul("a")), ("b", noul("b")), ("c", noul("c"))]);
     let error = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&json!("page"), &asked)).await.unwrap_err();
-    let JevError::RetriesExhausted(error) = error else { panic!("exhausted") };
+    let DecisionError::RetriesExhausted(error) = error else { panic!("exhausted") };
     assert_eq!(error.requests as usize, calls.load(Ordering::SeqCst));
     let answered: Vec<&String> = error.answered.iter().flat_map(|result| result.answers.keys()).collect();
     assert_eq!(answered, ["a", "b"]);
@@ -667,9 +667,9 @@ async fn test_batch_split_does_not_change_other_failure_contracts() {
             calls.store(0, Ordering::SeqCst);
             let error = client.evaluate(&json!("page"), &asked).await.unwrap_err();
             match status {
-                400 => assert!(matches!(error, JevError::InputTooLarge(_))),
-                429 => assert!(matches!(error, JevError::RetriesExhausted(_))),
-                _ => assert!(matches!(error, JevError::Failed(_))),
+                400 => assert!(matches!(error, DecisionError::InputTooLarge(_))),
+                429 => assert!(matches!(error, DecisionError::RetriesExhausted(_))),
+                _ => assert!(matches!(error, DecisionError::Failed(_))),
             }
             assert_eq!(calls.load(Ordering::SeqCst), if status == 429 { ATTEMPTS } else { 1 });
         }
@@ -701,7 +701,7 @@ async fn test_a_split_single_that_would_cross_the_dollar_cap_is_not_sent() {
     let client = direct(http);
     let result =
         jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), client.evaluate(&json!("page"), &asked)).await;
-    assert!(matches!(result, Err(JevError::Budget(_))), "{result:?}");
+    assert!(matches!(result, Err(DecisionError::Budget(_))), "{result:?}");
     let a = vec!["a".to_string()];
     let both_keys = vec!["a".to_string(), "b".to_string()];
     assert_eq!(*script_sent.lock().unwrap(), vec![both_keys.clone(), both_keys, a]);
@@ -734,11 +734,11 @@ async fn test_split_batch_keeps_paid_singles_on_cancellation_and_failover() {
             })
         });
         let primary = TypeSafeJevClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0");
-        let client: Box<dyn JevClient> = if cancel {
+        let client: Box<dyn DecisionClient> = if cancel {
             Box::new(primary)
         } else {
             let backup = TypeSafeJevClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0");
-            Box::new(FailoverJevClient::new(Box::new(primary), Box::new(backup), http.clone()))
+            Box::new(FailoverDecisionClient::new(Box::new(primary), Box::new(backup), http.clone()))
         };
         let paid = Paid::default();
         let asked = questions([("a", noul("a")), ("b", noul("b"))]);
@@ -796,10 +796,11 @@ async fn test_split_singletons_share_the_remaining_request_budget() {
             *counts.lock().unwrap().entry(keys(request)).or_default() += 1;
             Box::pin(async move { Ok(Response::new(503, "")) })
         });
-        let client: Box<dyn JevClient> = if gateway_route { Box::new(gateway(http)) } else { Box::new(direct(http)) };
+        let client: Box<dyn DecisionClient> =
+            if gateway_route { Box::new(gateway(http)) } else { Box::new(direct(http)) };
         let error =
             client.evaluate(&json!("page"), &questions([("a", noul("a")), ("b", noul("b"))])).await.unwrap_err();
-        assert!(matches!(error, JevError::RetriesExhausted(_)));
+        assert!(matches!(error, DecisionError::RetriesExhausted(_)));
         let seen = seen.lock().unwrap();
         assert_eq!(seen[&vec!["a".to_string(), "b".to_string()]], 2);
         assert_eq!(seen[&vec!["a".to_string()]], RETRY_DELAYS_SECONDS.len() - 1);

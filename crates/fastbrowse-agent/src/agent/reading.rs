@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::effects::{state_key, step_key};
-use fastbrowse_core::jev::JevClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult};
 use fastbrowse_core::page::{BlockKind, Capture, Control, Observation};
@@ -75,7 +75,7 @@ fn sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
 /// record.
 #[allow(clippy::too_many_arguments)]
 async fn page_records(
-    jev: Arc<dyn JevClient>,
+    jev: Arc<dyn DecisionClient>,
     llm: Arc<dyn LLMClient>,
     ledger: Arc<Ledger>,
     trace: Trace,

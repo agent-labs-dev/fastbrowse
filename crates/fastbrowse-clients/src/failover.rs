@@ -3,16 +3,18 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{DecisionProfile, Evaluation, JevClient, JevError, Question, RetriesExhausted};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Question, RetriesExhausted,
+};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
 use crate::http::Http;
 use crate::validation::{JevSpend, Lines, Paid, estimated_cost, exhausted, jev_spend, merged_cost};
 
-pub struct FailoverJevClient {
-    primary: Box<dyn JevClient>,
-    backup: Box<dyn JevClient>,
+pub struct FailoverDecisionClient {
+    primary: Box<dyn DecisionClient>,
+    backup: Box<dyn DecisionClient>,
     on_backup: AtomicBool,
     http: Http,
 }
@@ -34,17 +36,21 @@ impl Drop for PaidOnDrop {
     }
 }
 
-impl FailoverJevClient {
+impl FailoverDecisionClient {
     /// `http` carries the trace the switch is written to.
-    pub fn new(primary: Box<dyn JevClient>, backup: Box<dyn JevClient>, http: Http) -> FailoverJevClient {
-        FailoverJevClient { primary, backup, on_backup: AtomicBool::new(false), http }
+    pub fn new(
+        primary: Box<dyn DecisionClient>,
+        backup: Box<dyn DecisionClient>,
+        http: Http,
+    ) -> FailoverDecisionClient {
+        FailoverDecisionClient { primary, backup, on_backup: AtomicBool::new(false), http }
     }
 
     async fn evaluate_paid(
         &self,
         state: &Value,
         questions: &IndexMap<String, Question>,
-    ) -> Result<Evaluation, JevError> {
+    ) -> Result<Evaluation, DecisionError> {
         let paid = Paid::default();
         let mut guard = PaidOnDrop { paid: paid.clone(), parent: JevSpend::current(), armed: true };
         let result = jev_spend(Lines::Paid(paid.clone()), None, self.switching(state, questions)).await;
@@ -66,11 +72,15 @@ impl FailoverJevClient {
         Ok(result)
     }
 
-    async fn switching(&self, state: &Value, questions: &IndexMap<String, Question>) -> Result<Evaluation, JevError> {
+    async fn switching(
+        &self,
+        state: &Value,
+        questions: &IndexMap<String, Question>,
+    ) -> Result<Evaluation, DecisionError> {
         let on_backup = self.on_backup.load(Ordering::SeqCst);
         let client = if on_backup { &self.backup } else { &self.primary };
         let error = match client.evaluate(state, questions).await {
-            Err(JevError::RetriesExhausted(error)) if !on_backup => error,
+            Err(DecisionError::RetriesExhausted(error)) if !on_backup => error,
             other => return other,
         };
         // Calls already in flight may fail together; assigning the same backup without awaiting cannot flap.
@@ -86,12 +96,12 @@ impl FailoverJevClient {
             questions.iter().filter(|(key, _)| !held.contains_key(*key)).map(|(k, q)| (k.clone(), q.clone())).collect();
         let result = match self.backup.evaluate(state, &remaining).await {
             Ok(result) => result,
-            Err(JevError::RetriesExhausted(backup_error)) => {
+            Err(DecisionError::RetriesExhausted(backup_error)) => {
                 let requests = error.requests + backup_error.requests;
                 let seconds = error.seconds + backup_error.seconds;
                 let mut answered = error.answered.clone();
                 answered.extend(backup_error.answered.iter().cloned());
-                return Err(JevError::RetriesExhausted(Box::new(RetriesExhausted {
+                return Err(DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
                     message: exhausted(requests, seconds, &backup_error.last),
                     seconds,
                     unaccounted_requests: error.unaccounted_requests + backup_error.unaccounted_requests,
@@ -125,12 +135,12 @@ impl FailoverJevClient {
     }
 }
 
-impl JevClient for FailoverJevClient {
+impl DecisionClient for FailoverDecisionClient {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(self.evaluate_paid(state, questions))
     }
 

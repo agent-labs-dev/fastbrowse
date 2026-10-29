@@ -2,7 +2,7 @@
 //! the LLM proposes and code finds in the cited block.
 
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{Answer, ChoiceAnswer, ChoiceQuestion, JevClient, Question};
+use fastbrowse_core::decision::{Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, Question};
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{CostComponent, CostLine, Evidence, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::output_schema::{OutputField, OutputType};
@@ -529,7 +529,7 @@ pub fn field_group_question(
 /// The value Jev picks for one field, grouping first when the pool exceeds Jev's option ceiling.
 #[allow(clippy::too_many_arguments)]
 pub async fn choose_candidate(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     state: &Value,
     field: &ScalarField,
     candidates: &[Candidate],
@@ -539,7 +539,7 @@ pub async fn choose_candidate(
     ledger: Option<&Ledger>,
 ) -> Result<Option<(ScalarValue, Evidence)>> {
     async fn ask(
-        jev: &dyn JevClient,
+        jev: &dyn DecisionClient,
         state: &Value,
         questions: IndexMap<String, Question>,
         ledger: Option<&Ledger>,

@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, NoulQuestion, Question};
 use fastbrowse_core::effects::state_key;
-use fastbrowse_core::jev::{Answer, ChoiceQuestion, NoulQuestion, Question};
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{CostComponent, Decider, LLMPurpose, Operation, Status, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
@@ -834,7 +834,9 @@ impl Agent {
             keys.iter().map(|(key, option)| (key.clone(), self.mask(option).into())).collect();
         let picked = self.ask_choice(state, observation, question, criteria).await?;
         keys.get(&picked).cloned().ok_or_else(|| {
-            Flow::from(fastbrowse_core::jev::JevError::Failed(format!("Jev picked {picked}, which was not offered")))
+            Flow::from(fastbrowse_core::decision::DecisionError::Failed(format!(
+                "Jev picked {picked}, which was not offered"
+            )))
         })
     }
 
@@ -856,7 +858,7 @@ impl Agent {
         state.ledger.record([evaluation.cost.clone()])?;
         match evaluation.answers.get("pick") {
             Some(Answer::Choice(answer)) => Ok(answer.choice.clone()),
-            _ => Err(fastbrowse_core::jev::JevError::Failed("expected a choice answer".into()).into()),
+            _ => Err(fastbrowse_core::decision::DecisionError::Failed("expected a choice answer".into()).into()),
         }
     }
 

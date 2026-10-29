@@ -13,7 +13,7 @@ use std::task::{Context, Poll, Waker};
 
 use fastbrowse_agent::AgentError;
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question, RetriesExhausted};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question, RetriesExhausted};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostComponent, CostLine, LLMPurpose, Limits};
 use fastbrowse_core::py::dump::Dump;
@@ -93,12 +93,12 @@ impl ReplayJev {
     }
 }
 
-impl JevClient for ReplayJev {
+impl DecisionClient for ReplayJev {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let (index, call) = self.0.take();
         let name = &self.0.name;
         let written: serde_json::Map<String, Value> =
@@ -114,14 +114,14 @@ impl JevClient for ReplayJev {
     }
 }
 
-fn jev_response(response: &Value) -> Result<Evaluation, JevError> {
+fn jev_response(response: &Value) -> Result<Evaluation, DecisionError> {
     if let Some(evaluation) = response.get("evaluation") {
         return Ok(parse(evaluation));
     }
     let message = response["message"].as_str().unwrap_or_default().to_string();
     Err(match response["error"].as_str() {
-        Some("input_too_large") => JevError::InputTooLarge(message),
-        Some("retries_exhausted") => JevError::RetriesExhausted(Box::new(RetriesExhausted {
+        Some("input_too_large") => DecisionError::InputTooLarge(message),
+        Some("retries_exhausted") => DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message,
             seconds: response["seconds"].as_f64().unwrap_or_default(),
             unaccounted_requests: response["unaccounted_requests"].as_i64().unwrap_or_default(),
@@ -129,7 +129,7 @@ fn jev_response(response: &Value) -> Result<Evaluation, JevError> {
             answered: Vec::new(),
             last: String::new(),
         })),
-        _ => JevError::Failed(message),
+        _ => DecisionError::Failed(message),
     })
 }
 
@@ -200,8 +200,8 @@ pub fn ledger_state(ledger: Option<&Ledger>) -> Value {
 pub fn error_outcome(error: &AgentError) -> Value {
     let kind = match error {
         AgentError::Budget(_) => "budget",
-        AgentError::Jev(JevError::RetriesExhausted(_)) => "jev_retries_exhausted",
-        AgentError::Jev(JevError::InputTooLarge(_)) => "jev_input_too_large",
+        AgentError::Jev(DecisionError::RetriesExhausted(_)) => "jev_retries_exhausted",
+        AgentError::Jev(DecisionError::InputTooLarge(_)) => "jev_input_too_large",
         AgentError::Jev(_) => "jev",
         AgentError::Llm(_) => "llm",
         AgentError::ObservationTooLarge(_) => "ObservationTooLarge",

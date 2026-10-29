@@ -125,7 +125,7 @@ The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/
   with what tells them apart (role, label, the card or row that disambiguates twins, whether a field blocks
   its form); [browser/capture.js](src/fastbrowse/browser/capture.js) returns the text as source blocks with stable spans, so a reader can cite them.
 - **[policy.rs](crates/fastbrowse-agent/src/policy.rs)** batches operation and target choices, read assessment and applicable wall checks.
-  Large target sets use a further choice inside a group. [jev.rs](crates/fastbrowse-core/src/jev.rs) is the client's shape;
+  Large target sets use a further choice inside a group. [decision.rs](crates/fastbrowse-core/src/decision.rs) is the client's shape;
   [typesafe.rs](crates/fastbrowse-clients/src/typesafe.rs) serves direct TypeSafe when keyed, the recommended route, and otherwise OpenRouter; [vercel.rs](crates/fastbrowse-clients/src/vercel.rs) serves the
   Vercel AI Gateway, which is also the Jev primary when no other Jev key is set. OpenRouter is supported for Jev text but is not recommended and never receives Jev image input. [environment.rs](crates/fastbrowse-clients/src/environment.rs) selects routes; [failover.rs](crates/fastbrowse-clients/src/failover.rs) switches after retries.
 - **[retrieval](crates/fastbrowse-agent/src/retrieval)** routes short facts through Jev and other reads through the LLM. A read claim cites source

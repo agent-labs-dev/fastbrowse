@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use fastbrowse_core::config::Config;
-use fastbrowse_core::jev::{
-    Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, JevClient, JevError, NoulAnswer, NoulQuestion, Question,
+use fastbrowse_core::decision::{
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, NoulAnswer, NoulQuestion, Question,
 };
 use fastbrowse_core::models::{CostComponent, CostLine, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
@@ -283,7 +283,7 @@ impl RelevanceCache {
 
 /// Ask Jev for the next action, reducing the observation when it will not fit.
 pub async fn decide(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     observation: &Observation,
     context: &StepContext,
     config: &Config,
@@ -320,11 +320,11 @@ pub async fn decide(
                     decision.input_tokens += tokens;
                     return Ok(decision);
                 }
-                Err(AgentError::Jev(JevError::InputTooLarge(_))) => {}
-                Err(AgentError::Jev(JevError::RetriesExhausted(error))) => {
+                Err(AgentError::Jev(DecisionError::InputTooLarge(_))) => {}
+                Err(AgentError::Jev(DecisionError::RetriesExhausted(error))) => {
                     let Some((smaller, reduced)) = shed(&request, observation, &controls, context, config, reduction)
                     else {
-                        return Err(AgentError::Jev(JevError::RetriesExhausted(error)));
+                        return Err(AgentError::Jev(DecisionError::RetriesExhausted(error)));
                     };
                     trace.event("decide_shed", || {
                         let mut fields = Map::new();
@@ -458,7 +458,7 @@ type Shortlist = (Vec<Control>, Vec<CostLine>, i64);
 
 #[allow(clippy::too_many_arguments)]
 async fn shortlist(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     observation: &Observation,
     controls: &[Control],
     context: &StepContext,
@@ -770,7 +770,7 @@ pub fn fits(request: &Request, config: &Config) -> bool {
 }
 
 async fn evaluate(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     request: &Request,
     controls: &[Control],
     reduction: Reduction,
@@ -1100,8 +1100,8 @@ mod tests {
 
     use fastbrowse_core::BoxFuture;
     use fastbrowse_core::config::ObservationLimits;
-    use fastbrowse_core::jev::ChoiceTag;
-    use fastbrowse_core::jev::NoulTag;
+    use fastbrowse_core::decision::ChoiceTag;
+    use fastbrowse_core::decision::NoulTag;
     use fastbrowse_core::models::{CostBasis, Limits};
     use fastbrowse_core::py::datetime::DateTime;
 
@@ -1146,12 +1146,12 @@ mod tests {
         }
     }
 
-    impl JevClient for Fake {
+    impl DecisionClient for Fake {
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,
             questions: &'a IndexMap<String, Question>,
-        ) -> BoxFuture<'a, std::result::Result<Evaluation, JevError>> {
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
             self.requests.lock().unwrap().push(questions.clone());
             let relevance = !questions.contains_key("operation");
             let hold =

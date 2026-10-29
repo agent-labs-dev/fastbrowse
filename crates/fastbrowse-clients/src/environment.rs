@@ -2,11 +2,11 @@
 //! built from them.
 //!
 //! Jev: TYPESAFE_API_KEY selects direct TypeSafe; otherwise OPENROUTER_API_KEY is primary, with AI_GATEWAY_API_KEY
-//! (Vercel AI Gateway) as backup when set, or primary when neither other key is set. FASTBROWSE_JEV_SOURCE picks
+//! (Vercel AI Gateway) as backup when set, or primary when neither other key is set. FASTBROWSE_DECISION_SOURCE picks
 //! openrouter, typesafe or gateway explicitly. OpenRouter and direct use the gateway as backup; the gateway uses direct
-//! when configured, otherwise OpenRouter. FASTBROWSE_JEV_BASE_URL points either at a proxy or another host serving the
-//! same API, and FASTBROWSE_JEV_MODEL pins an OpenRouter or direct model. A custom endpoint or model disables automatic
-//! failover.
+//! when configured, otherwise OpenRouter. FASTBROWSE_DECISION_BASE_URL points either at a proxy or another host serving the
+//! same API, and FASTBROWSE_DECISION_MODEL pins an OpenRouter or direct model. A custom endpoint or model disables
+//! automatic failover. Each FASTBROWSE_DECISION_ variable is still read under its former FASTBROWSE_JEV_ name.
 //!
 //! LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
 //! Gateway's OpenAI-compatible chat completions. FASTBROWSE_LLM_BASE_URL points the LLM at any other OpenAI-compatible
@@ -25,13 +25,13 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use fastbrowse_core::jev::{JEV_MODEL, JevClient};
+use fastbrowse_core::decision::{DecisionClient, JEV_MODEL};
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
 use serde_json::{Map, Value};
 
-use crate::failover::FailoverJevClient;
+use crate::failover::FailoverDecisionClient;
 use crate::http::Http;
 use crate::openai_compatible::{
     LLMOptions, OpenAICompatibleLLM, ReasoningEffort, gateway_provider_routing, openrouter_provider_routing,
@@ -64,29 +64,30 @@ pub const LLM_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 pub const LLM_GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum JevSource {
+pub enum DecisionSource {
     OpenRouter,
     TypeSafe,
     Gateway,
 }
 
-impl JevSource {
-    pub const ALL: [JevSource; 3] = [JevSource::OpenRouter, JevSource::TypeSafe, JevSource::Gateway];
+impl DecisionSource {
+    pub const ALL: [DecisionSource; 3] =
+        [DecisionSource::OpenRouter, DecisionSource::TypeSafe, DecisionSource::Gateway];
 
     pub fn as_str(self) -> &'static str {
         match self {
-            JevSource::OpenRouter => "openrouter",
-            JevSource::TypeSafe => "typesafe",
-            JevSource::Gateway => "gateway",
+            DecisionSource::OpenRouter => "openrouter",
+            DecisionSource::TypeSafe => "typesafe",
+            DecisionSource::Gateway => "gateway",
         }
     }
 
-    pub fn parse(value: &str) -> Option<JevSource> {
-        JevSource::ALL.into_iter().find(|source| source.as_str() == value)
+    pub fn parse(value: &str) -> Option<DecisionSource> {
+        DecisionSource::ALL.into_iter().find(|source| source.as_str() == value)
     }
 }
 
-impl std::fmt::Display for JevSource {
+impl std::fmt::Display for DecisionSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -166,9 +167,9 @@ pub struct Settings {
     pub browser_use_api_key: Option<Secret>,
     /// Bearer token for `fastbrowse-mcp --transport http`.
     pub mcp_token: Option<Secret>,
-    pub jev_source: Option<JevSource>,
-    pub jev_base_url: Option<String>,
-    pub jev_model: Option<String>,
+    pub decision_source: Option<DecisionSource>,
+    pub decision_base_url: Option<String>,
+    pub decision_model: Option<String>,
     pub llm_model: Option<String>,
     pub llm_model_plan: Option<String>,
     pub llm_model_read: Option<String>,
@@ -212,9 +213,9 @@ impl Default for Settings {
             openrouter_api_key: None,
             browser_use_api_key: None,
             mcp_token: None,
-            jev_source: None,
-            jev_base_url: None,
-            jev_model: None,
+            decision_source: None,
+            decision_base_url: None,
+            decision_model: None,
             llm_model: None,
             llm_model_plan: None,
             llm_model_read: None,
@@ -243,6 +244,13 @@ impl Default for Settings {
     }
 }
 
+/// The variables a setting was read from before it took a provider-neutral name, read when the new one is unset.
+const FORMERLY: [(&str, &str); 3] = [
+    ("fastbrowse_decision_source", "fastbrowse_jev_source"),
+    ("fastbrowse_decision_base_url", "fastbrowse_jev_base_url"),
+    ("fastbrowse_decision_model", "fastbrowse_jev_model"),
+];
+
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
 const FIELDS: [(&str, &str); 31] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
@@ -250,9 +258,9 @@ const FIELDS: [(&str, &str); 31] = [
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
     ("BROWSER_USE_API_KEY", "browser_use_api_key"),
     ("mcp_token", "fastbrowse_mcp_token"),
-    ("jev_source", "fastbrowse_jev_source"),
-    ("jev_base_url", "fastbrowse_jev_base_url"),
-    ("jev_model", "fastbrowse_jev_model"),
+    ("decision_source", "fastbrowse_decision_source"),
+    ("decision_base_url", "fastbrowse_decision_base_url"),
+    ("decision_model", "fastbrowse_decision_model"),
     ("llm_model", "fastbrowse_llm_model"),
     ("llm_model_plan", "fastbrowse_llm_model_plan"),
     ("llm_model_read", "fastbrowse_llm_model_read"),
@@ -343,7 +351,9 @@ impl Settings {
         let mut settings = Settings::default();
         let mut invalid = Vec::new();
         for (name, variable) in FIELDS {
-            let Some(value) = values.get(&variable.to_lowercase()) else {
+            let former = FORMERLY.iter().find(|(new, _)| *new == variable).map(|(_, old)| *old);
+            let Some(value) = values.get(&variable.to_lowercase()).or_else(|| former.and_then(|old| values.get(old)))
+            else {
                 continue;
             };
             if settings.assign(name, value).is_err() {
@@ -366,9 +376,9 @@ impl Settings {
             "OPENROUTER_API_KEY" => self.openrouter_api_key = secret(),
             "BROWSER_USE_API_KEY" => self.browser_use_api_key = secret(),
             "mcp_token" => self.mcp_token = secret(),
-            "jev_source" => self.jev_source = Some(JevSource::parse(value).ok_or(())?),
-            "jev_base_url" => self.jev_base_url = text(),
-            "jev_model" => self.jev_model = text(),
+            "decision_source" => self.decision_source = Some(DecisionSource::parse(value).ok_or(())?),
+            "decision_base_url" => self.decision_base_url = text(),
+            "decision_model" => self.decision_model = text(),
             "llm_model" => self.llm_model = text(),
             "llm_model_plan" => self.llm_model_plan = text(),
             "llm_model_read" => self.llm_model_read = text(),
@@ -454,29 +464,31 @@ impl Settings {
     }
 
     /// The Jev provider a run starts on, and the one it fails over to when that one's retries run out.
-    pub fn jev_route(&self) -> (JevSource, Option<JevSource>) {
-        let source = self.jev_source.unwrap_or(if set(&self.typesafe_api_key) {
-            JevSource::TypeSafe
+    pub fn decision_route(&self) -> (DecisionSource, Option<DecisionSource>) {
+        let source = self.decision_source.unwrap_or(if set(&self.typesafe_api_key) {
+            DecisionSource::TypeSafe
         } else if set(&self.openrouter_api_key) {
-            JevSource::OpenRouter
+            DecisionSource::OpenRouter
         } else {
-            JevSource::Gateway
+            DecisionSource::Gateway
         });
         // A proxy may be a routing boundary, and the gateway cannot honour a direct-API model pin.
-        if self.jev_base_url.as_ref().is_some_and(|url| !url.is_empty()) || self.jev_model.is_some() {
+        if self.decision_base_url.as_ref().is_some_and(|url| !url.is_empty()) || self.decision_model.is_some() {
             return (source, None);
         }
         let backup = match source {
-            JevSource::OpenRouter | JevSource::TypeSafe => set(&self.ai_gateway_api_key).then_some(JevSource::Gateway),
-            JevSource::Gateway if set(&self.typesafe_api_key) => Some(JevSource::TypeSafe),
-            JevSource::Gateway => set(&self.openrouter_api_key).then_some(JevSource::OpenRouter),
+            DecisionSource::OpenRouter | DecisionSource::TypeSafe => {
+                set(&self.ai_gateway_api_key).then_some(DecisionSource::Gateway)
+            }
+            DecisionSource::Gateway if set(&self.typesafe_api_key) => Some(DecisionSource::TypeSafe),
+            DecisionSource::Gateway => set(&self.openrouter_api_key).then_some(DecisionSource::OpenRouter),
         };
         (source, backup)
     }
 
     /// Which providers a run will call, for the first line of a log: an outage reads differently with no backup.
     pub fn providers(&self) -> String {
-        let (source, backup) = self.jev_route();
+        let (source, backup) = self.decision_route();
         let failover = match backup {
             Some(backup) => format!("backup {backup}"),
             None => "no backup: an outage past its retries ends the run".to_string(),
@@ -496,19 +508,23 @@ impl Settings {
         if set(&self.openrouter_api_key) { LLMSource::OpenRouter } else { LLMSource::Gateway }
     }
 
-    pub fn jev(&self, http: &Http) -> Result<Box<dyn JevClient>, ConfigurationError> {
-        let (source, backup_source) = self.jev_route();
-        let primary = self.jev_client(source, http)?;
+    pub fn decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        let (source, backup_source) = self.decision_route();
+        let primary = self.decision_client(source, http)?;
         let Some(backup_source) = backup_source else { return Ok(primary) };
-        Ok(Box::new(FailoverJevClient::new(primary, self.jev_client(backup_source, http)?, http.clone())))
+        Ok(Box::new(FailoverDecisionClient::new(primary, self.decision_client(backup_source, http)?, http.clone())))
     }
 
-    fn jev_client(&self, source: JevSource, http: &Http) -> Result<Box<dyn JevClient>, ConfigurationError> {
-        let base_url = |default: &'static str| match &self.jev_base_url {
+    fn decision_client(
+        &self,
+        source: DecisionSource,
+        http: &Http,
+    ) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        let base_url = |default: &'static str| match &self.decision_base_url {
             Some(url) if !url.is_empty() => url.clone(),
             _ => default.to_string(),
         };
-        let model = |default: &'static str| match &self.jev_model {
+        let model = |default: &'static str| match &self.decision_model {
             Some(model) if !model.is_empty() => model.clone(),
             _ => default.to_string(),
         };
@@ -517,19 +533,19 @@ impl Settings {
             _ => Err(ConfigurationError(message.to_string())),
         };
         Ok(match source {
-            JevSource::OpenRouter => Box::new(TypeSafeJevClient::new(
+            DecisionSource::OpenRouter => Box::new(TypeSafeJevClient::new(
                 key(&self.openrouter_api_key, "set OPENROUTER_API_KEY for Jev via OpenRouter")?,
                 http.clone(),
                 &base_url(OPENROUTER_URL),
                 &model(OPENROUTER_MODEL),
             )),
-            JevSource::TypeSafe => Box::new(TypeSafeJevClient::new(
+            DecisionSource::TypeSafe => Box::new(TypeSafeJevClient::new(
                 key(&self.typesafe_api_key, "set TYPESAFE_API_KEY for Jev via the direct API")?,
                 http.clone(),
                 &base_url(TYPESAFE_URL),
                 &model(JEV_MODEL),
             )),
-            JevSource::Gateway => Box::new(VercelGatewayJevClient::new(
+            DecisionSource::Gateway => Box::new(VercelGatewayJevClient::new(
                 key(
                     &self.ai_gateway_api_key,
                     "set AI_GATEWAY_API_KEY for Jev via the gateway, OPENROUTER_API_KEY or TYPESAFE_API_KEY",

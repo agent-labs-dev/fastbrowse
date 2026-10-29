@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{Answer, JevClient, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
 use fastbrowse_core::models::{CostLine, Evidence, FactReader, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
@@ -978,7 +978,7 @@ const RECORD_REJECT_TO: f64 = 0.20;
 /// None when the page does not have the first page's shape or Jev is unsure of any record: the LLM reader then reads
 /// the page as before. The records are code-cut blocks, so every counted one is still a quote.
 pub async fn filter_tallies(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     capture: &Capture,
     readers: &[TallyReader],
     requirement_ids: &[String],
@@ -1127,7 +1127,7 @@ pub struct ReadOptions<'a> {
     pub max_chars: Option<i64>,
     pub tokens: TokenBudget,
     pub ledger: Option<&'a Ledger>,
-    pub jev: Option<&'a dyn JevClient>,
+    pub jev: Option<&'a dyn DecisionClient>,
     pub requirements: Vec<Requirement>,
     /// What the caller knows about the page that its text does not say, such as its next-page control; it goes with
     /// every question the reader is asked, however the question is narrowed.

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::NoulQuestion;
+use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED, background_section};
 use fastbrowse_core::page::cut_text;

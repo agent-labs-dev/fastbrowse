@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use fastbrowse_core::jev::{JevError, NoulQuestion};
+use fastbrowse_core::decision::{DecisionError, NoulQuestion};
 use fastbrowse_core::llm::{Generation, LLMError};
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, Status, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Control, Observation};
@@ -95,8 +95,8 @@ impl From<BudgetExceeded> for Flow {
     }
 }
 
-impl From<JevError> for Flow {
-    fn from(error: JevError) -> Self {
+impl From<DecisionError> for Flow {
+    fn from(error: DecisionError) -> Self {
         Flow::Agent(AgentError::Jev(error))
     }
 }

@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{Answer, JevClient, JevError, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Question};
 use fastbrowse_core::models::{CostComponent, CostLine};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
@@ -64,7 +64,7 @@ fn lock(spent: &Mutex<Spent>) -> MutexGuard<'_, Spent> {
 
 /// None when no batch was answered; a question too large to send with the state alone goes unscored.
 pub async fn evaluate_batches(
-    jev: &dyn JevClient,
+    jev: &dyn DecisionClient,
     state: &Value,
     questions: &IndexMap<String, Question>,
     tokens: &TokenBudget,
@@ -128,7 +128,7 @@ pub async fn evaluate_batches(
                 Ok(evaluation) => evaluation,
                 Err(error) => {
                     // Singles a split batch had answered were paid for even though the batch as a whole failed.
-                    if let JevError::RetriesExhausted(exhausted) = &error {
+                    if let DecisionError::RetriesExhausted(exhausted) = &error {
                         lock(spent).paid.extend(exhausted.answered.iter().map(|single| single.cost.clone()));
                     }
                     if !allow_failed_batches {
@@ -178,7 +178,7 @@ mod tests {
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
 
-    use fastbrowse_core::jev::{DecisionProfile, Evaluation, NoulAnswer, NoulQuestion, NoulTag};
+    use fastbrowse_core::decision::{DecisionProfile, Evaluation, NoulAnswer, NoulQuestion, NoulTag};
     use fastbrowse_core::models::{BudgetResource, CostBasis, Limits};
     use serde_json::json;
 
@@ -202,12 +202,12 @@ mod tests {
         max_questions: Option<usize>,
     }
 
-    impl JevClient for Fake {
+    impl DecisionClient for Fake {
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,
             questions: &'a IndexMap<String, Question>,
-        ) -> BoxFuture<'a, std::result::Result<Evaluation, JevError>> {
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
             self.sent.lock().unwrap().push(questions.keys().cloned().collect());
             let stall = questions.contains_key(self.stall);
             Box::pin(async move {
@@ -305,13 +305,13 @@ mod tests {
 
     struct Failing;
 
-    impl JevClient for Failing {
+    impl DecisionClient for Failing {
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,
             _: &'a IndexMap<String, Question>,
-        ) -> BoxFuture<'a, std::result::Result<Evaluation, JevError>> {
-            Box::pin(async { Err(JevError::Failed("down".into())) })
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            Box::pin(async { Err(DecisionError::Failed("down".into())) })
         }
     }
 
@@ -321,6 +321,6 @@ mod tests {
         let tokens = TokenBudget::default();
         assert_eq!(block_on(evaluate_batches(&Failing, &json!({}), &asked, &tokens, None, None, true)).unwrap(), None);
         let error = block_on(evaluate_batches(&Failing, &json!({}), &asked, &tokens, None, None, false)).unwrap_err();
-        assert_eq!(error, AgentError::Jev(JevError::Failed("down".into())));
+        assert_eq!(error, AgentError::Jev(DecisionError::Failed("down".into())));
     }
 }

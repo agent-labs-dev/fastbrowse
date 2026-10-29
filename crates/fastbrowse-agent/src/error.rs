@@ -4,7 +4,7 @@
 //! its class. Here every module returns this one type, so a budget stop reached inside an LLM client stays a budget
 //! stop and is never mistaken for a failed generation.
 
-use fastbrowse_core::jev::JevError;
+use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::LLMError;
 use fastbrowse_core::models::MaybeUnavailable;
 use fastbrowse_core::telemetry::BudgetExceeded;
@@ -12,7 +12,7 @@ use fastbrowse_core::telemetry::BudgetExceeded;
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AgentError {
     #[error(transparent)]
-    Jev(#[from] JevError),
+    Jev(#[from] DecisionError),
     /// Never `LLMError::Budget`: that one arrives as [`AgentError::Budget`].
     #[error(transparent)]
     Llm(LLMError),

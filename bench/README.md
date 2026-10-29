@@ -13,7 +13,7 @@ For each task the harness:
    reaches the prompts and the model writes it back;
 2. starts one headless Chrome and hands it to the agent as `cdp_url`, so Chrome's CPU and memory are not counted
    against the agent;
-3. starts a proxy on a free port and points the agent at it with `FASTBROWSE_JEV_BASE_URL` and
+3. starts a proxy on a free port and points the agent at it with `FASTBROWSE_DECISION_BASE_URL` and
    `FASTBROWSE_LLM_BASE_URL`;
 4. starts one agent process, sends `initialize` and `run`, answers `secrets/resolve`, and grades the result with
    the suite's own checks.

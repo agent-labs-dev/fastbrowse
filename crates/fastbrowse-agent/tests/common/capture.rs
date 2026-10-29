@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 use fastbrowse_agent::memory::{Notes, NotesState};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question, RetriesExhausted};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question, RetriesExhausted};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostLine, LLMPurpose, Limits};
 use fastbrowse_core::py::dump::Dump;
@@ -189,12 +189,12 @@ impl<'a> KeyedJev<'a> {
     }
 }
 
-impl JevClient for KeyedJev<'_> {
+impl DecisionClient for KeyedJev<'_> {
     fn evaluate<'b>(
         &'b self,
         state: &'b Value,
         questions: &'b IndexMap<String, Question>,
-    ) -> BoxFuture<'b, Result<Evaluation, JevError>> {
+    ) -> BoxFuture<'b, Result<Evaluation, DecisionError>> {
         let written: serde_json::Map<String, Value> =
             questions.iter().map(|(key, question)| (key.clone(), question.dump())).collect();
         let key = jev_body(&write(state, Style::HTTPX), &write(&Value::Object(written), Style::HTTPX));
@@ -205,14 +205,14 @@ impl JevClient for KeyedJev<'_> {
     }
 }
 
-fn jev_response(response: &Value) -> Result<Evaluation, JevError> {
+fn jev_response(response: &Value) -> Result<Evaluation, DecisionError> {
     if let Some(evaluation) = response.get("evaluation") {
         return Ok(parse(evaluation));
     }
     let message = response["message"].as_str().unwrap_or_default().to_string();
     Err(match response["error"].as_str() {
-        Some("input_too_large") => JevError::InputTooLarge(message),
-        Some("retries_exhausted") => JevError::RetriesExhausted(Box::new(RetriesExhausted {
+        Some("input_too_large") => DecisionError::InputTooLarge(message),
+        Some("retries_exhausted") => DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message,
             seconds: response["seconds"].as_f64().unwrap_or_default(),
             unaccounted_requests: response["unaccounted_requests"].as_i64().unwrap_or_default(),
@@ -220,7 +220,7 @@ fn jev_response(response: &Value) -> Result<Evaluation, JevError> {
             answered: Vec::new(),
             last: String::new(),
         })),
-        _ => JevError::Failed(message),
+        _ => DecisionError::Failed(message),
     })
 }
 

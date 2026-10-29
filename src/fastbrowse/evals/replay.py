@@ -1,7 +1,7 @@
 """Record and replay the model traffic of a run at the HTTP layer, so any implementation of `fastbrowse serve` can
 be driven by the same model responses.
 
-The agent is pointed at a local proxy through FASTBROWSE_JEV_BASE_URL and FASTBROWSE_LLM_BASE_URL. Jev requests
+The agent is pointed at a local proxy through FASTBROWSE_DECISION_BASE_URL and FASTBROWSE_LLM_BASE_URL. Jev requests
 arrive under `/jev` and LLM requests under `/llm`:
 
 - `record` forwards each POST to OpenRouter with the real key, keeps the response and returns it.
