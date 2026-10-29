@@ -171,12 +171,12 @@ jobs:
           path: fastbrowse
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       # The pr-bot App reads the private parallax source; it is installed on that repo, not on this one.
       - name: Mint the pr-bot token
         id: app
-        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
           private-key: ${{ secrets.AGENT_LABS_PR_BOT_PRIVATE_KEY }}
@@ -245,9 +245,9 @@ jobs:
           ref: ${{ needs.resolve.outputs.fastbrowse_sha }}
           path: fastbrowse
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
-      - uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v2
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app
         with:
           app-id: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
