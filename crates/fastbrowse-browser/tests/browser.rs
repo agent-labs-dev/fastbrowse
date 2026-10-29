@@ -368,6 +368,18 @@ async fn test_covered_click_dispatches_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_visually_hidden_radio_is_pressed_through_its_label() {
+    let _gate = gate().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/swatches.html").await;
+    let obs = h.observe().await;
+    let result = act(&h.page, click(find(&obs, "Blue")), &obs).await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(eval_active(&h, "document.getElementById('blue').checked").await, json!(true));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_small_fixed_child_does_not_hide_full_window_cover_from_hit_test() {
     let _gate = gate().await;
     for shadow in [false, true] {
