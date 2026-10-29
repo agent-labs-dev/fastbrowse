@@ -201,6 +201,8 @@ A prompt is code, and a model's output is untrusted until code accepts it.
 - **Every call leaves a receipt.** The ledger records each call's purpose, tokens and dollars, and a budget
   is checked before the call that would break it. A change to the calls a run makes is measured by calls per
   purpose, not wall clock.
+- **Nothing a model reads is cut short.** No text, control or output cap, except one a provider documents, named as
+  that provider's (Jev's in `DecisionProfile`). A rule that overrides a model is stated to that model.
 - **A prompt change is a behaviour change.** It is iterated against the eval suites like any other agent
   change, and a unit test pins any instruction the behaviour depends on.
 
