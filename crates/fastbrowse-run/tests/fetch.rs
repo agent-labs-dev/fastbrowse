@@ -119,10 +119,17 @@ async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
 }
 
 #[tokio::test]
-async fn test_a_shell_with_no_text_needs_the_browser_that_renders_it() {
+async fn test_a_shell_or_a_challenge_needs_the_browser_that_renders_it() {
     let shell = format!("<html><body><div id=root></div></body></html>{}", "<script>a=1</script>".repeat(200));
     let error = fetched(&html(&shell), "https://shop.example.com/app").await.unwrap_err();
     assert!(error.0.contains("scripts"), "{error}");
+    // A bot check answers with its status, as Cloudflare's 403 and 503 challenges do, so it is never read as the page.
+    let wall = "<html><body><h1>Just a moment</h1><p>Checking your browser</p></body></html>";
+    for status in [403, 503] {
+        let page = FetchedPage::new(client(wall, status, "text/html"), None, None);
+        let error = page.navigate("https://shop.example.com/app", None).await.unwrap_err();
+        assert!(error.needs_browser() && error.to_string().contains(&format!("HTTP {status}")), "{error}");
+    }
 }
 
 #[test]
