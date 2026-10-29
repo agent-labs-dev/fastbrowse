@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A local run clears the Chrome profiles that killed runs left behind.** A run stopped by a signal or a Chrome crash never removed its throwaway profile, about 140MB each in the temporary directory, and 262 of them filled a 16GB `/tmp` until runs failed with a full disk. On Linux and macOS each launch now removes the profiles whose owning process has exited. Profiles given with `--profile` are never touched.
+
 ## [0.9.0] - 2026-10-29
 
 - **A .NET client.** `dotnet add package Fastbrowse` runs tasks from .NET over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. Cancelling the `CancellationToken` stops a run once its browser has closed. The package carries each platform's binary. .NET 10 or newer.
