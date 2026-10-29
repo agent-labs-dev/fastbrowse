@@ -32,8 +32,8 @@ use fastbrowse_core::jev::JevClient;
 use fastbrowse_core::llm::{Generation, LLMClient};
 use fastbrowse_core::models::{
     Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler, Evidence,
-    Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact, StepOutcome, Tripwire,
-    TripwireMode, UntilCheck, Wall, WallKind,
+    Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact, StepOutcome, UntilCheck, Wall,
+    WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::py::json::dumps;
@@ -53,7 +53,6 @@ use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
 use crate::policy::StepContext;
 use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
 use crate::shortcut::{Shortcut, propose_shortcut};
-use crate::tripwires::{Tripped, repeated_action, stagnant_plan};
 use crate::verification::RecordSchema;
 
 /// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
@@ -69,7 +68,6 @@ const REDRAW_WATCH_SECONDS: f64 = 10.0;
 /// Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page takes
 /// many scrolls, each of which shows something new.
 const REPEATS_BEFORE_CYCLE: i64 = 2;
-const REVERSAL_WINDOW: usize = 6;
 /// How much of a wall's text a blocked result quotes: enough for its message, not a whole page.
 const WALL_QUOTE_CHARS: i64 = 600;
 /// The choice a field's text is written for when no input or secret is the answer.
@@ -728,7 +726,6 @@ impl Agent {
                 _ => None,
             },
             final_frame: None,
-            would_fire: state.map(|state| state.would_fire.clone()).unwrap_or_default(),
             recordings: Vec::new(),
             wall: outcome.wall,
         }
@@ -884,40 +881,6 @@ impl Agent {
         parts.join("\n\n")
     }
 
-    /// What the plan still wants. Requirement ids, not model prose: this asks whether the run resolved anything, and a
-    /// plan the agent cannot influence by rewording is the only honest way to ask it.
-    fn plan_mark(&self, state: &RunState) -> String {
-        let Some(plan) = &state.ready_plan else { return String::new() };
-        let mut ids: Vec<String> = state.notes.unresolved(plan).into_iter().map(|r| r.id).collect();
-        ids.sort();
-        ids.join(",")
-    }
-
-    /// Every grinding signal that holds right now, the long-standing unchanged-page count first.
-    fn tripwires(&self, state: &RunState) -> Vec<Tripped> {
-        let stall = &self.config.stall;
-        let mut tripped = Vec::new();
-        if state.unchanged >= stall.unchanged_actions {
-            tripped.push(Tripped { tripwire: Tripwire::NoProgress, streak: state.unchanged as usize });
-        }
-        let since = state.recovered_at.min(state.history.len());
-        if let Some(repeated) = repeated_action(&state.history[since..], stall.repeated_actions.max(0) as usize) {
-            tripped.push(repeated);
-        }
-        // An empty mark means the plan was not written yet, and every step before it would look identical.
-        if state.ready_plan.is_some() {
-            let marks: Vec<&String> = state.plan_marks.iter().filter(|mark| !mark.is_empty()).collect();
-            if let Some(stagnant) = stagnant_plan(&marks, stall.stagnant_plan_steps.max(0) as usize) {
-                tripped.push(stagnant);
-            }
-        }
-        tripped
-    }
-
-    fn armed(&self, tripped: &Tripped) -> bool {
-        tripped.tripwire == Tripwire::NoProgress || self.config.stall.tripwires == TripwireMode::Armed
-    }
-
     fn context(
         &self,
         state: &RunState,
@@ -1037,7 +1000,6 @@ fn blocked_without_browser(message: String) -> RunResult {
         error: Some(message),
         final_url: None,
         final_frame: None,
-        would_fire: Vec::new(),
         recordings: Vec::new(),
         wall: None,
     }

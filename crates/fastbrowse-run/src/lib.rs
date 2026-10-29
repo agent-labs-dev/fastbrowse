@@ -689,7 +689,6 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
                 error: Some(refusal.message),
                 final_url: None,
                 final_frame: None,
-                would_fire: Vec::new(),
                 recordings: Vec::new(),
                 wall: None,
             }
@@ -788,7 +787,6 @@ async fn fetched(
             error: Some("BrowserError".into()),
             final_url: None,
             final_frame: None,
-            would_fire: Vec::new(),
             recordings: Vec::new(),
             wall: None,
         };

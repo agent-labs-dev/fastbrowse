@@ -259,7 +259,6 @@ pub fn error_result(error: impl Into<String>) -> RunResult {
         error: Some(error.into()),
         final_url: None,
         final_frame: None,
-        would_fire: Vec::new(),
         recordings: Vec::new(),
         wall: None,
     }
