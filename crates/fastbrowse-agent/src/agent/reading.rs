@@ -259,7 +259,8 @@ impl Agent {
         let options = ReadOptions {
             tokens: self.config.tokens.clone(),
             ledger: Some(&state.ledger),
-            jev: if needs_context { None } else { Some(&*self.jev) },
+            // What Jev cannot quote, and the context the remaining actions need, still go to the LLM reader.
+            jev: Some(&*self.jev),
             requirements: wanted.clone(),
             targets: Some(plan.requirements.iter().filter(information).cloned().collect()),
             // Rebinding old quotes during output recovery does not make revisiting their page a fresh source.

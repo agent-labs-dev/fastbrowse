@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Jev reads first on a task that also acts.** A date picker, sign-in or checkout read was always the LLM's; Jev now answers what it can quote, field values included, and the LLM reads the rest.
 - **A step code chose is credited to code.** `decided_by` takes `code` for a step a rule in fastbrowse chose rather than a model: turning to the next page of a list and reading it, the fields after the first in a batch the form writer filled, DONE once a lookup is answered, and the reads owed before an interaction, after a page changed or before a sign-in prompt is called a wall. These steps were credited to the LLM or to Jev, so a count run's trace showed "click by llm on Next" for paging no model asked for, and per-decider stats overstated how much of a run the LLM decided. A code step carries no confidence, a recording captions it "picked by code", and the Python, TypeScript, Go, Java and .NET types list the new value.
 - **Jev 1.14 on every route.** OpenRouter asks `jev-1.14`, direct TypeSafe `jev-1.14.0`, the AI Gateway `typesafe-ai/jev-1.14.0` and AIMLAPI `typesafe/jev-1.14`, each pinned so a new release is measured before a run asks it.
 - **A suggestion drawn as an option around its own link is clicked.** Wikipedia's search suggestions were refused as covered on every click, because each option's whole box is its link.
