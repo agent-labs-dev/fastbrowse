@@ -40,11 +40,12 @@ OTLP_PATH = "/api/public/otel/v1/traces"
 SCOPE = "fastbrowse.evals"
 """The instrumentation scope a reviewer sees on the trace beside the build."""
 
-VERIFY_ATTEMPTS = 12
+VERIFY_ATTEMPTS = 60
 """How often to look for a trace before calling it unreadable: ingestion is queued, not synchronous."""
 
 VERIFY_DELAY_SECONDS = 5.0
-"""Seconds between read-backs, the wait `storage` already gives an upload before it gives up."""
+"""Seconds between read-backs. Langfuse queued an upload for over four minutes when this was measured, so the
+deadline is generous on purpose: a run that is simply still queueing is not a failed upload."""
 
 
 class RowsError(ValueError):
