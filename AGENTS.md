@@ -43,6 +43,8 @@ go -C go generate ./... && git diff --exit-code -- go && go -C go vet ./...
 FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli
 python3 scripts/java_types.py && git diff --exit-code -- java
 FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify    # Java 17+, Maven
+python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
+cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx; cd ..
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
@@ -147,13 +149,11 @@ The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/
   they share, so a flag means the same thing in all of them. `serve` is `fastbrowse serve --stdio`: it calls
   `run_task` for another process over JSON-RPC, one run at a time, and adds no agent logic. Its messages are the
   types in [protocol.rs](crates/fastbrowse-core/src/protocol.rs), written as JSON Schema to [protocol/schema.json](protocol/schema.json); [output_schema.rs](crates/fastbrowse-core/src/output_schema.rs) turns a caller's JSON Schema into an `output_schema`.
-- **[go](go)** is the Go client. It starts `serve` as the SDK does, and its [types](go/protocol.go) are generated
-  from `protocol/schema.json` (`go -C go generate ./...`). A release tags the module on a commit off `main` that pins
-  its binary archives by SHA-256 ([scripts/go_binaries.py](scripts/go_binaries.py)).
-- **[java](java)** is the Java client, `dev.agentlabs:fastbrowse` on Maven Central. It starts `serve` as the SDK
-  does, and its [types](java/src/main/java/dev/agentlabs/fastbrowse/protocol) are generated from
-  `protocol/schema.json` by [scripts/java_types.py](scripts/java_types.py). The release ships each platform's binary
-  in a `natives-<platform>` jar beside it.
+- **[go](go)**, **[java](java)** and **[dotnet](dotnet)** are the Go, Java (`dev.agentlabs:fastbrowse`) and .NET
+  (`Fastbrowse`) clients. Each starts `serve` as the SDK does, with types generated from `protocol/schema.json`
+  (`go generate`, [java_types.py](scripts/java_types.py), [dotnet_types.py](scripts/dotnet_types.py)). The release pins
+  the Go module's binary archives by SHA-256 ([go_binaries.py](scripts/go_binaries.py)), ships Java's in
+  `natives-<platform>` jars, and packs .NET's under `runtimes/<rid>/native`.
 - **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
   the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from `protocol/schema.json` (`npm run generate:sdk`).
   What it starts is the Rust `fastbrowse` binary ([crates/fastbrowse-cli](crates/fastbrowse-cli)), with the Node addon beside it

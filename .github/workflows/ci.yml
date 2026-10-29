@@ -144,6 +144,13 @@ jobs:
         with: {distribution: temurin, java-version: "17"}
       - run: python3 scripts/java_types.py && git diff --exit-code -- java && test -z "$(git status --porcelain -- java)"
       - run: FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify
+      # The .NET client against the same binary, its types written from protocol/schema.json and committed too.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with: {dotnet-version: "10.0.x"}
+      - run: python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
+      # From dotnet/, whose global.json picks the test runner xunit.v3 needs.
+      - run: FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx
+        working-directory: dotnet
       # Builds the package and its Rust core, `fastbrowse._native`, which the SDK suite's own server runs on.
       - run: uv sync --locked
       - run: cargo build -p fastbrowse-node --release --locked

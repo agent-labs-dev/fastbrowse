@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The .NET client for `fastbrowse serve`. Its version is the release's, which scripts/npm_versions.py keeps in step. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <RootNamespace>Fastbrowse</RootNamespace>
+
+    <PackageId>Fastbrowse</PackageId>
+    <Version>0.9.0</Version>
+    <Authors>agent-labs-dev</Authors>
+    <Description>A browser agent that picks instead of generating: cited answers, structured output, and credentials and authorization held in code.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/agent-labs-dev/fastbrowse</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/agent-labs-dev/fastbrowse</RepositoryUrl>
+    <PackageTags>browser;agent;automation;chrome;llm</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Fastbrowse.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <!--
+      Each platform's binary, which the release stages under runtimes/<rid>/native before it packs. A consuming app
+      gets them in its output's runtimes/<rid>/native, or the one for its own runtime beside it when it publishes for
+      one runtime.
+    -->
+    <None Include="../../runtimes/**/*" Pack="true" PackagePath="runtimes/" />
+  </ItemGroup>
+</Project>

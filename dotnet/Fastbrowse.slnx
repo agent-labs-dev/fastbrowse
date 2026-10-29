@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Fastbrowse/Fastbrowse.csproj" />
+  <Project Path="tests/Fastbrowse.Tests/Fastbrowse.Tests.csproj" />
+</Solution>
