@@ -133,20 +133,18 @@ final class Connection {
     /** Calls a method. The future completes with the result, or with an {@link RpcException} for an error reply. */
     CompletableFuture<JsonNode> call(String method, Object params) {
         CompletableFuture<JsonNode> waiting = new CompletableFuture<>();
-        FastbrowseException reason = ended;
-        if (reason != null) {
-            waiting.completeExceptionally(reason);
-            return waiting;
-        }
         long id = nextId.getAndIncrement();
-        pending.put(id, waiting);
+        // Under the lock end takes, so a call is either refused at once or in the snapshot end answers.
+        synchronized (this) {
+            if (ended != null) {
+                waiting.completeExceptionally(ended);
+                return waiting;
+            }
+            pending.put(id, waiting);
+        }
         ObjectNode request = json.createObjectNode().put("jsonrpc", "2.0").put("id", id).put("method", method);
         request.set("params", params == null ? json.createObjectNode() : json.valueToTree(params));
         send(request);
-        // A process that ended between the check above and the put has no one left to answer.
-        if (ended != null && pending.remove(id) != null) {
-            waiting.completeExceptionally(ended);
-        }
         return waiting;
     }
 
@@ -168,14 +166,15 @@ final class Connection {
      * any made later gets it at once.
      */
     void end(FastbrowseException reason) {
+        List<CompletableFuture<JsonNode>> waiting;
         synchronized (this) {
             if (ended != null) {
                 return;
             }
             ended = reason;
+            waiting = new ArrayList<>(pending.values());
+            pending.clear();
         }
-        List<CompletableFuture<JsonNode>> waiting = new ArrayList<>(pending.values());
-        pending.clear();
         delivery.execute(() -> waiting.forEach(each -> each.completeExceptionally(reason)));
         delivery.shutdown();
         answering.shutdown();
