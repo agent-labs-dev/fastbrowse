@@ -121,7 +121,6 @@ impl Agent {
             ));
             state.unchanged = 0;
             state.recovered_at = state.history.len();
-            state.plan_marks.clear();
             return Ok(());
         }
         let remaining = state.ready_plan.as_ref().map(|plan| state.notes.unresolved(plan)).unwrap_or_default();
@@ -191,7 +190,6 @@ impl Agent {
         // Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
         state.unchanged = 0;
         state.recovered_at = state.history.len();
-        state.plan_marks.clear();
         // Recovery that could not see a release's address clicked its download link to look for it, in a task that
         // said not to download. Asked before the controls are listed, a link the task rules out is never offered.
         if observation.controls.iter().any(starts_download) {

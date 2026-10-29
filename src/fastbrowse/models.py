@@ -54,22 +54,6 @@ class RecordingError(RuntimeError):
     """ffmpeg is missing. Later failures are logged instead: a video is never worth a run's result."""
 
 
-class TripwireMode(StrEnum):
-    SHADOW = "shadow"
-    """Evaluate and log what would have fired; change nothing about the run."""
-    ARMED = "armed"
-    """Send the run to recovery, as the unchanged-page count already does."""
-
-
-class Tripwire(StrEnum):
-    NO_PROGRESS = "no_progress"
-    """The page has not changed for N actions."""
-    ACTION_REPETITION = "action_repetition"
-    """One interaction, on one target, with one value, keeps recurring."""
-    PLAN_STAGNATION = "plan_stagnation"
-    """The set of requirements still wanting evidence has not shrunk for N steps."""
-
-
 class Operation(StrEnum):
     CLICK = "click"
     HOVER = "hover"
@@ -297,8 +281,6 @@ class RunResult(Frozen):
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
     final_frame: bytes | None = Field(default=None, exclude=True, repr=False)
     """A safe final PNG when step frames are enabled; kept out of text results."""
-    would_fire: tuple[Tripwire, ...] = ()
-    """Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration."""
     recordings: tuple[Path, ...] = ()
     """The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed."""
     wall: Wall | None = None

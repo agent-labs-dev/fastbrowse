@@ -4,10 +4,9 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use fastbrowse_core::effects::{ControlKey, ControlValue, Move};
 use fastbrowse_core::jev::{JevError, NoulQuestion};
 use fastbrowse_core::llm::{Generation, LLMError};
-use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, Status, StepResult, Tripwire, WallKind};
+use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, Status, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
@@ -141,12 +140,10 @@ impl HttpFailure {
     }
 }
 
-/// One action on one target, from one page state: how often it was taken, and what the last one did.
+/// One action on one target, from one page state: how often it was taken.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Attempts {
     pub count: i64,
-    /// The last attempt left the page as it was, so taking it again is a loop rather than a retry.
-    pub idle: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -327,7 +324,6 @@ pub(crate) struct RunState {
     pub answer_check_cache: AnswerChecks,
     pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
-    pub would_fire: Vec<Tripwire>,
     pub history: Vec<HistoryEntry>,
     pub http_failure: Option<HttpFailure>,
     pub failed_links: IndexMap<LinkKey, HttpFailure>,
@@ -364,9 +360,7 @@ pub(crate) struct RunState {
     /// `history.len()` when a tripwire last recovered the run. Evidence a recovery already acted on is spent:
     /// `history` only grows, so a repetition count that reached the limit once would hold forever.
     pub recovered_at: usize,
-    /// One fingerprint of the still-unevidenced requirements per step, for `stagnant_plan`.
-    pub plan_marks: Vec<String>,
-    /// What became of each action taken from each page state, which is how a cycle is told from progress.
+    /// How often each action was taken from each page state, which is how a cycle is told from progress.
     pub attempts: HashMap<Signature, Attempts>,
     pub last_page: Option<(String, String)>,
     /// The address of a sign-in wall an access inspection read instead of stopping on.
@@ -375,16 +369,8 @@ pub(crate) struct RunState {
     pub reached: HashMap<String, usize>,
     /// Source evidence already available at each action state; repeated quotes cannot renew recovery there.
     pub reached_with_evidence: HashMap<String, BTreeSet<EvidenceKey>>,
-    /// The state the last action that changed the page was taken from, until the next observation judges it.
-    pub left: Option<String>,
-    /// Each move the run has made: the state it left, the action, and the state it reached.
-    pub crossed: HashSet<(String, String, String)>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
-    pub pending_move: Option<Move>,
-    pub moves: Vec<(usize, Move)>,
-    /// Each document's committed control values seen so far, which a setting put back to cannot renew recovery.
-    pub settings_held: HashSet<(String, BTreeSet<(ControlKey, ControlValue)>)>,
     pub ready_plan: Option<Plan>,
     /// Addresses this run built from the task rather than reached by clicking.
     pub invented: HashSet<String>,
@@ -516,7 +502,6 @@ impl RunState {
             answer_check_cache: HashMap::new(),
             relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
-            would_fire: Vec::new(),
             history: Vec::new(),
             http_failure: None,
             failed_links: IndexMap::new(),
@@ -540,18 +525,12 @@ impl RunState {
             blank_opening_checked: false,
             recovery_log: VecDeque::new(),
             recovered_at: 0,
-            plan_marks: Vec::new(),
             attempts: HashMap::new(),
             last_page: None,
             passed_wall: None,
             reached: HashMap::new(),
             reached_with_evidence: HashMap::new(),
-            left: None,
-            crossed: HashSet::new(),
             acted_from: None,
-            pending_move: None,
-            moves: Vec::new(),
-            settings_held: HashSet::new(),
             ready_plan: None,
             invented: HashSet::new(),
             guessing: false,

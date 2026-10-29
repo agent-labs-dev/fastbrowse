@@ -20,7 +20,6 @@ pub mod retrieval;
 pub mod scripted;
 pub mod shortcut;
 mod support;
-pub mod tripwires;
 pub mod verification;
 
 pub use error::AgentError;

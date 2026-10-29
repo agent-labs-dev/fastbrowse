@@ -20,7 +20,6 @@ import os
 import sys
 import tempfile
 import time
-from collections import Counter
 from pathlib import Path
 from typing import cast
 
@@ -163,7 +162,6 @@ def _row(
         "normalized_status": normalize(result.status),
         "task": task_id,
         "passed": failure is None,
-        "would_fire": dict(Counter(tripwire.value for tripwire in result.would_fire)),
         "failure": failure,
         "status": result.status.value,
         "seconds": round(seconds, 1),

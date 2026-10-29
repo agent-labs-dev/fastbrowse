@@ -1103,13 +1103,12 @@ async fn recovered_on_read_list() -> (Agent, RunState) {
     let mut state = run_state().await;
     state.authorization = Authorization { irreversible_actions: true };
     let agent = agent();
-    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download"]), true, false);
+    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download"]));
     state.notes.remember_capture(&capture_at(&[(BlockKind::Record, "v1.14.1 Oct 13")], FILES));
     state.history.push(executed(Some(Operation::Read), None, false));
     state.recoveries = 1;
     state.recovered_at = state.history.len();
     state.history.push(clicked("v1.14.1"));
-    state.left = Some("files".into());
     (agent, state)
 }
 
@@ -1117,14 +1116,14 @@ async fn recovered_on_read_list() -> (Agent, RunState) {
 async fn test_a_read_page_redrawn_by_a_repeated_click_does_not_renew_recovery() {
     let (agent, mut state) = recovered_on_read_list().await;
     // The version row expanded: one more control at the same address, a state never seen before.
-    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download", "Collapse"]), true, false);
+    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download", "Collapse"]));
     assert_eq!(state.recoveries, 1);
 }
 
 #[tokio::test]
 async fn test_reaching_an_address_not_yet_read_still_renews_recovery() {
     let (agent, mut state) = recovered_on_read_list().await;
-    agent.settle(&mut state, &buttons_at(DOWNLOAD, &["try again"]), true, false);
+    agent.settle(&mut state, &buttons_at(DOWNLOAD, &["try again"]));
     assert_eq!(state.recoveries, 0);
 }
 
@@ -1134,7 +1133,7 @@ async fn test_a_read_page_redrawn_after_a_read_that_paid_out_still_renews_recove
     // Loading more of a list keeps its address; a read that found new quotes since recovery is progress.
     let at = state.history.len() - 1;
     state.history.insert(at, HistoryEntry { read_progress: true, ..executed(Some(Operation::Read), None, false) });
-    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download", "v1.14.0"]), true, false);
+    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download", "v1.14.0"]));
     assert_eq!(state.recoveries, 0);
 }
 
@@ -1145,14 +1144,13 @@ async fn test_a_new_step_at_the_same_address_still_renews_recovery() {
     state.authorization = Authorization { irreversible_actions: true };
     let agent = agent();
     let first = Observation { url: FILES.into(), ..observation(&[textbox("Name"), button("Next")]) };
-    agent.settle(&mut state, &first, true, false);
+    agent.settle(&mut state, &first);
     state.notes.remember_capture(&capture_at(&[(BlockKind::Record, "Step 1 of 3")], FILES));
     state.recoveries = 1;
     state.recovered_at = state.history.len();
     state.history.push(clicked("Next"));
-    state.left = Some("step 1".into());
     let second = Observation { url: FILES.into(), ..observation(&[textbox("Email"), button("Next")]) };
-    agent.settle(&mut state, &second, true, false);
+    agent.settle(&mut state, &second);
     assert_eq!(state.recoveries, 0);
 }
 

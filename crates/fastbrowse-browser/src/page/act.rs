@@ -235,6 +235,7 @@ impl CdpPage {
             self.input_mark().await
         };
         let window_opens = self.session.window_opens();
+        let requests = self.session.requests_mark();
         let downloads_before = self.session.downloads_settled();
         let (outcome, mut detail) = match self.dispatch(action, target.as_ref(), point, drawn).await {
             Ok(dispatched) => dispatched,
@@ -261,7 +262,7 @@ impl CdpPage {
         let input_settling = action.operation == Operation::Fill
             || (!matches!(action.operation, Operation::Back | Operation::SwitchTab | Operation::Dialog)
                 && target.as_ref().is_none_or(|t| Some(&t.0) == active_now.as_ref()));
-        let mut changed = self.changed_since(&before_fingerprint, input_settling).await?;
+        let mut changed = self.changed_since(&before_fingerprint, input_settling, requests).await?;
         if matches!(action.operation, Operation::Click | Operation::Enter)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {

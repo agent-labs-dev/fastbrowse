@@ -52,7 +52,6 @@ export type Status =
   | 'observation_limit'
   | 'unavailable'
   | 'error';
-export type Tripwire = 'no_progress' | 'action_repetition' | 'plan_stagnation';
 /**
  * What a sign-in or bot wall asks of the person who has to get the run past it.
  */
@@ -370,10 +369,6 @@ export interface RunResult {
    * Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
    */
   final_url: string | null;
-  /**
-   * Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration.
-   */
-  would_fire: Tripwire[];
   /**
    * The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
    */

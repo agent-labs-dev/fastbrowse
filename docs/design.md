@@ -98,11 +98,9 @@ active work; the return also waits for owned requests and browser cleanup. Injec
 cancellation and finish their cleanup. Returning while a paid request still runs would lose its cost receipt.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
-field cannot count, even when it opens an autocomplete popup. `StallRules` checks lack of progress,
-repeated interactions and consecutive unproductive steps with the same unresolved requirements.
-The latter two are recorded in `RunResult.would_fire` in `shadow` mode, the default; `armed` mode sends
-them to recovery. A productive step
-clears the plan-stagnation streak, and recovery resets the evidence used by all three checks.
+field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a run
+whose page has not changed for `unchanged_actions` steps goes to recovery, and recovery resets the count.
+The same action taken a third time from the same page state does not count as a change.
 
 ## Run events and images
 
