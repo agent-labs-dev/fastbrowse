@@ -183,3 +183,30 @@ def test_this_checkout_is_in_lockstep() -> None:
     done = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True)
 
     assert done.returncode == 0, done.stderr
+
+
+def _pom(root: Path, version: str) -> Path:
+    pom = root / "java" / "pom.xml"
+    pom.parent.mkdir()
+    pom.write_text(
+        "<project>\n  <groupId>dev.agentlabs</groupId>\n  <artifactId>fastbrowse</artifactId>\n"
+        f"  <version>{version}</version>\n  <dependencies><dependency>\n"
+        "    <artifactId>jackson-databind</artifactId>\n    <version>2.22.4</version>\n"
+        "  </dependency></dependencies>\n</project>\n"
+    )
+    return pom
+
+
+def test_a_java_client_at_another_version_fails_and_write_moves_only_its_own(tmp_path: Path) -> None:
+    root = _checkout(tmp_path)
+    pom = _pom(root, "1.2.2")
+
+    done = _run(root)
+    assert done.returncode == 1
+    assert "the Java client is 1.2.2" in done.stderr
+
+    assert _run(root, "--write").returncode == 0
+    # The project's version moves; a dependency's, written the same way further down, does not.
+    assert "<version>1.2.3</version>" in pom.read_text()
+    assert "<version>2.22.4</version>" in pom.read_text()
+    assert _run(root).returncode == 0

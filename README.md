@@ -594,6 +594,28 @@ the SHA-256 the module pins; `Options.BinaryPath` or `FASTBROWSE_BINARY` names a
 once its browser has closed. `RunOptions` takes the same options as the SDK: `OutputSchema`, `Secrets`, `Until`,
 `OnEvent` and `OnFrame`. One client runs one task at a time.
 
+## Use it from Java or Kotlin
+
+The [Java client](java) is `dev.agentlabs:fastbrowse` on Maven Central, with the binary for each platform in its
+`natives-<platform>` jar. Java 17 or newer:
+
+```kotlin
+implementation("dev.agentlabs:fastbrowse:0.9.0")
+runtimeOnly("dev.agentlabs:fastbrowse:0.9.0:natives-linux-x64")
+```
+
+```java
+try (Fastbrowse fastbrowse = Fastbrowse.start()) {
+    RunResult result = fastbrowse.run("What is the top story's title?", RunOptions.builder()
+            .start("https://news.ycombinator.com/")
+            .build()).join();
+}
+```
+
+`run` returns a `CompletableFuture`, so Kotlin awaits it with `kotlinx-coroutines-jdk8`, and cancelling the future
+stops the run. `RunOptions` takes the same options as the SDK: `outputSchema`, `secrets`, `until`, `onEvent` and
+`onFrame`. One client runs one task at a time.
+
 ## Use fastbrowse with your agent
 
 Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from an agent that supports Agent Skills. It uses the MCP

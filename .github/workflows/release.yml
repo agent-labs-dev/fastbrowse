@@ -1,5 +1,5 @@
 name: Release
-# One tag publishes one version to PyPI, npm, crates.io and the Go module proxy. Nothing is published until the sdist, the five wheels and
+# One tag publishes one version to PyPI, npm, crates.io, Maven Central and the Go module proxy. Nothing is published until the sdist, the five wheels and
 # the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
 # yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
@@ -255,6 +255,53 @@ jobs:
               cargo publish -p "$crate" --locked
             fi
           done
+
+  # The Java client on Maven Central: `dev.agentlabs:fastbrowse`, and one `natives-<target>` jar per platform holding
+  # that platform's binary from this release's archives. Central takes no OIDC identity, so the account's token and
+  # the signing key are the `maven-central` environment's secrets. Central refuses a version twice, so a run that
+  # stopped after publishing passes over it.
+  maven:
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    environment: maven-central
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fastbrowse-rust-*
+          path: ${{ runner.temp }}/rust
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      # Each jar's binary sits where the client looks for it on the classpath.
+      - name: Stage the binaries
+        run: |
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
+            into="java/target/natives/$target/dev/agentlabs/fastbrowse/natives/$target"
+            mkdir -p "$into"
+            tar -xzf "$RUNNER_TEMP/rust/fastbrowse-rust-$target/fastbrowse-rust-$target.tar.gz" -C "$into" --strip-components 1
+          done
+      - name: Publish
+        env:
+          VERSION: "${{ needs.build.outputs.version }}"
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          if curl -sfo /dev/null "https://repo1.maven.org/maven2/dev/agentlabs/fastbrowse/$VERSION/fastbrowse-$VERSION.pom"; then
+            echo "dev.agentlabs:fastbrowse $VERSION is already published"
+            exit 0
+          fi
+          # The client's tests need a binary to start; the binaries workflow ran each one already.
+          mvn -B -f java/pom.xml -P release -DskipTests deploy
 
   # The Go module for this release: the tag `go/vX.Y.Z`, on a commit off `main` that pins the release's binary archives
   # by their SHA-256. The module downloads its platform's archive from the GitHub release above and refuses one that
