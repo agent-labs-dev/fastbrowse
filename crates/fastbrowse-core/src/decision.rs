@@ -21,6 +21,36 @@ pub const JEV_DOLLARS_PER_INPUT_TOKEN: f64 = 0.042 / 1_000_000.0;
 /// also document as Jev's context on their routes.
 pub const JEV_LONG_CONTEXT_TOKENS: i64 = 262_144;
 
+/// Images a decision request carries, keyed by the reference its state writes in each one's place.
+pub type Images = IndexMap<String, Vec<u8>>;
+/// A request with no images.
+pub static NO_IMAGES: std::sync::LazyLock<Images> = std::sync::LazyLock::new(Images::new);
+
+/// Whether TypeSafe takes `png` as a Jev image: a PNG 280 to 1568 pixels a side and 78,400 to 2,458,624 in all, of at
+/// most 16 MiB. An image outside these is refused with the whole request, never resized.
+pub fn jev_takes_png(png: &[u8]) -> bool {
+    if png.len() < 24 || !png.starts_with(b"\x89PNG\r\n\x1a\n") || png.len() > 16 * 1024 * 1024 {
+        return false;
+    }
+    let side = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as u64;
+    let (width, height) = (side(16), side(20));
+    (280..=1568).contains(&width) && (280..=1568).contains(&height) && (78_400..=2_458_624).contains(&(width * height))
+}
+
+/// `state` with every value that is an image reference left out, for a route that takes no image.
+pub fn without_images(state: &Value, images: &Images) -> Value {
+    let reference = |value: &Value| value.as_str().is_some_and(|text| images.contains_key(text));
+    match state {
+        Value::Object(map) => Value::Object(
+            map.iter().filter(|(_, v)| !reference(v)).map(|(k, v)| (k.clone(), without_images(v, images))).collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.iter().filter(|v| !reference(v)).map(|v| without_images(v, images)).collect())
+        }
+        other => other.clone(),
+    }
+}
+
 literal_tag!(ChoiceTag = "choice");
 literal_tag!(NoulTag = "noul");
 literal_tag!(ScoreTag = "score");
@@ -333,7 +363,8 @@ pub struct DecisionProfile {
     pub max_request_bytes: Option<i64>,
     /// List price; `None` where none is published, so an unmetered call is an unknown cost.
     pub dollars_per_input_token: Option<f64>,
-    /// Whether the model may be sent image input.
+    /// Whether this route is sent image input. Only TypeSafe's own API is, so a page's pixels never pass through a
+    /// reseller.
     pub images: bool,
     /// Thresholds tuned on the evals against this model; `None` when it was never measured.
     pub thresholds: Option<Thresholds>,
@@ -350,7 +381,7 @@ impl DecisionProfile {
             max_total_tokens: 64_000,
             max_request_bytes: None,
             dollars_per_input_token: Some(JEV_DOLLARS_PER_INPUT_TOKEN),
-            images: true,
+            images: false,
             thresholds: Some(Thresholds::default()),
         }
     }
@@ -380,7 +411,7 @@ impl DecisionProfile {
             max_total_tokens: 256_000,
             max_request_bytes: Some(32 * 1024 * 1024),
             dollars_per_input_token: Some(dollars_per_million / 1_000_000.0),
-            images: true,
+            images: false,
             thresholds: None,
         }
     }
@@ -416,7 +447,7 @@ impl DecisionProfile {
                 max_total_tokens: 64_000,
                 max_request_bytes: None,
                 dollars_per_input_token: Some(0.10 / 1_000_000.0),
-                images: true,
+                images: false,
                 thresholds: None,
             },
             // Perplexity documents 128 questions a request, 255 options, 10 levels, inputs under 256K tokens, image input
@@ -426,7 +457,7 @@ impl DecisionProfile {
             }
             "pplx-decider-flash-v1.2" | "pplx-decider-flash-latest" => DecisionProfile::perplexity(0.01),
             // AIMLAPI lists a 32,768-token context and image input, and no other limit.
-            "liquid/d1" => DecisionProfile { max_total_tokens: 32_768, images: true, ..DecisionProfile::unknown() },
+            "liquid/d1" => DecisionProfile { max_total_tokens: 32_768, ..DecisionProfile::unknown() },
             // Pydantic AI's Ollama profile: 26 options, 26 levels, 64 questions and 64 KiB.
             "nimble" | "tev1" => DecisionProfile { max_score_levels: 26, ..DecisionProfile::unknown() },
             _ => DecisionProfile::unknown(),
@@ -488,6 +519,17 @@ pub trait DecisionClient: Send + Sync {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>>;
 
+    /// `evaluate` against a state that refers to `images` by their keys. A route that takes no image answers from the
+    /// rest of the state.
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move { self.evaluate(&without_images(state, images), questions).await })
+    }
+
     /// The model this client asks, whose limits fit every request sent to it.
     fn profile(&self) -> DecisionProfile;
 }
@@ -496,6 +538,7 @@ pub trait DecisionClient: Send + Sync {
 mod tests {
     use super::*;
     use crate::config::TokenBudget;
+    use serde_json::json;
 
     #[test]
     fn jev_leaves_the_default_config_as_it_is() {
@@ -512,6 +555,32 @@ mod tests {
         let mut given = Config::default();
         given.tokens.state_plus_largest_question = 2500;
         assert_eq!(long.fit(Some(given)).tokens.decision_chars.unwrap().0, 30_720);
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(width.to_be_bytes());
+        png.extend(height.to_be_bytes());
+        png
+    }
+
+    #[test]
+    fn a_png_is_sent_only_within_typesafes_image_limits() {
+        assert!(jev_takes_png(&png(1280, 900)));
+        assert!(jev_takes_png(&png(280, 280)) && jev_takes_png(&png(1568, 1568)));
+        assert!(!jev_takes_png(&png(2560, 1800)), "a HiDPI viewport");
+        assert!(!jev_takes_png(&png(1280, 279)));
+        assert!(!jev_takes_png(b"\xff\xd8\xff\xe0 a JPEG is not asked about here"));
+    }
+
+    #[test]
+    fn a_route_without_images_is_asked_the_rest_of_the_state() {
+        let images = Images::from([("ref-1".to_string(), png(300, 300))]);
+        let state = json!({"page": {"text": "ref-1 is text here"}, "screenshot": "ref-1", "frames": ["ref-1", "kept"]});
+        assert_eq!(
+            without_images(&state, &images),
+            json!({"page": {"text": "ref-1 is text here"}, "frames": ["kept"]})
+        );
     }
 
     #[test]
