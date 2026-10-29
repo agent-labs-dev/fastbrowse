@@ -293,18 +293,15 @@ async fn test_complete_json_marked_truncated_never_becomes_a_citable_read() {
 }
 
 #[test]
-fn test_a_strict_schema_leaves_array_caps_to_validation() {
-    // A provider answered HTTP 400 to every read whose claims list carried `maxItems: 60`. Validation keeping the cap
-    // is the response model's part, so only the schema half of the Python test is here.
-    let capped = ModelTy::frozen(
-        "Capped",
-        vec![Field::default("items", Ty::list(Ty::Str).constrained("maxItems", 60), json!([]))],
+fn test_a_strict_schema_states_the_array_bounds_validation_enforces() {
+    // A model is held only to rules it was told: the bound validation checks goes out in the schema.
+    let bounded = ModelTy::frozen(
+        "Bounded",
+        vec![Field::default("items", Ty::list(Ty::Str).constrained("maxItems", 2), json!([]))],
     )
     .ty();
-    let schema = json_schema(&capped);
-    assert!(schema.to_string().contains("maxItems"));
-    let strict = strict_schema(&schema).unwrap().to_string();
-    assert!(!strict.contains("maxItems") && !strict.contains("default"));
+    let strict = strict_schema(&json_schema(&bounded)).unwrap().to_string();
+    assert!(strict.contains("\"maxItems\":2") && !strict.contains("default"), "{strict}");
 }
 
 #[test]

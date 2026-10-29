@@ -727,18 +727,18 @@ fn all_null(value: &Value) -> bool {
 #[error("a strict schema cannot hold a map with free keys; use a list of keyed entries")]
 pub struct FreeKeys;
 
-/// Port of `clients/openai_compatible.strict_schema`: every property required, no defaults, no `maxItems`.
+/// Port of `clients/openai_compatible.strict_schema`: every property required and no defaults.
 ///
-/// A provider behind OpenRouter answered HTTP 400 to a `maxItems` it would not honor, and strict mode refuses an
-/// optional property, so validation keeps both rules instead. A map with free keys is refused: Gemini through the
-/// Vercel AI Gateway returned one empty where OpenRouter filled it.
+/// Strict mode refuses an optional property, so validation fills a default instead. Every constraint validation
+/// enforces stays in the schema, so the model is told each rule its reply is held to. A map with free keys is
+/// refused: Gemini through the Vercel AI Gateway returned one empty where OpenRouter filled it.
 pub fn strict_schema(schema: &Value) -> Result<Value, FreeKeys> {
     match schema {
         Value::Array(items) => items.iter().map(strict_schema).collect::<Result<Vec<_>, _>>().map(Value::Array),
         Value::Object(map) => {
             let mut result = Map::new();
             for (key, value) in map {
-                if key == "default" || key == "maxItems" {
+                if key == "default" {
                     continue;
                 }
                 if key == "additionalProperties" && value.is_object() {
