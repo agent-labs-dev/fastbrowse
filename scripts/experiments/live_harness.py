@@ -33,7 +33,7 @@ from fastbrowse.telemetry import traced
 CHROME = str(Path.home() / ".cache/ms-playwright/chromium-1243/chrome-linux64/chrome")
 SUITES = {"core": TASKS, "dev": DEV, "heldout": HELDOUT, "stretch-dev": STRETCH_DEV, "stretch-heldout": STRETCH_HELDOUT}
 
-# The final page as 0.7.1's grader read it (src/fastbrowse/evals/observe.py at v0.7.1): evidence first, then the
+# The final page for the grader: the whole visible text first, then the
 # agent's own snapshot of every control with modal-hidden ones unhidden, so a cart's Remove button or a flight
 # listing is a control the checks can find.
 SNAPSHOT_JS = (Path(os.environ.get("FASTBROWSE_TREE", ".")) / "crates/fastbrowse-browser/js/snapshot.js").read_text()
@@ -41,7 +41,7 @@ EVIDENCE = """(() => {
   const nav = performance.getEntriesByType('navigation')[0];
   const text = (document.body?.innerText || '').trim();
   return {url: location.href, status: nav?.responseStatus || null, title: document.title || null,
-    text: text.slice(0, 300), text_length: text.length,
+    text, text_length: text.length,
     inner_width: window.innerWidth, inner_height: window.innerHeight, device_pixel_ratio: window.devicePixelRatio};
 })()"""
 UNHIDE = """(() => {
@@ -251,7 +251,7 @@ async def main():
                 note = row.get("failure") or row.get("crash") or ""
                 print(
                     f"{time.strftime('%T')} {args.config} {task.id}#{repeat} {row.get('status')} "
-                    f"passed={row.get('passed')} {row.get('seconds', 0):.1f}s {note}"[:300],
+                    f"passed={row.get('passed')} {row.get('seconds', 0):.1f}s {note}",
                     flush=True,
                 )
 
