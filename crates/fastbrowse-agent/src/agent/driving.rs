@@ -24,7 +24,7 @@ use super::recovery::{READ, withheld};
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, SHORTCUT_WAIT_SECONDS};
 use crate::planner::RequirementKind;
-use crate::policy::{Decision, HistoryEntry, decide};
+use crate::policy::{Decision, HistoryEntry, StepContext, decide};
 use crate::retrieval::page_quotes;
 use crate::shortcut::{accept, accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -152,21 +152,10 @@ impl Agent {
             let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
-                    let mut context = self.context(state, secrets, check_login, fresh)?;
-                    context.screenshot = self.viewport().await?;
+                    let context = self.context(state, secrets, check_login, fresh)?;
                     let redecided = state.redecided;
-                    let deciding = decide(
-                        &*self.jev,
-                        &observation,
-                        &context,
-                        &self.config,
-                        Some(&state.ledger),
-                        Some(&state.relevance_cache),
-                        &self.trace,
-                    );
-                    let decided = self
-                        .unless_redrawn(redecided, async { deciding.await.map_err(Flow::from) }, &observation, None)
-                        .await?;
+                    let deciding = self.decide_looking(state, &observation, &context);
+                    let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(decision) = decided else {
                         self.redecide(state, &observation);
                         continue;
@@ -1149,6 +1138,28 @@ impl Agent {
     }
 
     /// The viewport for Jev's action decision, on a route that takes images and only within the sizes it accepts.
+    /// Jev reads the page as text first, and sees it only when that leaves its pick under the bar an action is held
+    /// to: a second look costs less than the LLM recovery the unsure pick would go to.
+    pub(super) async fn decide_looking(
+        &self,
+        state: &RunState,
+        observation: &Observation,
+        context: &StepContext,
+    ) -> Step<Decision> {
+        let (ledger, cache, trace) = (Some(&*state.ledger), Some(&state.relevance_cache), &self.trace);
+        let read = decide(&*self.jev, observation, context, &self.config, ledger, cache, trace).await?;
+        if read.confidence() >= self.config.thresholds.recover_below {
+            return Ok(read);
+        }
+        let Some(png) = self.viewport().await? else { return Ok(read) };
+        let mut seen = context.clone();
+        seen.screenshot = Some(png);
+        let mut looked = decide(&*self.jev, observation, &seen, &self.config, ledger, cache, trace).await?;
+        looked.cost = read.cost.into_iter().chain(looked.cost).collect();
+        looked.input_tokens += read.input_tokens;
+        Ok(looked)
+    }
+
     pub(super) async fn viewport(&self) -> Step<Option<Vec<u8>>> {
         if !self.jev.profile().images {
             return Ok(None);
