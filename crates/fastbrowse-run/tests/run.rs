@@ -5,7 +5,7 @@ use std::sync::Arc;
 use fastbrowse_clients::environment::Settings;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{LLMPurpose, Status};
 use fastbrowse_core::telemetry::Ledger;
@@ -214,5 +214,53 @@ async fn test_fetch_first_goes_to_the_browser_when_the_read_needs_one() {
     .await
     .unwrap();
     assert_eq!(result.status, Status::Error);
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("answered 404")), "{:?}", result.error);
+}
+
+/// Jev as the scripted client answers, except that every page is a bot check.
+struct SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev);
+
+impl DecisionClient for SeesBotCheck {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut("bot_check") {
+                answer.probability = 1.0;
+            }
+            Ok(evaluation)
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_fetch_first_takes_a_bot_check_jev_saw_in_the_document_to_the_browser() {
+    let http = Http::new(Arc::new(move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+        let response = if request.url.contains("/json/version") {
+            Response::new(404, Vec::new())
+        } else {
+            let wall = "<html><body><h1>Just a moment...</h1><p>Checking your browser.</p></body></html>";
+            Response::new(200, wall).with_header("content-type", "text/html")
+        };
+        Box::pin(async move { Ok(response) })
+    }));
+    let options = task(|o| {
+        o.jev = Some(Arc::new(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()))));
+        o.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        o.start = Some("https://shop.example/app".into());
+        o.http = Some(http);
+        o.fetch_first = true;
+        o.cdp_port = Some(9222);
+    });
+    let result = run_task("read the page", options).await.unwrap();
+    // The handed-over port is asked for its socket, so the run reached the browser.
+    assert_eq!(result.status, Status::Error, "{:?}", result.error);
     assert!(result.error.as_deref().is_some_and(|error| error.contains("answered 404")), "{:?}", result.error);
 }
