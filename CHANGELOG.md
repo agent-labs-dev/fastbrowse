@@ -11,6 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-29
+
+- This release is built on 0.7.1, not on 0.8.x. Its whole tree is the `v0.7.1` tag plus the accuracy fixes below, so
+  an install of it behaves like 0.7.1 where 0.8.x changed something. The number is 0.8.4 only because 0.8.3 is what
+  PyPI serves today and a plain `pip install fastbrowse` takes the highest version: a 0.7.x number would resolve to
+  nothing new. The 0.8.4 number is not a claim that this code is a descendant of 0.8.3.
+
 - No output token ceiling is sent anywhere. Every call used to pass one: 2000 to planning and the field writers,
   8000 to a read, a composition and a plan partition, 400 to a verifier's verdict and 512 to a field audit. A
   response cut off at any of them lost a value the page had already shown, and the retry spent a paid call to ask
