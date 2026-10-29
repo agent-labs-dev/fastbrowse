@@ -23,6 +23,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
+from fastbrowse import build
 from fastbrowse.jev import (
     JevClient,
     JevError,
@@ -560,4 +561,5 @@ def command(program: str) -> NoReturn:
     # Ctrl-C ends the command as it ends the binary; Python's own handler would wait for the core to return first.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     sys.stdout.flush()
-    sys.exit(core.cli_main(program, sys.argv[1:]))
+    commit = build.identity()
+    sys.exit(core.cli_main(program, sys.argv[1:], commit["git_sha"], commit["git_dirty"]))

@@ -325,9 +325,15 @@ fn artifact_argument(
 /// Run the `fastbrowse` command (or `fastbrowse-mcp`, by `program`'s name) with `args` and return its exit code. The
 /// command writes to this process's own stdout and stderr and reads its stdin, as the binary does.
 #[pyfunction]
-fn cli_main(py: Python<'_>, program: String, args: Vec<String>) -> i32 {
+fn cli_main(
+    py: Python<'_>,
+    program: String,
+    args: Vec<String>,
+    git_sha: Option<String>,
+    git_dirty: Option<bool>,
+) -> i32 {
     py.detach(move || {
-        let code = fastbrowse_cli::entry::main(&program, &args);
+        let code = fastbrowse_cli::entry::main(&program, &args, fastbrowse_cli::cli::Build { git_sha, git_dirty });
         // The binary's `process::exit` flushes what it printed; Python exits without asking this side to.
         let _ = std::io::Write::flush(&mut std::io::stdout());
         code
