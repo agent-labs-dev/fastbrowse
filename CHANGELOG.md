@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A search typed mid-run is written for the next item the task still needs.** The field writer was given the search rule and the requirements still unmet only while it recovered a missing answer output. Mid-run it saw only the whole task, so on a six-part cart task it called the search box's query missing and the run ended. It now always has both, and types the next item still to add.
+
 - **`FASTBROWSE_LLM_REASONING=none` turns reasoning off.** The setting took `low`, `medium` or `high`. A model such as DeepSeek V4.1 Flash reasons at every effort and does not scale it to the output allowance, so a short call such as the completion verdict could spend all of it thinking and come back empty. `none` sends OpenRouter's `reasoning: {"effort": "none"}`.
 
 - **Settling no longer waits on anything named like a spinner.** A settle waited up to 1.5s, and every observation and read up to 3s more, while any visible element had `spinner`, `loading`, `loader`, `skeleton` or `shimmer` in its class or id. A guessed list matches content: Shopify themes call the add-to-cart button's label `loader-button__text`, so on every product page each action paid 1.5s and each observation 3s. Through a CDP proxy on a six-part cart task, settle waits took 331s of the 363s not spent in model calls; without the list the median observation wait fell from 3.08s to 0.05s and the median action settle from 1.60s to 0.20s, and seconds per step from 7.2 to 4.0. Settling now waits for an interactive document and a quiet DOM alone. A page still loading is read as it stands, and the reader and Jev judge from its text whether to look again: on a page that shows "Loading..." for 2.5s, the answer is still right (3 of 3 runs) at about 3s more than before.
@@ -1382,6 +1384,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
   the browser whether it is still there, and keeps waiting if it answers. Only a browser that does not ends the
   run `unavailable`, where before a lost cloud browser could leave it waiting forever.
 - **Eval arms are named for their agent:** `--arms fastbrowse jev-ultrafast browser-use`.
+
 - **Recordings are captioned and kept plain beside them** (`<name>.plain.mp4`). Captions are timed from the
   video's first frame; an ffmpeg without libass still writes both videos, uncaptioned, and a failed write
   leaves an earlier recording at the same path intact.
@@ -1604,6 +1607,7 @@ Fixed in the same release, from tasks that failed in the field:
 ## [0.2.0] - 2026-09-18
 
 - **`--record FILE`** saves an MP4 of the tab, ending on the answer, its time and its cost.
+
 - **Sign in with a stored login the task never mentions.** `--secret NAME=ENV_VAR` and `--bitwarden ITEM` type a
   credential on the start origin without the value entering a model's context.
 

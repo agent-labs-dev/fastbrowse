@@ -517,10 +517,9 @@ impl Agent {
             }
         }
         let context = self.field_context(state, observation, target).await?;
-        let mut system = field_writer();
-        if !state.open_answer_outputs.is_empty() {
-            system += &format!("\n\n{OUTPUT_SEARCH}");
-        }
+        // Mid-run a task's next item is searched for too, not only an output the answer check found missing: given the
+        // task without this rule, the writer called a search box's query missing and ended a six-part cart run.
+        let system = format!("{}\n\n{OUTPUT_SEARCH}", field_writer());
         let messages = vec![Message::system(system), Message::user(dumps(&Value::Object(context)))];
         if let Some(written) = self.write_field(state, &messages, target, true).await? {
             return Ok(written);
@@ -553,9 +552,9 @@ impl Agent {
         // Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every time; in
         // order, it typed X first and Y after going back.
         context.insert("requirements".into(), json!(plan.requirements.iter().map(|r| &r.text).collect::<Vec<_>>()));
+        let unresolved: Vec<String> = state.notes.unresolved(&plan).into_iter().map(|r| r.text).collect();
+        context.insert("unresolved_requirements".into(), json!(unresolved));
         if !state.open_answer_outputs.is_empty() {
-            let unresolved: Vec<String> = state.notes.unresolved(&plan).into_iter().map(|r| r.text).collect();
-            context.insert("unresolved_requirements".into(), json!(unresolved));
             context.insert("unverified_outputs".into(), json!(state.open_answer_outputs));
         }
         context.insert("subgoal".into(), json!(state.hint));
