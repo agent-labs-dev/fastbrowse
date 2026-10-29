@@ -789,6 +789,8 @@
 
   // A revealed caption needs its actual container association, not merely the most recent action.
   registry.hoverContexts = new WeakMap();
+  // Hover targets are often every card of one list, so the sibling list is taken once per parent.
+  const siblingsOf = memo(parent => [...(parent?.children || [])]);
   for (const c of controls) {
     if (!c.operations.includes('hover')) continue;
     const element = registry.nodes.get(c.id);
@@ -799,9 +801,9 @@
       },
       labelAttributes: [element.getAttribute('role'), element.getAttribute('aria-label'),
         element.getAttribute('title'), element.querySelector('img[alt]')?.getAttribute('alt') || null],
-      text: element.innerText,
+      text: innerTextOf(element),
       parent: element.parentNode,
-      siblings: [...(element.parentNode?.children || [])],
+      siblings: siblingsOf(element.parentNode),
     });
   }
 
