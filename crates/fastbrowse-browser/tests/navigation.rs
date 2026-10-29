@@ -507,6 +507,29 @@ async fn test_accepting_a_dialog_that_navigates_is_a_move_the_run_made() {
     h.close().await;
 }
 
+/// The page moved its own address on the same document after the run observed it. The dialog the click opened
+/// carried the new address, so a mark taken against the observed one no longer matched and the accepted confirm's
+/// navigation was not reported as the run's move.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_confirm_after_a_same_document_navigation_is_still_the_runs_move() {
+    let Some(h) = harness().await else { return };
+    h.goto("/?q=guess").await;
+    let session_id = h.session.active_session_id().unwrap();
+    let form = "<button onclick=\"if (confirm('Search again?')) location.href = '/inner.html'\">Search</button>";
+    assert_eq!(
+        eval_value(&h.session, &session_id, &format!("document.body.innerHTML = {}; true", js(form))).await,
+        true
+    );
+    let obs = h.observe().await;
+    assert_eq!(eval_value(&h.session, &session_id, "history.pushState(null, '', '/?q=later'); true").await, true);
+    let clicked = h.page.act(&click(&find(&obs, "Search").id), &obs).await.expect("act");
+    assert_eq!(clicked.outcome, StepOutcome::Executed);
+    let accepted = accept_dialog(&h).await;
+    assert_eq!(accepted.outcome, StepOutcome::Executed);
+    assert!(accepted.moved);
+    h.close().await;
+}
+
 /// A click led to a page that opened an alert as it loaded. Accepting it was judged against the mark taken on the
 /// page the click left, so the new document read as a move the acceptance made, and a guess could be cleared.
 #[tokio::test(flavor = "multi_thread")]
