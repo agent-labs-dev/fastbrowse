@@ -10,13 +10,13 @@ use std::time::Duration;
 use bytes::Bytes;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::py::json::{Style, write};
-use fastbrowse_core::telemetry::Trace;
+use fastbrowse_core::telemetry::{Trace, monotonic};
 use http_body_util::{BodyExt, Full};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -173,7 +173,34 @@ impl Http {
             body: write(body, Style::HTTPX).into(),
             max_bytes: None,
         };
-        self.send(request, seconds).await
+        let began = monotonic();
+        let result = self.send(request, seconds).await;
+        // Every model request and reply in full, so a trace shows what a model was asked and what it said. Headers
+        // carry the API keys and are left out.
+        self.trace.event("http", || {
+            let mut fields = Map::new();
+            fields.insert("url".into(), url.into());
+            fields.insert("request".into(), body.clone());
+            fields.insert("began".into(), began.into());
+            fields.insert("ended".into(), monotonic().into());
+            match &result {
+                Ok(response) => {
+                    fields.insert("status".into(), response.status.into());
+                    let text = response.text();
+                    let text = if response.credential.is_empty() {
+                        text
+                    } else {
+                        text.replace(&response.credential, "[api key]")
+                    };
+                    fields.insert("response".into(), serde_json::from_str(&text).unwrap_or(Value::String(text)));
+                }
+                Err(error) => {
+                    fields.insert("error".into(), error.name().into());
+                }
+            }
+            fields
+        });
+        result
     }
 
     pub async fn get(&self, url: &str, headers: &[(String, String)], seconds: f64) -> Result<Response, TransportError> {
