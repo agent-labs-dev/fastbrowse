@@ -11,11 +11,16 @@ arm() {
   name=$1; shift
   D="$E/$name"; mkdir -p "$D"
   echo "$(date +%T) start $name" >> "$E/progress.log"
-  if [ "$(wc -l < "$D/fixtures.jsonl" 2>/dev/null || echo 0)" -lt 72 ]; then
+  # A budgeted runner refuses an existing output, so a partial one cannot be resumed: it is reported, not graded.
+  if [ ! -e "$D/fixtures.jsonl" ]; then
     env FASTBROWSE_TRACE="$D/fixtures.trace" "$@" uv run --no-sync python -m fastbrowse.evals.runner --repeat 2 --out "$D/fixtures.jsonl" --budget 20 > "$D/fixtures.log" 2>&1
   fi
+  if [ "$(wc -l < "$D/fixtures.jsonl" 2>/dev/null || echo 0)" -lt 72 ]; then
+    echo "$(date +%T) SKIPPED $name: $D/fixtures.jsonl is partial; reconcile it and its budget receipt, then move both aside" >> "$E/progress.log"
+    return 1
+  fi
   failed=$(python3 -c "import json,sys;print(' '.join(sorted({r['task'] for r in map(json.loads,open('$D/fixtures.jsonl')) if not r['passed']})))")
-  if [ -n "$failed" ]; then
+  if [ -n "$failed" ] && [ ! -e "$D/rerun.jsonl" ]; then
     env FASTBROWSE_TRACE="$D/rerun.trace" "$@" uv run --no-sync python -m fastbrowse.evals.runner --repeat 1 --only $failed --out "$D/rerun.jsonl" --budget 20 > "$D/rerun.log" 2>&1
   fi
   for i in 1 2 3; do
