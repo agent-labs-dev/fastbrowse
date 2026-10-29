@@ -574,6 +574,98 @@ Cancelling the `CancellationToken` stops a run, and `RunAsync` throws once its b
 the same options as the SDK: `OutputSchema`, `Secrets` with `ResolveSecret`, `Until`, `OnEvent` and `OnFrame`. One
 client runs one task at a time.
 
+## Use it from Rust
+
+The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, with the result's types:
+
+```toml
+[dependencies]
+fastbrowse = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+```rust
+use fastbrowse::{Limits, RunTask, run_task};
+
+let result = run_task(
+    "What is the top story's title?",
+    RunTask {
+        start: Some("https://news.ycombinator.com/".into()),
+        limits: Some(Limits { max_dollars: Some(0.25), ..Limits::default() }),
+        ..RunTask::default()
+    },
+)
+.await?;
+```
+
+The keys come from the environment, as the command reads them. `cargo install fastbrowse-cli` installs the
+`fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
+`fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
+
+## Use it from Go
+
+The [Go module](go) starts the fastbrowse binary and runs tasks over the same protocol the JavaScript SDK uses:
+
+```sh
+go get github.com/agent-labs-dev/fastbrowse/go
+```
+
+```go
+client, err := fastbrowse.Start(ctx, fastbrowse.Options{})
+if err != nil {
+	return err
+}
+defer client.Close(context.Background())
+result, err := client.Run(ctx, "What is the top story's title?", fastbrowse.RunOptions{
+	Start: "https://news.ycombinator.com/",
+})
+```
+
+The first `Start` downloads the release's binary for the platform into the user cache directory, checked against
+the SHA-256 the module pins; `Options.BinaryPath` or `FASTBROWSE_BINARY` names another. Cancelling `ctx` stops a run
+once its browser has closed. `RunOptions` takes the same options as the SDK: `OutputSchema`, `Secrets`, `Until`,
+`OnEvent` and `OnFrame`. One client runs one task at a time.
+
+## Use it from Java or Kotlin
+
+The [Java client](java) is `dev.agentlabs:fastbrowse` on Maven Central, with the binary for each platform in its
+`natives-<platform>` jar. Java 17 or newer:
+
+```kotlin
+implementation("dev.agentlabs:fastbrowse:0.9.0")
+runtimeOnly("dev.agentlabs:fastbrowse:0.9.0:natives-linux-x64")
+```
+
+```java
+try (Fastbrowse fastbrowse = Fastbrowse.start()) {
+    RunResult result = fastbrowse.run("What is the top story's title?", RunOptions.builder()
+            .start("https://news.ycombinator.com/")
+            .build()).join();
+}
+```
+
+`run` returns a `CompletableFuture`, so Kotlin awaits it with `kotlinx-coroutines-jdk8`, and cancelling the future
+stops the run. `RunOptions` takes the same options as the SDK: `outputSchema`, `secrets`, `until`, `onEvent` and
+`onFrame`. One client runs one task at a time.
+
+## Use it from .NET
+
+The [.NET client](dotnet) is `Fastbrowse` on NuGet, carrying the binary for each platform. .NET 10 or newer:
+
+```sh
+dotnet add package Fastbrowse
+```
+
+```csharp
+await using var fastbrowse = await FastbrowseClient.StartAsync();
+RunResult result = await fastbrowse.RunAsync("What is the top story's title?",
+    new RunOptions { Start = "https://news.ycombinator.com/" });
+```
+
+Cancelling the `CancellationToken` stops a run, and `RunAsync` throws once its browser has closed. `RunOptions` takes
+the same options as the SDK: `OutputSchema`, `Secrets` with `ResolveSecret`, `Until`, `OnEvent` and `OnFrame`. One
+client runs one task at a time.
+
 ## Use fastbrowse with your agent
 
 Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from any agent that supports Agent
