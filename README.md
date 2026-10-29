@@ -34,17 +34,19 @@ Benchmarking compares exactly three things:
 
 | | Comparison | Arms | Recorded |
 |:--|:--|:--|:--|
-| C1 | agent against agent | fastbrowse against the hosted Browser Use agent | 46 tasks, three repeats: 99.2% against 97.8%, median 16.3s against 16.1s, $0.0256 against $0.2840 a result |
-| C2 | backend against backend | fastbrowse on its own browser pool against fastbrowse on a Browser Use Cloud browser | 53 tasks, three repeats: 96.2% against 98.1%, median 15.9s against 15.0s, $0.0192 against $0.0200 a result |
+| C1 | agent against agent | fastbrowse against the hosted Browser Use agent | 46 tasks, three repeats: 99.2% against 96.3%, execution time 18.9s against 15.3s, cost per run $0.0296 against $0.3180 |
+| C2 | backend against backend | fastbrowse on its own browser pool against fastbrowse on a Browser Use Cloud browser | earlier campaign record (release-0.5.25), not on the published page; the pool passed fewer tasks than the Browser Use Cloud browser - see [Benchmark results](docs/benchmarks.md) |
 | C3 | fastbrowse and its backend against [Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast) | fastbrowse on its own browser pool against `jev-ultrafast`, 6 tasks | not yet measured |
 
 C1's figures are the recorded head-to-head on 46 tasks, three repeats each, on Browser Use cloud browsers under
-identical limits, with the hosted agent at its defaults. C2 compares browsers, not agents: both arms run the same
-fastbrowse build, tasks and repeats, and only the browser differs. On that backend fastbrowse passes fewer tasks
-on its own pool than on the Browser Use Cloud browser, 96.2% against 98.1%. [Benchmark results](docs/benchmarks.md)
+identical limits, with the hosted agent at its defaults; the same release also publishes fastbrowse alone on the
+53-task internal catalog, at 99.3%, an execution time of 17.0s and $0.0268 a run. C2 compares browsers, not
+agents: both arms run the same fastbrowse build, tasks and repeats, and only the browser differs. That comparison
+is an earlier record and is not on the published page; on it fastbrowse passed fewer tasks on its own pool than on
+the Browser Use Cloud browser. [Benchmark results](docs/benchmarks.md)
 gives each comparison's sources, the campaigns behind C1, the browser cost basis and the limitations. The
-[benchmark page](https://fastbrowse.ai/benchmarks) renders only figures the maintainer approved; the C1 and C2
-figures come from the 0.5.25 campaign staged in `docs/results/benchmark-candidate.json`, which awaits approval.
+[benchmark page](https://fastbrowse.ai/benchmarks) publishes the release-0.7.1 campaign (agent commit `7b8b0e8f`,
+data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).
 Rows are comparable only at matching task versions; the upstream suites and the Codex with Cua Driver arm are
 diagnostics, described in [eval results and workflow](docs/evals.md).
 
