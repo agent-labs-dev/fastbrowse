@@ -96,26 +96,26 @@ pub fn irreversible_question(
     )
 }
 
-/// Whether the task itself asks for this commit, asked beside [`irreversible_question`] when the run is authorized.
+/// Whether the task asks for this commit, asked beside [`irreversible_question`] when the run is authorized.
 ///
 /// Told "Finish the order", Jev picked Finish at 0.86, under `sensitive_act_from`, and the refusal cost a 4.5s LLM
-/// recovery that only read the task back. Jev agreeing the task names the action is that second opinion.
+/// recovery that only read the task back. Jev agreeing the task asks for the action is that second opinion. Asked
+/// as one positive question, Jev put 11 commits a task asked for at 0.66 or more and 11 it did not, including ones
+/// the task forbade or only led up to, at 0.08 or less.
 ///
 /// A page can have several controls labelled Submit or Finish, so the question carries what tells this one apart, as
 /// the irreversible one does.
 pub fn requested_question(task: &str, operation: Operation, control: &Control) -> NoulQuestion {
     let mut instructions = format!(
-        "{UNTRUSTED}\nThe agent is doing this task: {task}\nIt is about to {operation} the element labelled {}.\n",
+        "{UNTRUSTED}\nThe task: {task}\nThe agent is about to {operation} the element labelled {}.\n",
         text::repr(&control.label)
     );
     describe_control(&mut instructions, operation, control, None);
-    instructions.push_str(
-        "Does the task itself tell the agent to take this exact action, not merely allow it or lead up to it?",
-    );
+    instructions.push_str("Does the task ask the agent to do this?");
     NoulQuestion::new(
         instructions,
-        Some("The task names this action as one the user wants done now."),
-        Some("The task does not ask for it, asks for something else, or says not to."),
+        Some("The task asks for this action."),
+        Some("The task asks for something else."),
     )
 }
 
