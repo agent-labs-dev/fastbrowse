@@ -17,9 +17,9 @@ Three properties make a published trace usable as evidence, and each is enforced
   a comparison figure.
 
 Upload uses the OTLP endpoint, the path Langfuse serves for live data, and asks for real-time ingestion: without
-that header Langfuse may take many minutes to expose a direct export through the read API. Read-back asks the v2
-observation index first and falls back to the trace itself, because that index does not yet return every span
-ingested through OTLP.
+that header Langfuse may take many minutes to expose a direct export through the read API. Read-back reads the v2
+observation index, the read path Langfuse keeps: the trace endpoint it once fell back to is retired on 2026-11-16,
+so a span that is not in the index yet is waited for rather than looked up somewhere that will not exist.
 """
 
 import argparse
@@ -51,6 +51,10 @@ VERIFY_ATTEMPTS = 60
 VERIFY_DELAY_SECONDS = 5.0
 """Seconds between read-backs. Langfuse queued an upload for over four minutes when this was measured, so the
 deadline is generous on purpose: a run that is simply still queueing is not a failed upload."""
+
+READ_FIELDS = "core,basic,io,metadata"
+"""The v2 field groups read-back asks for. `io` carries the measured output, and `metadata` carries the run id: the
+index omits both unless they are named, so requesting less would read every row as somebody else's upload."""
 
 PROVENANCE = ("run_id", "git_sha", "fastbrowse_version", "run_started", "git_dirty", "providers")
 """What identifies the run. `run` also carries per-suite agent limits, which differ between the local and mock
@@ -217,27 +221,19 @@ def _matches(observation: Mapping[str, Any], spec: Mapping[str, Any]) -> bool:
 
 
 def _readable(client: httpx.Client, trace: str, spec: Mapping[str, Any], since: datetime) -> bool:
-    """Whether this upload's version of one trace is readable now, through the index or the trace itself."""
+    """Whether this upload's version of one trace is readable now, in the observation index."""
     params: dict[str, Any] = {
         "traceId": trace,
         "fromStartTime": since.isoformat(),
-        "fields": "core,basic,io",
+        "fields": READ_FIELDS,
         "limit": "10",
     }
     index = client.get("/api/public/v2/observations", params=params)
     if index.status_code == 429:
         raise RateLimited(_retry_after(index))
-    if index.status_code == 200 and any(_matches(row, spec) for row in index.json().get("data") or []):
-        return True
-    detail = client.get(f"/api/public/traces/{trace}")
-    if detail.status_code == 429:
-        raise RateLimited(_retry_after(detail))
-    if detail.status_code != 200:
+    if index.status_code != 200:
         return False
-    body = detail.json()
-    if (body.get("metadata") or {}).get("run_id") != spec["run_id"]:
-        return False
-    return any(_matches(row, spec) for row in body.get("observations") or [])
+    return any(_matches(row, spec) for row in index.json().get("data") or [])
 
 
 def verify(
