@@ -140,10 +140,16 @@ const JEV_KEYS: [(&str, &str); 3] =
     [("TYPESAFE_API_KEY", "t"), ("OPENROUTER_API_KEY", "o"), ("AI_GATEWAY_API_KEY", "g")];
 
 #[tokio::test(start_paused = true)]
-async fn test_another_system_one_host_gets_its_own_key_its_model_and_no_backup() {
+async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
     // Settings, then the URL, Authorization header and model every request carries.
     type Case<'a> = (&'a [(&'a str, &'a str)], &'a str, Option<&'a str>, &'a str);
-    let cases: [Case; 4] = [
+    let cases: [Case; 5] = [
+        (
+            &[("FASTBROWSE_DECISION_SOURCE", "openai"), ("OPENAI_API_KEY", "a")],
+            "https://api.openai.com/v1/decisions",
+            Some("Bearer a"),
+            "gpt-6-luna",
+        ),
         (
             &[("FASTBROWSE_DECISION_SOURCE", "telnyx"), ("TELNYX_API_KEY", "x")],
             "https://api.telnyx.com/v2/ai/typesafe/v1/systemone",
@@ -192,10 +198,11 @@ async fn test_another_system_one_host_gets_its_own_key_its_model_and_no_backup()
 }
 
 #[test]
-fn test_another_system_one_host_names_what_it_is_missing() {
+fn test_another_decision_host_names_what_it_is_missing() {
     let (http, _) = urls(400);
     let cases = [
         (vec![("FASTBROWSE_DECISION_SOURCE", "telnyx")], "TELNYX_API_KEY"),
+        (vec![("FASTBROWSE_DECISION_SOURCE", "openai")], "OPENAI_API_KEY"),
         (vec![("FASTBROWSE_DECISION_SOURCE", "ollama")], "FASTBROWSE_DECISION_MODEL"),
         (
             vec![("FASTBROWSE_DECISION_SOURCE", "custom"), ("FASTBROWSE_DECISION_MODEL", "m")],

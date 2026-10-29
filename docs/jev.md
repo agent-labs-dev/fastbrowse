@@ -36,19 +36,23 @@ unknown cost, which a dollar limit treats as unaffordable. Its thresholds are Je
 it, and the run's trace says so with a `decision_unvalidated` event. A Jev release other than 1.13 keeps Jev's limits
 and price but is unvalidated too.
 
-### Other System One hosts
+### Other decision hosts
 
 `FASTBROWSE_DECISION_SOURCE` picks one of these instead of a Jev source. Each is sent only its own key, never
 `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY` or `AI_GATEWAY_API_KEY`, and none has a backup: an outage past its
-retries ends the run. They all speak the System One API through `crates/fastbrowse-clients/src/system_one.rs`.
+retries ends the run. All but `openai` speak the System One API through `crates/fastbrowse-clients/src/system_one.rs`;
+`openai` speaks OpenAI's Decisions API through `crates/fastbrowse-clients/src/openai_decisions.rs`.
 
 | Source | Host | Key | Model | Limits |
 |:--|:--|:--|:--|:--|
 | `telnyx` | `https://api.telnyx.com/v2/ai/typesafe` ([Telnyx](https://developers.telnyx.com/api-reference/decision-models/evaluate-decision-models-typesafe-compatible)) | `TELNYX_API_KEY` | `telnyx/decision-flash`, or `telnyx/decision-pro` | 64 questions a request, 64 options a choice or levels a score; no published price |
 | `ollama` | `http://localhost:11434` ([Ollama](https://pydantic.dev/docs/ai/models/system-one/#ollama)) | none, or `FASTBROWSE_DECISION_API_KEY` | `FASTBROWSE_DECISION_MODEL`, such as `nimble` or `tev1` | 26 options, 26 levels, 64 questions and 64 KiB a request |
+| `openai` | `https://api.openai.com/v1/decisions` ([Decisions](https://developers.openai.com/api/docs/guides/decisions)) | `OPENAI_API_KEY` | `gpt-6-luna` | 400 questions a request, 2 to 10 levels a score, 255 options a choice; $0.10 per million input tokens, estimated since the response states no cost |
 | `custom` | `FASTBROWSE_DECISION_BASE_URL` | `FASTBROWSE_DECISION_API_KEY`, if it takes one | `FASTBROWSE_DECISION_MODEL` | The profile of a model fastbrowse knows, otherwise the unknown model's |
 
-`FASTBROWSE_DECISION_BASE_URL` also retargets `telnyx` and `ollama`. Telnyx answers an oversized body with HTTP
+`FASTBROWSE_DECISION_BASE_URL` also retargets `telnyx`, `ollama` and `openai`. The Decisions API names a yes/no
+question a predicate and has no true and false descriptions, so a Noul's are appended to its instructions; a choice
+criterion that is an object is sent as its JSON text, and a refused question fails the request. Telnyx answers an oversized body with HTTP
 413, which fastbrowse reads as input too large rather than as an outage. Telnyx says its scores are relative
 preference rather than calibrated probability, so no Jev threshold is known to hold on it.
 

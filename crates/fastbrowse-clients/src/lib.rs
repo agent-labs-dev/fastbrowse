@@ -9,6 +9,7 @@ pub mod environment;
 pub mod failover;
 pub mod http;
 pub mod openai_compatible;
+pub mod openai_decisions;
 pub mod system_one;
 pub mod validation;
 pub mod vercel;
