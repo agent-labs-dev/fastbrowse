@@ -16,7 +16,7 @@ use crate::validation::{
 
 pub const TYPESAFE_URL: &str = "https://api.typesafe.ai";
 pub const OPENROUTER_URL: &str = "https://openrouter.ai/api";
-pub const OPENROUTER_MODEL: &str = "jev-1.13";
+pub const OPENROUTER_MODEL: &str = "jev-1.14";
 /// The SDK base URL Telnyx documents; it serves only its own models, and rejects a request that names none.
 pub const TELNYX_URL: &str = "https://api.telnyx.com/v2/ai/typesafe";
 pub const TELNYX_MODEL: &str = "telnyx/decision-flash";
@@ -24,7 +24,7 @@ pub const TELNYX_MODEL: &str = "telnyx/decision-flash";
 pub const OLLAMA_URL: &str = "http://localhost:11434";
 pub const AIMLAPI_URL: &str = "https://api.aimlapi.com";
 /// Pinned rather than `typesafe/jev`, which AIMLAPI moves to each new Jev release.
-pub const AIMLAPI_MODEL: &str = "typesafe/jev-1.13";
+pub const AIMLAPI_MODEL: &str = "typesafe/jev-1.14";
 pub const PERPLEXITY_URL: &str = "https://api.perplexity.ai";
 /// Pinned rather than `pplx-decider-latest`.
 pub const PERPLEXITY_MODEL: &str = "pplx-decider-v1.2";

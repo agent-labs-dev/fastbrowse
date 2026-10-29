@@ -13,7 +13,7 @@ use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
 use crate::telemetry::BudgetExceeded;
 
-pub const JEV_MODEL: &str = "jev-1.13.0";
+pub const JEV_MODEL: &str = "jev-1.14.0";
 pub const MAX_CHOICE_OPTIONS: usize = 255;
 /// Input price; output is free.
 pub const JEV_DOLLARS_PER_INPUT_TOKEN: f64 = 0.042 / 1_000_000.0;
@@ -337,7 +337,7 @@ pub struct DecisionProfile {
 }
 
 impl DecisionProfile {
-    /// Jev 1.13, whose limits and price TypeSafe documents and on which every default threshold was tuned.
+    /// Jev 1.13 and 1.14, at the limits and price TypeSafe documents for 1.13, which 1.14 keeps.
     pub fn jev() -> DecisionProfile {
         DecisionProfile {
             max_choice_options: MAX_CHOICE_OPTIONS,
@@ -385,7 +385,7 @@ impl DecisionProfile {
     /// The profile of a model id as a provider names it.
     pub fn for_model(model: &str) -> DecisionProfile {
         let bare = model.rsplit('/').next().unwrap_or(model);
-        if bare == "jev" || bare.starts_with("jev-1.13") {
+        if bare == "jev" || bare.starts_with("jev-1.13") || bare.starts_with("jev-1.14") {
             return DecisionProfile::jev();
         }
         // Another Jev release keeps the family's limits and price, but nothing was tuned on it.
@@ -482,7 +482,9 @@ mod tests {
 
     #[test]
     fn a_pinned_or_routed_jev_is_jev() {
-        for model in ["jev-1.13", "jev-1.13.0", "typesafe/jev-1.13", "typesafe-ai/jev", "typesafe-ai/jev-1.13.0"] {
+        for model in
+            ["jev-1.13", "jev-1.14", "jev-1.14.0", "typesafe/jev-1.14", "typesafe-ai/jev", "typesafe-ai/jev-1.14.0"]
+        {
             assert!(DecisionProfile::for_model(model).validated(), "{model}");
         }
         assert!(!DecisionProfile::for_model("nimble").validated());
@@ -492,7 +494,7 @@ mod tests {
         let flash = DecisionProfile::for_model("perplexity/pplx-decider-flash-latest");
         assert_eq!((flash.max_questions, flash.dollars_per_input_token), (Some(128), Some(0.01 / 1_000_000.0)));
         assert_eq!(DecisionProfile::for_model("gpt-6-luna").fit(None), Config::default());
-        let later = DecisionProfile::for_model("typesafe/jev-1.14");
+        let later = DecisionProfile::for_model("typesafe/jev-1.15");
         assert_eq!((later.validated(), later.max_choice_options), (false, MAX_CHOICE_OPTIONS));
     }
 

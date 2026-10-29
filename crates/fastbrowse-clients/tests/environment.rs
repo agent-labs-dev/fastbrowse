@@ -108,9 +108,9 @@ async fn test_failover_requires_both_keys_and_default_routing() {
                 env.push(("FASTBROWSE_DECISION_BASE_URL", "https://proxy.test"));
             }
             let default_pin = match source {
-                DecisionSource::OpenRouter => "jev-1.13",
-                DecisionSource::TypeSafe => "jev-1.13.0",
-                DecisionSource::Gateway => "typesafe-ai/jev-1.13.0",
+                DecisionSource::OpenRouter => "jev-1.14",
+                DecisionSource::TypeSafe => "jev-1.14.0",
+                DecisionSource::Gateway => "typesafe-ai/jev-1.14.0",
                 _ => unreachable!(),
             };
             match restriction {
@@ -148,7 +148,7 @@ async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
             &[("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")],
             "https://api.aimlapi.com/v1/decisions",
             Some("Bearer m"),
-            "typesafe/jev-1.13",
+            "typesafe/jev-1.14",
         ),
         (
             &[
@@ -228,7 +228,7 @@ async fn test_a_resellers_unmetered_call_is_an_unknown_cost_not_the_models_list_
     let script = Script::new([common::reply(200, answered)]);
     let env = [("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")];
     let jev = settings(&env).decision(&script.http()).unwrap();
-    assert!(jev.profile().validated(), "the same Jev 1.13 the thresholds were tuned on");
+    assert!(jev.profile().validated(), "a Jev release the thresholds apply to");
     let evaluation = jev.evaluate(&json!("page"), &question()).await.unwrap();
     assert_eq!((evaluation.cost.basis, evaluation.cost.dollars), (CostBasis::Unknown, None));
 }
@@ -261,8 +261,8 @@ fn test_the_decision_key_is_not_printed_with_the_settings() {
 #[tokio::test(start_paused = true)]
 async fn test_source_model_defaults_and_explicit_pins() {
     for (source, pin, expected) in [
-        ("openrouter", None, "jev-1.13"),
-        ("typesafe", None, "jev-1.13.0"),
+        ("openrouter", None, "jev-1.14"),
+        ("typesafe", None, "jev-1.14.0"),
         ("openrouter", Some("jev-1.13.0"), "jev-1.13.0"),
         ("typesafe", Some("jev-latest"), "jev-latest"),
     ] {
