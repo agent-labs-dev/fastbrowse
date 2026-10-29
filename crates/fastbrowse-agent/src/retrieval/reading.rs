@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use super::choices::read_choices;
 use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_message, source_marker};
 use super::records::{Counted, count_records};
-use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search, numbers, states_empty};
+use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search, numbers};
 use super::{notes_room, route};
 use crate::comparison::{NumericComparison, QuotedField, digit};
 use crate::error::{AgentError, Result};
@@ -798,16 +798,7 @@ pub(crate) fn counted_collections(
             }
         }
         if count.is_none() {
-            let following = &blocks[index + 1..(index + 3).min(blocks.len())];
-            if following.first().is_some_and(|b| b.kind == BlockKind::Heading) {
-                continue;
-            }
-            let empty =
-                following.iter().find(|b| b.kind == BlockKind::Paragraph && states_empty(page.slice(b.start, b.end)));
-            match empty {
-                Some(empty) if members.is_empty() => members = vec![empty],
-                _ => continue,
-            }
+            continue;
         }
         if members.is_empty() || members[members.len() - 1].end > read_end {
             continue;

@@ -355,7 +355,7 @@ pub(crate) struct RunState {
     /// How often each action was taken from each page state, which is how a cycle is told from progress.
     pub attempts: HashMap<Signature, Attempts>,
     pub last_page: Option<(String, String)>,
-    /// The address of a sign-in wall an access inspection read instead of stopping on.
+    /// The address of the last page Jev judged a sign-in wall that blocks the task.
     pub passed_wall: Option<String>,
     /// Each page state and the action count when it was first reached.
     pub reached: HashMap<String, usize>,

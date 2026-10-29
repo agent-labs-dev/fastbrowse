@@ -229,7 +229,7 @@ impl Agent {
             } else {
                 format!("{reason}\nStill to find:\n{open_requirements}")
             };
-            return Err(Stop::new(self.walled(state, observation, gives_up_as, false), detail).into());
+            return Err(Stop::new(self.walled(state, observation, gives_up_as, false).await?, detail).into());
         }
         if self.ask_jev_again(state, observation, &reason, withheld).await? {
             return Ok(());
@@ -304,7 +304,7 @@ impl Agent {
             } else if gives_up_as == Status::Unverified {
                 Status::Unverified
             } else {
-                self.walled(state, observation, Status::Stuck, data.needs_login)
+                self.walled(state, observation, Status::Stuck, data.needs_login).await?
             };
             if let Some(failure) = &state.http_failure
                 && status != Status::NeedsInput

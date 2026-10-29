@@ -17,7 +17,6 @@ pub mod helpers;
 mod reading;
 mod recovery;
 mod seeing;
-mod sign_in;
 pub(crate) mod state;
 
 #[cfg(test)]
@@ -47,7 +46,7 @@ use serde_json::{Map, Value};
 
 pub use helpers::{next_page_control, next_page_notice, read_question};
 use helpers::{partition_proof, recovery_memory};
-use state::{Flow, RunState, Spawned};
+use state::{Flow, RunState, Spawned, Step};
 
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
@@ -953,25 +952,45 @@ impl Agent {
 
     /// Stuck becomes needs_login when a sign-in is what the run stopped at: a caller told "stuck" narrows the task
     /// rather than signing in.
-    fn walled(&self, state: &RunState, observation: &Observation, status: Status, said: bool) -> Status {
+    async fn walled(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        status: Status,
+        said: bool,
+    ) -> Step<Status> {
         if status != Status::Stuck {
-            return status;
+            return Ok(status);
         }
-        // A model's word alone is not the page's: absent controls do not establish missing authentication, so a run
-        // that stopped saying it was signed out ends needs_login only when the page itself shows a sign-in to act on,
-        // or the run is standing on a wall it actually observed. A page offering neither is stuck, not signed out.
-        let walled = (said && sign_in::shows_sign_in(observation))
-            || state
-                .passed_wall
-                .as_deref()
-                .is_some_and(|wall| fastbrowse_core::navigation::same_address(wall, &observation.url));
         // A held secret makes the sign-in work the run can do, so a run holding one did not stop for want of it.
         let origin = origin_of(&observation.url);
-        if walled && !(!origin.is_empty() && !self.secret_names(&origin).is_empty()) {
-            Status::NeedsLogin
-        } else {
-            status
+        if !origin.is_empty() && !self.secret_names(&origin).is_empty() {
+            return Ok(status);
         }
+        let standing = state
+            .passed_wall
+            .as_deref()
+            .is_some_and(|wall| fastbrowse_core::navigation::same_address(wall, &observation.url));
+        // A model's word alone is not the page's: a run that stopped saying it was signed out ends needs_login only
+        // when Jev, shown the page, agrees a sign-in blocks the task.
+        let walled = standing || (said && self.sees_wall(state, observation).await?);
+        Ok(if walled { Status::NeedsLogin } else { status })
+    }
+
+    /// Whether Jev, asked about this page as at any step, judges it a sign-in wall that blocks the task.
+    async fn sees_wall(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let context = self.context(state, Vec::new(), true, false)?;
+        let decision = crate::policy::decide(
+            &*self.jev,
+            observation,
+            &context,
+            &self.config,
+            Some(&state.ledger),
+            Some(&state.relevance_cache),
+            &self.trace,
+        )
+        .await?;
+        Ok(decision.login_required.is_some_and(|p| p > self.config.thresholds.login_required_above))
     }
 }
 

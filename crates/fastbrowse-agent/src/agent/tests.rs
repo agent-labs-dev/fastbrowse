@@ -34,7 +34,7 @@ use super::helpers::{
     next_page_control, next_value, plan_ids, unread, verified, visited,
 };
 use super::reading::covered;
-use super::state::{RunState, Spawned};
+use super::state::{RunState, Spawned, TransactionCandidate};
 use crate::memory::{Fact, Notes, Tally, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry};
@@ -1316,6 +1316,55 @@ async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
         let gated =
             agent.gate_question(&mut state, &observation, &decision, Decider::Jev, "Finish", question, false).await;
         assert_eq!(gated.is_ok(), acts, "requested {requested}");
+    }
+}
+
+/// A Jev that answers every yes/no with one probability, or with nothing.
+struct Receipts(Option<f64>);
+
+impl fastbrowse_core::decision::DecisionClient for Receipts {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        let answers = self
+            .0
+            .map(|probability| {
+                let answer = Answer::Noul(NoulAnswer { kind: Default::default(), probability });
+                questions.keys().map(|key| (key.clone(), answer.clone())).collect()
+            })
+            .unwrap_or_default();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_receipt_is_read_only_for_a_step_jev_says_committed() {
+    use fastbrowse_core::safety::irreversible_question;
+    // Adding to a cart on an authorized checkout used to force a full read of the list after every click.
+    for (probability, owed) in [(Some(0.1), false), (Some(0.9), true), (None, true)] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(Receipts(probability)), Arc::new(ScriptedLLM));
+        let mut state = run_state().await;
+        state.task = "Add the backpack to the cart and finish the order.".into();
+        state.authorization = Authorization { irreversible_actions: true };
+        state.ready_plan =
+            Some(Plan::new(vec![Requirement::new("a1", "Finish the order", RequirementKind::Action)], false));
+        state.transaction_candidates.push(TransactionCandidate {
+            question: irreversible_question(&state.task, Operation::Click, &button("Add to cart"), None),
+            from_url: "https://shop.test/inventory".into(),
+            landed_url: Some("https://shop.test/inventory".into()),
+            landed_status: None,
+            committing: None,
+            outcome_read: false,
+        });
+        assert_eq!(agent.unread_receipt(&mut state).await.ok(), Some(owed), "{probability:?}");
     }
 }
 
