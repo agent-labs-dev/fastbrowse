@@ -734,11 +734,7 @@ impl Agent {
                     .controls
                     .iter()
                     .map(|c| {
-                        if c.id == control.id {
-                            Control { value: Some(text.clone()), blocking: None, ..c.clone() }
-                        } else {
-                            c.clone()
-                        }
+                        if c.id == control.id { Control { value: Some(text.clone()), ..c.clone() } } else { c.clone() }
                     })
                     .collect(),
                 ..observation

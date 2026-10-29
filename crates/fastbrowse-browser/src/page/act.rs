@@ -494,10 +494,10 @@ impl CdpPage {
              node.querySelector('button,[role=button],a[href]')) {{ cover = node; break; }} }} \
              cover ||= hit; if (!cover) return null; const label = node => \
              (node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent || '')\
-             .trim().slice(0, 120); \
+             .trim(); \
              const controls = Array.from(cover.querySelectorAll('button,[role=button],a[href]'))\
              .filter(node => node.checkVisibility({{checkOpacity:true,checkVisibilityCSS:true}}))\
-             .slice(0, 8).map(label).filter(Boolean); \
+             .map(label).filter(Boolean); \
              return JSON.stringify({{role:cover.getAttribute('role') || cover.tagName.toLowerCase(), \
              label:cover.getAttribute('aria-label') || cover.getAttribute('title') || null, controls}}); }})()",
             obstructions = py_json(&Value::from(OBSTRUCTIONS)),
@@ -505,29 +505,24 @@ impl CdpPage {
         let mut detail = self.evaluate(session_id, &script).await.ok().filter(truthy);
         // A frame drawn over the control keeps its controls in its own document, which a cross-origin frame does not
         // share: a full-window ad was reported with no controls, so recovery closed another ad and stayed covered.
-        // Only a control that closes the frame is named; naming the rest offered recovery the ad's own links.
         if let Some(Value::String(text)) = &detail
             // Best effort: naming the frame's controls helps recovery, and failing to must not lose the report.
-            && let Ok(labels) = self.frame_controls(session_id, local_id).await
+            && let Ok(inside) = self.frame_controls(session_id, local_id).await
+            && !inside.is_empty()
+            && let Ok(mut described) = serde_json::from_str::<serde_json::Map<String, Value>>(text)
         {
-            let inside: Vec<String> = labels.into_iter().filter(|l| dismisses(l)).collect();
-            if !inside.is_empty()
-                && let Ok(mut described) = serde_json::from_str::<serde_json::Map<String, Value>>(text)
-            {
-                let mut controls: Vec<String> = described
-                    .get("controls")
-                    .and_then(Value::as_array)
-                    .map(|c| c.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
-                    .unwrap_or_default();
-                for label in inside {
-                    if !controls.contains(&label) {
-                        controls.push(label);
-                    }
+            let mut controls: Vec<String> = described
+                .get("controls")
+                .and_then(Value::as_array)
+                .map(|c| c.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            for label in inside {
+                if !controls.contains(&label) {
+                    controls.push(label);
                 }
-                controls.truncate(8);
-                described.insert("controls".into(), json!(controls));
-                detail = Some(Value::String(py_json(&Value::Object(described))));
             }
+            described.insert("controls".into(), json!(controls));
+            detail = Some(Value::String(py_json(&Value::Object(described))));
         }
         match detail {
             Some(detail) => format!(
@@ -1456,39 +1451,9 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
     )
 }
 
-/// What a person reads as closing a cover rather than following it, judged by its label alone:
-/// `\b(close|dismiss|skip|hide|no,? thanks|not now)\b|^\s*[x\u00d7\u2715\u2716]\s*$`, ignoring case.
-fn dismisses(label: &str) -> bool {
-    let trimmed = label.trim();
-    if trimmed.chars().count() == 1
-        && matches!(trimmed.chars().next(), Some('x' | 'X' | '\u{d7}' | '\u{2715}' | '\u{2716}'))
-    {
-        return true;
-    }
-    let lower = label.to_lowercase();
-    let word = |c: char| c.is_alphanumeric() || c == '_';
-    ["close", "dismiss", "skip", "hide", "no thanks", "no, thanks", "not now"].iter().any(|phrase| {
-        lower.match_indices(phrase).any(|(at, _)| {
-            let before = lower[..at].chars().next_back();
-            let after = lower[at + phrase.len()..].chars().next();
-            before.is_none_or(|c| !word(c)) && after.is_none_or(|c| !word(c))
-        })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dismiss_labels_match_the_python_pattern() {
-        for label in ["Close", "close ad", "No thanks", "no, thanks!", "Not now", " x ", "\u{d7}", "Skip"] {
-            assert!(dismisses(label), "{label}");
-        }
-        for label in ["Closed", "Shop now", "xx", "Hidden gems"] {
-            assert!(!dismisses(label), "{label}");
-        }
-    }
 
     #[test]
     fn points_parse_as_the_type_adapters_do() {

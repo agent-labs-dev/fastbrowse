@@ -168,15 +168,15 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         setting =
             setting || after.controls.iter().any(|c| !SETTING_ROLES.contains(&c.role.as_str()) && shows(c, &choice));
     }
-    let mut summary = if parts.is_empty() { "nothing visible changed".to_string() } else { parts.join("; ") };
-    // A submit a form refuses moves nothing or reopens a picker, and says why only in the fields it marks: Search on a
-    // round trip with no return date reopened the date picker, and the run clicked Done and Search in turn.
-    if !(navigated || setting) {
-        let blocking: Vec<&Control> = after.controls.iter().filter(|c| c.blocking == Some(true)).collect();
-        if !blocking.is_empty() {
-            summary.push_str(&format!("; fields the form still needs: {}", listed(&blocking)));
-        }
-    }
+    // A form that refuses a submit can say why in its text alone, as Sauce Demo's checkout shows "Error: First Name is
+    // required" and changes no control.
+    let summary = if !parts.is_empty() {
+        parts.join("; ")
+    } else if before.viewport_text != after.viewport_text {
+        "only the page text changed".to_string()
+    } else {
+        "nothing visible changed".to_string()
+    };
     Effect { summary, set_something: navigated || setting }
 }
 
@@ -303,22 +303,12 @@ mod tests {
     }
 
     #[test]
-    fn test_an_action_that_set_nothing_names_the_fields_the_form_still_needs() {
-        let search = Control::new("s", "button", "Search", [Operation::Click]);
-        let needed = with(&Control::new("r", "textbox", "Return", [Operation::Fill]), |c| c.blocking = Some(true));
-        let form = observation(vec![search.clone(), needed.clone()]);
-        assert_eq!(
-            effect(&form, &form, None).summary,
-            "nothing visible changed; fields the form still needs: 1 control: Return"
-        );
-        let filled = observation(vec![
-            search,
-            with(&needed, |c| {
-                c.value = Some("Oct 23".into());
-                c.blocking = Some(false);
-            }),
-        ]);
-        assert!(!effect(&form, &filled, None).summary.contains("still needs"));
+    fn test_an_action_that_changed_only_the_text_says_so() {
+        let form = observation(vec![Control::new("s", "button", "Continue", [Operation::Click])]);
+        let refused = Observation { viewport_text: "Error: First Name is required".into(), ..form.clone() };
+        let done = effect(&form, &refused, None);
+        assert_eq!(done.summary, "only the page text changed");
+        assert!(!done.set_something);
     }
 
     #[test]

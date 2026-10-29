@@ -1185,8 +1185,7 @@ async fn test_nothing_is_sent_through_an_obstruction_that_focusing_the_control_o
 async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_own_controls() {
     // A full-window ad frame (an interstitial) covered a login form. Its close button lives in its own,
     // cross-origin document, so the report named no controls, and recovery closed another ad while this one stayed.
-    // Nothing is pressed through a cover the size of the window; the frame's close control is named so it can be
-    // closed, and its links are not, so recovery is never offered the ad itself.
+    // Nothing is pressed through a cover the size of the window; the frame's controls are named so it can be closed.
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(&h.page, &anchored_form(false, "div")).await;
@@ -1202,7 +1201,7 @@ async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_o
     assert_eq!(result.outcome, StepOutcome::Covered);
     let detail = result.detail.unwrap_or_default();
     assert!(
-        detail.contains("Advertisement") && detail.contains("Close ad") && !detail.contains("spring offer"),
+        detail.contains("Advertisement") && detail.contains("Close ad") && detail.contains("spring offer"),
         "{detail}"
     );
     assert_eq!(eval_active(&h.page, "[window.pressed, window.submitted]").await, json!([null, null]));
