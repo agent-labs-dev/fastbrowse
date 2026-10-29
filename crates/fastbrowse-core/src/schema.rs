@@ -26,8 +26,12 @@ pub enum Ty {
     /// pydantic's `JsonValue`, a named alias with an empty schema.
     JsonValue,
     DateTime,
-    /// Bytes written as base64 in JSON (`Image`, `Base64Bytes`).
+    /// `bytes`.
     Bytes,
+    /// `Base64Bytes`: bytes read and written as base64.
+    Base64,
+    /// `Image`: bytes read as `bytes`, written as a base64 string.
+    Image,
     /// A `pathlib.Path`.
     Path,
     /// `tuple[T, ...]` or `list[T]`.
@@ -96,7 +100,7 @@ impl Ty {
     /// model or an enum, looking through `None` and a default to find one.
     fn titled(&self) -> bool {
         match self {
-            Ty::Model(_) | Ty::Enum(_) | Ty::Tagged { .. } => false,
+            Ty::Model(_) | Ty::Enum(_) | Ty::Tagged { .. } | Ty::Alias(..) | Ty::JsonValue => false,
             Ty::Optional(inner) => inner.titled(),
             _ => true,
         }
@@ -133,18 +137,24 @@ pub struct Field {
     pub description: Option<String>,
     /// `default_factory`: not required, and pydantic writes no default for it.
     pub factory: bool,
+    /// `exclude=True`: never written, so a serialization schema leaves it out.
+    pub exclude: bool,
 }
 
 impl Field {
     pub fn required(name: &str, ty: Ty) -> Field {
-        Field { name: name.into(), alias: None, ty, default: None, description: None, factory: false }
+        Field { name: name.into(), alias: None, ty, default: None, description: None, factory: false, exclude: false }
     }
     pub fn default(name: &str, ty: Ty, default: impl Into<Value>) -> Field {
-        Field { name: name.into(), alias: None, ty, default: Some(default.into()), description: None, factory: false }
+        Field { default: Some(default.into()), ..Field::required(name, ty) }
     }
     /// A field with a `default_factory`, which the schema leaves out of `required` and writes no default for.
     pub fn factory(name: &str, ty: Ty) -> Field {
         Field { factory: true, ..Field::required(name, ty) }
+    }
+    /// A field the model holds and never writes.
+    pub fn excluded(self) -> Field {
+        Field { exclude: true, ..self }
     }
     pub fn doc(mut self, description: &str) -> Field {
         self.description = Some(description.into());
@@ -216,16 +226,47 @@ pub fn json_schema(ty: &Ty) -> Value {
     sort(Value::Object(root), None)
 }
 
+/// Which way a model travels, as pydantic's `JsonSchemaMode` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// What is read: a field with a default may be left out.
+    Validation,
+    /// What is written: every field is there, a default included, and an excluded one never is.
+    Serialization,
+}
+
+/// `models_json_schema()` of several types at once: one document whose `$defs` hold each of them and what they refer
+/// to, every one under its own name. A field with a default is required in a type written in [`Mode::Serialization`],
+/// since the writer always puts it there.
+pub fn definitions(roots: &[(Ty, Mode)]) -> Value {
+    let mut generator = Generator::default();
+    for (ty, _) in roots {
+        generator.collect(ty);
+    }
+    for (ty, mode) in roots {
+        generator.mode = *mode;
+        generator.schema(ty);
+    }
+    let defs: Map<String, Value> = generator.defs.into_iter().collect();
+    sort(json!({ "$defs": defs }), None)
+}
+
 /// `json_schema` of a type that describes itself.
 pub fn json_schema_of<T: Schema>() -> Value {
     json_schema(&T::ty())
 }
 
-#[derive(Default)]
 struct Generator {
+    mode: Mode,
     defs: BTreeMap<String, Value>,
     /// Each distinct model under a name, in the order they are met.
     models: BTreeMap<String, Vec<Arc<ModelTy>>>,
+}
+
+impl Default for Generator {
+    fn default() -> Self {
+        Generator { mode: Mode::Validation, defs: BTreeMap::new(), models: BTreeMap::new() }
+    }
 }
 
 impl Generator {
@@ -285,6 +326,11 @@ impl Generator {
             Ty::JsonValue => self.reference("JsonValue", |_| json!({})),
             Ty::DateTime => json!({"format": "date-time", "type": "string"}),
             Ty::Bytes => json!({"format": "binary", "type": "string"}),
+            Ty::Base64 => json!({"format": "base64", "type": "string"}),
+            Ty::Image => match self.mode {
+                Mode::Validation => json!({"format": "binary", "type": "string"}),
+                Mode::Serialization => json!({"type": "string"}),
+            },
             Ty::Path => json!({"format": "path", "type": "string"}),
             Ty::List(item) => json!({"items": self.schema(item), "type": "array"}),
             Ty::Set(item) => json!({"items": self.schema(item), "type": "array", "uniqueItems": true}),
@@ -293,6 +339,8 @@ impl Generator {
                 let count = items.len();
                 json!({"maxItems": count, "minItems": count, "prefixItems": items, "type": "array"})
             }
+            // pydantic writes `dict[str, Any]` as any object at all.
+            Ty::Map(value) if **value == Ty::Any => json!({"additionalProperties": true, "type": "object"}),
             Ty::Map(value) => json!({"additionalProperties": self.schema(value), "type": "object"}),
             Ty::Optional(inner) => {
                 let mut branches = self.branches(std::slice::from_ref(&**inner));
@@ -366,7 +414,8 @@ impl Generator {
     fn model(&mut self, model: &ModelTy) -> Value {
         let mut properties = Map::new();
         let mut required = Vec::new();
-        for field in &model.fields {
+        let serializing = self.mode == Mode::Serialization;
+        for field in model.fields.iter().filter(|field| !(serializing && field.exclude)) {
             let mut schema = match self.schema(&field.ty) {
                 Value::Object(map) => map,
                 _ => Map::new(),
@@ -377,12 +426,11 @@ impl Generator {
             if let Some(description) = &field.description {
                 schema.insert("description".into(), description.clone().into());
             }
-            match &field.default {
-                Some(default) => {
-                    schema.insert("default".into(), default.clone());
-                }
-                None if !field.factory => required.push(Value::from(field.key())),
-                None => {}
+            if let Some(default) = &field.default {
+                schema.insert("default".into(), default.clone());
+            }
+            if serializing || field.is_required() {
+                required.push(Value::from(field.key()));
             }
             properties.insert(field.key().to_string(), Value::Object(schema));
         }

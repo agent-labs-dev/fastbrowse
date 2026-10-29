@@ -234,6 +234,24 @@ fn citation_id<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
     Ok(id)
 }
 
+impl Schema for Citation {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "Citation",
+            vec![
+                Field::required("id", Ty::Int.ge(1))
+                    .doc("The number used by this fact's links in the answer, stable within a run."),
+                Field::required("text", Ty::Str),
+                Field::default("requirement_id", Ty::optional(Ty::Str), Value::Null),
+                Field::required("url", Ty::Str),
+                Field::required("quote", Ty::Str),
+                Field::required("deep_link", Ty::Str),
+            ],
+        )
+        .ty()
+    }
+}
+
 str_enum! {
     pub enum FactReader {
         JevChoice = "jev_choice",
@@ -293,6 +311,25 @@ pub struct Artifact {
     pub sha256: String,
     /// Reference returned by the caller's `ArtifactSink`; fastbrowse never keeps bytes past the run.
     pub uri: String,
+}
+
+impl Schema for Artifact {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "Artifact",
+            vec![
+                Field::required("kind", ArtifactKind::ty()),
+                Field::required("name", Ty::Str),
+                Field::required("mime_type", Ty::Str),
+                Field::required("size_bytes", Ty::Int.ge(0)),
+                Field::required("sha256", Ty::Str),
+                Field::required("uri", Ty::Str).doc(
+                    "Reference returned by the caller's `ArtifactSink`; fastbrowse never keeps bytes past the run.",
+                ),
+            ],
+        )
+        .ty()
+    }
 }
 
 str_enum! {
@@ -395,6 +432,13 @@ impl Schema for CostLine {
 pub struct CostBreakdown {
     #[serde(default)]
     pub lines: Vec<CostLine>,
+}
+
+impl Schema for CostBreakdown {
+    fn ty() -> Ty {
+        ModelTy::frozen("CostBreakdown", vec![Field::default("lines", Ty::list(CostLine::ty()), Value::Array(vec![]))])
+            .ty()
+    }
 }
 
 impl CostBreakdown {
@@ -501,6 +545,7 @@ impl Schema for BudgetStop {
 }
 
 str_enum! {
+    doc: "What a sign-in or bot wall asks of the person who has to get the run past it.";
     pub enum WallKind {
         /// A password field: the account's credentials.
         Password = "password",
@@ -526,6 +571,23 @@ pub struct Wall {
     /// When the run stopped at it, in UTC epoch milliseconds.
     #[serde(deserialize_with = "lax::int")]
     pub seen_at_ms: i64,
+}
+
+impl Schema for Wall {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "Wall",
+            vec![
+                Field::required("kind", WallKind::ty()),
+                Field::required("origin", Ty::Str).doc("The origin of the page that showed the wall."),
+                Field::default("fields", Ty::list(Ty::Str), Value::Array(vec![]))
+                    .doc("The visible labels of the fields it asked for, redacted as the error is."),
+                Field::required("seen_at_ms", Ty::Int).doc("When the run stopped at it, in UTC epoch milliseconds."),
+            ],
+        )
+        .doc("The wall a `needs_login` or `blocked` run stopped at, typed so a caller can route it without parsing `error`.")
+        .ty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -563,6 +625,39 @@ pub struct RunResult {
 impl RunResult {
     pub fn succeeded(&self) -> bool {
         self.status == Status::Complete
+    }
+}
+
+impl Schema for RunResult {
+    fn ty() -> Ty {
+        let none = || Value::Null;
+        let empty = || Value::Array(vec![]);
+        ModelTy::frozen(
+            "RunResult",
+            vec![
+                Field::required("status", Status::ty()),
+                Field::default("budget", Ty::optional(BudgetStop::ty()), none()),
+                Field::required("answer", Ty::optional(Ty::Str)),
+                Field::required("data", Ty::optional(Ty::JsonValue)),
+                Field::required("evidence", Ty::list(Evidence::ty())),
+                Field::required("steps", Ty::list(StepResult::ty())),
+                Field::required("cost", CostBreakdown::ty()),
+                Field::required("artifacts", Ty::list(Artifact::ty())),
+                Field::default("citations", Ty::list(Citation::ty()), empty()),
+                Field::default("error", Ty::optional(Ty::Str), none()),
+                Field::default("final_url", Ty::optional(Ty::Str), none()).doc(
+                    "Where the browser was last observed; what a caller checks when the task was to arrive somewhere.",
+                ),
+                Field::default("final_frame", Ty::optional(Ty::Bytes), none()).excluded(),
+                Field::default("recordings", Ty::list(Ty::Path), empty()).doc(
+                    "The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.",
+                ),
+                Field::default("wall", Ty::optional(Wall::ty()), none()).doc(
+                    "The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.",
+                ),
+            ],
+        )
+        .ty()
     }
 }
 
@@ -636,6 +731,23 @@ pub struct LocalChrome {
     /// A profile directory kept between runs; without one every run starts from a fresh profile.
     #[serde(default)]
     pub profile: Option<PathBuf>,
+}
+
+impl Schema for LocalChrome {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "LocalChrome",
+            vec![
+                Field::default("binary", Ty::optional(Ty::Str), Value::Null)
+                    .doc("A name or path that replaces discovery of the Chrome binary."),
+                Field::default("headed", Ty::Bool, false).doc("Show the window, to watch a run."),
+                Field::default("profile", Ty::optional(Ty::Path), Value::Null).doc(
+                    "A profile directory kept between runs, so a site signed into there stays signed in. Without one,\nevery run starts from a fresh profile that is deleted afterwards.",
+                ),
+            ],
+        )
+        .ty()
+    }
 }
 
 /// Raw bytes in a model. pydantic writes `bytes` into JSON as UTF-8 text, so this does too.
@@ -717,6 +829,19 @@ pub struct Authorization {
     pub irreversible_actions: bool,
 }
 
+impl Schema for Authorization {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "Authorization",
+            vec![
+                Field::default("irreversible_actions", Ty::Bool, false)
+                    .doc("Allow submit/pay/delete/send style actions without pausing for confirmation."),
+            ],
+        )
+        .ty()
+    }
+}
+
 /// A secret's value, or what computes it when it is typed: an authenticator code is good for seconds.
 #[derive(Clone)]
 pub enum SecretValue {
@@ -755,6 +880,20 @@ pub struct SecretRef {
     pub name: String,
     /// Origins (scheme://host[:port]) the value may be typed into; models only ever see `name`.
     pub origins: Vec<String>,
+}
+
+impl Schema for SecretRef {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "SecretRef",
+            vec![
+                Field::required("name", Ty::Str),
+                Field::required("origins", Ty::list(Ty::Str))
+                    .doc("Origins (scheme://host[:port]) the value may be typed into; models only ever see `name`."),
+            ],
+        )
+        .ty()
+    }
 }
 
 pub trait SecretResolver: Send + Sync {
@@ -814,7 +953,7 @@ impl Schema for StepEvent {
             vec![
                 Field::default("type", StepTag::ty(), "step"),
                 Field::required("step", StepResult::ty()),
-                Field::default("frame", Ty::optional(Ty::Bytes), Value::Null).doc(
+                Field::default("frame", Ty::optional(Ty::Image), Value::Null).doc(
                     "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.",
                 ),
             ],
@@ -837,12 +976,36 @@ pub struct BrowserEvent {
     pub browser_id: Option<String>,
 }
 
+impl Schema for BrowserEvent {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "BrowserEvent",
+            vec![
+                Field::default("type", BrowserTag::ty(), "browser"),
+                Field::required("live_url", Ty::optional(Ty::Str))
+                    .doc("Where a cloud browser can be watched live; None for local Chrome."),
+                Field::default("browser_id", Ty::optional(Ty::Str), Value::Null).doc(
+                    "The cloud browser's id, for a caller that may have to stop it out of band. None when the run did not\nstart a browser of its own (local Chrome, or one handed over through `cdp_url`).",
+                ),
+            ],
+        )
+        .doc("Sent once, when the browser is open and before the first step.")
+        .ty()
+    }
+}
+
 /// `StepEvent | BrowserEvent`, told apart by `type`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Event {
     Step(StepEvent),
     Browser(BrowserEvent),
+}
+
+impl Schema for Event {
+    fn ty() -> Ty {
+        Ty::Union(vec![StepEvent::ty(), BrowserEvent::ty()])
+    }
 }
 
 pub type EventHandler = Arc<dyn Fn(Event) -> BoxFuture<'static, ()> + Send + Sync>;

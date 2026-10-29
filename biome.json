@@ -2,8 +2,8 @@
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "files": {
     "includes": [
-      "src/fastbrowse/browser/capture.js",
-      "src/fastbrowse/browser/snapshot.js",
+      "crates/fastbrowse-browser/js/capture.js",
+      "crates/fastbrowse-browser/js/snapshot.js",
       "packages/sdk/**/*.ts",
       "!packages/sdk/dist",
       "!packages/sdk/src/protocol.ts"

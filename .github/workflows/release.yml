@@ -1,7 +1,7 @@
 name: Release
-# One tag publishes one version to PyPI and to npm. Nothing is published until the sdist, the five wheels and the
-# five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there yet:
-# PyPI, the five platform packages, the SDK.
+# One tag publishes one version to PyPI, npm and crates.io. Nothing is published until the sdist, the five wheels and
+# the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
+# yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
 # A tag runs the fixture suites itself, before anything is published: the release carries its own proof that the
 # agent still browses well on the exact commit that ships, rather than needing somebody to dispatch a run first.
@@ -213,6 +213,42 @@ jobs:
             # With `./`, or npm reads the argument as a GitHub repository.
             npm publish ./packages/sdk --access public
           fi
+
+  # The Rust crates, by trusted publishing as npm is: crates.io accepts this job's OIDC identity for each crate and
+  # hands back a token that is revoked when the job ends. A crate depends on the others at this exact version, so
+  # each is published after those it depends on, and the facade `fastbrowse` last.
+  crates:
+    needs: pypi
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.13"
+          enable-cache: false
+      - run: echo "VERSION=$(uv version --short)" >> "$GITHUB_ENV"
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      # A version already on crates.io is passed over, so a run that stopped partway can be run again: crates.io
+      # refuses a version twice. rustup installs the toolchain rust-toolchain.toml pins on the first cargo call.
+      - name: Publish the crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          for crate in fastbrowse-core fastbrowse-clients fastbrowse-browser fastbrowse-agent fastbrowse-run \
+            fastbrowse-cli fastbrowse; do
+            if curl -sfo /dev/null -A "fastbrowse release (github.com/agent-labs-dev/fastbrowse)" \
+              "https://crates.io/api/v1/crates/$crate/$VERSION"; then
+              echo "$crate $VERSION is already published"
+            else
+              cargo publish -p "$crate" --locked
+            fi
+          done
 
   # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container,
   # then pushed to the AUR so Arch users get the release without anyone copying two files by hand. Its

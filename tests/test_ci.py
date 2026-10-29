@@ -44,7 +44,7 @@ def _jobs() -> dict[str, Any]:
 
 
 def test_the_rust_job_runs_on_every_pull_request() -> None:
-    """The Rust crates embed snapshot.js and read fixtures from outside crates/, so a change elsewhere can break them.
+    """The Rust crates read fixtures from outside crates/, so a change elsewhere can break them.
     A path filter on the job would let that change merge without the Rust checks seeing it."""
     rust = _jobs()["rust"]
     assert "if" not in rust
@@ -58,13 +58,13 @@ def _binaries_pathspecs() -> list[str]:
 
 
 def test_every_file_a_rust_crate_embeds_rebuilds_the_binaries() -> None:
-    """The Rust binary compiles in files from outside crates/ (the page scripts), so a change to one of them must
-    rebuild and smoke the binaries, or the shipped binary breaks on a page script it was never run against."""
+    """The Rust binary compiles in files (the page scripts), so a change to one of them must rebuild and smoke the
+    binaries, or the shipped binary breaks on a page script it was never run against."""
     embedded = set()
     for source in Path("crates").rglob("*.rs"):
         for included in re.findall(r'include_(?:str|bytes)!\("([^"]+)"\)', source.read_text(encoding="utf-8")):
             embedded.add((source.parent / included).resolve().relative_to(Path.cwd()).as_posix())
-    assert "src/fastbrowse/browser/snapshot.js" in embedded
+    assert "crates/fastbrowse-browser/js/snapshot.js" in embedded
     covered = subprocess.run(
         ["git", "ls-files", "--", *_binaries_pathspecs()], capture_output=True, text=True, check=True
     ).stdout.splitlines()

@@ -3,16 +3,16 @@ name = "fastbrowse-node"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-fastbrowse-core = { path = "../fastbrowse-core" }
+fastbrowse-core = { workspace = true }
 # `run_task` with the rules `serve` applies to a run's params. The stand-in runs come along, as they do in the binary,
 # so the SDK's suite runs against the addon as it runs against the binary.
-fastbrowse-cli = { path = "../fastbrowse-cli" }
+fastbrowse-cli = { workspace = true }
 # tokio_rt: a run is a future on napi's runtime, and its promise settles when the future does.
 napi = { version = "3", default-features = false, features = ["napi4", "tokio_rt"] }
 napi-derive = "3"

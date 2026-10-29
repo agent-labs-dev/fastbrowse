@@ -57,7 +57,7 @@ uv run pytest tests/browser -q          # needs Chrome; skips without it
 cargo test -p fastbrowse-agent --test agent   # the run loop's own suites are the crates'
 ```
 
-A change to `src/fastbrowse/browser/snapshot.js` is checked against `benchmarks/golden/` (`test_snapshot_matches_golden`
+A change to `crates/fastbrowse-browser/js/snapshot.js` is checked against `benchmarks/golden/` (`test_snapshot_matches_golden`
 in `crates/fastbrowse-browser/tests/capture.rs`; `FASTBROWSE_UPDATE_GOLDEN=1` rewrites them, and the diff is the
 behaviour change) and timed by CodSpeed
 (`.github/workflows/codspeed.yml`, locally `uv run --group bench pytest benchmarks --codspeed`).
@@ -115,15 +115,17 @@ in `src/fastbrowse` are the shapes a caller passes and gets back. A behaviour ch
 
 The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/agent), and everything else is a seam it calls.
 
+- **[fastbrowse](crates/fastbrowse/src/lib.rs)** is the crate on crates.io a Rust caller depends on: `run_task` and the
+  result's types, re-exported. The crates under it are published at the same version so it can be.
 - **[fastbrowse-run](crates/fastbrowse-run/src/lib.rs)** opens the browser and builds the Jev and LLM clients from the
   environment, then hands control to the loop. Python's `run_task(...)` is this, in process. The browser is one of
   three, in this order: one the caller hands over (`cdp_url` or `cdp_port`, neither started nor stopped here; `attach`
   drives a window already open instead of a new tab, and `connect_cdp` yields that page without the agent), a Browser
   Use Cloud browser (`browser_api_key`), or local Chrome. `start` is optional; without one the first address is
   proposed from the task.
-- **[fastbrowse-browser](crates/fastbrowse-browser/src)** indexes the page. [browser/snapshot.js](src/fastbrowse/browser/snapshot.js) runs in the page and returns the controls
+- **[fastbrowse-browser](crates/fastbrowse-browser/src)** indexes the page. [browser/snapshot.js](crates/fastbrowse-browser/js/snapshot.js) runs in the page and returns the controls
   with what tells them apart (role, label, the card or row that disambiguates twins, whether a field blocks
-  its form); [browser/capture.js](src/fastbrowse/browser/capture.js) returns the text as source blocks with stable spans, so a reader can cite them.
+  its form); [browser/capture.js](crates/fastbrowse-browser/js/capture.js) returns the text as source blocks with stable spans, so a reader can cite them.
 - **[policy.rs](crates/fastbrowse-agent/src/policy.rs)** batches operation and target choices, read assessment and applicable wall checks.
   Large target sets use a further choice inside a group. [decision.rs](crates/fastbrowse-core/src/decision.rs) is the client's shape;
   [system_one.rs](crates/fastbrowse-clients/src/system_one.rs) serves the System One API: direct TypeSafe when keyed, the recommended Jev route, otherwise OpenRouter, or Telnyx, Ollama or another host when chosen; [vercel.rs](crates/fastbrowse-clients/src/vercel.rs) serves the
@@ -140,9 +142,9 @@ The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/
 - **[cli.rs](crates/fastbrowse-cli/src/cli.rs)**, **[mcp](crates/fastbrowse-cli/src/mcp)**, **[serve.rs](crates/fastbrowse-cli/src/serve.rs)** and **`run_task`** are the four entry points; [options.rs](crates/fastbrowse-cli/src/options.rs) holds the rules
   they share, so a flag means the same thing in all of them. `serve` is `fastbrowse serve --stdio`: it calls
   `run_task` for another process over JSON-RPC, one run at a time, and adds no agent logic. Its messages are the
-  models in [protocol.py](src/fastbrowse/protocol.py); [output_schema.rs](crates/fastbrowse-core/src/output_schema.rs) turns a caller's JSON Schema into an `output_schema`.
+  types in [protocol.rs](crates/fastbrowse-core/src/protocol.rs), written as JSON Schema to [protocol/schema.json](protocol/schema.json); [output_schema.rs](crates/fastbrowse-core/src/output_schema.rs) turns a caller's JSON Schema into an `output_schema`.
 - **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
-  the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from the Python models (`npm run generate:sdk`).
+  the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from `protocol/schema.json` (`npm run generate:sdk`).
   What it starts is the Rust `fastbrowse` binary ([crates/fastbrowse-cli](crates/fastbrowse-cli)), with the Node addon beside it
   for `inProcess`, shipped as one `@fastbrowse/<os>-<arch>` npm package per platform.
 

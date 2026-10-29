@@ -501,7 +501,7 @@ server refuses the request before a browser opens (a bad option, a missing key, 
 fails after it has started resolves with status `error`.
 
 The result is the `RunResult` the Python library returns, with the same statuses, citations and cost lines.
-Its fields keep their Python names, such as `final_url`, since the types are generated from the Python models;
+Its fields keep their Python names, such as `final_url`, since the types are generated from the protocol's schema;
 the options are camelCase. The structured data is in `data`, as in Python. The SDK adds
 `output`: with a Zod (4.2 or newer) or ArkType schema, or a Valibot schema wrapped by
 `@valibot/to-json-schema`, `output` is `data` after the schema's own validation and transforms, and has the
@@ -541,6 +541,34 @@ There is no binary for Alpine or another musl system, and none for a platform ou
 `binaryPath` or `FASTBROWSE_BINARY`. The macOS binaries carry an ad-hoc signature and are not notarized, which a Mac
 that allows programs only by the team that signed them refuses. The Windows binary is not signed. Bun and Deno are
 untested.
+
+## Use it from Rust
+
+The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, with the result's types:
+
+```toml
+[dependencies]
+fastbrowse = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+```rust
+use fastbrowse::{Limits, RunTask, run_task};
+
+let result = run_task(
+    "What is the top story's title?",
+    RunTask {
+        start: Some("https://news.ycombinator.com/".into()),
+        limits: Some(Limits { max_dollars: Some(0.25), ..Limits::default() }),
+        ..RunTask::default()
+    },
+)
+.await?;
+```
+
+The keys come from the environment, as the command reads them. `cargo install fastbrowse-cli` installs the
+`fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
+`fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
 
 ## Use fastbrowse with your agent
 

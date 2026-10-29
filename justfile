@@ -25,6 +25,7 @@ rust:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
+    cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
     uv sync --all-extras
     uv run --no-sync pytest -q
     cargo build -p fastbrowse-node --release

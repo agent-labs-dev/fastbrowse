@@ -1,0 +1,18 @@
+[package]
+name = "fastbrowse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A browser agent that picks instead of generating: cited answers, structured output, and credentials and authorization held in code."
+readme = "README.md"
+keywords = ["browser", "agent", "automation", "chrome", "llm"]
+categories = ["web-programming", "development-tools"]
+
+[dependencies]
+fastbrowse-core = { workspace = true }
+fastbrowse-run = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

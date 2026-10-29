@@ -102,7 +102,7 @@ jobs:
       # The SDK's tests start `fastbrowse serve --stdio` from this environment, so they meet the real server.
       - run: uv sync --locked
       - run: npm ci --ignore-scripts
-      # The SDK's types are written from the Python models and committed. A model changed without them fails here.
+      # The SDK's types are written from protocol/schema.json and committed. A schema changed without them fails here.
       - run: npm run generate:sdk
       - run: git diff --exit-code -- packages/sdk/src/protocol.ts
       - run: npm run check:sdk
@@ -128,6 +128,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
+      # outside its own directory, or names another without a version, fails here instead of at a release.
+      - run: cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
       # Builds the package and its Rust core, `fastbrowse._native`, which the SDK suite's own server runs on.
       - run: uv sync --locked
       - run: cargo build -p fastbrowse-node --release --locked
