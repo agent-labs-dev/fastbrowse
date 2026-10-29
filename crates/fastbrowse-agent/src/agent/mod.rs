@@ -151,19 +151,20 @@ impl HeadStart {
         HeadStop { planning: self.planning.clone(), proposing: self.proposing.clone() }
     }
 
-    /// Wait for every startup call to finish.
-    async fn gather(&self) {
-        self.stopper().gather().await;
+    /// Join the startup calls already sent and cancel the rest.
+    async fn settle(&self) {
+        self.stopper().settle().await;
     }
 
-    /// Cancel what is still being written, so nothing bills a run that has already ended.
+    /// Cancel what is still being written. A request already sent is still billed, and is charged as unknown.
     pub async fn discard(&self) {
         self.stopper().discard().await;
     }
 
-    /// What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here.
+    /// What a run that never began spent: a shortcut bills itself, and the plan is billed here. A call already sent
+    /// is joined rather than cancelled, since it is billed whether or not its receipt is read.
     pub async fn abandon(&self) -> Vec<CostLine> {
-        self.discard().await;
+        self.settle().await;
         if !self.plan_billed
             && let Some(planned) = self.planning.succeeded()
         {
@@ -195,6 +196,19 @@ impl HeadStop {
         if let Some(proposing) = &self.proposing {
             proposing.wait().await;
         }
+    }
+
+    /// Cancel the startup calls not yet begun, which have sent nothing, and wait for the rest. OpenRouter finishes and
+    /// bills a non-streamed generation after its connection closes, so cancelling one already sent saves nothing and
+    /// loses its receipt, which a dollar cap then reads as a charge it cannot bound.
+    async fn settle(&self) {
+        if !self.planning.started() {
+            self.planning.cancel();
+        }
+        if let Some(proposing) = self.proposing.as_ref().filter(|proposing| !proposing.started()) {
+            proposing.cancel();
+        }
+        self.gather().await;
     }
 }
 
@@ -350,6 +364,7 @@ impl Agent {
             };
             let mut loop_returned = false;
             let mut needs_browser = false;
+            let timed_out = outcome.is_none();
             let mut result = match outcome {
                 Some(Ok(result)) => {
                     loop_returned = true;
@@ -373,25 +388,27 @@ impl Agent {
                     )
                 }
             };
-            // Cancelling a paid startup call loses its receipt, so a finished run joins it before reporting cost.
-            if loop_returned {
-                let joined = match deadline {
-                    Some(deadline) => tokio::time::timeout_at(deadline.into(), head.gather()).await.is_ok(),
+            // A startup call already sent is billed whether or not its receipt is read, so a run that finished or
+            // stopped joins it before reporting cost. A run stopped at its first step used to cancel the plan in
+            // flight, and the unknown charge left behind replaced its own status with a spend limit that could not
+            // be enforced.
+            let joined = !timed_out
+                && match deadline {
+                    Some(deadline) => tokio::time::timeout_at(deadline.into(), head.settle()).await.is_ok(),
                     None => {
-                        head.gather().await;
+                        head.settle().await;
                         true
                     }
                 };
-                if !joined {
-                    head.discard().await;
+            if !joined {
+                head.discard().await;
+                if loop_returned {
                     let limit = ledger.limits.max_seconds.unwrap_or_default();
                     result.status = Status::BudgetExceeded;
                     result.error = Some(time_limit(limit));
                     result.budget = Some(BudgetStop { resource: BudgetResource::Seconds, limit });
                     loop_returned = false;
                 }
-            } else {
-                head.discard().await;
             }
             if slot.as_ref().is_none_or(|state| state.ready_plan.is_none())
                 && !head.plan_billed

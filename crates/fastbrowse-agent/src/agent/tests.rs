@@ -1601,3 +1601,113 @@ async fn test_a_code_jev_finds_no_requirement_in_is_still_kept_for_the_sign_in()
     let fact = state.notes.facts().into_iter().find(|f| f.text.contains("587373")).expect("the code");
     assert_eq!(fact.requirement_id, None);
 }
+
+/// A plan still being written when the run stops. A provider finishes and bills a non-streamed generation after the
+/// connection closes, so a request dropped in flight is charged as unknown, as the OpenAI-compatible client does.
+struct SlowPlan;
+
+struct ChargedIfDropped<'a> {
+    ledger: Option<&'a Ledger>,
+    armed: bool,
+}
+
+impl Drop for ChargedIfDropped<'_> {
+    fn drop(&mut self) {
+        if let (true, Some(ledger)) = (self.armed, self.ledger) {
+            ledger.state().lines.push(CostLine::new(CostComponent::Llm, CostBasis::Unknown, None));
+        }
+    }
+}
+
+impl fastbrowse_core::llm::LLMClient for SlowPlan {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: fastbrowse_core::models::LLMPurpose,
+        messages: &'a [fastbrowse_core::llm::Message],
+        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        cap: i64,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            let mut charged = ChargedIfDropped { ledger, armed: true };
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            charged.armed = false;
+            MeteredPlan.generate_value(purpose, messages, schema, cap, ledger).await
+        })
+    }
+}
+
+/// A tab that crashed before the run could read it.
+struct Crashed;
+
+impl Page for Crashed {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        // Long enough for the plan's request to be in flight when the run stops.
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Err(BrowserError::Failed("the tab crashed".into()))
+        })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the run is given no start")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Err(BrowserError::Failed("the tab crashed".into())) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("nothing was observed, so no step acts")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::Failed("the tab crashed".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        Box::pin(async { Err(BrowserError::Failed("the tab crashed".into())) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+#[tokio::test]
+async fn test_a_run_that_stops_before_its_plan_arrives_keeps_the_plans_receipt_and_its_own_status() {
+    // A run stopped at its first step used to cancel the plan in flight. The provider billed it anyway, the receipt
+    // was lost, and the unknown charge replaced the stop with "spend limit cannot be enforced".
+    let agent = Agent::new(Arc::new(Crashed), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(SlowPlan));
+    let options = super::RunOptions {
+        limits: Some(Limits { max_dollars: Some(1.0), ..Limits::default() }),
+        ..Default::default()
+    };
+    let result = agent.run("Tidy up my list", options).await.expect("a result, not an error");
+    assert_eq!(result.status, Status::Error, "{:?}", result.error);
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("the tab crashed")), "{:?}", result.error);
+    assert!(!result.cost.has_unknown(), "{:?}", result.cost);
+    assert_eq!(result.cost.known_dollars(), 0.01);
+}
