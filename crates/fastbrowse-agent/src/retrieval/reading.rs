@@ -1758,11 +1758,19 @@ async fn read_inner(
             }
             if missing > 0 {
                 // A comparison missing an operand cannot close here or on a later page using these notes.
+                //
+                // A claim with no requirement id is one of the context claims a read is asked to give a null id -
+                // "keep quotes containing values needed for the task's remaining actions". It is no requirement's
+                // operand, so records it cited that do not resolve close nothing: it used to mark every open
+                // requirement of the page lost, and `lost` outlives the page, so one malformed context claim from a
+                // reader that attaches records to its context claims left the run unable to evidence anything it
+                // read later, on any page. A claim that does name a requirement keeps the recorded behaviour.
                 match &claim.requirement_id {
                     Some(requirement_id) if requirement_ids.contains(requirement_id) => {
                         lost.insert(requirement_id.clone());
                     }
-                    _ => lost.extend(requirement_ids.iter().cloned()),
+                    Some(_) => lost.extend(requirement_ids.iter().cloned()),
+                    None => {}
                 }
                 uncovered += missing;
                 rejected_here += 1;
