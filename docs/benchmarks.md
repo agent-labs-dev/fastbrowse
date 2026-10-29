@@ -2,8 +2,16 @@
 
 Measured results for fastbrowse against the agents it competes with. Every figure is traceable to a named
 source; where a comparison has not been run, this file says so rather than estimating. The
-[benchmark page](https://fastbrowse.ai/benchmarks) publishes the approved campaign `release-0.7.1`; this file
-records each comparison's sources and the earlier records that are no longer on that page.
+[benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign `release-0.5.25-48c964d`; this file
+records each comparison's sources and the records that are no longer on that page.
+
+The published campaign is 0.5.25 on purpose. It is the newest release whose page figures come from a campaign
+bound to a Langfuse export (`langfuse_verified` true, fixture 108 of 108). The 0.7.1 campaign was rendered from a
+local candidate that nothing bound to an export, and no campaign at all exists for 0.7.3, 0.7.4 or 0.8.x, so there
+is no recorded evidence that those builds perform better. On task success the two campaigns tie: 0.5.25 passed 158
+of 159 and 137 of 138, 0.7.1 the same 158 of 159 and 137 of 138, with the hosted Browser Use arm scoring lower in
+the 0.7.1 run (133 of 138 against 135 of 138). 0.5.25 is also the faster of the two and the one with a full C2
+record.
 
 These are recorded benchmark comparisons, not a controlled experiment: the associations below do not
 establish cause.
@@ -12,8 +20,8 @@ Benchmarking compares exactly three things, and nothing else is a headline:
 
 | | Comparison | Arms | Publication group | Status |
 |:--|:--|:--|:--|:--|
-| C1 | agent against agent | `fastbrowse` against `browser-use`, the hosted Browser Use agent | `internal-hosted` | recorded below |
-| C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | earlier campaign record below; not on the published page |
+| C1 | agent against agent | `fastbrowse` against `browser-use`, the hosted Browser Use agent | `internal-hosted` | recorded below, on the published campaign |
+| C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | recorded below, on the published campaign |
 | C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 6 tasks both run | `internal-ultrafast` | not yet measured |
 
 The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web) are diagnostics, described in
@@ -25,19 +33,23 @@ The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web
 
 Both agents attempted every catalog task the hosted agent supports (46), three repeats each, on Browser Use
 cloud browsers under identical limits, with the hosted agent at its defaults. Source: the published
-`fastbrowse-internal, hosted Browser Use` group, campaign `release-0.7.1`, agent commit `7b8b0e8f`, data sha256
-`7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`.
+`fastbrowse-internal, hosted Browser Use` group, campaign `release-0.5.25-48c964d`, agent commit `48c964d8`, data
+sha256 `46dfe0123d6626cb909290064f2ed84cb56fe187e204d1daed0e741aedac4e2c`.
 
 | Metric | fastbrowse | Browser Use (hosted) | Delta |
 |:--|:--|:--|:--|
-| Task success | 99.2% (137 of 138 counted) | 96.3% (133 of 138) | 2.9 points higher |
-| Execution time | 18.9s | 15.3s | 3.6s slower |
-| Cost per run | $0.0296 | $0.3180 | 10.7x cheaper |
+| Task success | 99.3% (137 of 138 counted) | 97.8% (135 of 138) | 1.4 points higher |
+| Execution time | 16.4s | 16.1s | 0.3s slower |
+| Cost per run | $0.0510 | $0.3267 | 6.4x cheaper |
 
 Task success is the share of scored results the source grader passed. Completion is reported separately:
-fastbrowse completed 133 of 138 results to the hosted agent's 138 of 138. The same campaign also publishes the
-`fastbrowse-internal` group, fastbrowse alone on the 53-task internal catalog: 99.3% (158 of 159), an execution
-time of 17.0s and $0.0268 a run.
+fastbrowse completed 135 of 138 results to the hosted agent's 138 of 138. The same campaign also publishes the
+`fastbrowse-internal` group, fastbrowse alone on the 53-task internal catalog: 99.4% (158 of 159), an execution
+time of 14.5s and $0.0383 a run.
+
+The 0.7.1 campaign measured the same task success as this one (137 of 138 against a hosted arm that scored 133 of
+138), 18.9s, $0.0296 a run, and 99.3% (158 of 159) at 17.0s and $0.0268 on the internal catalog. It is faster to
+quote and cheaper per run, and it is not on the page because its figures were never bound to a Langfuse export.
 
 An earlier record in the `fastbrowse-site` repository (`src/app/page.tsx`) measured 14 answer tasks (lookups,
 sign-ins, checkout, Google Flights) under a 30-step, $0.25 cap, 300s regime: fastbrowse passed 40 of 42 and the
@@ -67,12 +79,13 @@ within a build, not across.
 
 ## C2: fastbrowse's own browser pool against a Browser Use Cloud browser
 
-### Earlier campaign record (release-0.5.25), not on the published page
+### Recorded on the published campaign (release-0.5.25)
 
 The `internal-backend` group runs fastbrowse on the 53 fastbrowse tasks three repeats each, once on its own
 hosted browser pool and once on a Browser Use Cloud browser, so the browser backend is the only difference.
-Source: `docs/results/benchmark-candidate.json`, campaign `release-0.5.25-48c964d`. The published benchmark page
-does not currently carry this group.
+Source: `docs/results/benchmark-candidate.json`, campaign `release-0.5.25-48c964d`, data sha256
+`46dfe0123d6626cb909290064f2ed84cb56fe187e204d1daed0e741aedac4e2c`. It is the only campaign with this group, so
+no later build has a recorded C2 comparison.
 
 | Metric | fastbrowse, Browser Use Cloud browser | fastbrowse, own pool | Delta |
 |:--|:--|:--|:--|

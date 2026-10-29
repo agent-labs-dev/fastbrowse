@@ -38,8 +38,8 @@ credentials, irreversible actions and spending under the control of code.
 Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.29 in model calls. Playback is sped
 up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
-Against the hosted Browser Use agent, on 46 tasks with three repeats each, fastbrowse passed 99.2% to 96.3% at
-$0.0296 a run to $0.3180, and took 18.9s to 15.3s. See [How it compares](#how-it-compares).
+Against the hosted Browser Use agent, on 46 tasks with three repeats each, fastbrowse passed 99.3% to 97.8% at
+$0.0510 a run to $0.3267, and took 16.4s to 16.1s. See [How it compares](#how-it-compares).
 
 ## Try it
 
@@ -49,7 +49,7 @@ You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer it
 export TYPESAFE_API_KEY=...     # Jev, the model that picks each action
 export OPENROUTER_API_KEY=...   # the LLM that plans, reads and writes
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
-uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
+uvx --from fastbrowse==0.5.25 fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
 The cloud browser is the default because it passes bot checks a fresh local Chrome fails; it also prints a URL to
@@ -59,8 +59,10 @@ Jev can also run through OpenRouter (text only), the gateway as a last resort, o
 [other hosts](docs/jev.md#other-decision-hosts).
 
 Keys can live in a `.env` file in the working directory ([`.env.example`](.env.example) lists every setting), but
-values named by `--secret` must be in the process environment. `uv tool install fastbrowse` keeps the command on
-your PATH and `uv add fastbrowse` adds it to a project. On Arch Linux, the
+values named by `--secret` must be in the process environment. `uv tool install 'fastbrowse==0.5.25'` keeps the
+command on your PATH and `uv add 'fastbrowse==0.5.25'` adds it to a project. 0.5.25 is pinned because it is the
+newest release with a published, measured benchmark campaign; `pip install fastbrowse` still resolves a later
+version, which has none. On Arch Linux, the
 [AUR package](https://aur.archlinux.org/packages/fastbrowse) installs `fastbrowse` and `fastbrowse-mcp`:
 `paru -S fastbrowse`, or `makepkg -si` in [`packaging/aur`](packaging/aur).
 
@@ -251,13 +253,13 @@ Benchmarking makes three comparisons:
 
 - **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, the figures above, on Browser
   Use cloud browsers under identical limits with the hosted agent at its defaults. On its own 53-task catalog,
-  fastbrowse passed 99.3% at 17.0s and $0.0268 a run.
+  fastbrowse passed 99.4% at 14.5s and $0.0383 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
-  browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
+  browser. In the published campaign the pool passed fewer tasks (96.2% against 98.1%).
 - **C3, fastbrowse on its pool against `jev-ultrafast`,** over 6 tasks: not yet measured.
 
-The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.7.1 (agent commit `7b8b0e8f`,
-data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).
+The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.5.25-48c964d (agent commit
+`48c964d8`, data sha256 `46dfe0123d6626cb909290064f2ed84cb56fe187e204d1daed0e741aedac4e2c`).
 [Benchmark results](docs/benchmarks.md) gives the sources, cost basis and limitations, and
 [eval results and workflow](docs/evals.md) covers the diagnostic suites.
 
@@ -342,14 +344,14 @@ No frame or screenshot is sent while a resolved secret may show on the page.
 
 ## Use it from JavaScript
 
-`npm install fastbrowse` gives a Node.js 20+ program the same agent with no Python on the machine. The SDK has no
+`npm install fastbrowse@0.5.25` gives a Node.js 20+ program the same agent with no Python on the machine. The SDK has no
 dependencies; npm also installs a native binary for your platform (`@fastbrowse/darwin-arm64`, `darwin-x64`,
 `linux-arm64`, `linux-x64` or `win32-x64`). No install script runs and nothing downloads on first use. It reads
 the same keys from your environment, and finds local Chrome, starts a cloud browser or drives one already running,
 as the CLI does.
 
 ```sh
-npm install fastbrowse zod
+npm install fastbrowse@0.5.25 zod
 export TYPESAFE_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
