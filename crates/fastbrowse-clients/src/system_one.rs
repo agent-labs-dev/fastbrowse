@@ -1,6 +1,6 @@
 //! The System One API (`POST /v1/systemone`), first ported from `clients/typesafe.py`: direct TypeSafe and OpenRouter
-//! serve Jev over it, Telnyx its own decision models, and Ollama any it runs locally. A host with no key is sent no
-//! Authorization header.
+//! serve Jev over it, Telnyx its own decision models, and Ollama any it runs locally. AIMLAPI and Perplexity take the
+//! same body at `/v1/decisions`. A host with no key is sent no Authorization header.
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, JEV_MODEL, Question};
@@ -22,6 +22,15 @@ pub const TELNYX_URL: &str = "https://api.telnyx.com/v2/ai/typesafe";
 pub const TELNYX_MODEL: &str = "telnyx/decision-flash";
 /// Ollama 0.35 and later, with no `/v1` suffix and no key.
 pub const OLLAMA_URL: &str = "http://localhost:11434";
+pub const AIMLAPI_URL: &str = "https://api.aimlapi.com";
+/// Pinned rather than `typesafe/jev`, which AIMLAPI moves to each new Jev release.
+pub const AIMLAPI_MODEL: &str = "typesafe/jev-1.13";
+pub const PERPLEXITY_URL: &str = "https://api.perplexity.ai";
+/// Pinned rather than `pplx-decider-latest`.
+pub const PERPLEXITY_MODEL: &str = "pplx-decider-v1.2";
+pub const SYSTEM_ONE_PATH: &str = "/v1/systemone";
+/// Where AIMLAPI and Perplexity take a System One body.
+pub const DECISIONS_PATH: &str = "/v1/decisions";
 
 pub struct SystemOneClient {
     api_key: String,
@@ -29,6 +38,7 @@ pub struct SystemOneClient {
     base_url: String,
     model: String,
     profile: DecisionProfile,
+    path: &'static str,
 }
 
 impl SystemOneClient {
@@ -39,7 +49,20 @@ impl SystemOneClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             profile: DecisionProfile::for_model(model),
+            path: SYSTEM_ONE_PATH,
         }
+    }
+
+    /// The same body sent to `path` instead of `/v1/systemone`.
+    pub fn at(mut self, path: &'static str) -> SystemOneClient {
+        self.path = path;
+        self
+    }
+
+    /// A reseller's own price, which it does not report: its calls are an unknown cost, never the model's list price.
+    pub fn unpriced(mut self) -> SystemOneClient {
+        self.profile.dollars_per_input_token = None;
+        self
     }
 
     /// The direct API with its default model.
@@ -68,7 +91,7 @@ impl SystemOneClient {
         let started = Instant::now();
         let sent = Usage::default();
         let body = json!({"model": self.model, "state": state, "questions": wire_questions(questions, false)});
-        let url = format!("{}/v1/systemone", self.base_url);
+        let url = format!("{}{}", self.base_url, self.path);
         let price = self.profile.dollars_per_input_token;
         let response =
             post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch, price).await?;

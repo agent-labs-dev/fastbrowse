@@ -148,6 +148,12 @@ impl OpenAIDecisionsClient {
         }
     }
 
+    /// A reseller's own price, which it does not report: its calls are an unknown cost, never the model's list price.
+    pub fn unpriced(mut self) -> OpenAIDecisionsClient {
+        self.profile.dollars_per_input_token = None;
+        self
+    }
+
     async fn ask(
         &self,
         state: &Value,

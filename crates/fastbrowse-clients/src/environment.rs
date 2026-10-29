@@ -39,7 +39,8 @@ use crate::openai_compatible::{
 };
 use crate::openai_decisions::{OPENAI_DECISIONS_MODEL, OPENAI_URL, OpenAIDecisionsClient};
 use crate::system_one::{
-    OLLAMA_URL, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient, TELNYX_MODEL, TELNYX_URL, TYPESAFE_URL,
+    AIMLAPI_MODEL, AIMLAPI_URL, DECISIONS_PATH, OLLAMA_URL, OPENROUTER_MODEL, OPENROUTER_URL, PERPLEXITY_MODEL,
+    PERPLEXITY_URL, SystemOneClient, TELNYX_MODEL, TELNYX_URL, TYPESAFE_URL,
 };
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
@@ -79,10 +80,14 @@ pub enum DecisionSource {
     Custom,
     /// OpenAI's Decisions API.
     OpenAI,
+    /// AIMLAPI, reselling Jev, Liquid's d1 and OpenAI's gpt-6-luna.
+    Aimlapi,
+    /// Perplexity's pplx-decider models.
+    Perplexity,
 }
 
 impl DecisionSource {
-    pub const ALL: [DecisionSource; 7] = [
+    pub const ALL: [DecisionSource; 9] = [
         DecisionSource::OpenRouter,
         DecisionSource::TypeSafe,
         DecisionSource::Gateway,
@@ -90,6 +95,8 @@ impl DecisionSource {
         DecisionSource::Ollama,
         DecisionSource::Custom,
         DecisionSource::OpenAI,
+        DecisionSource::Aimlapi,
+        DecisionSource::Perplexity,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -101,6 +108,8 @@ impl DecisionSource {
             DecisionSource::Ollama => "ollama",
             DecisionSource::Custom => "custom",
             DecisionSource::OpenAI => "openai",
+            DecisionSource::Aimlapi => "aimlapi",
+            DecisionSource::Perplexity => "perplexity",
         }
     }
 
@@ -204,6 +213,8 @@ pub struct Settings {
     pub decision_api_key: Option<Secret>,
     pub telnyx_api_key: Option<Secret>,
     pub openai_api_key: Option<Secret>,
+    pub aimlapi_api_key: Option<Secret>,
+    pub perplexity_api_key: Option<Secret>,
     pub llm_model: Option<String>,
     pub llm_model_plan: Option<String>,
     pub llm_model_read: Option<String>,
@@ -253,6 +264,8 @@ impl Default for Settings {
             decision_api_key: None,
             telnyx_api_key: None,
             openai_api_key: None,
+            aimlapi_api_key: None,
+            perplexity_api_key: None,
             llm_model: None,
             llm_model_plan: None,
             llm_model_read: None,
@@ -289,7 +302,7 @@ const FORMERLY: [(&str, &str); 3] = [
 ];
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 34] = [
+const FIELDS: [(&str, &str); 36] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -301,6 +314,8 @@ const FIELDS: [(&str, &str); 34] = [
     ("decision_api_key", "fastbrowse_decision_api_key"),
     ("TELNYX_API_KEY", "telnyx_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
+    ("AIMLAPI_API_KEY", "aimlapi_api_key"),
+    ("PERPLEXITY_API_KEY", "perplexity_api_key"),
     ("llm_model", "fastbrowse_llm_model"),
     ("llm_model_plan", "fastbrowse_llm_model_plan"),
     ("llm_model_read", "fastbrowse_llm_model_read"),
@@ -422,6 +437,8 @@ impl Settings {
             "decision_api_key" => self.decision_api_key = secret(),
             "TELNYX_API_KEY" => self.telnyx_api_key = secret(),
             "OPENAI_API_KEY" => self.openai_api_key = secret(),
+            "AIMLAPI_API_KEY" => self.aimlapi_api_key = secret(),
+            "PERPLEXITY_API_KEY" => self.perplexity_api_key = secret(),
             "llm_model" => self.llm_model = text(),
             "llm_model_plan" => self.llm_model_plan = text(),
             "llm_model_read" => self.llm_model_read = text(),
@@ -528,7 +545,7 @@ impl Settings {
             }
             DecisionSource::Gateway if set(&self.typesafe_api_key) => Some(DecisionSource::TypeSafe),
             DecisionSource::Gateway => set(&self.openrouter_api_key).then_some(DecisionSource::OpenRouter),
-            DecisionSource::Telnyx | DecisionSource::Ollama | DecisionSource::Custom | DecisionSource::OpenAI => None,
+            _ => None,
         };
         (source, backup)
     }
@@ -612,6 +629,26 @@ impl Settings {
                 &base_url(OPENAI_URL),
                 &model(OPENAI_DECISIONS_MODEL),
             )),
+            DecisionSource::Aimlapi => {
+                let key = key(&self.aimlapi_api_key, "set AIMLAPI_API_KEY for decisions via AIMLAPI")?;
+                let model = model(AIMLAPI_MODEL);
+                // AIMLAPI takes gpt-6-luna in OpenAI's own shape and every other model in System One's.
+                if model.rsplit('/').next() == Some(OPENAI_DECISIONS_MODEL) {
+                    Box::new(OpenAIDecisionsClient::new(key, http.clone(), &base_url(AIMLAPI_URL), &model).unpriced())
+                } else {
+                    let client = SystemOneClient::new(key, http.clone(), &base_url(AIMLAPI_URL), &model);
+                    Box::new(client.at(DECISIONS_PATH).unpriced())
+                }
+            }
+            DecisionSource::Perplexity => Box::new(
+                SystemOneClient::new(
+                    key(&self.perplexity_api_key, "set PERPLEXITY_API_KEY for decisions via Perplexity")?,
+                    http.clone(),
+                    &base_url(PERPLEXITY_URL),
+                    &model(PERPLEXITY_MODEL),
+                )
+                .at(DECISIONS_PATH),
+            ),
             // Only this source's own key: a TypeSafe, OpenRouter or gateway key must never reach another host.
             DecisionSource::Ollama | DecisionSource::Custom => {
                 let base_url = match (source, &self.decision_base_url) {

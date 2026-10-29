@@ -368,6 +368,20 @@ impl DecisionProfile {
         }
     }
 
+    fn perplexity(dollars_per_million: f64) -> DecisionProfile {
+        DecisionProfile {
+            max_choice_options: 255,
+            max_score_levels: 10,
+            max_questions: Some(128),
+            max_largest_tokens: 256_000,
+            max_total_tokens: 256_000,
+            max_request_bytes: Some(32 * 1024 * 1024),
+            dollars_per_input_token: Some(dollars_per_million / 1_000_000.0),
+            images: true,
+            thresholds: None,
+        }
+    }
+
     /// The profile of a model id as a provider names it.
     pub fn for_model(model: &str) -> DecisionProfile {
         let bare = model.rsplit('/').next().unwrap_or(model);
@@ -378,7 +392,9 @@ impl DecisionProfile {
         if bare.starts_with("jev-") {
             return DecisionProfile { thresholds: None, ..DecisionProfile::jev() };
         }
-        match model {
+        // Perplexity and AIMLAPI also take a model under its maker's prefix.
+        let name = ["perplexity/", "openai/"].iter().find_map(|prefix| model.strip_prefix(prefix)).unwrap_or(model);
+        match name {
             // Telnyx documents 64 questions a request and 64 options a choice or levels a score, and no price.
             "telnyx/decision-flash" | "telnyx/decision-pro" => DecisionProfile {
                 max_choice_options: 64,
@@ -389,7 +405,7 @@ impl DecisionProfile {
             // OpenAI documents 400 questions a request, 2 to 10 levels, $0.10 per million input tokens and image input;
             // Pydantic AI's profile caps a choice at 255 options. No token limit is stated, so the configured budget
             // stands.
-            "gpt-6-luna" | "openai/gpt-6-luna" => DecisionProfile {
+            "gpt-6-luna" => DecisionProfile {
                 max_choice_options: 255,
                 max_score_levels: 10,
                 max_questions: Some(400),
@@ -400,6 +416,14 @@ impl DecisionProfile {
                 images: true,
                 thresholds: None,
             },
+            // Perplexity documents 128 questions a request, 255 options, 10 levels, inputs under 256K tokens, image input
+            // and these prices; its legacy names bill as v1.2.
+            "pplx-decider-v1.2" | "pplx-decider-latest" | "pplx-decider-v1.1-27b" | "pplx-decider-v1-27b" => {
+                DecisionProfile::perplexity(0.02)
+            }
+            "pplx-decider-flash-v1.2" | "pplx-decider-flash-latest" => DecisionProfile::perplexity(0.01),
+            // AIMLAPI lists a 32,768-token context and image input, and no other limit.
+            "liquid/d1" => DecisionProfile { max_total_tokens: 32_768, images: true, ..DecisionProfile::unknown() },
             // Pydantic AI's Ollama profile: 26 options, 26 levels, 64 questions and 64 KiB.
             "nimble" | "tev1" => DecisionProfile { max_score_levels: 26, ..DecisionProfile::unknown() },
             _ => DecisionProfile::unknown(),
@@ -473,6 +497,9 @@ mod tests {
         assert!(!DecisionProfile::for_model("nimble").validated());
         assert_eq!(DecisionProfile::for_model("telnyx/decision-flash").max_choice_options, 64);
         assert_eq!(DecisionProfile::for_model("nimble").max_score_levels, 26);
+        assert_eq!(DecisionProfile::for_model("openai/gpt-6-luna").max_questions, Some(400));
+        let flash = DecisionProfile::for_model("perplexity/pplx-decider-flash-latest");
+        assert_eq!((flash.max_questions, flash.dollars_per_input_token), (Some(128), Some(0.01 / 1_000_000.0)));
         assert_eq!(DecisionProfile::for_model("gpt-6-luna").fit(None), Config::default());
         let later = DecisionProfile::for_model("typesafe/jev-1.14");
         assert_eq!((later.validated(), later.max_choice_options), (false, MAX_CHOICE_OPTIONS));
