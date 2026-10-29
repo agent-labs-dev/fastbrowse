@@ -14,8 +14,9 @@ Jev still needs its own key ([jev.md](jev.md)); the provider choice is the LLM's
 
 ## What each preset sends
 
-Every preset speaks the provider's OpenAI-compatible chat completions API. A preset fixes the address, the
-variable its key is read from, how the schema is asked for and where a reasoning effort goes. The table is
+Every preset but `anthropic` speaks the provider's OpenAI-compatible chat completions API; `anthropic` speaks the
+Messages API ([below](#claude-through-the-messages-api)). A preset fixes the address, the variable its key is read
+from, how the schema is asked for and where a reasoning effort goes. The table is
 [providers.rs](../crates/fastbrowse-clients/src/providers.rs).
 
 | `FASTBROWSE_LLM_PROVIDER` | Address | Key | Schema | Reasoning effort | Default model |
@@ -23,7 +24,7 @@ variable its key is read from, how the schema is asked for and where a reasoning
 | `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`, `low` unless set | `google/gemini-3.8-flash` |
 | `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`, `low` unless set | `google/gemini-3.8-flash` |
 | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
-| `anthropic` | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` | `json_object`, schema in the prompt | not taken | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, `low` unless set | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
 | `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | strict `json_schema` | `reasoning_effort` | `openai/gpt-oss-120b` |
 | `together` | `https://api.together.ai/v1` | `TOGETHER_API_KEY` | `json_schema`, not strict | not taken | none |
@@ -47,8 +48,9 @@ Rules that hold across the table:
 - **A model is named, or the run does not start.** Without a default, the run stops before its first request and
   asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on the first plan instead.
   `FASTBROWSE_LLM_MODEL_<PURPOSE>` pins one purpose as it does on OpenRouter.
-- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` is set**, except on OpenRouter and the
-  gateway, which default to `low`. A provider whose OpenAI-compatible API takes no effort stops the run with a
+- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` or `FASTBROWSE_LLM_REASONING_<PURPOSE>` is
+  set**, except on OpenRouter, the gateway and Anthropic, which default to `low`. A purpose's own effort goes in the
+  same field as the global one, for that purpose alone. A provider whose OpenAI-compatible API takes no effort stops the run with a
   configuration error, rather than drop a setting you asked for.
 - **`FASTBROWSE_LLM_STRICT` overrides the preset's strictness, and `FASTBROWSE_LLM_EXTRA_BODY` applies to every
   preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, including
@@ -59,6 +61,31 @@ Rules that hold across the table:
   tokens, so their calls are recorded with tokens and an unknown cost, never zero, and `--max-dollars` stops the
   run after the first such call.
 
+## Claude through the Messages API
+
+Anthropic's OpenAI-compatible endpoint ignores `response_format`, so a schema sent there is not enforced. The
+`anthropic` preset uses the Messages API instead, with the schema as structured output, and reads each reply through
+the same retries, schema repair, truncation retry and ledger as every other LLM call.
+
+- The key goes in `x-api-key`, with `anthropic-version: 2023-06-01`. System messages become the top-level `system`,
+  and screenshots are base64 image blocks.
+- Structured outputs refuse some schema keywords with HTTP 400: numeric bounds, string lengths, `minItems` above 1
+  and the rest of [the list](https://platform.claude.com/docs/en/build-with-claude/structured-outputs). They are
+  left out of the schema sent, and the reply is still validated against the full schema, so a value outside a
+  dropped bound is repaired as any other schema miss is.
+- Claude 5 models think by default, and thinking counts against the output cap, so the effort is always sent: `low`
+  unless `FASTBROWSE_LLM_REASONING` says otherwise. `none` is refused, since not every Claude model can have its
+  thinking turned off. A reply cut at the cap is asked for again with four times the room, as on every route.
+- A refusal (`stop_reason: refusal`) is asked once more and then reported as an LLM failure.
+- The response reports tokens, cached input included, but no dollars, so the cost is unknown as on the other direct
+  providers.
+
+No other provider has a native adapter. Gemini's and xAI's OpenAI-compatible endpoints take a `json_schema`
+`response_format`, and Azure OpenAI's v1 API takes the OpenAI request shape at your resource, so those are presets.
+Amazon Bedrock is not supported: its Converse API signs each request with AWS Signature Version 4 from the AWS
+credential chain, which this client does not carry. Reach Claude on Bedrock through `custom` and a gateway that
+holds the AWS credentials, or use `anthropic`.
+
 ## Sources
 
 Each preset was checked against the provider's own documentation on 2026-10-28.
@@ -68,8 +95,11 @@ Each preset was checked against the provider's own documentation on 2026-10-28.
   `json_schema` with `strict`, `reasoning_effort` from `none` to `max`, and `max_tokens` deprecated in favour of
   `max_completion_tokens`, which o-series models require.
 - **Anthropic.** [OpenAI SDK compatibility](https://platform.claude.com/docs/en/api/openai-sdk): base URL
-  `https://api.anthropic.com/v1/`, `response_format` and `reasoning_effort` are ignored, images as `image_url` are
-  supported, and the page points to the native API's structured outputs for guaranteed schema conformance.
+  `https://api.anthropic.com/v1/`, `response_format` and `reasoning_effort` are ignored, and the page points to the
+  native API's structured outputs for guaranteed schema conformance.
+  [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs):
+  `output_config.format` of type `json_schema` with no beta header, `additionalProperties: false` on every object,
+  the keywords that answer HTTP 400, and `stop_reason` `max_tokens` and `refusal`.
 - **Gemini.** [OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai): base URL
   `https://generativelanguage.googleapis.com/v1beta/openai/`, `Authorization: Bearer` with the Gemini key,
   structured output through `response_format`, and `reasoning_effort` (`none` only on 2.5 models).

@@ -14,6 +14,7 @@ use fastbrowse_core::telemetry::Ledger;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
+use crate::anthropic::{self, ANTHROPIC_VERSION};
 use crate::http::{Http, Response};
 use crate::validation::{
     Attempts, LLM_ATTEMPT_SECONDS, RetryStop, Usage, body_excerpt, describe, dollars, errors_json, json_invalid,
@@ -46,15 +47,19 @@ pub fn reserved_clashes(extra: &Map<String, Value>) -> Vec<&'static str> {
     RESERVED_BODY_KEYS.into_iter().filter(|key| extra.contains_key(*key)).collect()
 }
 
-fn image_url(content: &[u8]) -> Result<String, LLMError> {
-    let mime = if content.starts_with(b"\x89PNG\r\n\x1a\n") {
-        "image/png"
+/// The media type of a PNG or JPEG, the two image formats every client sends.
+pub(crate) fn image_type(content: &[u8]) -> Result<&'static str, LLMError> {
+    if content.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Ok("image/png")
     } else if content.starts_with(b"\xff\xd8\xff") {
-        "image/jpeg"
+        Ok("image/jpeg")
     } else {
-        return Err(LLMError::Failed("Only PNG and JPEG images are supported".into()));
-    };
-    Ok(format!("data:{mime};base64,{}", base64::encode(content)))
+        Err(LLMError::Failed("Only PNG and JPEG images are supported".into()))
+    }
+}
+
+fn image_url(content: &[u8]) -> Result<String, LLMError> {
+    Ok(format!("data:{};base64,{}", image_type(content)?, base64::encode(content)))
 }
 
 fn wire_message(message: &Message) -> Result<Value, LLMError> {
@@ -292,6 +297,15 @@ impl ReasoningField {
     }
 }
 
+/// The request and response format a client speaks. Everything past the wire, retries, the repair and the ledger, is
+/// shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wire {
+    ChatCompletions,
+    /// Anthropic's Messages API ([`crate::anthropic`]).
+    AnthropicMessages,
+}
+
 /// How a request asks for output that matches the schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -309,6 +323,7 @@ fn present<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
 
 pub struct OpenAICompatibleLLM {
     api_key: String,
+    wire: Wire,
     auth_header: Option<&'static str>,
     strict: bool,
     output_format: OutputFormat,
@@ -432,14 +447,29 @@ impl OpenAICompatibleLLM {
         if !clashes.is_empty() {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
         }
+        let extra_body = options.extra_body.clone();
+        OpenAICompatibleLLM::with_wire(api_key, http, base_url, models, options, Wire::ChatCompletions, extra_body)
+    }
+
+    /// A client on another wire, whose caller has checked the extra body against that wire's own fields.
+    pub(crate) fn with_wire(
+        api_key: impl Into<String>,
+        http: Http,
+        base_url: &str,
+        models: HashMap<LLMPurpose, String>,
+        options: LLMOptions,
+        wire: Wire,
+        extra_body: Map<String, Value>,
+    ) -> Result<OpenAICompatibleLLM, String> {
         Ok(OpenAICompatibleLLM {
             api_key: api_key.into(),
+            wire,
             auth_header: options.auth_header,
             strict: options.strict,
             output_format: options.output_format,
             output_cap_field: options.output_cap_field,
             reasoning_field: options.reasoning_field,
-            extra_body: options.extra_body,
+            extra_body,
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
             models,
@@ -451,6 +481,13 @@ impl OpenAICompatibleLLM {
     }
 
     fn headers(&self) -> Vec<(String, String)> {
+        if self.wire == Wire::AnthropicMessages {
+            let mut headers = vec![("anthropic-version".to_string(), ANTHROPIC_VERSION.to_string())];
+            if !self.api_key.is_empty() {
+                headers.push(("x-api-key".into(), self.api_key.clone()));
+            }
+            return headers;
+        }
         match self.auth_header {
             _ if self.api_key.is_empty() => vec![],
             Some(header) => vec![(header.into(), self.api_key.clone())],
@@ -485,7 +522,11 @@ impl OpenAICompatibleLLM {
             start_attempt: 0,
             split_batch: false,
         };
-        let url = format!("{}/chat/completions", self.base_url);
+        let path = match self.wire {
+            Wire::ChatCompletions => "chat/completions",
+            Wire::AnthropicMessages => "messages",
+        };
+        let url = format!("{}/{path}", self.base_url);
         let response = match post_with_retry(&self.http, &url, body, &self.headers(), &attempts, usage).await {
             Ok(response) => response,
             Err(RetryStop::Budget(error)) => return Err(LLMError::Budget(error)),
@@ -509,8 +550,12 @@ impl OpenAICompatibleLLM {
         if !response.is_success() {
             return Err(LLMError::Failed(format!("LLM {}", describe(&response))));
         }
-        json_object(&response).map_err(|_| {
+        let payload = json_object(&response).map_err(|_| {
             LLMError::Failed(format!("Invalid LLM response; HTTP {}: {}", response.status, body_excerpt(&response)))
+        })?;
+        Ok(match self.wire {
+            Wire::ChatCompletions => payload,
+            Wire::AnthropicMessages => anthropic::as_chat_completion(payload),
         })
     }
 
@@ -608,6 +653,17 @@ impl OpenAICompatibleLLM {
         } else {
             schema.json_schema()
         };
+        if self.wire == Wire::AnthropicMessages {
+            let body = anthropic::body(
+                &self.extra_body,
+                model,
+                messages,
+                &json_schema,
+                max_output_tokens,
+                self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort),
+            )?;
+            return self.billed(body, purpose, schema, max_output_tokens, ledger, model).await;
+        }
         let response_format = match self.output_format {
             OutputFormat::JsonSchema => json!({
                 "type": "json_schema",
@@ -629,10 +685,23 @@ impl OpenAICompatibleLLM {
         if let Some(effort) = self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort) {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
+        self.billed(body, purpose, schema, max_output_tokens, ledger, model).await
+    }
+
+    /// Run a generation's turns over a built request body, recording what it was billed however it ends.
+    async fn billed(
+        &self,
+        mut body: Map<String, Value>,
+        purpose: LLMPurpose,
+        schema: &dyn ResponseSchema,
+        max_output_tokens: i64,
+        ledger: Option<&Ledger>,
+        model: &str,
+    ) -> Result<Generation<Value>, LLMError> {
         let mut billing = Billing {
             llm: self,
             ledger,
-            model: model.clone(),
+            model: model.to_string(),
             body_images: images(&body),
             costs: Vec::new(),
             purpose,
