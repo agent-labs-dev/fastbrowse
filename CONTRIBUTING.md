@@ -34,6 +34,13 @@ line and `cargo test --workspace --no-run` compiles in about 40 s rather than 60
 values from that build; ask for them for one command when you need them:
 `CARGO_PROFILE_DEV_DEBUG=2 cargo test -p fastbrowse-agent`.
 
+The Rust suites run under `cargo nextest`, which schedules every test binary at once instead of one after
+another: on four cores over the same 985 tests, `cargo test --workspace` took 382 s and
+`cargo nextest run --workspace` 161 s. Install it once with `cargo install cargo-nextest --locked` (or see
+[nextest's install page](https://get.nexte.st)), then `cargo nextest run --workspace`. `cargo test` still
+works and is still the way to run one binary or one test by name. nextest does not run doctests, so the gate
+runs `cargo test --workspace --doc` beside it; no crate has a doctest today.
+
 Run the gate before you push. CI runs the same checks, and `main` requires them:
 
 ```sh

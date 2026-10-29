@@ -24,7 +24,8 @@ evals-docs *args:
 rust:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    cargo nextest run --workspace --no-fail-fast
+    cargo test --workspace --doc
     cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
     uv sync --all-extras
     uv run --no-sync pytest -q

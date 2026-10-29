@@ -144,7 +144,15 @@ jobs:
       # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use.
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      # The suites are where this job's time goes: measured on four cores over the same 985 tests, `cargo test
+      # --workspace` spent 382 s running them and `cargo nextest run --workspace` 161 s, because nextest
+      # schedules every test binary at once instead of one after another. It runs the same binaries.
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with: {tool: nextest@0.9.150}
+      - run: cargo nextest run --workspace --locked --no-fail-fast
+      # nextest does not run doctests. No crate has one today; this keeps it that way rather than silently
+      # dropping the check.
+      - run: cargo test --workspace --locked --doc
       # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.
       - run: cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
