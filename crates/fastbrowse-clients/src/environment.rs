@@ -14,8 +14,8 @@
 //! chat completions endpoint (for example a local vLLM server) instead, and FASTBROWSE_LLM_API_KEY supplies its bearer
 //! token when it has one; that endpoint never receives the OpenRouter or gateway key. FASTBROWSE_LLM_STRICT and
 //! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only. FASTBROWSE_LLM_MODEL overrides every purpose at
-//! once, and FASTBROWSE_LLM_MODEL_<PURPOSE> overrides one. FASTBROWSE_LLM_REASONING sets the reasoning effort: none,
-//! low (default), medium or high, and FASTBROWSE_LLM_REASONING_<PURPOSE> sets one purpose's.
+//! once, and FASTBROWSE_LLM_MODEL_<PURPOSE> overrides one. FASTBROWSE_LLM_REASONING sets the reasoning effort: none
+//! (default), low, medium or high, and FASTBROWSE_LLM_REASONING_<PURPOSE> sets one purpose's.
 //!
 //! FASTBROWSE_LLM_PROVIDER names the LLM provider outright instead: openrouter, gateway, openai, anthropic, gemini,
 //! groq, together, mistral, deepseek, xai, fireworks, azure, ollama, lmstudio, vllm or custom. Each reads its own key
@@ -52,15 +52,15 @@ use crate::system_one::{
 };
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
-/// The default is the model the live suite passes on. gemini-3.5-flash-lite is two to three times faster a call but
-/// scored 8/12 live against 12/12, so it serves only the purposes whose output is checked downstream.
-/// FASTBROWSE_LLM_MODEL overrides every purpose (docs/evals.md has the measurements).
-pub const DEFAULT_LLM: &str = "google/gemini-3.8-flash";
-pub const FIELD_TEXT_LLM: &str = "google/gemini-3.5-flash-lite";
+/// The default LLM is DeepSeek V4.1 Flash 1017, and it is the only model any LLM purpose uses: field text and the
+/// shortcut address run on it too, because a second model in the loop is a second set of failure modes to explain.
+/// Jev is the decision model and is separate (crates/fastbrowse-core/src/decision.rs). FASTBROWSE_LLM_MODEL overrides
+/// every purpose (docs/evals.md has the measurements).
+pub const DEFAULT_LLM: &str = "deepseek/deepseek-v4.1-flash-1017";
+pub const FIELD_TEXT_LLM: &str = "deepseek/deepseek-v4.1-flash-1017";
 
-/// Each flash-lite purpose fails visibly rather than into the answer: field text is typed and seen to work or not, a
-/// shortcut is an address confined to the start origin. VERIFY is the last word on what the done check doubted, so it
-/// stays on the default: on flash-lite it passed a Google Flights search with no nonstop filter ten times in ten.
+/// Field text and the shortcut address keep their own constant so FASTBROWSE_LLM_MODEL_<PURPOSE> has a default to
+/// override; it names the default LLM.
 pub fn default_model(purpose: LLMPurpose) -> &'static str {
     match purpose {
         LLMPurpose::FieldText | LLMPurpose::Shortcut => FIELD_TEXT_LLM,
@@ -68,9 +68,12 @@ pub fn default_model(purpose: LLMPurpose) -> &'static str {
     }
 }
 
-/// gemini-3.8-flash rejects disabled reasoning but accepts less of it: `low` took plan 4.6s to 3.2s and read 2.4s to
-/// 2.1s. FASTBROWSE_LLM_REASONING overrides it.
-pub const DEFAULT_REASONING: ReasoningEffort = ReasoningEffort::Low;
+/// The effort a model gets on OpenRouter or the gateway when no FASTBROWSE_LLM_REASONING setting names one. DeepSeek
+/// V4.1 Flash reasons at every effort and does not scale it to the output allowance, so it gets `none`; any other
+/// model is sent no effort and keeps its provider's default.
+fn default_reasoning(model: &str) -> Option<ReasoningEffort> {
+    model.starts_with("deepseek/").then_some(ReasoningEffort::None)
+}
 
 pub const LLM_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 pub const LLM_GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v1";
@@ -223,9 +226,8 @@ pub struct Settings {
     /// Extra JSON object merged into every chat completions request body to the custom endpoint. An invalid value
     /// stops the run.
     pub llm_extra_body: Option<String>,
-    pub llm_reasoning: ReasoningEffort,
-    /// Whether FASTBROWSE_LLM_REASONING was given, as pydantic's `model_fields_set` records it.
-    pub llm_reasoning_set: bool,
+    /// FASTBROWSE_LLM_REASONING; unset, each model gets its own default.
+    pub llm_reasoning: Option<ReasoningEffort>,
     /// FASTBROWSE_LLM_REASONING_<PURPOSE>: one purpose's effort over FASTBROWSE_LLM_REASONING, as a purpose's model is.
     pub llm_reasoning_plan: Option<ReasoningEffort>,
     pub llm_reasoning_read: Option<ReasoningEffort>,
@@ -270,8 +272,7 @@ impl Default for Settings {
             llm_strict: true,
             llm_strict_set: false,
             llm_extra_body: None,
-            llm_reasoning: DEFAULT_REASONING,
-            llm_reasoning_set: false,
+            llm_reasoning: None,
             llm_reasoning_plan: None,
             llm_reasoning_read: None,
             llm_reasoning_field_text: None,
@@ -452,10 +453,7 @@ impl Settings {
                 self.llm_strict_set = true;
             }
             "llm_extra_body" => self.llm_extra_body = text(),
-            "llm_reasoning" => {
-                self.llm_reasoning = ReasoningEffort::parse(value).ok_or(())?;
-                self.llm_reasoning_set = true;
-            }
+            "llm_reasoning" => self.llm_reasoning = Some(ReasoningEffort::parse(value).ok_or(())?),
             "llm_reasoning_plan" => self.llm_reasoning_plan = Some(ReasoningEffort::parse(value).ok_or(())?),
             "llm_reasoning_read" => self.llm_reasoning_read = Some(ReasoningEffort::parse(value).ok_or(())?),
             "llm_reasoning_field_text" => {
@@ -785,12 +783,13 @@ impl Settings {
             // Claude thinks by default, and on a short output cap a default effort can spend the cap before the
             // answer, so the effort is always sent, low unless FASTBROWSE_LLM_REASONING says otherwise.
             let models = self.preset_models(&preset)?;
+            let effort = self.llm_reasoning.unwrap_or(ReasoningEffort::Low);
             return AnthropicLLM::new(
                 key,
                 http.clone(),
                 &base_url,
                 models,
-                Some(self.llm_reasoning),
+                Some(effort),
                 self.purpose_reasoning(),
                 self.extra_body()?,
             )
@@ -800,9 +799,9 @@ impl Settings {
         // The effort goes only where it was asked for: a strict server answers HTTP 400 to a field it does not know,
         // and each provider's own default is a better guess than OpenRouter's for its models.
         let purpose_reasoning = self.purpose_reasoning();
-        let reasoning_effort = match (self.llm_reasoning_set || !purpose_reasoning.is_empty(), preset.reasoning) {
+        let reasoning_effort = match (self.llm_reasoning.is_some() || !purpose_reasoning.is_empty(), preset.reasoning) {
             (false, _) => None,
-            (true, Some(_)) => self.llm_reasoning_set.then_some(self.llm_reasoning),
+            (true, Some(_)) => self.llm_reasoning,
             (true, None) => {
                 return Err(ConfigurationError(format!(
                     "{} takes no reasoning effort through its OpenAI-compatible API; unset FASTBROWSE_LLM_REASONING \
@@ -869,12 +868,17 @@ impl Settings {
         routing: Value,
         http: &Http,
     ) -> Result<Box<dyn LLMClient>, ConfigurationError> {
-        let options = LLMOptions {
-            reasoning_effort: Some(self.llm_reasoning),
-            purpose_reasoning: self.purpose_reasoning(),
-            provider_routing: Some(routing),
-            ..LLMOptions::default()
-        };
+        // A purpose's effort is its own setting, else FASTBROWSE_LLM_REASONING, else its model's default, if any.
+        let asked = self.purpose_reasoning();
+        let purpose_reasoning = self
+            .models()
+            .into_iter()
+            .filter_map(|(purpose, model)| {
+                let effort = asked.get(&purpose).copied().or(self.llm_reasoning).or_else(|| default_reasoning(&model));
+                effort.map(|effort| (purpose, effort))
+            })
+            .collect();
+        let options = LLMOptions { purpose_reasoning, provider_routing: Some(routing), ..LLMOptions::default() };
         OpenAICompatibleLLM::new(key.expose(), http.clone(), base_url, self.models(), options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
             .map_err(ConfigurationError)

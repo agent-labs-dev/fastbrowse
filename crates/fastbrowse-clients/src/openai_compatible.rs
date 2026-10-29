@@ -9,7 +9,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::llm::{Generation, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose, combined_basis};
 use fastbrowse_core::py::{self, base64, text};
-use fastbrowse_core::schema::strict_schema;
+use fastbrowse_core::schema::{flat_optional_objects, nest_flat_objects, strict_schema};
 use fastbrowse_core::telemetry::Ledger;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -29,6 +29,15 @@ const TRUNCATION_RETRY_FACTOR: i64 = 4;
 /// same read in 1.3s; sorting by latency keeps fallbacks and follows the faster endpoint.
 pub fn openrouter_provider_routing() -> Value {
     json!({"require_parameters": true, "sort": "latency"})
+}
+
+/// DeepSeek is served by many OpenRouter providers, and most of them null every optional object (see
+/// [`flat_optional_objects`]). At its default temperature it also broke one plan in four on Together: a lone
+/// requirement list, or `"true"` repeated to the output cap; at 0 all 20 replays of the same request planned every
+/// requirement. Other models keep their schema as written and their default temperature, which Gemini 3 is
+/// documented to need.
+fn deepseek(model: &str) -> bool {
+    model.starts_with("deepseek/")
 }
 
 /// The Vercel AI Gateway documents `ttft` for the lowest time to first token where OpenRouter calls that sort
@@ -673,6 +682,7 @@ impl OpenAICompatibleLLM {
             )?;
             return self.billed(body, purpose, schema, max_output_tokens, ledger, model).await;
         }
+        let json_schema = if deepseek(model) { flat_optional_objects(&json_schema) } else { json_schema };
         let response_format = match self.output_format {
             OutputFormat::JsonSchema => json!({
                 "type": "json_schema",
@@ -696,6 +706,9 @@ impl OpenAICompatibleLLM {
         body.insert("response_format".into(), response_format);
         if let Some(routing) = &self.provider_routing {
             body.insert("provider".into(), routing.clone());
+        }
+        if deepseek(model) {
+            body.entry("temperature").or_insert(0.0.into());
         }
         if let Some(effort) = self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort) {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
@@ -795,7 +808,11 @@ impl OpenAICompatibleLLM {
                     errors_json(vec![json_invalid(&content, &error)]),
                     error.classify() == serde_json::error::Category::Eof,
                 ),
-                Ok(_) => match schema.validate_json(&content) {
+                Ok(value) => match schema.validate_json(&if deepseek(&billing.model) {
+                    nest_flat_objects(&schema.json_schema(), value).to_string()
+                } else {
+                    content.clone()
+                }) {
                     Ok(data) => {
                         let cost = CostLine {
                             seconds: Some(started.elapsed().as_secs_f64()),
