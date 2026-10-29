@@ -12,7 +12,7 @@ use super::scripts::{
     ACTIVATION_KEY_JS, COVER_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, PRESENTED_JS,
     SELECT_TEXT_JS, UNCOVER_JS, py_float,
 };
-use super::{BackTarget, CdpPage, Target, truthy};
+use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::secs;
 use crate::error::BrowserError;
 use crate::session::py_json;
@@ -101,12 +101,13 @@ fn parse_cover(value: &Value) -> Result<Cover, BrowserError> {
     })
 }
 
-/// `[fingerprint, live guard, hit-test point, popup announced, opens a window]` from the pre-action check.
-type TargetState = (String, Option<String>, Point, bool, bool);
+/// `[fingerprint, live guard, hit-test point, popup announced, opens a window, address]` from the pre-action check.
+/// The address is the active page's own `location.href`, read in the same evaluation.
+type TargetState = (String, Option<String>, Point, bool, bool, String);
 
 fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
-    let shape = "tuple[str, str | None, _Point, bool, bool]";
-    let Some([fingerprint, guard, point, announced, opens]) = value.as_array().map(Vec::as_slice) else {
+    let shape = "tuple[str, str | None, _Point, bool, bool, str]";
+    let Some([fingerprint, guard, point, announced, opens, address]) = value.as_array().map(Vec::as_slice) else {
         return Err(bad(shape));
     };
     let fingerprint = fingerprint.as_str().ok_or_else(|| bad(shape))?.to_owned();
@@ -122,6 +123,7 @@ fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
         point,
         announced.as_bool().ok_or_else(|| bad(shape))?,
         opens.as_bool().ok_or_else(|| bad(shape))?,
+        address.as_str().ok_or_else(|| bad(shape))?.to_owned(),
     ))
 }
 
@@ -170,6 +172,7 @@ impl CdpPage {
         let mut before_fingerprint = String::new();
         let mut point = Point::Gone;
         let (mut announced, mut opens) = (false, false);
+        let mut address = String::new();
         let active = self.session.active_session_id()?;
         // The pointer must move only once the browser has drawn the layout the point was measured in. Waiting for that
         // frame inside the measuring call saves the pointer move a round trip of its own.
@@ -206,7 +209,7 @@ impl CdpPage {
                 other => other?,
             };
             let live_guard;
-            (before_fingerprint, live_guard, point, announced, opens) = measured;
+            (before_fingerprint, live_guard, point, announced, opens, address) = measured;
             if let Some(target) = &target
                 && live_guard != target.3
             {
@@ -232,7 +235,7 @@ impl CdpPage {
                 marked.as_ref().is_some_and(|m| self.session.pending_dialog_url().as_deref() == Some(&m.1));
             marked.filter(|_| opened_here).map(|m| m.0)
         } else {
-            self.input_mark().await
+            self.input_mark(&address)
         };
         let window_opens = self.session.window_opens();
         let requests = self.session.requests_mark();
@@ -314,21 +317,13 @@ impl CdpPage {
         self.session.downloads_settled() > since || self.session.download_settled(since, DOWNLOAD_SETTLE_SECONDS).await
     }
 
-    /// How many moves the run's input had made before an action, as the input watch reports them.
-    async fn input_mark(&self) -> Option<u32> {
-        if self.session.pending_dialog().is_some() {
-            self.state.lock().unwrap().marked = None;
-            return None;
-        }
-        let begun = self.session.input_navigations();
-        if let Ok(session_id) = self.session.active_session_id()
-            && let Ok(Value::String(href)) = self.evaluate(&session_id, "location.href").await
-        {
-            self.state.lock().unwrap().marked = Some((begun, href));
-            return Some(begun);
-        }
-        self.state.lock().unwrap().marked = None;
-        None
+    /// How many moves the run's input had made before an action, as the input watch reports them, marked with the
+    /// page's address as the pre-action check read it. The live address, not the observation's: a same-document
+    /// navigation in between would leave a dialog the action opens unmatched to its mark.
+    fn input_mark(&self, address: &str) -> Option<u32> {
+        let mark = self.session.pending_dialog().is_none().then(|| self.session.input_navigations());
+        self.state.lock().unwrap().marked = mark.map(|begun| (begun, address.to_owned()));
+        mark
     }
 
     /// Whether the action just taken moved the page: its own input began a navigation, to another document or on the
@@ -669,14 +664,17 @@ impl CdpPage {
             return Ok(Some(Refusal { outcome: StepOutcome::Stale, detail: Some(CHANGED.into()) }));
         }
         let node = local_id.unwrap_or(target.2);
-        if matches!(self.cover(&target.0, node).await?, Cover::Obstruction | Cover::Other) {
-            let handed = (target.0.clone(), target.1.clone(), node, target.3.clone());
-            return Ok(Some(Refusal {
-                outcome: StepOutcome::Covered,
-                detail: Some(self.covered_detail(&handed).await),
-            }));
+        let cover = self.cover(&target.0, node).await?;
+        Ok(self.cover_refusal(target, node, cover).await)
+    }
+
+    /// The refusal [`Self::keys_reach`] gives a field `node` that `cover` was measured over after focus.
+    async fn cover_refusal(&self, target: &Target, node: i64, cover: Cover) -> Option<Refusal> {
+        if !matches!(cover, Cover::Obstruction | Cover::Other) {
+            return None;
         }
-        Ok(None)
+        let handed = (target.0.clone(), target.1.clone(), node, target.3.clone());
+        Some(Refusal { outcome: StepOutcome::Covered, detail: Some(self.covered_detail(&handed).await) })
     }
 
     async fn guard_holds(&self, target: &Target) -> Result<bool, BrowserError> {
@@ -747,45 +745,50 @@ impl CdpPage {
         // A field a band still covers is focused and typed into, as a keyboard user would; there is nothing of its own
         // to click, and a click there lands on the band.
         let keyboard = matches!(route, Route::Keyboard);
-        let (handed, native_date, mut focused): (Option<i64>, bool, Option<bool>) = match route {
-            Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
-            Route::At(x, y) => {
-                // Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing. Focus alone
-                // bypasses pointer handlers that open autocomplete and calendar pickers.
-                let (outcome, detail) = self.click_point(target, (x, y), true, drawn).await?;
-                if outcome != StepOutcome::Executed {
-                    return Ok((outcome, detail));
-                }
-                let script = format!(
-                    "({handed})({local_id}, {secret}).then(async id => {{ \
+        // On the pointer route, the field focus landed on is checked for covers in the same evaluate, once focus took.
+        let (handed, native_date, mut focused, mut covered): (Option<i64>, bool, Option<bool>, Option<Cover>) =
+            match route {
+                Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
+                Route::At(x, y) => {
+                    // Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing. Focus alone
+                    // bypasses pointer handlers that open autocomplete and calendar pickers.
+                    let (outcome, detail) = self.click_point(target, (x, y), true, drawn).await?;
+                    if outcome != StepOutcome::Executed {
+                        return Ok((outcome, detail));
+                    }
+                    let script = format!(
+                        "({handed})({local_id}, {secret}).then(async id => {{ \
                      const native = {types}.includes(window.__fastbrowse?.nodes.get(id)?.type); \
                      const focused = id === null || (native && !{secret}) ? false : \
                      await ({focus})(id, false); \
-                     return [id, native, focused]; }})",
-                    handed = *HANDED_FOCUS_JS,
-                    secret = py_json(&json!(secret)),
-                    types = py_json(&json!(DATE_INPUT_TYPES)),
-                    focus = focus_script(true, secret),
-                );
-                let raw = self.evaluate(session_id, &script).await?;
-                let Some([id, native, focused]) = raw.as_array().map(Vec::as_slice) else {
-                    return Err(bad("tuple[int | None, bool, bool | None]"));
-                };
-                let focused = match focused {
-                    Value::Null => None,
-                    v => Some(v.as_bool().ok_or_else(|| bad("tuple[int | None, bool, bool | None]"))?),
-                };
-                (opt_i64(id)?, native.as_bool().ok_or_else(|| bad("bool"))?, focused)
-            }
-            Route::Keyboard => {
-                let script = format!(
-                    "{}.includes(window.__fastbrowse?.nodes.get({local_id})?.type)",
-                    py_json(&json!(DATE_INPUT_TYPES))
-                );
-                let native = self.evaluate(session_id, &script).await?;
-                (Some(local_id), native == Value::Bool(true), None)
-            }
-        };
+                     return [id, native, focused, focused === true ? ({cover})(id) : null]; }})",
+                        handed = *HANDED_FOCUS_JS,
+                        secret = py_json(&json!(secret)),
+                        types = py_json(&json!(DATE_INPUT_TYPES)),
+                        focus = focus_script(true, secret),
+                        cover = *COVER_JS,
+                    );
+                    let raw = self.evaluate(session_id, &script).await?;
+                    let shape = "tuple[int | None, bool, bool | None, _Cover | None]";
+                    let Some([id, native, focused, cover]) = raw.as_array().map(Vec::as_slice) else {
+                        return Err(bad(shape));
+                    };
+                    let focused = match focused {
+                        Value::Null => None,
+                        v => Some(v.as_bool().ok_or_else(|| bad(shape))?),
+                    };
+                    let covered = if focused == Some(true) { Some(parse_cover(cover)?) } else { None };
+                    (opt_i64(id)?, native.as_bool().ok_or_else(|| bad("bool"))?, focused, covered)
+                }
+                Route::Keyboard => {
+                    let script = format!(
+                        "{}.includes(window.__fastbrowse?.nodes.get({local_id})?.type)",
+                        py_json(&json!(DATE_INPUT_TYPES))
+                    );
+                    let native = self.evaluate(session_id, &script).await?;
+                    (Some(local_id), native == Value::Bool(true), None, None)
+                }
+            };
         let Some(handed) = handed else {
             return Ok((
                 StepOutcome::Failed,
@@ -801,13 +804,18 @@ impl CdpPage {
             if attempt > 0 || focused.is_none() {
                 let activate = focused.is_none();
                 focused = Some(self.focus(session_id, local_id, true, secret, activate).await?);
+                covered = None;
             }
             if focused != Some(true) {
                 return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
             }
             // No pointer press rechecked the field on the keyboard route, so the text goes only to the field that was
             // authorized, and on either route only to a field nothing has since been drawn over.
-            if let Some(refusal) = self.keys_reach(target, keyboard, Some(local_id)).await? {
+            let refusal = match covered.take() {
+                Some(cover) => self.cover_refusal(target, local_id, cover).await,
+                None => self.keys_reach(target, keyboard, Some(local_id)).await?,
+            };
+            if let Some(refusal) = refusal {
                 return Ok((refusal.outcome, refusal.detail));
             }
             if secret {
@@ -1149,7 +1157,7 @@ impl CdpPage {
             let Some(checked) = checked else {
                 return Ok((StepOutcome::Failed, Some("pointer movement opened a dialog before press".into()), point));
             };
-            let (_, guard, fresh, _, _) = checked?;
+            let (_, guard, fresh, _, _, _) = checked?;
             if guard != target.3 || fresh == Point::Gone {
                 return Ok((StepOutcome::Stale, Some("control changed before pointer press".into()), point));
             }
@@ -1197,7 +1205,7 @@ impl CdpPage {
         }
         // The drop target is hit-tested exactly as the source is: its point is only computed when the live guard still
         // matches the observed one, so a target that moved or was covered since the observation is stale.
-        let (_, _, drop_point, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
+        let (_, _, drop_point, _, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
         if !matches!(drop_point, Point::At(..)) {
             return Ok((StepOutcome::Stale, Some("drop target disconnected".into())));
         }
@@ -1207,7 +1215,7 @@ impl CdpPage {
             return Ok((outcome, detail));
         }
         // Pointer entry on the source can repurpose the destination after its first guard check.
-        let (_, _, drop_point, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+        let (_, _, drop_point, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
         let Point::At(end_x, end_y) = drop_point else {
             return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into())));
         };
@@ -1224,7 +1232,7 @@ impl CdpPage {
                 .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
             if step == 1 {
-                let (_, _, landed, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+                let (_, _, landed, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
                 if !matches!(landed, Point::At(..)) {
                     self.cancel_drag(session_id, (start_x, start_y)).await?;
                     return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into())));
@@ -1243,7 +1251,7 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
-            let (_, _, landed, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+            let (_, _, landed, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
             let Point::At(x, y) = landed else { break };
             if (x, y) == at {
                 self.release(session_id, at.0, at.1).await?;
@@ -1322,7 +1330,10 @@ impl CdpPage {
         scroll: bool,
         present: bool,
     ) -> Result<TargetState, BrowserError> {
-        let Some(target) = target else { return Ok((self.fingerprint().await?, None, Point::Gone, false, false)) };
+        let Some(target) = target else {
+            let (fingerprint, address) = self.fingerprint_and_address().await?;
+            return Ok((fingerprint, None, Point::Gone, false, false, address));
+        };
         let (session_id, local_id, guard) = (&target.0, target.2, &target.3);
         let active = self.session.active_session_id()?;
         let same_session = *session_id == active;
@@ -1369,14 +1380,24 @@ impl CdpPage {
              : e.ownerDocument.querySelector('base[target]')?.getAttribute('target'))) || \
              (!!e.form && ['submit', 'image'].includes(e.type) && \
              fresh(e.getAttribute('formtarget') ?? e.form.getAttribute('target')))); \
-             return [fingerprint, guard, point, announced, opens]; }})()"
+             return [fingerprint, guard, point, announced, opens, location.href]; }})()"
         ));
         let state = async { parse_target_state(&self.evaluate(session_id, &script).await?) };
         if same_session || after_move {
             return state.await;
         }
-        let (fingerprint, (_, live_guard, point, announced, opens)) = tokio::try_join!(self.fingerprint(), state)?;
-        Ok((fingerprint, live_guard, point, announced, opens))
+        let ((fingerprint, address), (_, live_guard, point, announced, opens, _)) =
+            tokio::try_join!(self.fingerprint_and_address(), state)?;
+        Ok((fingerprint, live_guard, point, announced, opens, address))
+    }
+
+    /// The active page's fingerprint and `location.href`, in one evaluation.
+    async fn fingerprint_and_address(&self) -> Result<(String, String), BrowserError> {
+        let script = format!("[{}, location.href]", self.fingerprint_js);
+        let value = self.evaluate(&self.session.active_session_id()?, &script).await?;
+        let shape = "tuple[str, str]";
+        let Some([fingerprint, address]) = value.as_array().map(Vec::as_slice) else { return Err(bad(shape)) };
+        Ok((value_str(fingerprint), address.as_str().ok_or_else(|| bad(shape))?.to_owned()))
     }
 }
 
