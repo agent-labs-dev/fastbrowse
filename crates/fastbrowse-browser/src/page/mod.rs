@@ -31,7 +31,7 @@ use tokio::time::{Instant, sleep, timeout};
 
 use crate::cdp::secs;
 use crate::error::BrowserError;
-use crate::session::{BrowserSession, CAPTURE_JS, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
+use crate::session::{BrowserSession, CAPTURE_JS, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
 use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
@@ -126,7 +126,8 @@ struct SnapshotControl {
     sensitive: bool,
     #[serde(default)]
     offscreen: bool,
-    blocking: Option<bool>,
+    required: Option<bool>,
+    invalid: Option<bool>,
     next_page: Option<bool>,
     download: Option<bool>,
 }
@@ -359,7 +360,8 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
-        blocking: c.blocking,
+        required: c.required,
+        invalid: c.invalid,
         next_page: c.next_page,
         download: c.download,
     }
@@ -568,13 +570,17 @@ impl CdpPage {
                 ));
             }
             for refused in self.session.pending_download_refusals() {
+                let why = match refused.reason {
+                    Refusal::TooLarge { size_bytes, limit_bytes } => format!(
+                        "The file is {} and this run keeps downloads up to {}",
+                        bytes_of(size_bytes),
+                        bytes_of(limit_bytes)
+                    ),
+                    Refusal::Failed => "The browser could not hand over or store the file".to_owned(),
+                };
                 notices.push_str(&format!(
-                    "\n\n[Download not kept: {} from {}] The file is {} and this run keeps downloads up to {}; \
-                     nothing was saved. Report the file as not downloaded.",
-                    refused.name,
-                    refused.url,
-                    bytes_of(refused.size_bytes),
-                    bytes_of(refused.limit_bytes)
+                    "\n\n[Download not kept: {} from {}] {why}; nothing was saved. Report the file as not downloaded.",
+                    refused.name, refused.url,
                 ));
             }
             viewport_text.push_str(&notices);

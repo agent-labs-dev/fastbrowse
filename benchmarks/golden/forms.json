@@ -2,7 +2,6 @@
  "controls": [
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 0",
    "form_id": "2",
    "frame_origin": "http://fixture",
@@ -17,6 +16,7 @@
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
@@ -210,7 +210,6 @@
   },
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 1",
    "form_id": "14",
    "frame_origin": "http://fixture",
@@ -225,6 +224,7 @@
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
@@ -418,7 +418,6 @@
   },
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 2",
    "form_id": "26",
    "frame_origin": "http://fixture",
@@ -433,6 +432,7 @@
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
@@ -626,7 +626,6 @@
   },
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 3",
    "form_id": "38",
    "frame_origin": "http://fixture",
@@ -641,6 +640,7 @@
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",

@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An element marked blocking is a field\nits form will not submit without: fill it, or change the form's mode, before submitting again. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\nA link's href shows where it leads; use it to tell site navigation from content links.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\nA link's href shows where it leads; use it to tell site navigation from content links.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode (a trip or ticket type, a tab) is not the one the task needs, the control that sets\nthe mode is the target, not the form's submit. A control that explores or browses broadly does not run the\nsearch the task asked for.\nElements marked offscreen can be targeted directly. A link's href shows where it leads.\nElements that read alike carry a `context`: the card, row or section each one belongs to. When the task\nor subgoal names one of those, choose the element whose context matches it.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
@@ -573,7 +573,6 @@ fn cap(
 fn protected(control: &Control) -> bool {
     pager_link(control)
         || loads_more(control)
-        || control.blocking == Some(true)
         || control.value.as_deref().is_some_and(|value| !value.is_empty())
         || control.checked == Some(true)
         || control.selected == Some(true)
@@ -1143,8 +1142,10 @@ pub fn element(control: &Control, compact: bool) -> Map<String, Value> {
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
-    if control.blocking == Some(true) {
-        element.insert("blocking".into(), true.into());
+    for (key, marked) in [("required", control.required), ("invalid", control.invalid)] {
+        if marked == Some(true) {
+            element.insert(key.into(), true.into());
+        }
     }
     element
 }
@@ -1489,11 +1490,14 @@ mod tests {
     }
 
     #[test]
-    fn test_a_field_the_form_will_not_submit_without_is_marked_for_jev() {
-        let mut blocking = button(1);
-        blocking.blocking = Some(true);
-        assert_eq!(element(&blocking, false)["blocking"], true);
-        assert!(!element(&button(2), false).contains_key("blocking"));
+    fn test_what_the_page_says_about_a_field_is_shown_to_jev() {
+        let mut field = button(1);
+        field.required = Some(true);
+        field.invalid = Some(true);
+        assert_eq!(element(&field, false)["required"], true);
+        assert_eq!(element(&field, false)["invalid"], true);
+        assert!(!element(&button(2), false).contains_key("required"));
+        assert!(!element(&button(2), false).contains_key("invalid"));
     }
 
     #[test]

@@ -1494,7 +1494,7 @@ async fn test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_an
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_download_evidence_is_bounded_and_cites_the_response() {
+async fn test_download_evidence_is_whole_and_cites_the_response() {
     let _gate = gate().await;
     // The Python test quotes the download through retrieval's `chunk` and `_cited`, which are not ported; with one
     // chunk holding the whole capture, the quote is the block's text, its url the block's source or the capture's,
@@ -1504,7 +1504,6 @@ async fn test_download_evidence_is_bounded_and_cites_the_response() {
         h.goto("").await;
         h.goto(path).await;
         let capture = h.page.capture().await.expect("capture");
-        assert!(capture.text.chars().count() < 70000, "{path}");
         let block = capture.blocks.iter().find(|b| b.source_id.starts_with("download/")).expect("download block");
         assert_eq!(block.kind, BlockKind::Table, "{path}");
         let url = block.source_url.as_deref().unwrap_or(&capture.url);
@@ -1512,8 +1511,8 @@ async fn test_download_evidence_is_bounded_and_cites_the_response() {
         let quote = slice(&capture, block.start, block.end);
         assert!(quote.contains("name,total"), "{path}");
         assert!(quote.contains("139.79"), "{path}");
-        assert_eq!(quote.contains("omitted"), ["/report.csv", "/export-report"].contains(&path), "{path}");
-        assert_eq!(block.complete_source, path == "/report.csv?short", "{path}");
+        assert_eq!(quote.matches("item,1").count(), if path.contains('?') { 0 } else { 10000 }, "{path}");
+        assert_eq!(block.complete_source, path != "/report.csv?partial", "{path}");
         let first = &capture.blocks[0];
         assert_ne!(
             (first.frame_id.as_deref(), first.source_url.as_deref().unwrap_or(&capture.url)),
@@ -1637,29 +1636,23 @@ async fn test_the_kept_status_world_is_addressed_only_by_its_unique_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_required_radios_use_their_form_group_validity() {
+async fn test_fields_carry_what_the_page_says_about_them() {
     let _gate = gate().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     let markup = concat!(
-        "<form><label>First<input type=\"radio\" name=\"choice\" required checked></label>",
-        "<label>Second<input type=\"radio\" name=\"choice\" required></label>",
-        "<label>Terms<input type=\"checkbox\" required></label></form>",
-        "<form><label>Other form<input type=\"radio\" name=\"choice\" required></label></form>",
+        "<form><label>First<input name=\"first\" required></label>",
+        "<label>Last<input name=\"last\" aria-required=\"true\" aria-invalid=\"true\"></label>",
+        "<label>Zip<input name=\"zip\" value=\"12345\"></label></form>",
     );
     let session_id = active(&h);
     let script = format!("document.body.innerHTML = {}", serde_json::to_string(markup).unwrap());
     h.page.evaluate(&session_id, &script).await.expect("evaluate");
     let observed = h.observe().await;
-    let blocking = |obs: &Observation, label: &str| find(obs, label).blocking == Some(true);
-    assert!(!blocking(&observed, "First"));
-    assert!(!blocking(&observed, "Second"));
-    assert!(blocking(&observed, "Terms"));
-    assert!(blocking(&observed, "Other form"));
-    h.page.evaluate(&session_id, "document.querySelector('input').checked = false").await.expect("evaluate");
-    let observed = h.observe().await;
-    assert!(blocking(&observed, "First"));
-    assert!(blocking(&observed, "Second"));
+    let marks = |label: &str| (find(&observed, label).required, find(&observed, label).invalid);
+    assert_eq!(marks("First"), (Some(true), None));
+    assert_eq!(marks("Last"), (Some(true), Some(true)));
+    assert_eq!(marks("Zip"), (None, None));
     h.close().await;
 }
 

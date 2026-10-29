@@ -102,9 +102,12 @@ pub struct Control {
     pub sensitive: bool,
     #[serde(default, deserialize_with = "lax::boolean")]
     pub offscreen: bool,
-    /// A field its form will not submit without: required and still empty, or marked invalid by the page.
+    /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
-    pub blocking: Option<bool>,
+    pub required: Option<bool>,
+    /// A field the page marks invalid (`aria-invalid`).
+    #[serde(default, deserialize_with = "lax::opt_boolean")]
+    pub invalid: Option<bool>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub next_page: Option<bool>,
@@ -138,7 +141,8 @@ impl Control {
             expanded: None,
             sensitive: false,
             offscreen: false,
-            blocking: None,
+            required: None,
+            invalid: None,
             next_page: None,
             download: None,
         }
