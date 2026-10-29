@@ -327,8 +327,6 @@ type RunResult struct {
 	Error     *string         `json:"error"`
 	// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
 	FinalURL *string `json:"final_url"`
-	// Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration.
-	WouldFire []Tripwire `json:"would_fire"`
 	// The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
 	Recordings []string `json:"recordings"`
 	// The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.
@@ -441,14 +439,6 @@ type StepResult struct {
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
 }
-
-type Tripwire string
-
-const (
-	TripwireNoProgress       Tripwire = "no_progress"
-	TripwireActionRepetition Tripwire = "action_repetition"
-	TripwirePlanStagnation   Tripwire = "plan_stagnation"
-)
 
 // The wall a `needs_login` or `blocked` run stopped at, typed so a caller can route it without parsing `error`.
 type Wall struct {

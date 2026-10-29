@@ -320,7 +320,6 @@ func endedBy(failure string) *RunResult {
 		Artifacts:  []Artifact{},
 		Citations:  []Citation{},
 		Error:      &failure,
-		WouldFire:  []Tripwire{},
 		Recordings: []string{},
 	}
 }
