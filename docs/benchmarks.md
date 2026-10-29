@@ -2,8 +2,8 @@
 
 Measured results for fastbrowse against the agents it competes with. Every figure is traceable to a named
 source; where a comparison has not been run, this file says so rather than estimating. The
-[benchmark page](https://fastbrowse.ai/benchmarks) renders only an approved feed and withholds every
-measurement slot until the maintainer approves one; this file records the measurements behind that feed.
+[benchmark page](https://fastbrowse.ai/benchmarks) publishes the approved campaign `release-0.7.1`; this file
+records each comparison's sources and the earlier records that are no longer on that page.
 
 These are recorded benchmark comparisons, not a controlled experiment: the associations below do not
 establish cause.
@@ -13,7 +13,7 @@ Benchmarking compares exactly three things, and nothing else is a headline:
 | | Comparison | Arms | Publication group | Status |
 |:--|:--|:--|:--|:--|
 | C1 | agent against agent | `fastbrowse` against `browser-use`, the hosted Browser Use agent | `internal-hosted` | recorded below |
-| C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | recorded below |
+| C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | earlier campaign record below; not on the published page |
 | C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 6 tasks both run | `internal-ultrafast` | not yet measured |
 
 The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web) are diagnostics, described in
@@ -24,19 +24,20 @@ The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web
 ### Recorded head-to-head
 
 Both agents attempted every catalog task the hosted agent supports (46), three repeats each, on Browser Use
-cloud browsers under identical limits, with the hosted agent at its defaults. Source:
-`docs/results/benchmark-candidate.json`, campaign `release-0.5.25-48c964d`, staged and not yet approved for the
-benchmark page.
+cloud browsers under identical limits, with the hosted agent at its defaults. Source: the published
+`fastbrowse-internal, hosted Browser Use` group, campaign `release-0.7.1`, agent commit `7b8b0e8f`, data sha256
+`7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`.
 
 | Metric | fastbrowse | Browser Use (hosted) | Delta |
 |:--|:--|:--|:--|
-| Task success | 99.2% (137 of 138 counted) | 97.8% (135 of 138) | 1.4 points higher |
-| Median time per result | 16.3s | 16.1s | 0.2s slower |
-| Median cost per result | $0.0256 | $0.2840 | 11.1x cheaper |
-| Total cost | $7.03 | $45.07 | $38.04 cheaper |
+| Task success | 99.2% (137 of 138 counted) | 96.3% (133 of 138) | 2.9 points higher |
+| Execution time | 18.9s | 15.3s | 3.6s slower |
+| Cost per run | $0.0296 | $0.3180 | 10.7x cheaper |
 
 Task success is the share of scored results the source grader passed. Completion is reported separately:
-fastbrowse completed 135 of 138 results to the hosted agent's 138 of 138.
+fastbrowse completed 133 of 138 results to the hosted agent's 138 of 138. The same campaign also publishes the
+`fastbrowse-internal` group, fastbrowse alone on the 53-task internal catalog: 99.3% (158 of 159), an execution
+time of 17.0s and $0.0268 a run.
 
 An earlier record in the `fastbrowse-site` repository (`src/app/page.tsx`) measured 14 answer tasks (lookups,
 sign-ins, checkout, Google Flights) under a 30-step, $0.25 cap, 300s regime: fastbrowse passed 40 of 42 and the
@@ -66,11 +67,12 @@ within a build, not across.
 
 ## C2: fastbrowse's own browser pool against a Browser Use Cloud browser
 
-### Recorded matched browser comparison
+### Earlier campaign record (release-0.5.25), not on the published page
 
 The `internal-backend` group runs fastbrowse on the 53 fastbrowse tasks three repeats each, once on its own
 hosted browser pool and once on a Browser Use Cloud browser, so the browser backend is the only difference.
-Source: `docs/results/benchmark-candidate.json`, campaign `release-0.5.25-48c964d`, staged and not yet approved.
+Source: `docs/results/benchmark-candidate.json`, campaign `release-0.5.25-48c964d`. The published benchmark page
+does not currently carry this group.
 
 | Metric | fastbrowse, Browser Use Cloud browser | fastbrowse, own pool | Delta |
 |:--|:--|:--|:--|

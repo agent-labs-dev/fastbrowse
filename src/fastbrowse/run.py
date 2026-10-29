@@ -125,6 +125,7 @@ async def run_task(
     record: Path | None = None,
     cursor: bool = False,
     fetch: bool = False,
+    fetch_first: bool = False,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
 
@@ -193,6 +194,11 @@ async def run_task(
     a page builds with scripts is not there either: a document whose readable text is a sliver of its markup
     is refused as needing a browser. Browser, recording, download and cursor options mean nothing here and
     are an error rather than ignored.
+
+    `fetch_first` reads the same way, and when the fetched run ends `blocked` because the page refused
+    something only a browser can do, runs the task again on the browser the other options describe. That run
+    spends what the attempt left of `limits`, and its cost lists the attempt's calls first. A recording or an
+    attached window has to exist from the first step, so `record`, `attach` and `target_match` are an error.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. The planner, recovery and the answer see it in its own section headed as not
