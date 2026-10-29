@@ -365,7 +365,7 @@ pub async fn decide(
                         let mut fields = Map::new();
                         fields.insert("offered".into(), controls.len().into());
                         fields.insert("retry_with".into(), smaller.len().into());
-                        fields.insert("reason".into(), text::prefix(&error.message, 300).into());
+                        fields.insert("reason".into(), error.message.clone().into());
                         fields
                     });
                     (controls, reduction) = (smaller, reduced);

@@ -38,7 +38,6 @@ use fastbrowse_core::models::{
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::py::json::dumps;
-use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
@@ -552,7 +551,7 @@ impl Agent {
     }
 
     fn failed(&self, message: String, unavailable: bool, state: Option<&RunState>, ledger: &Ledger) -> RunResult {
-        let message = text::prefix(&self.redact(&message), 500).to_string();
+        let message = self.redact(&message);
         let status = if unavailable { Status::Unavailable } else { Status::Error };
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
         self.partial_result(&notes, state, ledger, status, Some(message), None)
