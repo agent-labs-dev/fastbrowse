@@ -5,5 +5,6 @@ self-hosted-runner:
     # Blacksmith's runners, which the organization's Blacksmith app serves.
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404
+    - blacksmith-8vcpu-ubuntu-2404-arm
     - blacksmith-6vcpu-macos-26
     - blacksmith-8vcpu-windows-2025
