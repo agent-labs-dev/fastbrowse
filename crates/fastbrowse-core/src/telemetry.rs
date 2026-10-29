@@ -255,7 +255,7 @@ fn write_line(sink: &Sink, record: &Map<String, Value>) {
 }
 
 /// Why a run went the way it did, one record per judgement, for evals to keep beside each result: ids, verdicts,
-/// scores and redacted addresses, never page text.
+/// scores and redacted addresses. The `http` events hold each model request and reply in full, page text included.
 ///
 /// Python collects these through a logger and a context variable, so runs that overlap keep separate traces. Here a
 /// run owns its `Trace` and hands it to what it calls; a disabled one builds nothing unless [`trace_to`] set a
