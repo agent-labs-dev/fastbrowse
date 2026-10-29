@@ -29,6 +29,7 @@ COPY = (
     "docs/design.md",
     "docs/evals.md",
     "docs/jev.md",
+    "docs/llm-providers.md",
     "docs/native-typesafe.md",
     "docs/skill.md",
     "docs/troubleshooting.md",

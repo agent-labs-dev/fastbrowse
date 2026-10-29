@@ -243,6 +243,13 @@ not set a field fastbrowse sends itself (`model`, `messages`, `max_tokens`, `res
 `reasoning`). Jev still needs its own key. An endpoint that reports no price leaves those calls' cost unknown
 rather than zero, so `--max-dollars` stops the run after the first such call.
 
+`FASTBROWSE_LLM_PROVIDER` names the provider instead of leaving it to which keys are set: `openrouter`,
+`gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`,
+`azure`, `ollama`, `lmstudio`, `vllm` or `custom`. Each reads its own key, such as `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY`, and sends it to that provider's host alone. [LLM providers](docs/llm-providers.md) lists
+what each preset sends, the models it defaults to, and the provider documentation behind it. Unset, the LLM is
+chosen as above.
+
 ### Results
 
 The exit code identifies the run status. Configuration refusals exit 1; invalid command syntax exits 2.

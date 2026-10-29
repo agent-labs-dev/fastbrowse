@@ -94,6 +94,7 @@ fn build(spec: &Value, http: &Http) -> Client {
                 provider_routing,
                 strict: spec.get("strict").and_then(Value::as_bool).unwrap_or(true),
                 extra_body: spec.get("extra_body").and_then(Value::as_object).cloned().unwrap_or_default(),
+                ..LLMOptions::default()
             };
             let base_url = text("base_url", "https://openrouter.ai/api/v1");
             Client::Llm(Box::new(
