@@ -165,7 +165,8 @@ pub(crate) type Commit = (Operation, Option<String>, String, String);
 pub(crate) struct Spawned<T: Clone + Send + Sync + 'static> {
     handle: Option<JoinHandle<()>>,
     result: watch::Receiver<Option<Result<T, AgentError>>>,
-    started: Arc<AtomicBool>,
+    /// Set by whichever comes first: the task beginning, or a cancel of a task not yet begun.
+    claimed: Arc<AtomicBool>,
 }
 
 impl<T: Clone + Send + Sync + 'static> Spawned<T> {
@@ -174,20 +175,27 @@ impl<T: Clone + Send + Sync + 'static> Spawned<T> {
         F: Future<Output = Result<T, AgentError>> + Send + 'static,
     {
         let (sender, result) = watch::channel(None);
-        let started = Arc::new(AtomicBool::new(false));
-        let begun = started.clone();
+        let claimed = Arc::new(AtomicBool::new(false));
+        let begun = claimed.clone();
         let handle = tokio::spawn(async move {
-            begun.store(true, Ordering::Release);
+            if begun.swap(true, Ordering::AcqRel) {
+                return;
+            }
             let outcome = future.await;
             let _ = sender.send(Some(outcome));
         });
-        Spawned { handle: Some(handle), result, started }
+        Spawned { handle: Some(handle), result, claimed }
     }
 
-    /// Whether the task has begun. A model call runs up to its request in its first poll, so one that has begun has
-    /// a request out, which the provider bills whether or not anyone reads its receipt.
-    pub fn started(&self) -> bool {
-        self.started.load(Ordering::Acquire)
+    /// Cancel the task if it has not begun, and say whether it was cancelled. A model call runs up to its request in
+    /// its first poll, so one that has begun has a request out, which the provider bills whether or not anyone reads
+    /// its receipt. The check and the cancel are one step, so a task cannot begin between them.
+    pub fn cancel_unstarted(&self) -> bool {
+        let cancelled = !self.claimed.swap(true, Ordering::AcqRel);
+        if cancelled {
+            self.cancel();
+        }
+        cancelled
     }
 
     /// The result, once it finished; None while it runs or after it was cancelled first.

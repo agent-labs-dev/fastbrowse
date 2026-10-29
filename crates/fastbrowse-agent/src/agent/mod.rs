@@ -202,11 +202,9 @@ impl HeadStop {
     /// bills a non-streamed generation after its connection closes, so cancelling one already sent saves nothing and
     /// loses its receipt, which a dollar cap then reads as a charge it cannot bound.
     async fn settle(&self) {
-        if !self.planning.started() {
-            self.planning.cancel();
-        }
-        if let Some(proposing) = self.proposing.as_ref().filter(|proposing| !proposing.started()) {
-            proposing.cancel();
+        self.planning.cancel_unstarted();
+        if let Some(proposing) = &self.proposing {
+            proposing.cancel_unstarted();
         }
         self.gather().await;
     }
