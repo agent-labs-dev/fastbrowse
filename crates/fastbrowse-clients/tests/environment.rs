@@ -409,6 +409,23 @@ async fn test_openrouter_still_gets_the_default_reasoning_effort() {
 }
 
 #[tokio::test]
+async fn test_one_purposes_reasoning_effort_overrides_the_others_only_for_it() {
+    // The requests are for the reader.
+    for (env, effort) in [
+        (&[("FASTBROWSE_LLM_REASONING_READ", "none")][..], json!({"effort": "none"})),
+        (&[("FASTBROWSE_LLM_REASONING", "high"), ("FASTBROWSE_LLM_REASONING_READ", "none")], json!({"effort": "none"})),
+        (&[("FASTBROWSE_LLM_REASONING_VERIFY", "none")], json!({"effort": "low"})),
+    ] {
+        let env: Vec<(&str, &str)> = [("OPENROUTER_API_KEY", "o")].into_iter().chain(env.iter().copied()).collect();
+        let (seen, _) = llm_requests(&env, Some(0.0001)).await;
+        assert_eq!(body(&seen[0])["reasoning"], effort, "{env:?}");
+    }
+    let (seen, _) = llm_requests(&local(&[("FASTBROWSE_LLM_REASONING_READ", "none")]), None).await;
+    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "none"}));
+    assert!(Settings::from_sources(&[("FASTBROWSE_LLM_REASONING_VERIFY", "off")], None).is_err());
+}
+
+#[tokio::test]
 async fn test_openrouter_gets_reasoning_turned_off_when_asked() {
     let (seen, _) =
         llm_requests(&[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_REASONING", "none")], Some(0.0001)).await;
