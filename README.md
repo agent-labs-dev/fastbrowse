@@ -74,7 +74,7 @@ uv run fastbrowse "What is the title of the top story right now?" --start https:
 ```
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
-prints the full result: every step, the quotes behind the answer, and cost by component.
+prints the full result: every step, the quotes behind the answer, cost by component, and the build that ran it.
 
 | Flag | Effect |
 |:--|:--|

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::argparse::{Exit, Opt, Parser};
-use crate::cli::{self, Context, Streams};
+use crate::cli::{self, Build, Context, Streams};
 use crate::runner::default_runner;
 use crate::serve::{self, Server, StdioTransport, Transport};
 use crate::{log, mcp, options};
@@ -125,8 +125,9 @@ fn mcp_command(argv: &[String]) -> i32 {
     })
 }
 
-/// Run the command `program` names with `args`, the arguments after the program, and return its exit code.
-pub fn main(program: &str, args: &[String]) -> i32 {
+/// Run the command `program` names with `args`, the arguments after the program, and return its exit code. `build`
+/// is the commit the CLI reports.
+pub fn main(program: &str, args: &[String], build: Build) -> i32 {
     let program = std::path::Path::new(program).file_stem();
     if program.is_some_and(|name| name == "fastbrowse-mcp") {
         mcp_command(args)
@@ -141,6 +142,7 @@ pub fn main(program: &str, args: &[String]) -> i32 {
             settings: serve::load_settings(),
             environ: options::environ(),
             streams: Streams::stdio(),
+            build,
         };
         runtime().block_on(cli::main(args, &context))
     }
