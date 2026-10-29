@@ -337,6 +337,19 @@ async fn test_fill_and_click_submits_form_and_page_changed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_click_the_page_answers_over_fetch_is_judged_by_the_response() {
+    let _gate = gate().await;
+    let Some(h) = harness().await else { return };
+    for (label, changed) in [("Add to cart", true), ("Track", false)] {
+        h.goto("/quick-add.html").await;
+        let obs = h.observe().await;
+        let result = act(&h.page, click(find(&obs, label)), &obs).await;
+        assert_eq!((result.outcome, result.page_changed), (StepOutcome::Executed, changed), "{label}");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_covered_click_dispatches_nothing() {
     let _gate = gate().await;
     let Some(h) = loaded().await else { return };

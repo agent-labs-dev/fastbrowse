@@ -1302,9 +1302,12 @@ impl CdpPage {
     ///
     /// A click that navigates returns before the navigation starts, so an immediate fingerprint would describe the old
     /// page. Settled means an interactive document with a quiet DOM. A blocking JavaScript dialog freezes the renderer,
-    /// and an evaluate that fails mid-navigation is itself evidence of change.
+    /// and an evaluate that fails mid-navigation is itself evidence of change. A page that has not changed while a
+    /// fetch or XHR request started after `requests` (a `requests_mark`) is open has not answered yet, so the settle
+    /// waits for the response, within the same deadline: a quick-add cart redrew 0.5s after its quiet DOM was read,
+    /// and the run took the add for a click that did nothing and added the item again.
     #[doc(hidden)]
-    pub async fn changed_since(&self, before: &str, input_settling: bool) -> Result<bool, BrowserError> {
+    pub async fn changed_since(&self, before: &str, input_settling: bool, requests: u64) -> Result<bool, BrowserError> {
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
@@ -1315,27 +1318,36 @@ impl CdpPage {
             // moving, so this waits on the page rather than a flat interval that expires regardless.
             self.wait_for_lifecycle(self.lifecycle_mark(), SETTLE_QUIET_SECONDS).await;
         }
+        // A deadline reached while the page sat quiet and unchanged, waiting only on a request that never answered,
+        // is a page the action left as it was; one reached while the page kept moving is a change.
+        let mut unchanged = false;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Ok(true);
+                return Ok(!unchanged);
             }
             if self.session.pending_dialog().is_some() {
                 return Ok(true);
             }
+            // Taken before the read: a request that finishes while the page is read bumps it, and its handler's redraw
+            // emits no lifecycle event of its own, so the page is read again rather than judged unchanged.
+            let mark = self.lifecycle_mark();
             let settled = self.settled_fingerprint(remaining.as_secs_f64());
             tokio::select! {
                 () = &mut dialog => return Ok(true),
-                () = sleep(remaining) => return Ok(true),
+                () = sleep(remaining) => return Ok(!unchanged),
                 out = settled => match out {
-                    Ok((true, current)) => return Ok(current.as_deref() != Some(before)),
-                    Ok((false, _)) => {}
+                    Ok((true, current)) if current.as_deref() != Some(before) => return Ok(true),
+                    Ok((true, _)) if !self.session.requests_open_since(requests) && self.lifecycle_mark() == mark => {
+                        return Ok(false);
+                    }
+                    Ok((quiet, _)) => unchanged = quiet,
                     // Navigation destroys the promise with its execution context. Only this read is retried.
                     Err(_) => {}
                 },
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            self.wait_for_lifecycle(self.lifecycle_mark(), remaining.as_secs_f64()).await;
+            self.wait_for_lifecycle(mark, remaining.as_secs_f64()).await;
         }
     }
 

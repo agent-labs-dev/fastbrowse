@@ -104,7 +104,9 @@ pub const POPUP_ANNOUNCE_SECONDS: f64 = 5.0;
 /// The isolated world a tab's HTTP status is read in, out of reach of the page's scripts.
 pub const STATUS_WORLD: &str = "fastbrowse-status";
 
-const ENABLE_DOMAINS: [&str; 3] = ["Page", "Runtime", "DOM"];
+// `Network` reports the requests a page makes itself, which is how a settle tells a page still answering an action
+// from one the action left as it was.
+const ENABLE_DOMAINS: [&str; 4] = ["Page", "Runtime", "DOM", "Network"];
 const DOWNLOAD_TEXT_BYTES: usize = 16_384;
 const DOWNLOAD_TEXT_TOTAL: usize = 65_536;
 /// Largest download a session keeps by default. Bodies arrive whole over the DevTools socket, so this bounds a
@@ -230,6 +232,10 @@ pub(crate) struct State {
     pub(crate) popups: Vec<Popup>,
     /// `Page.windowOpen` events from the run's pages: each one is a window on its way, announced or not.
     pub(crate) window_opens: u32,
+    /// Fetch and XHR requests the run's pages have started, counted, for `requests_mark`.
+    pub(crate) requests_started: u64,
+    /// (session, request id) -> its place in that count, for each such request not yet finished or failed.
+    pub(crate) requests_open: HashMap<(String, String), u64>,
     /// (session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating.
     pub(crate) status_contexts: HashMap<(String, i64), String>,
     pub(crate) active_target_id: String,
@@ -625,6 +631,19 @@ impl BrowserSession {
 
     pub fn window_opens(&self) -> u32 {
         self.0.state.lock().unwrap().window_opens
+    }
+
+    /// How many fetch and XHR requests the run's pages have started; pass it back to `requests_open_since`.
+    pub fn requests_mark(&self) -> u64 {
+        self.0.state.lock().unwrap().requests_started
+    }
+
+    /// Whether a fetch or XHR request started after `mark` is still waiting for its response.
+    ///
+    /// A page that answers a click with a request (a cart that adds over fetch, then redraws) leaves its document as
+    /// it was until the response arrives, so an unchanged page with one open is not yet an action that did nothing.
+    pub fn requests_open_since(&self, mark: u64) -> bool {
+        self.0.state.lock().unwrap().requests_open.values().any(|started| *started > mark)
     }
 
     /// Whether a download landed since `since`, waiting briefly for the intercept's own task.
@@ -1210,12 +1229,36 @@ impl Shared {
             "Page.windowOpen" => self.state.lock().unwrap().window_opens += 1,
             // A frame reported a lifecycle transition (init, DOMContentLoaded, load, networkIdle...).
             "Page.lifecycleEvent" => self.lifecycle.send_modify(|generation| *generation += 1),
+            // Only the page's own calls: a document, image or script request is the load lifecycle events report.
+            "Network.requestWillBeSent" if matches!(params["type"].as_str(), Some("Fetch" | "XHR")) => {
+                if let Some(session) = session {
+                    let mut state = self.state.lock().unwrap();
+                    let key = (session.to_owned(), str_of(&params["requestId"]));
+                    // A redirect sends this again under the same id: the request keeps the age it started with.
+                    if !state.requests_open.contains_key(&key) {
+                        state.requests_started += 1;
+                        let started = state.requests_started;
+                        state.requests_open.insert(key, started);
+                    }
+                }
+            }
+            "Network.loadingFinished" | "Network.loadingFailed" => {
+                if let Some(session) = session {
+                    let key = (session.to_owned(), str_of(&params["requestId"]));
+                    if self.state.lock().unwrap().requests_open.remove(&key).is_some() {
+                        // Wakes a settle waiting on lifecycle events to look at the page again.
+                        self.lifecycle.send_modify(|generation| *generation += 1);
+                    }
+                }
+            }
             "Target.attachedToTarget" => self.on_attached(params, session),
             "Target.detachedFromTarget" => {
                 let child = str_of(&params["sessionId"]);
                 let mut state = self.state.lock().unwrap();
                 state.frame_parents.remove(&child);
                 state.frame_sessions.retain(|(_, sid)| *sid != child);
+                // A target that went away answers nothing more.
+                state.requests_open.retain(|(sid, _), _| *sid != child);
             }
             // A scoped run adopts popups where they attach paused, not here, after their first request may have left.
             "Target.targetCreated" if self.grant.is_none() => {
