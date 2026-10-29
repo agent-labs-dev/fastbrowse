@@ -1014,6 +1014,107 @@ async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
     }
 }
 
+/// The page used by the finish-path test, whose read has already supplied the cited requirement claim.
+struct FinishPage(Observation);
+
+impl Page for FinishPage {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let observation = self.0.clone();
+        Box::pin(async move { Ok(observation) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the finish-path test does not navigate")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("the finish-path test does not capture")
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the finish-path test does not act")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        unreachable!("the finish-path test does not watch")
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        unreachable!("the finish-path test does not take a screenshot")
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("the finish-path test does not ask for the address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// Accepts the draft made from a read claim and counts the done-check requests.
+struct DoneCheckJev(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl DecisionClient for DoneCheckJev {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let answers = questions
+            .keys()
+            .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.0 })))
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_cited_read_claim_finishes_after_one_done_check() {
+    let page = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
+    let fact = Fact::read(Some("r1"), "The answer is 42", block_evidence(&page, "s0"), FactReader::Llm);
+    let mut state = run_state().await;
+    state.task = "Report the answer.".into();
+    state.ready_plan = Some(Plan::new(vec![Requirement::new("r1", "Report the answer", INFO)], true));
+    state.notes = Notes::new([fact]);
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let agent = Agent::new(
+        Arc::new(FinishPage(observation(&[]))),
+        Arc::new(DoneCheckJev(requests.clone())),
+        Arc::new(ScriptedLLM),
+    );
+
+    let result = agent.finish(&mut state, None, None).await.expect("finish").expect("a completed result");
+    assert_eq!(result.status, Status::Complete);
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
+}
+
 /// A Jev that answers every yes/no with one probability, or with nothing.
 struct Receipts(Option<f64>);
 
