@@ -26,6 +26,10 @@ use crate::planner::Requirement;
 // A mistaken choice marks a requirement evidenced; favor the reader whenever selection is uncertain.
 const READ_CONFIDENCE: f64 = 0.90;
 const ABSENT_CONFIDENCE: f64 = 0.90;
+// Experiment switch: FASTBROWSE_READ_CONFIDENCE overrides both read bars.
+fn read_bar(default: f64) -> f64 {
+    std::env::var("FASTBROWSE_READ_CONFIDENCE").ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
 const NO_NEW_EVIDENCE_CONFIDENCE: f64 = 0.80;
 // Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
 const FOCUS_WINDOW_CHARS: i64 = 1500;
@@ -395,7 +399,8 @@ pub(crate) async fn read_choices(
         let id = Some(requirement.id.as_str());
         let answer = match evaluation.answers.get(&requirement.id) {
             Some(Answer::Choice(answer))
-                if answer.confidence >= if answer.choice == "absent" { ABSENT_CONFIDENCE } else { READ_CONFIDENCE } =>
+                if answer.confidence
+                    >= read_bar(if answer.choice == "absent" { ABSENT_CONFIDENCE } else { READ_CONFIDENCE }) =>
             {
                 answer
             }

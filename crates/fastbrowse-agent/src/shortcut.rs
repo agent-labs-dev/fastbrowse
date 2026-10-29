@@ -78,6 +78,18 @@ pub async fn propose_shortcut(
     start: &str,
     ledger: Option<&Ledger>,
 ) -> Result<Generation<Shortcut>> {
+    // Experiment switch: FASTBROWSE_SHORTCUT=off always opens the start page.
+    if std::env::var("FASTBROWSE_SHORTCUT").is_ok_and(|value| value == "off") {
+        let cost = fastbrowse_core::models::CostLine {
+            purpose: Some(LLMPurpose::Shortcut),
+            ..fastbrowse_core::models::CostLine::new(
+                fastbrowse_core::models::CostComponent::Llm,
+                fastbrowse_core::models::CostBasis::Metered,
+                Some(0.0),
+            )
+        };
+        return Ok(Generation { data: Shortcut { url: None }, cost });
+    }
     let messages = [Message::system(INSTRUCTIONS), Message::user(format!("# Task\n{task}\n\n# Start page\n{start}"))];
     Ok(generate(llm, LLMPurpose::Shortcut, &messages, 0, ledger).await?)
 }

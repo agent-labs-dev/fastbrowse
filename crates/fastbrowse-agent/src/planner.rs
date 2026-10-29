@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message};
-use fastbrowse_core::models::{LLMPurpose, background_section};
+use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose, background_section};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::{lax, text};
@@ -362,6 +362,16 @@ pub async fn make_plan(
     context: Option<&str>,
     ledger: Option<&Ledger>,
 ) -> Result<Generation<Plan>> {
+    if std::env::var("FASTBROWSE_PLAN").is_ok_and(|value| value == "off") {
+        // The task is its own one requirement, checked as the planner's empty-plan fallback checks it.
+        let mut plan = Plan::new(vec![Requirement::new("req_1", task, RequirementKind::Information)], true);
+        plan.answer_checks = settled_checks(&plan);
+        let cost = CostLine {
+            purpose: Some(LLMPurpose::Plan),
+            ..CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0))
+        };
+        return Ok(Generation { data: plan, cost });
+    }
     let site = start.map_or(String::new(), |start| format!("\n\n# Start page\n{start}"));
     // Requirements come from the task alone: the background is what the caller knows, not what it asked for.
     let background = background_section(context, "#");
