@@ -649,9 +649,6 @@ impl Schema for RunResult {
                     "Where the browser was last observed; what a caller checks when the task was to arrive somewhere.",
                 ),
                 Field::default("final_frame", Ty::optional(Ty::Bytes), none()).excluded(),
-                Field::default("would_fire", Ty::list(Tripwire::ty()), empty()).doc(
-                    "Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration.",
-                ),
                 Field::default("recordings", Ty::list(Ty::Path), empty()).doc(
                     "The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.",
                 ),

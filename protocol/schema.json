@@ -1216,15 +1216,6 @@
           "description": "Where the browser was last observed; what a caller checks when the task was to arrive somewhere.",
           "title": "Final Url"
         },
-        "would_fire": {
-          "default": [],
-          "description": "Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration.",
-          "items": {
-            "$ref": "#/$defs/Tripwire"
-          },
-          "title": "Would Fire",
-          "type": "array"
-        },
         "recordings": {
           "default": [],
           "description": "The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.",
@@ -1260,7 +1251,6 @@
         "citations",
         "error",
         "final_url",
-        "would_fire",
         "recordings",
         "wall"
       ],
@@ -1640,15 +1630,6 @@
       ],
       "title": "StepResult",
       "type": "object"
-    },
-    "Tripwire": {
-      "enum": [
-        "no_progress",
-        "action_repetition",
-        "plan_stagnation"
-      ],
-      "title": "Tripwire",
-      "type": "string"
     },
     "Wall": {
       "additionalProperties": false,
