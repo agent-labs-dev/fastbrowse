@@ -625,16 +625,32 @@ fn leaves(
     }
 }
 
-/// The reply to a [`flat_optional_objects`] schema with each object folded back, and `null` where every leaf is.
-pub fn nest_flat_objects(value: Value) -> Value {
+/// The reply to a [`flat_optional_objects`] schema folded back into `schema`, the one it was flattened from. An
+/// optional object comes back `null` when every leaf is, or when a field it requires is: the original schema allows
+/// no object there, but not half of one, and a partial `comparison` or tally `field` used to fail validation twice
+/// and end the run.
+pub fn nest_flat_objects(schema: &Value, value: Value) -> Value {
+    let defs = schema.get("$defs").cloned().unwrap_or(Value::Null);
+    nest(value, schema, &defs)
+}
+
+fn nest(value: Value, node: &Value, defs: &Value) -> Value {
     match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(nest_flat_objects).collect()),
+        Value::Array(items) => {
+            let item = items_schema(node, defs).unwrap_or(&Value::Null);
+            Value::Array(items.into_iter().map(|value| nest(value, item, defs)).collect())
+        }
         Value::Object(map) => {
+            let properties = object_schema(node, defs)
+                .or_else(|| optional_object(node, defs))
+                .and_then(|object| object.get("properties"))
+                .unwrap_or(&Value::Null);
             let mut result = Map::new();
             let mut grouped: Vec<String> = Vec::new();
             for (key, value) in map {
                 let Some((head, rest)) = key.split_once(FLAT) else {
-                    result.insert(key, nest_flat_objects(value));
+                    let value = nest(value, properties.get(&key).unwrap_or(&Value::Null), defs);
+                    result.insert(key, value);
                     continue;
                 };
                 if !grouped.iter().any(|name| name == head) {
@@ -646,15 +662,40 @@ pub fn nest_flat_objects(value: Value) -> Value {
                 }
             }
             for head in grouped {
+                let field = properties.get(&head).unwrap_or(&Value::Null);
                 if let Some(slot) = result.get_mut(&head) {
-                    let nested = nest_flat_objects(slot.take());
-                    *slot = if all_null(&nested) { Value::Null } else { nested };
+                    let nested = nest(slot.take(), field, defs);
+                    *slot = if all_null(&nested) || !complete(&nested, field, defs) { Value::Null } else { nested };
                 }
             }
             Value::Object(result)
         }
         other => other,
     }
+}
+
+/// The schema of an array's items, through a `$ref` and an `anyOf [array, null]`.
+fn items_schema<'a>(node: &'a Value, defs: &'a Value) -> Option<&'a Value> {
+    let node = match node.get("$ref").and_then(Value::as_str) {
+        Some(path) => defs.get(path.strip_prefix("#/$defs/")?)?,
+        None => node,
+    };
+    node.get("items").or_else(|| node.get("anyOf")?.as_array()?.iter().find_map(|branch| items_schema(branch, defs)))
+}
+
+/// Whether `value` has every field its object schema requires, `null` only where that field allows it.
+fn complete(value: &Value, node: &Value, defs: &Value) -> bool {
+    let Some(object) = object_schema(node, defs).or_else(|| optional_object(node, defs)) else { return true };
+    let mut required = object.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+    required.all(|name| {
+        let allows_null = object["properties"].get(name).is_some_and(|field| {
+            field.get("type").and_then(Value::as_str) == Some("null")
+                || field.get("anyOf").and_then(Value::as_array).is_some_and(|branches| {
+                    branches.iter().any(|branch| branch.get("type").and_then(Value::as_str) == Some("null"))
+                })
+        });
+        allows_null || !value.get(name).is_none_or(Value::is_null)
+    })
 }
 
 fn all_null(value: &Value) -> bool {

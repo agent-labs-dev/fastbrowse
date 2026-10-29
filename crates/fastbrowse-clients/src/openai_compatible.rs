@@ -809,7 +809,7 @@ impl OpenAICompatibleLLM {
                     error.classify() == serde_json::error::Category::Eof,
                 ),
                 Ok(value) => match schema.validate_json(&if deepseek(&billing.model) {
-                    nest_flat_objects(value).to_string()
+                    nest_flat_objects(&schema.json_schema(), value).to_string()
                 } else {
                     content.clone()
                 }) {

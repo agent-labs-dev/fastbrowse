@@ -637,3 +637,25 @@ async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whol
     assert_eq!(schema["properties"]["cite__first"]["description"], "The blocks the claim reads.");
     assert_eq!(body["temperature"], 0.0);
 }
+
+#[tokio::test]
+async fn test_a_half_answered_optional_object_comes_back_as_none_rather_than_failing_validation() {
+    // DeepSeek answered a comparison's operator without its limit, and a tally field without its span: the original
+    // schema allows no object there, but not half of one, so both runs failed validation twice and stopped.
+    let cite = ModelTy::frozen("Cite", vec![Field::required("first", Ty::Str), Field::required("last", Ty::Str)]).ty();
+    let tally =
+        ModelTy::frozen("Tally", vec![Field::required("span", cite.clone()), Field::required("prefix", Ty::Str)]).ty();
+    let claim = ModelTy::frozen(
+        "Claim",
+        vec![Field::required("cite", Ty::optional(cite)), Field::required("field", Ty::optional(tally))],
+    )
+    .ty();
+    let reply = json!({"cite__first": "main/:5", "cite__last": null, "field__span__first": null,
+        "field__span__last": null, "field__prefix": "Total"});
+    let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
+    let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Read, "deepseek/deepseek-v4.1-flash-1017");
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let result = llm.generate_value(LLMPurpose::Read, &[message], &Model(claim), 0, None).await.unwrap();
+    assert_eq!(result.data, json!({"cite": null, "field": null}));
+    assert_eq!(script.requests().len(), 1);
+}
