@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 classifiers = ["Development Status :: 4 - Beta"]
 dependencies = [
     "httpx[http2]>=0.28.1,<1",
-    "pydantic>=2.14.1,<3",
+    "pydantic>=2.14.2,<3",
 ]
 
 [project.urls]
