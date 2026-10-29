@@ -218,6 +218,26 @@ class FastbrowseTest {
     }
 
     @Test
+    void aRunCancelledWhileItWaitsForTheBrowserBeforeItIsNeverSent(@TempDir Path directory) throws Exception {
+        Fastbrowse fastbrowse = scripted("until_cancelled");
+        CountDownLatch started = new CountDownLatch(1);
+        CompletableFuture<RunResult> first = fastbrowse.run("t", RunOptions.builder()
+                .inputs(Map.of("closed", directory.resolve("closed").toString()))
+                .onEvent(event -> started.countDown())
+                .build());
+        assertTrue(started.await(10, TimeUnit.SECONDS));
+        first.cancel(true);
+        // Queued behind the first run's closing browser, and cancelled there.
+        CompletableFuture<RunResult> second = fastbrowse.run("t", RunOptions.builder()
+                .inputs(Map.of("closed", directory.resolve("second").toString()))
+                .build());
+        second.cancel(true);
+        // The stand-in answers with how many runs the server was sent: the first and this one.
+        RunResult third = fastbrowse.run("t", RunOptions.defaults()).get(15, TimeUnit.SECONDS);
+        assertEquals(2, third.data().asInt());
+    }
+
+    @Test
     void aSecondRunWhileOneIsActiveIsRefusedAsBusy() throws Exception {
         Fastbrowse fastbrowse = scripted("never_ends");
         CountDownLatch started = new CountDownLatch(1);

@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,15 +65,39 @@ public final class Fastbrowse implements AutoCloseable {
     private CompletableFuture<Void> closed;
 
     /** A run waiting on its reply, and where the server's calls about it go. */
-    private static final class Served {
+    private final class Served {
+        final String runId;
         final RunOptions options;
-        final Runnable cancel;
         /** What ended the run from this side: the first onEvent or onFrame that threw. */
         volatile String failure;
+        // Guarded by this: whether the run request went out, and whether the run was cancelled before or after.
+        private boolean sent;
+        private boolean cancelled;
 
-        Served(RunOptions options, Runnable cancel) {
+        Served(String runId, RunOptions options) {
+            this.runId = runId;
             this.options = options;
-            this.cancel = cancel;
+        }
+
+        /**
+         * Sends the run request, unless the run was cancelled while it waited for an earlier run's browser. Under the
+         * same lock as {@link #cancel()}, so a cancellation is written after the request it stops.
+         */
+        synchronized CompletableFuture<JsonNode> send(RunParams params) {
+            if (cancelled) {
+                return CompletableFuture.failedFuture(new CancellationException("the run was cancelled before it started"));
+            }
+            sent = true;
+            return connection.call(Protocol.METHOD_RUN, params);
+        }
+
+        /** Stops the run: on the server once it has been sent, and before it is sent by not sending it. */
+        synchronized void cancel() {
+            cancelled = true;
+            if (sent) {
+                // The reply says only that the request was read, and a process that has gone answers the run itself.
+                connection.call(Protocol.METHOD_RUN_CANCEL, new RunCancelParams(runId));
+            }
         }
     }
 
@@ -163,20 +188,19 @@ public final class Fastbrowse implements AutoCloseable {
         String runId = UUID.randomUUID().toString();
         RunParams params = params(runId, task, options.browser() != null ? options.browser() : browser, options);
         CompletableFuture<JsonNode> reply = new CompletableFuture<>();
-        Runnable cancel = () -> connection.call(Protocol.METHOD_RUN_CANCEL, new RunCancelParams(runId));
-        Served served = new Served(options, cancel);
+        Served served = new Served(runId, options);
         CompletableFuture<RunResult> result = new CompletableFuture<>() {
             @Override
             public boolean cancel(boolean mayInterruptIfRunning) {
                 settling = reply.handle((value, error) -> null);
-                served.cancel.run();
+                served.cancel();
                 return super.cancel(mayInterruptIfRunning);
             }
         };
         // The server names the run in every message it sends, which is how a run refused as busy hears nothing of the
         // one that is active.
         runs.put(runId, served);
-        settling.whenComplete((ignored, error) -> connection.call(Protocol.METHOD_RUN, params).whenComplete((value, failure) -> {
+        settling.whenComplete((ignored, error) -> served.send(params).whenComplete((value, failure) -> {
             if (failure != null) {
                 reply.completeExceptionally(failure);
             } else {
@@ -243,7 +267,7 @@ public final class Fastbrowse implements AutoCloseable {
             }
         } catch (Exception e) {
             run.failure = method + ": " + e.getMessage();
-            run.cancel.run();
+            run.cancel();
         }
     }
 
