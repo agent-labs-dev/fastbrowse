@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A .NET client.** `dotnet add package Fastbrowse` runs tasks from .NET over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. Cancelling the `CancellationToken` stops a run once its browser has closed. The package carries each platform's binary. .NET 10 or newer.
+
 - **A Java client, for Kotlin too.** `dev.agentlabs:fastbrowse` on Maven Central runs tasks from the JVM over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. `run` returns a `CompletableFuture`, and cancelling it stops the run. Each platform's binary ships in a `natives-<platform>` jar beside the client, unpacked once into the user cache directory. Java 17 or newer.
 
 - **A Go client.** `go get github.com/agent-labs-dev/fastbrowse/go` runs tasks from Go over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames, and cancellation through `context`. The first start downloads the release's binary for the platform and refuses one whose SHA-256 is not the one the module's tag pins. Each release tags the module `go/vX.Y.Z`.

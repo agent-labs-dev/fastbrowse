@@ -34,6 +34,9 @@ TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"
 _WORKSPACE_VERSION = re.compile(r'(?m)^(\[workspace\.package\]\n(?:[^\[\n].*\n)*?version = ")[^"]*(")')
 # The Java client's own version in `java/pom.xml`: the first `<version>`, right after its `<artifactId>`.
 _POM_VERSION = re.compile(r"(<artifactId>fastbrowse</artifactId>\s*<version>)([^<]*)(</version>)")
+# The .NET client's version in its project file.
+_CSPROJ_VERSION = re.compile(r"(<Version>)([^<]*)(</Version>)")
+_CSPROJ = Path("dotnet") / "src" / "Fastbrowse" / "Fastbrowse.csproj"
 # One workspace crate as another depends on it: `fastbrowse-core = { path = "...", version = "=0.8.3" }`.
 _PIN = re.compile(r'(?m)^(fastbrowse[a-z-]* = \{ path = "[^"]+", version = "=)[^"]*(" \})$')
 
@@ -89,6 +92,24 @@ def write_pom(root: Path, version: str) -> None:
         pom.write_text(text, encoding="utf-8")
 
 
+def csproj_version(root: Path) -> str | None:
+    """The .NET client's version, or None in a checkout without one."""
+    project = root / _CSPROJ
+    if not project.exists():
+        return None
+    found = _CSPROJ_VERSION.search(project.read_text(encoding="utf-8"))
+    return found[2] if found else ""
+
+
+def write_csproj(root: Path, version: str) -> None:
+    project = root / _CSPROJ
+    if project.exists():
+        text, count = _CSPROJ_VERSION.subn(rf"\g<1>{version}\g<3>", project.read_text(encoding="utf-8"), count=1)
+        if count != 1:
+            raise SystemExit(f"{project} has no <Version> to set")
+        project.write_text(text, encoding="utf-8")
+
+
 def write_workspace(root: Path, version: str) -> None:
     """Set the Rust workspace's version, and its own packages' entries in `Cargo.lock`, to `version`."""
     cargo = root / "Cargo.toml"
@@ -130,6 +151,7 @@ def main() -> int:
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         write_workspace(args.root, version)
         write_pom(args.root, version)
+        write_csproj(args.root, version)
     found = [f"{path}: {line}" for line in differences(version, manifest)]
     rust = workspace_version(cargo.read_text(encoding="utf-8"))
     if rust != version:
@@ -142,6 +164,9 @@ def main() -> int:
     java = pom_version(args.root)
     if java is not None and java != version:
         found.append(f"{args.root / 'java' / 'pom.xml'}: the Java client is {java}")
+    dotnet = csproj_version(args.root)
+    if dotnet is not None and dotnet != version:
+        found.append(f"{args.root / _CSPROJ}: the .NET client is {dotnet}")
     if found:
         print(f"pyproject.toml is {version}, and in", file=sys.stderr)
         for line in found:
