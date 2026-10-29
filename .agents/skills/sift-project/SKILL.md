@@ -90,7 +90,9 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | src/fastbrowse Python, crates/fastbrowse-browser/js/capture.js and snapshot.js | production |
 | packages/sdk/src/ except protocol.ts | production |
 | packages/sdk/test/ | test |
-| packages/sdk/src/protocol.ts, protocol/schema.json | generated |
+| go/ Go except protocol.go and *_test.go | production |
+| go/*_test.go | test |
+| packages/sdk/src/protocol.ts, protocol/schema.json, go/protocol.go | generated |
 | scripts/ | script |
 | tests/ Python, benchmarks/ Python | test |
 | tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/ | fixture |
