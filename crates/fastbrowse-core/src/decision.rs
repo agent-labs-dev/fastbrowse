@@ -413,8 +413,7 @@ pub struct DecisionProfile {
     pub max_request_bytes: Option<i64>,
     /// List price; `None` where none is published, so an unmetered call is an unknown cost.
     pub dollars_per_input_token: Option<f64>,
-    /// Whether this route is sent image input. Only TypeSafe's own API is, so a page's pixels never pass through a
-    /// reseller.
+    /// Whether this route is sent image input: TypeSafe's own API and OpenRouter are, a backup is not.
     pub images: bool,
     /// Thresholds tuned on the evals against this model; `None` when it was never measured.
     pub thresholds: Option<Thresholds>,

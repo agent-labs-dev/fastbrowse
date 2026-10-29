@@ -108,20 +108,21 @@ async fn test_openrouter_uses_systemone_and_records_cost() {
     }
 }
 
-/// Jev images are direct-only: TypeSafe's own API is sent the image in its documented format with the images header,
-/// and OpenRouter never receives a page's pixels, nor the reference to them.
+/// A route that takes images is sent the image in TypeSafe's documented format with the images header, and a route
+/// that does not never receives a page's pixels, nor the reference to them.
 #[tokio::test]
-async fn test_only_typesafe_is_sent_images() {
+async fn test_only_a_route_that_takes_images_is_sent_them() {
     let images = Images::from([("shot-1".to_string(), b"png bytes".to_vec())]);
     let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
-    for typesafe in [false, true] {
+    for route in ["text", "openrouter", "typesafe"] {
+        let sent = route != "text";
         let http = answering(move |request| {
             let flagged = request
                 .headers
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case(IMAGES_HEADER.0) && value == "true");
             let body: Value = serde_json::from_slice(&request.body).unwrap();
-            if typesafe {
+            if sent {
                 assert!(flagged);
                 assert_eq!(
                     body["assets"],
@@ -139,10 +140,10 @@ async fn test_only_typesafe_is_sent_images() {
             );
             Box::pin(async move { Ok(response) })
         });
-        let client = if typesafe {
-            SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe()
-        } else {
-            SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).long_context()
+        let client = match route {
+            "typesafe" => SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe(),
+            "openrouter" => SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).images(),
+            _ => SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).long_context(),
         };
         let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();
         assert!(matches!(result.answers["q"], Answer::Noul(_)));
