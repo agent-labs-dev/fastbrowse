@@ -4,12 +4,44 @@ name: Binaries
 # user would get.
 on:
   workflow_call:
+    inputs:
+      # The two macOS runners cost the most and queue the longest, so CI leaves them to the release.
+      macos:
+        type: boolean
+        default: true
   workflow_dispatch:
+    inputs:
+      macos:
+        type: boolean
+        default: true
 permissions: {}
 defaults:
   run:
     shell: bash
 jobs:
+  # The targets to build, each on a runner of its own kind, so no cross linker is needed. The Linux builds stay on
+  # GitHub's Ubuntu 22.04, the oldest glibc offered, since a build runs on the system it was built on and on newer
+  # ones. macOS on Apple silicon and Windows run on Blacksmith, whose GitHub-hosted counterparts queued for most of a
+  # run, and `macos-15-intel` is the last Intel image GitHub offers besides `macos-26-intel`. A matrix cannot drop an
+  # `include` entry, so the list is picked here and both build jobs read it.
+  targets:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - id: pick
+        env: {MACOS: "${{ inputs.macos }}"}
+        run: |
+          all='[
+            {"target": "darwin-arm64", "triple": "aarch64-apple-darwin", "runner": "blacksmith-6vcpu-macos-26", "addon": "libfastbrowse_node.dylib"},
+            {"target": "darwin-x64", "triple": "x86_64-apple-darwin", "runner": "macos-15-intel", "addon": "libfastbrowse_node.dylib"},
+            {"target": "linux-x64", "triple": "x86_64-unknown-linux-gnu", "runner": "ubuntu-22.04", "addon": "libfastbrowse_node.so"},
+            {"target": "linux-arm64", "triple": "aarch64-unknown-linux-gnu", "runner": "ubuntu-22.04-arm", "addon": "libfastbrowse_node.so"},
+            {"target": "win32-x64", "triple": "x86_64-pc-windows-msvc", "runner": "blacksmith-8vcpu-windows-2025", "addon": "fastbrowse_node.dll"}
+          ]'
+          if [ "$MACOS" = false ]; then filter='map(select(.target | startswith("darwin-") | not))'; else filter='.'; fi
+          echo "include=$(jq -c "$filter" <<< "$all")" >> "$GITHUB_OUTPUT"
+
   # The Rust `fastbrowse` (crates/fastbrowse-cli, docs/adr/0001) and the Node addon, per target, which the npm
   # platform packages carry.
   #
@@ -18,21 +50,13 @@ jobs:
   # an uploaded artifact loses file modes, and the executable bit with them.
   rust:
     name: rust ${{ matrix.target }}
+    needs: targets
     permissions: {contents: read}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        # Each target on a runner of its own kind, so no cross linker is needed. The Linux builds stay on GitHub's
-        # Ubuntu 22.04, the oldest glibc offered, since a build runs on the system it was built on and on newer
-        # ones. macOS on Apple silicon and Windows run on Blacksmith, whose GitHub-hosted counterparts queued for
-        # most of a run, and `macos-15-intel` is the last Intel image GitHub offers besides `macos-26-intel`.
-        include:
-          - {target: darwin-arm64, triple: aarch64-apple-darwin, runner: blacksmith-6vcpu-macos-26, addon: libfastbrowse_node.dylib}
-          - {target: darwin-x64, triple: x86_64-apple-darwin, runner: macos-15-intel, addon: libfastbrowse_node.dylib}
-          - {target: linux-x64, triple: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, addon: libfastbrowse_node.so}
-          - {target: linux-arm64, triple: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, addon: libfastbrowse_node.so}
-          - {target: win32-x64, triple: x86_64-pc-windows-msvc, runner: blacksmith-8vcpu-windows-2025, addon: fastbrowse_node.dll}
+        include: ${{ fromJSON(needs.targets.outputs.include) }}
     env:
       TARGET: ${{ matrix.target }}
       TRIPLE: ${{ matrix.triple }}
@@ -102,18 +126,14 @@ jobs:
   # pass the smoke test.
   wheel:
     name: wheel ${{ matrix.target }}
+    needs: targets
     permissions: {contents: read}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        # The runners the jobs above use, so the Linux wheels link the glibc of Ubuntu 22.04 as the binaries do.
-        include:
-          - {target: darwin-arm64, runner: blacksmith-6vcpu-macos-26}
-          - {target: darwin-x64, runner: macos-15-intel}
-          - {target: linux-x64, runner: ubuntu-22.04}
-          - {target: linux-arm64, runner: ubuntu-22.04-arm}
-          - {target: win32-x64, runner: blacksmith-8vcpu-windows-2025}
+        # The binaries' runners, so the Linux wheels link the glibc of Ubuntu 22.04 as the binaries do.
+        include: ${{ fromJSON(needs.targets.outputs.include) }}
     env:
       TARGET: ${{ matrix.target }}
       UV_PYTHON_PREFERENCE: only-managed

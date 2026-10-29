@@ -114,8 +114,9 @@ def test_a_directory_with_something_in_it_is_not_written_over(tmp_path: Path) ->
 
 
 def test_the_targets_are_the_ones_built_and_the_ones_the_sdk_depends_on() -> None:
-    # Each job of the workflow builds every target: the Rust executable and addon, and the wheel.
-    built = set(re.findall(r"\{target: ([\w-]+),", (REPO / ".github/workflows/binaries.yml").read_text()))
+    # Both jobs of the workflow build every target from one list, the Rust executable and addon and the wheel, when
+    # the release asks for all of them.
+    built = set(re.findall(r'\{"target": "([\w-]+)",', (REPO / ".github/workflows/binaries.yml").read_text()))
     sdk = json.loads((REPO / "packages/sdk/package.json").read_text())
 
     assert sorted(built) == sorted(TARGETS)
@@ -171,6 +172,6 @@ def test_a_binary_of_another_version_is_refused(tmp_path: Path, held: str) -> No
 
 
 def test_the_rust_job_builds_the_same_targets() -> None:
-    built = re.findall(r"\{target: ([\w-]+), triple:", (REPO / ".github/workflows/binaries.yml").read_text())
+    built = re.findall(r'\{"target": "([\w-]+)", "triple":', (REPO / ".github/workflows/binaries.yml").read_text())
 
     assert sorted(built) == sorted(TARGETS)
