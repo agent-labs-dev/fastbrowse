@@ -20,10 +20,12 @@ The GitHub queries are read-only and need no repository secret.
 """
 
 import argparse
+import base64
 import json
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -173,6 +175,8 @@ def problems(
     # evidence; asking GitHub for a separately dispatched run would refuse a tag that ran them itself.
     if not evals_ran_here and not _evals_green(repository, head, token):
         issues.append(f"no successful {WORKFLOW} run on the release build {head[:12]}")
+    # A release is only a build the eval suites measured; no trace for this build blocks it first.
+    issues += eval_evidence_problems(version, head)
     rows = comparison_rows(version, root)
     if rows is None:
         return issues
@@ -200,6 +204,75 @@ def problems(
             )
     issues += publication_problems(version, root)
     return issues
+
+
+LANGFUSE_HOST = "https://us.cloud.langfuse.com"
+"""The dedicated eval project's host, the only one the evidence read is ever pointed at."""
+LANGFUSE_ATTEMPTS = 4
+"""Reads before the evidence is called missing: a blip is waited out, an absence is not."""
+LANGFUSE_TIMEOUT = 30.0
+"""Seconds per read, so a hung request retries instead of holding the release for the runner's budget."""
+
+
+def _basic(public: str, secret: str) -> str:
+    return base64.b64encode(f"{public}:{secret}".encode()).decode()
+
+
+def _langfuse_read(path: str, params: dict[str, str]) -> dict[str, Any] | None:
+    """One Langfuse read, retried on a transient failure. None only when every attempt failed."""
+    public = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    secret = os.environ.get("LANGFUSE_SECRET_KEY")
+    if not public or not secret:
+        return None
+    url = f"{LANGFUSE_HOST}{path}?{urllib.parse.urlencode(params)}"
+    request = urllib.request.Request(url, headers={"Authorization": "Basic " + _basic(public, secret)})
+    for attempt in range(1, LANGFUSE_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=LANGFUSE_TIMEOUT) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            # A 429 or a 5xx is the project being busy; a 401/403/404 is the answer, not a blip.
+            if exc.code < 500 and exc.code != 429:
+                raise RuntimeError(f"Langfuse refused the eval evidence read with HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            pass
+        if attempt < LANGFUSE_ATTEMPTS:
+            time.sleep(2 ** attempt)
+    return None
+
+
+def eval_evidence_problems(version: str, head: str) -> list[str]:
+    """Refuse a release whose build has no recorded eval run in the fastbrowse-evals project.
+
+    Every release is a build the eval suites ran, whether or not it publishes a figure: the job writes
+    each attempt as a trace named for the build, so an absence means nobody measured this commit and the
+    release is blocked rather than passed. Missing credentials fail closed for the same reason.
+    """
+    if not os.environ.get("LANGFUSE_PUBLIC_KEY") or not os.environ.get("LANGFUSE_SECRET_KEY"):
+        return ["LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required to prove a release has an eval run"]
+    body = _langfuse_read(
+        "/api/public/v2/observations",
+        {
+            "fields": "core",
+            "limit": "1",
+            "fromStartTime": "2020-01-01T00:00:00Z",
+            "filter": json.dumps(
+                [
+                    {
+                        "type": "string",
+                        "column": "traceName",
+                        "operator": "starts with",
+                        "value": f"fastbrowse/{version}@{head[:7]}/",
+                    }
+                ]
+            ),
+        },
+    )
+    if body is None:
+        return [f"could not read eval evidence for {head[:12]} after {LANGFUSE_ATTEMPTS} attempts"]
+    if not body.get("data"):
+        return [f"no eval run recorded in the fastbrowse-evals project for build {head[:12]}"]
+    return []
 
 
 def main(argv: list[str] | None = None) -> int:
