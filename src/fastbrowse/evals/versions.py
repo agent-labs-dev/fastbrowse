@@ -39,7 +39,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from fastbrowse import build
+from fastbrowse.build import identity
 from fastbrowse.evals import baseline
 
 LOCK = Path(__file__).with_name("versions.json")
@@ -186,7 +186,7 @@ def provenance(**extra: object) -> dict[str, object]:
     return {
         "run_id": uuid.uuid4().hex[:12],
         "run_started": datetime.now(UTC).isoformat(timespec="seconds"),
-        **build.identity(),
+        **identity(),
         "python": platform.python_version(),
         **extra,
     }

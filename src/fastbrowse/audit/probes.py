@@ -14,6 +14,8 @@ import subprocess
 import sys
 from typing import Any
 
+from pydantic import ValidationError
+
 from fastbrowse.audit.cases import CLI_FLAGS
 from fastbrowse.models import (
     CostBreakdown,
@@ -98,10 +100,13 @@ def repeat_status() -> dict[str, Any]:
     for _ in range(2):
         run = _run(argv, timeout=280.0)
         try:
-            result = RunResult.model_validate_json(run.stdout)
+            # `--json` adds the build that produced the result, which is not a `RunResult` field.
+            fields = json.loads(run.stdout)
+            fields.pop("build", None)
+            result = RunResult.model_validate(fields)
             statuses.append(result.status.value)
             cost += result.cost.known_dollars
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, ValidationError):
             statuses.append(None)
     return {
         "status": "ok",
