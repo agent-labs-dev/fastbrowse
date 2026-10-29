@@ -68,6 +68,19 @@ fn wire_message(message: &Message) -> Result<Value, LLMError> {
     Ok(json!({"role": message.role.as_str(), "content": parts}))
 }
 
+/// The schema stated for an endpoint that cannot be given it as `response_format`. JSON mode on such endpoints (DeepSeek's)
+/// also refuses a prompt that never says "json".
+fn schema_instruction(schema: &Value) -> String {
+    format!("Reply with one JSON object, and nothing else, that matches this JSON Schema:\n{schema}")
+}
+
+/// A reply without JSON mode can wrap its object in a Markdown fence; the fence is not the model's answer.
+fn unfenced(content: &str) -> &str {
+    let trimmed = content.trim();
+    let Some(inner) = trimmed.strip_prefix("```").and_then(|rest| rest.strip_suffix("```")) else { return content };
+    inner.strip_prefix("json").unwrap_or(inner).trim()
+}
+
 fn first_choice(payload: &Map<String, Value>) -> Result<Option<&Map<String, Value>>, String> {
     match payload.get("choices").and_then(Value::as_array) {
         Some(choices) if !choices.is_empty() => object_value(choices.first()).map(Some),
@@ -106,14 +119,20 @@ fn short_of_cap(payload: &Map<String, Value>, cap: i64) -> Option<i64> {
 ///
 /// Repairing the JSON would send the same prompt under the same cap and be cut off again, so the one retry is spent on
 /// more room instead, and a second truncation is reported as what it is.
-fn grow_cap(body: &mut Map<String, Value>, attempt: usize, cap: i64, purpose: LLMPurpose) -> Result<(), LLMError> {
+fn grow_cap(
+    body: &mut Map<String, Value>,
+    field: &str,
+    attempt: usize,
+    cap: i64,
+    purpose: LLMPurpose,
+) -> Result<(), LLMError> {
     if attempt == 1 {
         return Err(LLMError::Failed(format!(
             "LLM response truncated at the {} token output cap ({purpose})",
-            body["max_tokens"]
+            body[field]
         )));
     }
-    body.insert("max_tokens".into(), (cap * TRUNCATION_RETRY_FACTOR).into());
+    body.insert(field.into(), (cap * TRUNCATION_RETRY_FACTOR).into());
     Ok(())
 }
 
@@ -248,6 +267,41 @@ impl ReasoningEffort {
     }
 }
 
+/// Where a request carries the reasoning effort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningField {
+    /// OpenRouter's `reasoning: {"effort": ...}`, which the gateway and many local servers also read.
+    OpenRouter,
+    /// OpenAI's top-level `reasoning_effort`, which the other OpenAI-compatible APIs copy.
+    Effort,
+}
+
+impl ReasoningField {
+    pub fn key(self) -> &'static str {
+        match self {
+            ReasoningField::OpenRouter => "reasoning",
+            ReasoningField::Effort => "reasoning_effort",
+        }
+    }
+
+    fn value(self, effort: ReasoningEffort) -> Value {
+        match self {
+            ReasoningField::OpenRouter => json!({"effort": effort.as_str()}),
+            ReasoningField::Effort => effort.as_str().into(),
+        }
+    }
+}
+
+/// How a request asks for output that matches the schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// `response_format: json_schema`, which the endpoint decodes against.
+    JsonSchema,
+    /// `response_format: json_object` with the schema stated in the prompt, for an endpoint that takes no schema. The
+    /// schema is not enforced, so the one repair is what holds the reply to it.
+    JsonObject,
+}
+
 /// A `Some(value)` that is not JSON null: Python's `.get(key)` reads both as `None`.
 fn present<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
     map.get(key).filter(|value| !value.is_null())
@@ -255,7 +309,11 @@ fn present<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
 
 pub struct OpenAICompatibleLLM {
     api_key: String,
+    auth_header: Option<&'static str>,
     strict: bool,
+    output_format: OutputFormat,
+    output_cap_field: &'static str,
+    reasoning_field: ReasoningField,
     extra_body: Map<String, Value>,
     http: Http,
     base_url: String,
@@ -272,8 +330,14 @@ pub struct LLMOptions {
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Efforts for single purposes, over `reasoning_effort`.
     pub purpose_reasoning: HashMap<LLMPurpose, ReasoningEffort>,
+    pub reasoning_field: ReasoningField,
     pub provider_routing: Option<Value>,
     pub strict: bool,
+    pub output_format: OutputFormat,
+    /// `max_tokens`, or `max_completion_tokens` where an API has deprecated the other for its reasoning models.
+    pub output_cap_field: &'static str,
+    /// The header that carries the key in place of `Authorization: Bearer`, such as Azure's `api-key`.
+    pub auth_header: Option<&'static str>,
     pub extra_body: Map<String, Value>,
 }
 
@@ -282,8 +346,12 @@ impl Default for LLMOptions {
         LLMOptions {
             reasoning_effort: None,
             purpose_reasoning: HashMap::new(),
+            reasoning_field: ReasoningField::OpenRouter,
             provider_routing: Some(openrouter_provider_routing()),
             strict: true,
+            output_format: OutputFormat::JsonSchema,
+            output_cap_field: "max_tokens",
+            auth_header: None,
             extra_body: Map::new(),
         }
     }
@@ -355,13 +423,22 @@ impl OpenAICompatibleLLM {
         models: HashMap<LLMPurpose, String>,
         options: LLMOptions,
     ) -> Result<OpenAICompatibleLLM, String> {
-        let clashes = reserved_clashes(&options.extra_body);
+        let mut clashes = reserved_clashes(&options.extra_body);
+        for key in [options.output_cap_field, options.reasoning_field.key()] {
+            if options.extra_body.contains_key(key) && !clashes.contains(&key) {
+                clashes.push(key);
+            }
+        }
         if !clashes.is_empty() {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
         }
         Ok(OpenAICompatibleLLM {
             api_key: api_key.into(),
+            auth_header: options.auth_header,
             strict: options.strict,
+            output_format: options.output_format,
+            output_cap_field: options.output_cap_field,
+            reasoning_field: options.reasoning_field,
             extra_body: options.extra_body,
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -374,10 +451,10 @@ impl OpenAICompatibleLLM {
     }
 
     fn headers(&self) -> Vec<(String, String)> {
-        if self.api_key.is_empty() {
-            vec![]
-        } else {
-            vec![("Authorization".into(), format!("Bearer {}", self.api_key))]
+        match self.auth_header {
+            _ if self.api_key.is_empty() => vec![],
+            Some(header) => vec![(header.into(), self.api_key.clone())],
+            None => vec![("Authorization".into(), format!("Bearer {}", self.api_key))],
         }
     }
 
@@ -523,7 +600,7 @@ impl OpenAICompatibleLLM {
         let Some(model) = self.models.get(&purpose) else {
             return Err(LLMError::Failed(format!("No model configured for {purpose}")));
         };
-        let wire_messages = messages.iter().map(wire_message).collect::<Result<Vec<_>, _>>()?;
+        let mut wire_messages = messages.iter().map(wire_message).collect::<Result<Vec<_>, _>>()?;
         // Strict mode needs every property required and no defaults; a decoder without strict support (some local
         // vLLM builds) gets the model's own schema instead.
         let json_schema = if self.strict {
@@ -531,19 +608,26 @@ impl OpenAICompatibleLLM {
         } else {
             schema.json_schema()
         };
+        let response_format = match self.output_format {
+            OutputFormat::JsonSchema => json!({
+                "type": "json_schema",
+                "json_schema": {"name": schema.name(), "schema": json_schema, "strict": self.strict},
+            }),
+            OutputFormat::JsonObject => {
+                wire_messages.push(json!({"role": "system", "content": schema_instruction(&json_schema)}));
+                json!({"type": "json_object"})
+            }
+        };
         let mut body = self.extra_body.clone();
         body.insert("model".into(), model.clone().into());
-        body.insert("max_tokens".into(), max_output_tokens.into());
+        body.insert(self.output_cap_field.into(), max_output_tokens.into());
         body.insert("messages".into(), wire_messages.into());
-        body.insert(
-            "response_format".into(),
-            json!({"type": "json_schema", "json_schema": {"name": schema.name(), "schema": json_schema, "strict": self.strict}}),
-        );
+        body.insert("response_format".into(), response_format);
         if let Some(routing) = &self.provider_routing {
             body.insert("provider".into(), routing.clone());
         }
         if let Some(effort) = self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort) {
-            body.insert("reasoning".into(), json!({"effort": effort.as_str()}));
+            body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
         let mut billing = Billing {
             llm: self,
@@ -607,10 +691,11 @@ impl OpenAICompatibleLLM {
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
             if truncated(&payload).map_err(LLMError::Failed)? {
-                grow_cap(body, attempt, max_output_tokens, purpose)?;
+                grow_cap(body, self.output_cap_field, attempt, max_output_tokens, purpose)?;
                 continue;
             }
             let content = match content(&payload) {
+                Ok(content) if self.output_format == OutputFormat::JsonObject => unfenced(&content).to_string(),
                 Ok(content) => content,
                 // An empty completion comes back intermittently (a dropped or refused generation); ask once more.
                 Err(_) if attempt == 0 => continue,
@@ -641,9 +726,9 @@ impl OpenAICompatibleLLM {
             // it read, so it is scrubbed too.
             let detail = self.scrubbed(&detail);
             if ends_mid_json {
-                let cap = body["max_tokens"].as_i64().unwrap_or(max_output_tokens);
+                let cap = body[self.output_cap_field].as_i64().unwrap_or(max_output_tokens);
                 match short_of_cap(&payload, cap) {
-                    None => grow_cap(body, attempt, max_output_tokens, purpose)?,
+                    None => grow_cap(body, self.output_cap_field, attempt, max_output_tokens, purpose)?,
                     Some(written) if short_retried => {
                         return Err(LLMError::RetriesExhausted(format!(
                             "LLM response ended mid-JSON at {written} of {cap} output tokens twice"

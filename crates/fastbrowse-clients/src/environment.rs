@@ -16,6 +16,10 @@
 //! once, and FASTBROWSE_LLM_MODEL_<PURPOSE> overrides one. FASTBROWSE_LLM_REASONING sets the reasoning effort: none,
 //! low (default), medium or high, and FASTBROWSE_LLM_REASONING_<PURPOSE> sets one purpose's.
 //!
+//! FASTBROWSE_LLM_PROVIDER names the LLM provider outright instead: openrouter, gateway, openai, anthropic, gemini,
+//! groq, together, mistral, deepseek, xai, fireworks, azure, ollama, lmstudio, vllm or custom. Each reads its own key
+//! variable and sends it to its own host only; [`crate::providers`] holds what each one takes.
+//!
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.
 //!
@@ -34,10 +38,12 @@ use serde_json::{Map, Value};
 use crate::failover::FailoverDecisionClient;
 use crate::http::Http;
 use crate::openai_compatible::{
-    LLMOptions, OpenAICompatibleLLM, ReasoningEffort, gateway_provider_routing, openrouter_provider_routing,
-    reserved_clashes,
+    LLMOptions, OpenAICompatibleLLM, ReasoningEffort, ReasoningField, gateway_provider_routing,
+    openrouter_provider_routing, reserved_clashes,
 };
 use crate::openai_decisions::{OPENAI_DECISIONS_MODEL, OPENAI_URL, OpenAIDecisionsClient};
+pub use crate::providers::LLMProvider;
+use crate::providers::{Endpoint, KeySource, Preset};
 use crate::system_one::{
     AIMLAPI_MODEL, AIMLAPI_URL, DECISIONS_PATH, OLLAMA_URL, OPENROUTER_MODEL, OPENROUTER_URL, PERPLEXITY_MODEL,
     PERPLEXITY_URL, SystemOneClient, TELNYX_MODEL, TELNYX_URL, TYPESAFE_URL,
@@ -132,31 +138,6 @@ impl std::fmt::Display for DecisionSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LLMSource {
-    OpenRouter,
-    Gateway,
-    Local,
-}
-
-impl LLMSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LLMSource::OpenRouter => "openrouter",
-            LLMSource::Gateway => "gateway",
-            LLMSource::Local => "local",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            LLMSource::OpenRouter => "OpenRouter",
-            LLMSource::Gateway => "Vercel AI Gateway",
-            LLMSource::Local => "local endpoint",
-        }
-    }
-}
-
 /// A missing key or an invalid setting in the environment, reported without a traceback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigurationError(pub String);
@@ -215,6 +196,10 @@ pub struct Settings {
     pub openai_api_key: Option<Secret>,
     pub aimlapi_api_key: Option<Secret>,
     pub perplexity_api_key: Option<Secret>,
+    /// FASTBROWSE_LLM_PROVIDER: the LLM provider named outright rather than inferred from which keys are set.
+    pub llm_provider: Option<LLMProvider>,
+    /// The key from the variable FASTBROWSE_LLM_PROVIDER's preset reads, such as OPENAI_API_KEY.
+    pub llm_provider_api_key: Option<Secret>,
     pub llm_model: Option<String>,
     pub llm_model_plan: Option<String>,
     pub llm_model_read: Option<String>,
@@ -231,6 +216,8 @@ pub struct Settings {
     pub llm_api_key: Option<Secret>,
     /// Send strict structured output. Some local vLLM builds mangle the output under strict mode.
     pub llm_strict: bool,
+    /// Whether FASTBROWSE_LLM_STRICT was given: a preset's own default holds until it is.
+    pub llm_strict_set: bool,
     /// Extra JSON object merged into every chat completions request body to the custom endpoint. An invalid value
     /// stops the run.
     pub llm_extra_body: Option<String>,
@@ -266,6 +253,8 @@ impl Default for Settings {
             openai_api_key: None,
             aimlapi_api_key: None,
             perplexity_api_key: None,
+            llm_provider: None,
+            llm_provider_api_key: None,
             llm_model: None,
             llm_model_plan: None,
             llm_model_read: None,
@@ -277,6 +266,7 @@ impl Default for Settings {
             llm_base_url: None,
             llm_api_key: None,
             llm_strict: true,
+            llm_strict_set: false,
             llm_extra_body: None,
             llm_reasoning: DEFAULT_REASONING,
             llm_reasoning_set: false,
@@ -302,7 +292,7 @@ const FORMERLY: [(&str, &str); 3] = [
 ];
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 36] = [
+const FIELDS: [(&str, &str); 37] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -316,6 +306,7 @@ const FIELDS: [(&str, &str); 36] = [
     ("OPENAI_API_KEY", "openai_api_key"),
     ("AIMLAPI_API_KEY", "aimlapi_api_key"),
     ("PERPLEXITY_API_KEY", "perplexity_api_key"),
+    ("llm_provider", "fastbrowse_llm_provider"),
     ("llm_model", "fastbrowse_llm_model"),
     ("llm_model_plan", "fastbrowse_llm_model_plan"),
     ("llm_model_read", "fastbrowse_llm_model_read"),
@@ -415,6 +406,10 @@ impl Settings {
                 invalid.push(name);
             }
         }
+        // Only the variable the named provider reads: a key for any other provider stays out of the settings.
+        if let Some(KeySource::Variable(variable)) = settings.llm_provider.map(|provider| provider.preset().key) {
+            settings.llm_provider_api_key = values.get(&variable.to_lowercase()).map(Secret::new);
+        }
         if !invalid.is_empty() {
             // Name the setting, never echo the input: the field may be a key.
             return Err(ConfigurationError(format!("invalid settings: {}", invalid.join(", "))));
@@ -439,6 +434,7 @@ impl Settings {
             "OPENAI_API_KEY" => self.openai_api_key = secret(),
             "AIMLAPI_API_KEY" => self.aimlapi_api_key = secret(),
             "PERPLEXITY_API_KEY" => self.perplexity_api_key = secret(),
+            "llm_provider" => self.llm_provider = Some(LLMProvider::parse(value).ok_or(())?),
             "llm_model" => self.llm_model = text(),
             "llm_model_plan" => self.llm_model_plan = text(),
             "llm_model_read" => self.llm_model_read = text(),
@@ -449,7 +445,10 @@ impl Settings {
             "llm_model_shortcut" => self.llm_model_shortcut = text(),
             "llm_base_url" => self.llm_base_url = text(),
             "llm_api_key" => self.llm_api_key = secret(),
-            "llm_strict" => self.llm_strict = bool_of(&Value::String(value.into())).map_err(|_| ())?,
+            "llm_strict" => {
+                self.llm_strict = bool_of(&Value::String(value.into())).map_err(|_| ())?;
+                self.llm_strict_set = true;
+            }
             "llm_extra_body" => self.llm_extra_body = text(),
             "llm_reasoning" => {
                 self.llm_reasoning = ReasoningEffort::parse(value).ok_or(())?;
@@ -557,19 +556,33 @@ impl Settings {
             Some(backup) => format!("backup {backup}"),
             None => "no backup: an outage past its retries ends the run".to_string(),
         };
-        let models: BTreeSet<String> = self.models().into_values().collect();
-        let models: Vec<String> = models.into_iter().collect();
-        format!("Jev {source} ({failover}); LLM {} via {}", models.join(", "), self.llm_source().label())
+        let llm = self.llm_source();
+        let models = match llm {
+            LLMProvider::OpenRouter | LLMProvider::Gateway => Ok(self.models()),
+            _ => self.preset_models(&llm.preset()),
+        };
+        let models = match models {
+            Ok(models) => models.into_values().collect::<BTreeSet<String>>().into_iter().collect::<Vec<_>>().join(", "),
+            Err(_) => "model unset".to_string(),
+        };
+        format!("Jev {source} ({failover}); LLM {models} via {}", llm.label())
     }
 
-    /// Where the LLM goes: a custom endpoint when FASTBROWSE_LLM_BASE_URL is set, else OpenRouter when keyed, otherwise
-    /// the gateway, which serves the same models.
-    pub fn llm_source(&self) -> LLMSource {
-        // An empty FASTBROWSE_LLM_BASE_URL= left in a `.env` is unset, not a request to an empty address.
-        if self.llm_base_url.as_ref().is_some_and(|url| !url.is_empty()) {
-            return LLMSource::Local;
+    /// Where the LLM goes: the provider FASTBROWSE_LLM_PROVIDER names; otherwise a custom endpoint when
+    /// FASTBROWSE_LLM_BASE_URL is set, else OpenRouter when keyed, otherwise the gateway, which serves the same models.
+    pub fn llm_source(&self) -> LLMProvider {
+        if let Some(provider) = self.llm_provider {
+            return provider;
         }
-        if set(&self.openrouter_api_key) { LLMSource::OpenRouter } else { LLMSource::Gateway }
+        if self.llm_base_url().is_some() {
+            return LLMProvider::Custom;
+        }
+        if set(&self.openrouter_api_key) { LLMProvider::OpenRouter } else { LLMProvider::Gateway }
+    }
+
+    /// An empty FASTBROWSE_LLM_BASE_URL= left in a `.env` is unset, not a request to an empty address.
+    fn llm_base_url(&self) -> Option<&str> {
+        self.llm_base_url.as_deref().map(str::trim).filter(|url| !url.is_empty())
     }
 
     pub fn decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
@@ -690,11 +703,11 @@ impl Settings {
         Ok(parsed)
     }
 
-    /// Per-purpose models for a custom endpoint, with no default to fall back on.
+    /// Per-purpose models for a preset, falling back only on the preset's own defaults.
     ///
-    /// A default model is an OpenRouter id the endpoint would not serve, which surfaces as a 404 on the first plan
+    /// The OpenRouter default is an id another provider would not serve, which surfaces as a 404 on the first plan
     /// rather than as the setting that is missing; a blank `FASTBROWSE_LLM_MODEL=` in a `.env` is unset too.
-    fn local_models(&self) -> Result<HashMap<LLMPurpose, String>, ConfigurationError> {
+    fn preset_models(&self, preset: &Preset) -> Result<HashMap<LLMPurpose, String>, ConfigurationError> {
         LLMPurpose::ALL
             .iter()
             .map(|purpose| {
@@ -703,50 +716,126 @@ impl Settings {
                     .flatten()
                     .map(|model| model.trim())
                     .find(|model| !model.is_empty())
+                    .or_else(|| preset.models.map(|default| default(*purpose)))
                     .map(|model| (*purpose, model.to_string()))
                     .ok_or_else(|| {
-                        ConfigurationError(
-                            "set FASTBROWSE_LLM_MODEL to the model FASTBROWSE_LLM_BASE_URL serves".into(),
-                        )
+                        ConfigurationError(match preset.provider {
+                            LLMProvider::Custom => {
+                                "set FASTBROWSE_LLM_MODEL to the model FASTBROWSE_LLM_BASE_URL serves".into()
+                            }
+                            provider => format!("set FASTBROWSE_LLM_MODEL to a model {} serves", provider.label()),
+                        })
                     })
             })
             .collect()
     }
 
-    pub fn llm(&self, http: &Http) -> Result<Box<dyn LLMClient>, ConfigurationError> {
-        let (key, base_url, routing) = match self.llm_source() {
-            LLMSource::Local => {
-                // Only this endpoint's own key: an OpenRouter or gateway key must never reach another host.
-                let key = self.llm_api_key.as_ref().map(|key| key.expose().trim().to_string()).unwrap_or_default();
-                let options = LLMOptions {
-                    // `reasoning` is OpenRouter's field, and a strict server answers HTTP 400 to a field it does not
-                    // know, so the local route sends it only when FASTBROWSE_LLM_REASONING asks for it.
-                    reasoning_effort: self.llm_reasoning_set.then_some(self.llm_reasoning),
-                    purpose_reasoning: self.purpose_reasoning(),
-                    provider_routing: None,
-                    strict: self.llm_strict,
-                    extra_body: self.extra_body()?,
-                };
-                let base_url = self.llm_base_url.clone().unwrap_or_default();
-                return OpenAICompatibleLLM::new(key, http.clone(), &base_url, self.local_models()?, options)
-                    .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
-                    .map_err(ConfigurationError);
+    /// The address a preset's requests go to. A provider's key is sent to that provider's host alone, so a hosted
+    /// preset refuses another address rather than carry its key there.
+    fn preset_url(&self, preset: &Preset) -> Result<String, ConfigurationError> {
+        let provider = preset.provider;
+        match (preset.endpoint, self.llm_base_url()) {
+            (Endpoint::Hosted(url), None) => Ok(url.to_string()),
+            (Endpoint::Hosted(_), Some(_)) => Err(ConfigurationError(format!(
+                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER={provider}, whose key goes to its \
+                 own host only; use FASTBROWSE_LLM_PROVIDER=custom for another endpoint"
+            ))),
+            (Endpoint::Resource(suffixes), Some(url)) => {
+                let parsed = url::Url::parse(url).ok();
+                let host = parsed.as_ref().filter(|url| url.scheme() == "https").and_then(url::Url::host_str);
+                match host {
+                    Some(host) if suffixes.iter().any(|suffix| host.ends_with(suffix)) => Ok(url.to_string()),
+                    _ => Err(ConfigurationError(format!(
+                        "FASTBROWSE_LLM_BASE_URL must be an https address on {} for FASTBROWSE_LLM_PROVIDER={provider}",
+                        suffixes.join(" or ")
+                    ))),
+                }
             }
-            LLMSource::OpenRouter => match &self.openrouter_api_key {
+            (Endpoint::Resource(suffixes), None) => Err(ConfigurationError(format!(
+                "set FASTBROWSE_LLM_BASE_URL to your resource's /openai/v1 address on {} for \
+                 FASTBROWSE_LLM_PROVIDER={provider}",
+                suffixes.join(" or ")
+            ))),
+            (Endpoint::Local(_) | Endpoint::Custom, Some(url)) => Ok(url.to_string()),
+            (Endpoint::Local(url), None) => Ok(url.to_string()),
+            (Endpoint::Custom, None) => {
+                Err(ConfigurationError("set FASTBROWSE_LLM_BASE_URL for FASTBROWSE_LLM_PROVIDER=custom".into()))
+            }
+        }
+    }
+
+    fn preset_llm(&self, preset: Preset, http: &Http) -> Result<Box<dyn LLMClient>, ConfigurationError> {
+        let provider = preset.provider;
+        let base_url = self.preset_url(&preset)?;
+        let key = match preset.key {
+            // Only this provider's own key: an OpenRouter or gateway key must never reach another host.
+            KeySource::Local => {
+                self.llm_api_key.as_ref().map(|key| key.expose().trim().to_string()).unwrap_or_default()
+            }
+            KeySource::Variable(variable) => match &self.llm_provider_api_key {
+                Some(key) if !key.expose().trim().is_empty() => key.expose().trim().to_string(),
+                _ => {
+                    return Err(ConfigurationError(format!("set {variable} for FASTBROWSE_LLM_PROVIDER={provider}")));
+                }
+            },
+        };
+        // The effort goes only where it was asked for: a strict server answers HTTP 400 to a field it does not know,
+        // and each provider's own default is a better guess than OpenRouter's for its models.
+        let purpose_reasoning = self.purpose_reasoning();
+        let reasoning_effort = match (self.llm_reasoning_set || !purpose_reasoning.is_empty(), preset.reasoning) {
+            (false, _) => None,
+            (true, Some(_)) => self.llm_reasoning_set.then_some(self.llm_reasoning),
+            (true, None) => {
+                return Err(ConfigurationError(format!(
+                    "{} takes no reasoning effort through its OpenAI-compatible API; unset FASTBROWSE_LLM_REASONING \
+                     and FASTBROWSE_LLM_REASONING_<PURPOSE>",
+                    provider.label()
+                )));
+            }
+        };
+        let options = LLMOptions {
+            reasoning_effort,
+            purpose_reasoning,
+            reasoning_field: preset.reasoning.unwrap_or(ReasoningField::OpenRouter),
+            provider_routing: None,
+            strict: if self.llm_strict_set { self.llm_strict } else { preset.strict },
+            output_format: preset.output_format,
+            output_cap_field: preset.output_cap_field,
+            auth_header: preset.auth_header,
+            extra_body: self.extra_body()?,
+        };
+        OpenAICompatibleLLM::new(key, http.clone(), &base_url, self.preset_models(&preset)?, options)
+            .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
+            .map_err(ConfigurationError)
+    }
+
+    pub fn llm(&self, http: &Http) -> Result<Box<dyn LLMClient>, ConfigurationError> {
+        let source = self.llm_source();
+        if matches!(source, LLMProvider::OpenRouter | LLMProvider::Gateway)
+            && self.llm_provider.is_some()
+            && self.llm_base_url().is_some()
+        {
+            return Err(ConfigurationError(format!(
+                "FASTBROWSE_LLM_BASE_URL cannot be used with FASTBROWSE_LLM_PROVIDER={source}, whose key goes to its own \
+                 host only; use FASTBROWSE_LLM_PROVIDER=custom for another endpoint"
+            )));
+        }
+        let (key, base_url, routing) = match source {
+            LLMProvider::OpenRouter => match &self.openrouter_api_key {
                 Some(key) if key.is_set() => (key, LLM_OPENROUTER_URL, openrouter_provider_routing()),
                 _ => return Err(ConfigurationError("set OPENROUTER_API_KEY or AI_GATEWAY_API_KEY for the LLM".into())),
             },
-            LLMSource::Gateway => match &self.ai_gateway_api_key {
+            LLMProvider::Gateway => match &self.ai_gateway_api_key {
                 Some(key) if key.is_set() => (key, LLM_GATEWAY_URL, gateway_provider_routing()),
                 _ => return Err(ConfigurationError("set AI_GATEWAY_API_KEY or OPENROUTER_API_KEY for the LLM".into())),
             },
+            provider => return self.preset_llm(provider.preset(), http),
         };
         let options = LLMOptions {
             reasoning_effort: Some(self.llm_reasoning),
             purpose_reasoning: self.purpose_reasoning(),
             provider_routing: Some(routing),
-            strict: true,
-            extra_body: Map::new(),
+            ..LLMOptions::default()
         };
         OpenAICompatibleLLM::new(key.expose(), http.clone(), base_url, self.models(), options)
             .map(|llm| Box::new(llm) as Box<dyn LLMClient>)

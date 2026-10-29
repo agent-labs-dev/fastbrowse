@@ -7,7 +7,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{Script, answer_model, answering};
-use fastbrowse_clients::environment::{ConfigurationError, DecisionSource, LLMSource, Settings, default_model};
+use fastbrowse_clients::environment::{ConfigurationError, DecisionSource, LLMProvider, Settings, default_model};
 use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::decision::{DecisionError, NoulQuestion, Question};
 use fastbrowse_core::llm::{Generation, Message};
@@ -383,7 +383,7 @@ async fn test_a_base_url_takes_the_llm_from_openrouter_and_the_gateway() {
 #[test]
 fn test_an_empty_base_url_leaves_the_llm_on_openrouter() {
     let loaded = settings(&[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_BASE_URL", "")]);
-    assert_eq!(loaded.llm_source(), LLMSource::OpenRouter);
+    assert_eq!(loaded.llm_source(), LLMProvider::OpenRouter);
 }
 
 #[tokio::test]
@@ -511,7 +511,7 @@ fn test_the_local_settings_read_their_documented_variables() {
         ("FASTBROWSE_LLM_STRICT", "0"),
         ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"top_k": 20}"#),
     ]);
-    assert_eq!(loaded.llm_source(), LLMSource::Local);
+    assert_eq!(loaded.llm_source(), LLMProvider::Custom);
     assert_eq!(loaded.llm_api_key.as_ref().map(|key| key.expose()), Some("k"));
     assert!(!loaded.llm_strict);
     assert_eq!(loaded.llm_extra_body.as_deref(), Some(r#"{"top_k": 20}"#));
@@ -647,7 +647,7 @@ fn the_example_dotenv_reads_as_python_dotenv_reads_it() {
         loaded.openrouter_api_key.as_ref().map(|key| key.expose()),
         Some("# the LLM, and a supported Jev text route, https://openrouter.ai/keys")
     );
-    assert_eq!(loaded.llm_source(), LLMSource::OpenRouter);
+    assert_eq!(loaded.llm_source(), LLMProvider::OpenRouter);
     assert!(loaded.ai_gateway_api_key.is_none());
 }
 
