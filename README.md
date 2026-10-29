@@ -38,7 +38,7 @@ credentials, irreversible actions and spending under the control of code.
 Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.29 in model calls. Playback is sped
 up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
-Against the hosted Browser Use agent, on 46 tasks with three repeats each, fastbrowse passed 99.3% to 97.8% at
+Against the hosted Browser Use agent, on 46 tasks with three repeats each, fastbrowse passed 99.2% to 97.8% at
 $0.0510 a run to $0.3267, and took 16.4s to 16.1s. See [How it compares](#how-it-compares).
 
 ## Try it
@@ -253,7 +253,7 @@ Benchmarking makes three comparisons:
 
 - **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, the figures above, on Browser
   Use cloud browsers under identical limits with the hosted agent at its defaults. On its own 53-task catalog,
-  fastbrowse passed 99.4% at 14.5s and $0.0383 a run.
+  fastbrowse passed 99.3% at 14.5s and $0.0383 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In the published campaign the pool passed fewer tasks (96.2% against 98.1%).
 - **C3, fastbrowse on its pool against `jev-ultrafast`,** over 6 tasks: not yet measured.

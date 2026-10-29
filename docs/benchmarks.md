@@ -38,13 +38,13 @@ sha256 `46dfe0123d6626cb909290064f2ed84cb56fe187e204d1daed0e741aedac4e2c`.
 
 | Metric | fastbrowse | Browser Use (hosted) | Delta |
 |:--|:--|:--|:--|
-| Task success | 99.3% (137 of 138 counted) | 97.8% (135 of 138) | 1.4 points higher |
+| Task success | 99.2% (137 of 138 counted) | 97.8% (135 of 138) | 1.4 points higher |
 | Execution time | 16.4s | 16.1s | 0.3s slower |
 | Cost per run | $0.0510 | $0.3267 | 6.4x cheaper |
 
 Task success is the share of scored results the source grader passed. Completion is reported separately:
 fastbrowse completed 135 of 138 results to the hosted agent's 138 of 138. The same campaign also publishes the
-`fastbrowse-internal` group, fastbrowse alone on the 53-task internal catalog: 99.4% (158 of 159), an execution
+`fastbrowse-internal` group, fastbrowse alone on the 53-task internal catalog: 99.3% (158 of 159), an execution
 time of 14.5s and $0.0383 a run.
 
 The 0.7.1 campaign measured the same task success as this one (137 of 138 against a hosted arm that scored 133 of
