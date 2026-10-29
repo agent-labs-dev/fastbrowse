@@ -21,6 +21,9 @@ pub struct Thresholds {
     pub bot_check_above: f64,
     #[serde(deserialize_with = "lax::float")]
     pub irreversible_above: f64,
+    /// Jev's agreement that the task asks for an authorized commit, above which it proceeds under `sensitive_act_from`.
+    #[serde(deserialize_with = "lax::float")]
+    pub requested_above: f64,
     /// An action requirement's "not satisfied" answer above this keeps the run working.
     #[serde(deserialize_with = "lax::float")]
     pub claim_problem_above: f64,
@@ -40,6 +43,7 @@ impl Default for Thresholds {
             login_required_above: 0.70,
             bot_check_above: 0.70,
             irreversible_above: 0.50,
+            requested_above: 0.50,
             claim_problem_above: 0.70,
             value_stated_above: 0.50,
             rewrite_from: 0.30,

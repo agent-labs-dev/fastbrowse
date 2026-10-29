@@ -378,7 +378,7 @@ impl Agent {
             if probability.is_some_and(|p| p <= thresholds.irreversible_above) {
                 return Ok(());
             }
-            if requested.is_some_and(|p| p >= thresholds.sensitive_act_from)
+            if requested.is_some_and(|p| p > thresholds.requested_above)
                 && decision.confidence() >= thresholds.recover_below
             {
                 return Ok(());

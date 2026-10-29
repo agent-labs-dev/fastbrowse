@@ -14,6 +14,8 @@ class Thresholds(Frozen):
     bot_check_above: float = 0.70
     """Jev's agreement, on a page it also judged a wall, that the wall is a bot check and not a sign-in."""
     irreversible_above: float = 0.50
+    requested_above: float = 0.50
+    """Jev's agreement that the task asks for an authorized commit, above which it proceeds under sensitive_act_from."""
     claim_problem_above: float = 0.70
     """An action requirement's "not satisfied" answer above this keeps the run working."""
     value_stated_above: float = 0.50
