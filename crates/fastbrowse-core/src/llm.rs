@@ -17,7 +17,9 @@ use crate::schema::{Schema, Ty, json_schema};
 use crate::telemetry::{BudgetExceeded, Ledger};
 
 /// Planning and field responses are short; readers and composers pass their larger configured caps.
-pub const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 2000;
+/// Zero means no ceiling: fastbrowse never caps, truncates or crops an output token, so a caller that names no
+/// budget sends no cap field and the model's own maximum and the answer schema are the only bounds.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 0;
 
 literal_enum! {
     pub enum Role {

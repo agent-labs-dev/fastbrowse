@@ -91,7 +91,8 @@ class DoneCheck(Frozen):
     cost: CostLine
 
 
-VERDICT_TOKENS = 400
+# Zero is no ceiling: a verdict cut mid-JSON costs the run its answer, not just a retry.
+VERDICT_TOKENS = 0
 """A verdict is three short lists and a boolean. Measured on a live count-pagination run, an uncapped verdict
 spent 1166 output tokens and 13.7s restating the answer it was judging; the cap bounds that pathology while
 leaving room for every requirement id on a long plan."""
@@ -1125,7 +1126,7 @@ async def _check_answer_outputs(
             fit(messages, _identity_schema(uncertain))
             identifying = recorded(
                 llm.generate(
-                    LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=8000, ledger=ledger
+                    LLMPurpose.VERIFY, messages, _identity_schema(uncertain), max_output_tokens=0, ledger=ledger
                 ),
                 ledger,
             )
@@ -1308,7 +1309,7 @@ async def _check_answer_outputs(
                     LLMPurpose.VERIFY,
                     request,
                     schema,
-                    max_output_tokens=512,
+                    max_output_tokens=0,
                     ledger=ledger,
                 )
                 if ledger is not None:

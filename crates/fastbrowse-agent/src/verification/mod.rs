@@ -85,7 +85,11 @@ pub struct DoneCheck {
 /// A verdict is three short lists and a boolean. Measured on a live count-pagination run, an uncapped verdict spent
 /// 1166 output tokens and 13.7s restating the answer it was judging; the cap bounds that pathology while leaving room
 /// for every requirement id on a long plan.
-pub const VERDICT_TOKENS: i64 = 400;
+/// Zero: a verdict reply is uncapped. A ceiling here cut a reply mid-JSON and the retry spent itself growing it.
+pub const VERDICT_TOKENS: i64 = 0;
+/// No ceiling on a field audit either: a verdict cut mid-JSON costs the run its answer, and the audit is the last
+/// check before an answer is reported.
+pub const AUDIT_TOKENS: i64 = 0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1597,7 +1601,7 @@ impl<'a> Check<'a> {
                 self.fit(&messages, &schema)?;
                 let response = ModelSchema { ty: schema };
                 let generated = recorded(
-                    llm.generate_value(LLMPurpose::Verify, &messages, &response, 8000, self.options.ledger),
+                    llm.generate_value(LLMPurpose::Verify, &messages, &response, 0, self.options.ledger),
                     self.options.ledger,
                 )
                 .await?;
@@ -1883,7 +1887,7 @@ impl<'a> Check<'a> {
                     "purpose": LLMPurpose::Verify.as_str(),
                     "messages": request.iter().map(Dump::dump).collect::<Vec<_>>(),
                     "schema": fastbrowse_core::schema::json_schema(&schema),
-                    "max_output_tokens": 512,
+                    "max_output_tokens": AUDIT_TOKENS,
                 }),
                 Style::DUMPS.sorted(),
             )
@@ -1895,7 +1899,8 @@ impl<'a> Check<'a> {
             return Ok((key.to_string(), verdict.judgment.clone(), verdict.reason.clone()));
         }
         let response = ModelSchema { ty: schema };
-        let generated = llm.generate_value(LLMPurpose::Verify, &request, &response, 512, self.options.ledger).await?;
+        let generated =
+            llm.generate_value(LLMPurpose::Verify, &request, &response, AUDIT_TOKENS, self.options.ledger).await?;
         if let Some(ledger) = self.options.ledger {
             ledger.record([generated.cost.clone()])?;
         }

@@ -4393,7 +4393,7 @@ async def test_output_audits_isolate_fields_and_check_extra_answer_claims(separa
             actual = field.get("reported_claims", [])
             self.saw_extra |= any("member price 9" in claim["text"] for claim in actual)
             judgment = "no" if actual and "member price 9" in json.dumps(actual) else "yes"
-            assert kwargs["max_output_tokens"] == 512
+            assert kwargs["max_output_tokens"] == 0
             return Generation(
                 data=schema.model_validate({"judgments": {key: judgment}, "reason": "test"}),
                 cost=CostLine(component=CostComponent.LLM, basis=CostBasis.METERED, dollars=0.001, purpose=purpose),
