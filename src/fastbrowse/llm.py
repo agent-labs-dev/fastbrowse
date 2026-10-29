@@ -8,9 +8,6 @@ from pydantic import BaseModel
 from fastbrowse.models import CostLine, Frozen, LLMPurpose, Unavailable
 from fastbrowse.telemetry import Ledger
 
-# The cap when a caller names none. 0 sends no ceiling; readers, composers, field text and recovery pass 0.
-DEFAULT_MAX_OUTPUT_TOKENS = 2000
-
 
 class Message(Frozen):
     role: Literal["system", "user", "assistant"]
@@ -39,10 +36,12 @@ class LLMClient(Protocol):
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = 0,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         """Return `schema`-validated data. `purpose` lets callers route models and attribute cost.
+
+        `max_output_tokens` above 0 is an output ceiling; 0 sends none.
 
         The client reserves against `ledger` once per HTTP request it makes, because only it knows
         how many a repair or a re-ask costs; a caller that reserved instead would undercount them.

@@ -43,8 +43,6 @@ const INSTRUCTIONS: &str = "fastbrowse drives a real browser. Each browse call i
 const INPUT_SCHEMA: &str = include_str!("../../generated/browse_input_schema.json");
 const OUTPUT_SCHEMA: &str = include_str!("../../generated/browse_output_schema.json");
 
-/// Past this many fields a schema is a scraping job, which one cited extraction per field is not built for.
-const MAX_FIELDS: usize = 20;
 /// A run past its own max_seconds is given this long to wind down (close the browser, bill the cloud session) before
 /// the call is abandoned.
 pub const OVERRUN_GRACE_SECONDS: f64 = 60.0;
@@ -155,9 +153,6 @@ const MODEL_ATTRIBUTES: [&str; 14] = [
 pub fn output_model(fields: &IndexMap<String, (String, Option<String>)>) -> Result<Option<OutputModel>, String> {
     if fields.is_empty() {
         return Ok(None);
-    }
-    if fields.len() > MAX_FIELDS {
-        return Err(format!("fields: at most {MAX_FIELDS}, got {}", fields.len()));
     }
     let reserved = |name: &str| name.starts_with('_') || name.starts_with("model_") || MODEL_ATTRIBUTES.contains(&name);
     let mut bad: Vec<&str> = fields
@@ -1001,9 +996,6 @@ pub mod browse_arguments {
                 Ok(task) if task.chars().count() < 1 => {
                     fail("task".into(), ("string_too_short", "String should have at least 1 character".into()), value)
                 }
-                Ok(task) if task.chars().count() > 4000 => {
-                    fail("task".into(), ("string_too_long", "String should have at most 4000 characters".into()), value)
-                }
                 Ok(task) => browse.task = task,
                 Err(error) => fail("task".into(), error, value),
             },
@@ -1043,15 +1035,6 @@ pub mod browse_arguments {
                         };
                         let description = match spec.get("description").filter(|value| !value.is_null()) {
                             None => None,
-                            Some(Value::String(text)) if text.chars().count() > 500 => {
-                                let message = "String should have at most 500 characters".into();
-                                fail(
-                                    format!("{at}.description"),
-                                    ("string_too_long", message),
-                                    &Value::String(text.clone()),
-                                );
-                                None
-                            }
                             Some(Value::String(text)) => Some(text.clone()),
                             Some(other) => {
                                 fail(

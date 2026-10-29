@@ -14,8 +14,8 @@ evals rather than taken from Typesafe.
 | Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `crates/fastbrowse-clients/src/validation.rs` decodes each shape separately; `crates/fastbrowse-agent/src/policy.rs` asks one per control to filter a dense page |
 | Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `crates/fastbrowse-agent/src/policy.rs` (operation and target), `crates/fastbrowse-agent/src/retrieval/` (field and short-fact reads) |
 | Score | Ordered levels, returning a probability-weighted index ([Score](https://docs.typesafe.ai/primitives/score)) | Modelled in `crates/fastbrowse-core/src/decision.rs`, not yet called |
-| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `DecisionProfile::jev()` in `crates/fastbrowse-core/src/decision.rs`; the 240 cap and group-then-element selection are **ours** |
-| Tokens | 32k for state plus the largest question, 64k in total ([Models](https://docs.typesafe.ai/models)) | `TokenBudget` (`crates/fastbrowse-core/src/config.rs`) targets 24k and 48k; the headroom and `chars_per_token = 3.0` are **ours**, because tokens are estimated locally. Jev requests also stop at 48,000 characters for state plus the largest question and 96,000 total, because recorded dense JSON used 1.84 characters per token |
+| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `DecisionProfile::jev()` in `crates/fastbrowse-core/src/decision.rs`; group-then-element selection is **ours** |
+| Tokens | 32k for state plus the largest question, 64k in total ([Models](https://docs.typesafe.ai/models)) | `TokenBudget` (`crates/fastbrowse-core/src/config.rs`) holds the documented 32k and 64k. TypeSafe publishes no tokenizer, so tokens are estimated locally: a Jev request is counted at 1.5 characters a token (**ours**; recorded dense JSON used 1.84), and an LLM prompt at `chars_per_token = 3.0` (**ours**). A step request that does not fit loses its oldest actions, then has its recovery memory, page text and notes cut, each saying what was left out |
 | Rate limits | 1,200 requests a minute and 250k tokens a second on the direct API, subject to change ([Models](https://docs.typesafe.ai/models)); no extra gateway limit on paid tiers ([Gateway limits](https://vercel.com/docs/ai-gateway/rate-limits)) | Retries handle 429 responses; concurrent runs share their provider's limits |
 | Errors | 400/401/403/404/422/429/5xx, with 529 for overload; retry with backoff, honouring server retry headers ([Exceptions](https://docs.typesafe.ai/sdk/python/api/exceptions)) | `post_with_retry` retries 408, 429, 500, 502, 503, 504, 520 to 524 and 529 (not the 4xx request errors) and honours `retry-after-ms` and `retry-after`, capped at 10s |
 | Price | $0.042 per million input tokens; output is free ([Models](https://docs.typesafe.ai/models), [gateway catalog](https://ai-gateway.vercel.sh/v1/models)) | `DecisionProfile::jev()`, and `CostComponent::Jev` on the ledger |
@@ -141,11 +141,12 @@ and where fastbrowse follows it:
   a second choice; code-selected pagination needs no policy call. The done check batches completion,
   unmet actions and whether a draft needs rewriting.
 - **Filter before choosing on a dense page.** The Jev 1.13 jaggedness notes say accuracy falls with a large
-  state full of irrelevant detail, and suggest a Noul to filter for relevance. Past `max_offered_controls` (160,
-  **ours**) the policy asks one Noul per control, packed into requests of about 8k tokens (**ours**) and sent
+  state full of irrelevant detail, and suggest a Noul to filter for relevance. When a page has more controls than
+  one group step can offer (`group_size` times the model's options per Choice) or its request does not fit Jev's
+  limit, the policy asks one Noul per control, packed into requests of about 8k tokens (**ours**) and sent
   together, and offers the highest-scoring controls. A Noul is used rather than ranking one Choice's
   probabilities: a Choice ranks alternatives against each other, and its two-decimal probabilities leave all but
-  a handful of 240 options tied at zero. The rubric sits once in the shared state, so each question carries only
+  a handful of 255 options tied at zero. The rubric sits once in the shared state, so each question carries only
   its control. Protected controls skip the check and an unanswered one is kept.
   The short-fact read does the same when a page has more quotable spans than a Choice can offer or more
   text than its input allows: one Noul per window of about 1,500 characters (**ours**), a longer block asked about
@@ -154,7 +155,7 @@ and where fastbrowse follows it:
   Requests stay small because the gateway sheds large ones: measured on Wikipedia windows, a 26k-token Noul
   batch returned 503 until its retries ran out on five of eight tries, a 4k-token batch on none.
   The step request cannot be split that way, since its state is shared: when one larger than a batch runs out
-  of retries, the policy asks it again with the on-screen controls only, then with half of those left. Replayed
+  of retries, the policy asks it again once with the on-screen controls only, and past that reports the outage. Replayed
   against the gateway, a 27k-token step from a Wikipedia article was answered four times in ten, while requests
   under 10k tokens were answered in all but two of 29 (**ours**).
 - **Match state to the question.** Navigation uses the redacted viewport, controls and working notes;

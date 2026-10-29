@@ -166,8 +166,8 @@ restart it without the flag, when you are done.
 
 ### Models
 
-The LLM defaults to `deepseek/deepseek-v4.1-flash-1017` with reasoning off for every purpose. Any other model is
-sent no reasoning effort unless `FASTBROWSE_LLM_REASONING` sets one, so it keeps its provider's default.
+The LLM defaults to `deepseek/deepseek-v4.1-flash-1017` for every purpose. No reasoning effort is sent unless
+`FASTBROWSE_LLM_REASONING` sets one, so each model keeps its provider's default.
 
 | Setting | Effect |
 |:--|:--|
@@ -336,8 +336,8 @@ scrolls to the quote; it may not resolve on a page that changes or needs a sessi
 
 No frame or screenshot is sent while a resolved secret may show on the page.
 
-`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; see
-[Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
+`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; a `jev` client is asked at
+Jev's limits and thresholds. See [Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
 
 ## Use it from JavaScript
 

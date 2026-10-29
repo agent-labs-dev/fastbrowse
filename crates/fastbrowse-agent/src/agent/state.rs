@@ -23,9 +23,6 @@ use crate::policy::{HistoryEntry, RelevanceCache};
 use crate::retrieval::{AnswerCorrection, ComposedAnswer, TallyReader};
 use crate::verification::LLMVerdict;
 
-/// How many recovery records the next recovery is shown.
-pub(crate) const RECOVERY_RECORDS: usize = 4;
-
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
 pub(crate) struct Stop {
@@ -586,11 +583,8 @@ impl RunState {
         self.ready_plan.as_ref().expect("the plan was used before it was awaited")
     }
 
-    /// Record a recovery's record, keeping only the most recent few.
+    /// Record a recovery's record.
     pub fn log_recovery(&mut self, record: String) {
-        if self.recovery_log.len() == RECOVERY_RECORDS {
-            self.recovery_log.pop_front();
-        }
         self.recovery_log.push_back(record);
     }
 

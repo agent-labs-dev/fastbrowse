@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::BoxFuture;
-use crate::config::{Config, Thresholds};
+use crate::config::{Config, JSON_CHARS_PER_TOKEN, Thresholds};
 use crate::models::{CostLine, MaybeUnavailable};
 use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
@@ -336,9 +336,6 @@ pub struct DecisionProfile {
     pub thresholds: Option<Thresholds>,
 }
 
-/// Share of a provider's token limit a request is budgeted to, because tokens are estimated locally.
-const TOKEN_HEADROOM: f64 = 0.75;
-
 impl DecisionProfile {
     /// Jev 1.13, whose limits and price TypeSafe documents and on which every default threshold was tuned.
     pub fn jev() -> DecisionProfile {
@@ -443,23 +440,16 @@ impl DecisionProfile {
     pub fn fit(&self, config: Option<Config>) -> Config {
         let mut config = config
             .unwrap_or_else(|| Config { thresholds: self.thresholds.clone().unwrap_or_default(), ..Config::default() });
-        let options = self.max_choice_options.max(2) as i64;
         let observation = &mut config.observation;
-        observation.max_choice_options = observation.max_choice_options.min(options);
-        observation.group_size = observation.group_size.min(observation.max_choice_options);
-        // A group choice offers at most `max_choice_options` groups of `group_size`, so a denser shortlist cannot be
-        // asked at all.
-        observation.max_offered_controls =
-            observation.max_offered_controls.min(observation.group_size * observation.max_choice_options);
-        let mut total = self.max_total_tokens as f64;
+        observation.group_size = observation.group_size.min(self.max_choice_options.max(2) as i64);
+        let mut total = self.max_total_tokens;
         if let Some(bytes) = self.max_request_bytes {
-            total = total.min(bytes as f64 / config.tokens.chars_per_token);
+            total = total.min((bytes as f64 / JSON_CHARS_PER_TOKEN) as i64);
         }
-        let largest = (self.max_largest_tokens as f64).min(total);
+        let largest = self.max_largest_tokens.min(total);
         let tokens = &mut config.tokens;
-        tokens.state_plus_largest_question =
-            tokens.state_plus_largest_question.min((largest * TOKEN_HEADROOM) as i64).max(1);
-        tokens.state_plus_all_questions = tokens.state_plus_all_questions.min((total * TOKEN_HEADROOM) as i64).max(1);
+        tokens.state_plus_largest_question = tokens.state_plus_largest_question.min(largest).max(1);
+        tokens.state_plus_all_questions = tokens.state_plus_all_questions.min(total).max(1);
         config
     }
 
@@ -477,10 +467,8 @@ pub trait DecisionClient: Send + Sync {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>>;
 
-    /// The model this client asks. A client that does not say is taken to ask Jev.
-    fn profile(&self) -> DecisionProfile {
-        DecisionProfile::jev()
-    }
+    /// The model this client asks, whose limits fit every request sent to it.
+    fn profile(&self) -> DecisionProfile;
 }
 
 #[cfg(test)]
@@ -511,12 +499,10 @@ mod tests {
     #[test]
     fn a_small_model_bounds_the_choices_offered_and_the_request() {
         let config = DecisionProfile::unknown().fit(None);
-        assert_eq!(config.observation.max_choice_options, 26);
         assert_eq!(config.observation.group_size, 26);
-        assert_eq!(config.observation.max_offered_controls, 160);
-        // 64 KiB at three characters a token, budgeted to three quarters.
-        assert_eq!(config.tokens.state_plus_all_questions, 16_384);
-        assert_eq!(config.tokens.state_plus_largest_question, 16_384);
+        // 64 KiB of dense JSON, counted as the request is fitted.
+        assert_eq!(config.tokens.state_plus_all_questions, 43_690);
+        assert_eq!(config.tokens.state_plus_largest_question, 32_000);
     }
 
     #[test]
@@ -525,6 +511,6 @@ mod tests {
         given.thresholds.recover_below = 0.4;
         let fitted = DecisionProfile::unknown().fit(Some(given));
         assert_eq!(fitted.thresholds.recover_below, 0.4);
-        assert_eq!(fitted.observation.max_choice_options, 26);
+        assert_eq!(fitted.observation.group_size, 26);
     }
 }

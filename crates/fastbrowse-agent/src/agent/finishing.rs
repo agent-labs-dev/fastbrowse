@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 
 use super::helpers::{
     EvidenceKey, answer_evidence, blocked_action, guessed, guessed_page, lookup, misread, not_acting, partition_proof,
-    path_of, record, unread, verified, visited,
+    path_of, unread, verified, visited,
 };
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate};
 use super::{Agent, Outcome};
@@ -33,8 +33,7 @@ use crate::retrieval::{
 use crate::support::generate;
 use crate::verification::{
     CheckOptions, DoneCheck, DoneOptions, DoneVerdict, ExtractOptions, Extraction, LLMVerdict, RecordSchema,
-    VERDICT_TOKENS, VerifyOptions, check_claims, check_done, extract, verify_cache_key, verify_messages,
-    visual_only_state,
+    VerifyOptions, check_claims, check_done, extract, verify_cache_key, verify_messages, visual_only_state,
 };
 
 /// An answer whose claims passed, or what a composer sent beside the verifier came back with.
@@ -344,8 +343,8 @@ impl Agent {
         let plan = state.plan().clone();
         let draft = if plan.page_answer_expected() { draft_answer(&plan, &state.notes) } else { None };
         let notes = state.notes.clone();
-        let history = record(&state.history, &self.config.observation);
-        let shown = visited(&state.visited, &self.config.observation, |url| self.redact(url));
+        let history = state.history.clone();
+        let shown = visited(&state.visited, |url| self.redact(url));
         let options = DoneOptions {
             tokens: self.config.tokens.clone(),
             history: &history,
@@ -587,17 +586,10 @@ impl Agent {
         let screenshots = if visual_only_state(fresh) { self.screenshots().await? } else { Vec::new() };
         let mut invented: Vec<String> = state.invented.iter().cloned().collect();
         invented.sort();
-        let history = record(&state.history, &self.config.observation);
-        let shown = visited(&state.visited, &self.config.observation, |url| self.redact(url));
-        let options = VerifyOptions {
-            doubted: &check.doubted,
-            invented: &invented,
-            visited: &shown,
-            config: self.config.clone(),
-            ledger: None,
-        };
+        let shown = visited(&state.visited, |url| self.redact(url));
+        let options = VerifyOptions { doubted: &check.doubted, invented: &invented, visited: &shown, ledger: None };
         let messages =
-            verify_messages(&state.task, state.plan(), fresh, &screenshots, &state.notes, &history, &options)?;
+            verify_messages(&state.task, state.plan(), fresh, &screenshots, &state.notes, &state.history, &options)?;
         let key = verify_cache_key(&messages);
         let reused = state.verify_cache.get(&key).cloned();
         if reused.is_some() {
@@ -617,8 +609,7 @@ impl Agent {
             return Ok((request.key, reused));
         }
         let judged =
-            generate::<LLMVerdict>(&*self.llm, LLMPurpose::Verify, &request.messages, VERDICT_TOKENS, Some(&ledger))
-                .await?;
+            generate::<LLMVerdict>(&*self.llm, LLMPurpose::Verify, &request.messages, 0, Some(&ledger)).await?;
         ledger.record([judged.cost.clone()])?;
         Ok((request.key, judged))
     }

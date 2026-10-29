@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from pydantic import BaseModel, JsonValue
 
 from fastbrowse.jev import Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer, NoulQuestion, Question
-from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, Message
+from fastbrowse.llm import Generation, Message
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Frozen, LLMPurpose, Operation
 from fastbrowse.telemetry import Ledger
 
@@ -112,7 +112,7 @@ class ScriptedLLM:
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int = 0,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         if ledger is not None:

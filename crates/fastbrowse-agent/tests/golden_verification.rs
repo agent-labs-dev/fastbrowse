@@ -12,7 +12,7 @@ use fastbrowse_agent::planner::Plan;
 use fastbrowse_agent::policy::HistoryEntry;
 use fastbrowse_agent::retrieval::{Annotation, AnswerCorrection, ComposedAnswer, ScalarField};
 use fastbrowse_agent::verification::{self, *};
-use fastbrowse_core::config::{Config, Thresholds, TokenBudget};
+use fastbrowse_core::config::{Thresholds, TokenBudget};
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::{Capture, Observation};
@@ -127,13 +127,8 @@ fn replay(case: &Value) -> Result<(), String> {
     let visited = strings(args.get("visited").unwrap_or(&Value::Null));
     let doubted = strings(args.get("doubted").unwrap_or(&Value::Null));
     let invented = strings(args.get("invented").unwrap_or(&Value::Null));
-    let verify_options = || VerifyOptions {
-        doubted: &doubted,
-        invented: &invented,
-        visited: &visited,
-        config: opt::<Config>(args, "config").unwrap_or_default(),
-        ledger: ledger.as_ref(),
-    };
+    let verify_options =
+        || VerifyOptions { doubted: &doubted, invented: &invented, visited: &visited, ledger: ledger.as_ref() };
     let result: Value = match name {
         "visual_only_state" => json!({"result": visual_only_state(&parse::<Observation>(&args["observation"]))}),
         "verify_cache_key" => json!({"result": verify_cache_key(&parse::<Vec<Message>>(&args["messages"]))}),

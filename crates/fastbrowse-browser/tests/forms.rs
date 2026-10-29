@@ -268,7 +268,7 @@ async fn test_empty_frame_documents_emit_one_absence_observation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_control_observations_are_bounded() {
+async fn test_every_empty_or_disabled_control_is_observed() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -288,7 +288,7 @@ async fn test_control_observations_are_bounded() {
             text.contains("[empty]") || text.contains(": disabled")
         })
         .count();
-    assert_eq!(observations, 64);
+    assert_eq!(observations, 600);
     h.close().await;
 }
 

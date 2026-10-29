@@ -105,7 +105,7 @@ fn replay(case: &Value) -> Result<(), String> {
             args["max_chars"].as_i64().unwrap(),
             args.get("overlap_blocks").and_then(Value::as_i64).unwrap_or(1),
         )),
-        "leading_quotes" => json!({"result": leading_quotes(&capture(), args["max_chars"].as_i64().unwrap()).dump()}),
+        "leading_quotes" => json!({"result": page_quotes(&capture()).dump()}),
         "_read_message" => {
             let part: Chunk = parse(&args["part"]);
             let message = read_message_for(
@@ -171,7 +171,7 @@ fn replay(case: &Value) -> Result<(), String> {
             json!({"result": retain_fields(answer, &previous, notes.as_ref().unwrap()).dump()})
         }
         "partial_answer" => {
-            json!({"result": partial_answer(notes.as_ref().unwrap(), args["max_chars"].as_i64().unwrap()).dump()})
+            json!({"result": partial_answer(notes.as_ref().unwrap()).dump()})
         }
         "draft_answer" => {
             let plan: Plan = parse(&args["plan"]);

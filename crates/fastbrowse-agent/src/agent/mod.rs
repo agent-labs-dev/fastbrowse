@@ -43,8 +43,8 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-use helpers::{history, partition_proof, recovery_memory};
 pub use helpers::{next_page_control, next_page_notice, read_question};
+use helpers::{partition_proof, recovery_memory};
 use state::{Flow, RunState, Spawned};
 
 use crate::error::AgentError;
@@ -68,8 +68,6 @@ const REDRAW_WATCH_SECONDS: f64 = 10.0;
 /// Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page takes
 /// many scrolls, each of which shows something new.
 const REPEATS_BEFORE_CYCLE: i64 = 2;
-/// How much of a wall's text a blocked result quotes: enough for its message, not a whole page.
-const WALL_QUOTE_CHARS: i64 = 600;
 /// The choice a field's text is written for when no input or secret is the answer.
 const GENERATE: &str = "generate";
 
@@ -643,7 +641,7 @@ impl Agent {
             return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
         }
         let mut partial = match committed {
-            None => partial_answer(notes, self.config.observation.working_notes_chars),
+            None => partial_answer(notes),
             Some(mut committed) => {
                 let notice = "Answer (unverified). The run stopped before its completion check confirmed this; these \
                               are the values its evidence supports, written as an answer rather than a dump of what \
@@ -915,8 +913,8 @@ impl Agent {
                 .ready_plan
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.requirements.iter().map(|r| r.text.clone()).collect()),
-            notes: state.notes.render_for_navigation(self.config.observation.working_notes_chars, false)?,
-            history: history(&state.history, &self.config.observation),
+            notes: state.notes.render_for_navigation(false),
+            history: state.history.clone(),
             check_login,
             check_bot,
             has_attachments: !state.attachments.is_empty(),
@@ -926,6 +924,7 @@ impl Agent {
             start_landing_url: state.start_landing_url.clone(),
             recovery_memory: recovery_memory(state, self.config.stall.max_recoveries, |value| self.redact(value)),
             background: state.context.clone(),
+            omitted_actions: 0,
         })
     }
 

@@ -85,9 +85,10 @@ The claim check, numbered links and citation records all use those expanded ids.
 
 ## Prompt limits and progress
 
-`Config.observation` names the limits for viewport text, working notes and recent and earlier history.
-`Config.tokens` names the input budgets and reader/composer output limits. Working notes can omit facts
-with a count; verdict prompts retain all requirement evidence or stop at `observation_limit`. The notes
+`Config.observation` names the group size for group-then-element choices. `Config.tokens` names the input
+budgets and reader/composer output limits. A step request shows Jev the whole viewport, working notes and
+history; one that does not fit Jev's limit loses its oldest actions first and then has its long texts cut, each
+cut saying what it left out. Verdict prompts retain all requirement evidence or stop at `observation_limit`. The notes
 budget keeps a retained fact's basis with it; requirement evidence includes its transitive basis. The Jev
 completion check reduces page text first to make room for that evidence. Cut page text carries a marker
 when there is room for one; an excerpt too small to carry the marker is empty.

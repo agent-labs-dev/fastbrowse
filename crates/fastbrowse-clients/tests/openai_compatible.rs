@@ -20,7 +20,7 @@ use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, Role};
 use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose, Limits, MaybeUnavailable};
 use fastbrowse_core::py::base64;
 use fastbrowse_core::schema::{Field, ModelTy, Ty, json_schema, strict_schema};
-use fastbrowse_core::telemetry::Ledger;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 
@@ -220,23 +220,25 @@ async fn test_an_error_status_retry_does_not_add_llm_cost() {
 }
 
 #[tokio::test]
-async fn test_a_truncated_response_is_retried_with_a_larger_output_cap() {
-    let script = Script::new([truncated(r#"{"count":"cut off mid-str"#), stopped(r#"{"count":5}"#, None)]);
+async fn test_a_response_truncated_at_the_callers_cap_is_reported_without_raising_it() {
+    // The cap is the caller's setting: the same prompt under it would be cut off again, and a larger one is a ceiling
+    // nobody asked for.
+    let script = Script::new([truncated(r#"{"count":""#), stopped(r#"{"count":5}"#, None)]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let result = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap();
-    assert_eq!(result.data["count"], 5);
-    assert_eq!(caps(&script), [json!(100), json!(400)]);
-    assert_eq!(result.cost.output_tokens, 9);
+    let error = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap_err();
+    assert!(error.to_string().contains("truncated at the 100 token output cap"), "{error}");
+    assert!(!error.to_string().contains("schema"));
+    assert_eq!(caps(&script), [json!(100)]);
 }
 
 #[tokio::test]
-async fn test_a_response_truncated_twice_is_reported_as_truncation_not_as_a_schema_failure() {
-    let script = Script::new([truncated(r#"{"count":""#), truncated(r#"{"count":""#)]);
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let error = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap_err();
-    assert!(error.to_string().contains("truncated at the 400 token output cap"), "{error}");
-    assert!(!error.to_string().contains("schema"));
-    assert_eq!(script.requests().len(), 2);
+async fn test_a_response_cut_off_with_no_cap_sends_no_cap_and_is_reported_once() {
+    let script = Script::new([truncated(r#"{"count":""#), stopped(r#"{"count":5}"#, None)]);
+    let llm = client(script.http(), "https://llm.test", LLMPurpose::Verify, "verifier");
+    let error = generate(&llm, LLMPurpose::Verify, &[], 0, None).await.unwrap_err();
+    assert!(error.to_string().contains("no output cap set (verify)"), "{error}");
+    assert_eq!(script.requests().len(), 1);
+    assert!(script.bodies()[0].get("max_tokens").is_none());
 }
 
 #[tokio::test]
@@ -247,16 +249,16 @@ async fn test_a_response_that_ran_out_of_tokens_before_any_text_is_truncation() 
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
     let error = generate(&llm, LLMPurpose::Read, &[], 2000, None).await.unwrap_err();
     assert!(error.to_string().contains("truncated"));
-    assert_eq!(script.requests().len(), 2);
+    assert_eq!(script.requests().len(), 1);
 }
 
 #[tokio::test]
 async fn test_json_that_ends_mid_value_is_truncation_even_when_the_provider_says_it_stopped() {
     let script = Script::new([stopped(r#"{"count":"cut off mid-str"#, None), stopped(r#"{"count":2}"#, None)]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let result = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap();
-    assert_eq!(result.data["count"], 2);
-    assert_eq!(caps(&script), [json!(100), json!(400)]);
+    let error = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap_err();
+    assert!(error.to_string().contains("truncated at the 100 token output cap"), "{error}");
+    assert_eq!(caps(&script), [json!(100)]);
 }
 
 #[tokio::test]
@@ -272,17 +274,13 @@ async fn test_json_that_ends_mid_value_short_of_the_cap_is_a_provider_fault_not_
 
 #[tokio::test]
 async fn test_a_short_reply_after_another_retry_is_still_asked_for_again() {
-    // After a schema repair, and after the cap grew.
-    for replies in [
-        [(r#"{"count":"five"}"#, 7), (r#"{"count":"cut off"#, 7), (r#"{"count":5}"#, 7)],
-        [(r#"{"count":"cut off"#, 100), (r#"{"count":"cut off"#, 7), (r#"{"count":5}"#, 7)],
-    ] {
-        let script = Script::new(replies.map(|(content, written)| stopped(content, Some(written))));
-        let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-        let result = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap();
-        assert_eq!(result.data["count"], 5);
-        assert_eq!(script.requests().len(), 3);
-    }
+    // After a schema repair.
+    let replies = [(r#"{"count":"five"}"#, 7), (r#"{"count":"cut off"#, 7), (r#"{"count":5}"#, 7)];
+    let script = Script::new(replies.map(|(content, written)| stopped(content, Some(written))));
+    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
+    let result = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap();
+    assert_eq!(result.data["count"], 5);
+    assert_eq!(script.requests().len(), 3);
 }
 
 #[tokio::test]
@@ -291,22 +289,19 @@ async fn test_complete_json_marked_truncated_never_becomes_a_citable_read() {
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
     let error = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap_err().to_string();
     assert!(error.contains("truncated") && error.ends_with("(read)"), "{error}");
-    assert_eq!(caps(&script), [json!(100), json!(400)]);
+    assert_eq!(caps(&script), [json!(100)]);
 }
 
 #[test]
-fn test_a_strict_schema_leaves_array_caps_to_validation() {
-    // A provider answered HTTP 400 to every read whose claims list carried `maxItems: 60`. Validation keeping the cap
-    // is the response model's part, so only the schema half of the Python test is here.
-    let capped = ModelTy::frozen(
-        "Capped",
-        vec![Field::default("items", Ty::list(Ty::Str).constrained("maxItems", 60), json!([]))],
+fn test_a_strict_schema_states_the_array_bounds_validation_enforces() {
+    // A model is held only to rules it was told: the bound validation checks goes out in the schema.
+    let bounded = ModelTy::frozen(
+        "Bounded",
+        vec![Field::default("items", Ty::list(Ty::Str).constrained("maxItems", 2), json!([]))],
     )
     .ty();
-    let schema = json_schema(&capped);
-    assert!(schema.to_string().contains("maxItems"));
-    let strict = strict_schema(&schema).unwrap().to_string();
-    assert!(!strict.contains("maxItems") && !strict.contains("default"));
+    let strict = strict_schema(&json_schema(&bounded)).unwrap().to_string();
+    assert!(strict.contains("\"maxItems\":2") && !strict.contains("default"), "{strict}");
 }
 
 #[test]
@@ -653,9 +648,16 @@ async fn test_a_half_answered_optional_object_comes_back_as_none_rather_than_fai
     let reply = json!({"cite__first": "main/:5", "cite__last": null, "field__span__first": null,
         "field__span__last": null, "field__prefix": "Total"});
     let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
-    let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Read, "deepseek/deepseek-v4.1-flash-1017");
+    let trace = Trace::collecting();
+    let models = HashMap::from([(LLMPurpose::Read, "deepseek/deepseek-v4.1-flash-1017".to_string())]);
+    let llm =
+        OpenAICompatibleLLM::new("key", script.traced(&trace), "https://llm.test/v1/", models, LLMOptions::default())
+            .unwrap();
     let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
     let result = llm.generate_value(LLMPurpose::Read, &[message], &Model(claim), 0, None).await.unwrap();
     assert_eq!(result.data, json!({"cite": null, "field": null}));
     assert_eq!(script.requests().len(), 1);
+    // What the reply lost is in the trace, not only in the result.
+    let dropped: Vec<Value> = trace.events().into_iter().filter(|e| e["event"] == "half_objects_dropped").collect();
+    assert_eq!(dropped, [json!({"event": "half_objects_dropped", "purpose": "read", "paths": ["cite", "field"]})]);
 }

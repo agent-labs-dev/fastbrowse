@@ -103,6 +103,10 @@ impl ScriptedJev {
 }
 
 impl DecisionClient for ScriptedJev {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         _: &'a Value,

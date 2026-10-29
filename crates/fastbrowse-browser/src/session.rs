@@ -57,7 +57,7 @@ impl SnapshotScript {
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => (mode, limits) => snapshot(mode, {origins}, limits))({SNAPSHOT_JS}))"
+                 (snapshot => mode => snapshot(mode, {origins}))({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
@@ -107,8 +107,6 @@ pub const STATUS_WORLD: &str = "fastbrowse-status";
 // `Network` reports the requests a page makes itself, which is how a settle tells a page still answering an action
 // from one the action left as it was.
 const ENABLE_DOMAINS: [&str; 4] = ["Page", "Runtime", "DOM", "Network"];
-const DOWNLOAD_TEXT_BYTES: usize = 16_384;
-const DOWNLOAD_TEXT_TOTAL: usize = 65_536;
 /// Largest download a session keeps by default. Bodies arrive whole over the DevTools socket, so this bounds a
 /// run's memory as much as a file's size; `Config.max_download_bytes` is how a caller that knows the size of the
 /// file it asked for raises it.
@@ -191,16 +189,23 @@ pub struct DownloadText {
     pub complete: bool,
 }
 
-/// A file the site offered and the run did not keep, because its body is over the ceiling. Recorded rather than
-/// dropped: a download that silently never arrives looks exactly like a click that never started one, so a
-/// migration would report success while holding no archive.
+/// A file the site offered and the run did not keep. Recorded rather than dropped: a download that silently never
+/// arrives looks exactly like a click that never started one, so a migration would report success while holding no
+/// archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadRefused {
     pub name: String,
     pub url: String,
-    /// What the response stated its size to be, or what arrived when it stated nothing usable.
-    pub size_bytes: u64,
-    pub limit_bytes: u64,
+    pub reason: Refusal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The body is over the ceiling. `size_bytes` is what the response stated, or what arrived when it stated
+    /// nothing usable.
+    TooLarge { size_bytes: u64, limit_bytes: u64 },
+    /// The browser did not hand the body over, or it could not be stored.
+    Failed,
 }
 
 #[derive(Clone)]
@@ -259,7 +264,7 @@ pub(crate) struct State {
     /// A refused one has no identity: nothing was saved. A link that only downloads never changes the page, so the
     /// same click taken again looks productive every time; identity is what tells the second save from the first.
     pub(crate) download_keys: Vec<Option<(String, String)>>,
-    /// Downloads turned away by the ceiling, oldest first: evidence the file was offered, not kept.
+    /// Downloads not kept, oldest first: evidence the file was offered.
     pub(crate) download_refusals: Vec<DownloadRefused>,
     /// How many of them an observation has already reported, so each refusal is reported once.
     pub(crate) download_refusals_shown: usize,
@@ -1659,8 +1664,13 @@ async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
         let complete = event["responseStatusCode"] == 200 && !headers.contains_key("content-range");
         let url = str_of(&event["request"]["url"]);
         let content_length = headers.get("content-length").and_then(|value| content_length(value));
-        let _ = capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete, content_length)
-            .await;
+        if capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete, content_length)
+            .await
+            .is_err()
+        {
+            warn("Download capture failed");
+            refuse_download(shared, download_filename(&disposition, &url), &url, Refusal::Failed);
+        }
     }
     // Never leave a request paused, even if capture above failed. The request or session may already be gone
     // (navigation, tab close), which is fine to swallow here.
@@ -1685,7 +1695,7 @@ async fn capture_download(
     if let Some(stated) = content_length
         && stated > shared.max_download_bytes as u64
     {
-        refuse_download(shared, name, url, stated);
+        refuse_download(shared, name, url, too_large(shared, stated));
         return Ok(());
     }
     let body =
@@ -1694,30 +1704,19 @@ async fn capture_download(
     let raw = if body["base64Encoded"] == true { BASE64.decode(text.as_bytes())? } else { text.as_bytes().to_vec() };
     if raw.len() > shared.max_download_bytes {
         // Bounded size: refuse to hold an oversized body in memory as an artifact, and say that it was refused.
-        refuse_download(shared, name, url, raw.len() as u64);
+        refuse_download(shared, name, url, too_large(shared, raw.len() as u64));
         return Ok(());
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
     let readable = readable_text(mime, &raw);
-    let size = raw.len();
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
     state.downloads_captured += 1;
     state.download_keys.push(Some((url.to_owned(), crate::page::sha256_bytes(&raw))));
     if let Some(text) = readable {
-        state.download_texts.push(DownloadText {
-            mime: kind,
-            name,
-            url: url.to_owned(),
-            text,
-            complete: complete && size <= DOWNLOAD_TEXT_BYTES,
-        });
-        while state.download_texts.iter().map(|d| d.text.chars().count()).sum::<usize>() > DOWNLOAD_TEXT_TOTAL {
-            state.download_texts.remove(0);
-            state.download_texts_shown = state.download_texts_shown.saturating_sub(1);
-        }
+        state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete });
     }
     Ok(())
 }
@@ -1762,15 +1761,14 @@ fn download_filename(disposition: &str, url: &str) -> String {
     safe_filename(&name)
 }
 
-fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, size_bytes: u64) {
+fn too_large(shared: &Shared, size_bytes: u64) -> Refusal {
+    Refusal::TooLarge { size_bytes, limit_bytes: shared.max_download_bytes as u64 }
+}
+
+fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, reason: Refusal) {
     let mut state = shared.state.lock().unwrap();
     state.download_keys.push(None);
-    state.download_refusals.push(DownloadRefused {
-        name,
-        url: url.to_owned(),
-        size_bytes,
-        limit_bytes: shared.max_download_bytes as u64,
-    });
+    state.download_refusals.push(DownloadRefused { name, url: url.to_owned(), reason });
 }
 
 fn repeated(keys: &[Option<(String, String)>], since: usize) -> bool {
@@ -1903,12 +1901,7 @@ fn readable_text(mime: &str, raw: &[u8]) -> Option<String> {
     if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
         return None;
     }
-    let mut text = String::from_utf8_lossy(&raw[..raw.len().min(DOWNLOAD_TEXT_BYTES)]).into_owned();
-    if raw.len() > DOWNLOAD_TEXT_BYTES {
-        let omitted = raw.len() - DOWNLOAD_TEXT_BYTES;
-        text.push_str(&format!("\n[Download cut: {omitted} bytes omitted; full file in artifact]"));
-    }
-    Some(text)
+    Some(String::from_utf8_lossy(raw).into_owned())
 }
 
 pub fn str_of(value: &Value) -> String {
@@ -2092,10 +2085,9 @@ mod tests {
     }
 
     #[test]
-    fn long_text_downloads_are_cut_with_a_note() {
-        let raw = vec![b'a'; DOWNLOAD_TEXT_BYTES + 5];
-        let text = readable_text("text/csv", &raw).unwrap();
-        assert!(text.ends_with("\n[Download cut: 5 bytes omitted; full file in artifact]"));
+    fn text_downloads_are_read_whole() {
+        let raw = vec![b'a'; 100_000];
+        assert_eq!(readable_text("text/csv", &raw).unwrap().len(), raw.len());
         assert_eq!(readable_text("application/zip", b"PK"), None);
     }
 
