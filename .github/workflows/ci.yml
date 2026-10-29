@@ -155,7 +155,13 @@ jobs:
       - run: cargo test --workspace --locked --doc
       # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.
-      - run: cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
+      # cargo treats a crate it verifies against as an immutable registry crate: it reuses an unpacked copy in
+      # ~/.cargo/registry/src and a build in the target directory keyed on name and version alone. The cache above
+      # restores both from other sources, so the check gets a target directory of its own and no unpacked copies.
+      - run: rm -rf ~/.cargo/registry/src/*/fastbrowse*
+      - run: >-
+          cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
+          --target-dir "$RUNNER_TEMP/package"
       # The Go client against the binary just built, its scripted runs standing in for the agent. Its types are
       # written from protocol/schema.json and committed; a schema changed without them fails here.
       - run: cargo build -p fastbrowse-cli --locked
