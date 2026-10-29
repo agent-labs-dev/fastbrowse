@@ -175,8 +175,11 @@ def problems(
     # evidence; asking GitHub for a separately dispatched run would refuse a tag that ran them itself.
     if not evals_ran_here and not _evals_green(repository, head, token):
         issues.append(f"no successful {WORKFLOW} run on the release build {head[:12]}")
-    # A release is only a build the eval suites measured; no trace for this build blocks it first.
-    issues += eval_evidence_problems(version, head)
+    # A release is only a build the eval suites measured; no trace for this build blocks it first. A tag
+    # whose own evals job ran green in this workflow already measured this commit and exits non-zero when
+    # its upload fails, so the lookup would only re-read it with credentials that step is not given.
+    if not evals_ran_here:
+        issues += eval_evidence_problems(version, head)
     rows = comparison_rows(version, root)
     if rows is None:
         return issues
