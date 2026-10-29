@@ -13,7 +13,7 @@ use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_credentials, downloads_question, irreversible_question, may_be_irreversible,
-    requested_question, resolve_secret, reversible_toggle, sets_new_password, starts_download,
+    requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
@@ -23,10 +23,9 @@ use serde_json::{Map, Value, json};
 use super::driving::{StepOptions, Watched, require};
 use super::helpers::{
     caller_link, code_decision, describe, dialog_question, lookup, misfit, navigation_question, next_value,
-    only_typed_since_read, read_exhausted, seen, unread, unread_transaction,
+    only_typed_since_read, read_exhausted, seen, unread,
 };
 use super::reading::covered;
-use super::sign_in::shows_sign_in;
 use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
 use super::{Agent, GENERATE};
 use crate::memory::shows;
@@ -249,12 +248,6 @@ impl Agent {
             return Ok(());
         };
         self.gate_download(state, observation, decision, decided_by, target).await?;
-        if decision.operation == Operation::Click && reversible_toggle(target) {
-            // A media pause, play or mute is undone by the same control and commits nothing off the page, so it is
-            // not a commit to confirm.
-            self.event("reversible_toggle", || Map::from_iter([("target".into(), describe(target).into())]));
-            return Ok(());
-        }
         let mut label = describe(target);
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
@@ -897,18 +890,14 @@ impl Agent {
         Ok(self.ask_choice(state, observation, &question, criteria).await? == "accept")
     }
 
-    /// Stop at a sign-in wall Jev saw only on the page's evidence for it; return once the page proved readable.
-    ///
-    /// Returns whether the run should look at this page again: true after a read changed the notes, false when the
-    /// page shows no sign-in at all. Absent controls do not establish missing authentication, so a page with neither a
-    /// credential field nor a sign-in to act on is not a wall, and the run acts on its decision.
+    /// Stop at a sign-in wall Jev judged blocks the task; return once a read proved the page readable.
     pub(super) async fn meet_wall(
         &self,
         state: &mut RunState,
         observation: &Observation,
         raw: &Observation,
         plan: &Plan,
-    ) -> Step<bool> {
+    ) -> Step {
         let origin = fastbrowse_core::safety::origin_of(&observation.url);
         // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
         // echo a typed secret into its title or a field's label.
@@ -935,9 +924,6 @@ impl Agent {
             let asked = if asked.is_empty() { "a password".to_string() } else { asked.join(", ") };
             return Err(wall(format!("the page asks for {asked}")));
         }
-        if !shows_sign_in(observation) {
-            return Ok(false);
-        }
         if !unread(plan, &state.notes) {
             return Err(wall(format!("{page} offers only sign-in")));
         }
@@ -949,7 +935,7 @@ impl Agent {
         if state.notes.facts().len() == facts {
             return Err(wall(format!("reading {page} found none of the requested information")));
         }
-        Ok(true)
+        Ok(())
     }
 
     pub(super) async fn read_before_interaction(
@@ -993,11 +979,11 @@ impl Agent {
         // A read takes in the whole page, so a scroll over one never read only spends steps.
         let unread_scroll =
             decision.operation.is_scrolling() && !state.reads.iter().any(|key| key.0 == observation.document_key);
-        let transaction_pending = unread_transaction(state);
-        if matches!(decision.operation, Operation::Read | Operation::Done)
-            || (decision.read_assessment != crate::policy::ReadAssessment::Evidence
-                && !unread_scroll
-                && !transaction_pending)
+        if matches!(decision.operation, Operation::Read | Operation::Done) {
+            return Ok(false);
+        }
+        let transaction_pending = self.unread_receipt(state).await?;
+        if decision.read_assessment != crate::policy::ReadAssessment::Evidence && !unread_scroll && !transaction_pending
         {
             return Ok(false);
         }

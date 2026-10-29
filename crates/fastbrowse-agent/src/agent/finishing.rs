@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 
 use super::helpers::{
     EvidenceKey, answer_evidence, doubted, guessed, guessed_page, lookup, misread, not_acting, partition_proof,
-    path_of, unread, verified, visited,
+    path_of, unread, unread_transaction, verified, visited,
 };
 use super::recovery::DONE;
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate};
@@ -741,6 +741,25 @@ impl Agent {
             .flat_map(|c| std::iter::once(&c.from_url).chain(c.landed_url.as_ref()))
             .collect();
         Ok(evidence.iter().filter(|(_, item)| committed.contains(&item.url)).map(|(key, _)| key.clone()).collect())
+    }
+
+    /// Whether an action Jev classifies as committing still owes a read of what it landed on.
+    ///
+    /// Each unread candidate is classified before the read it would force, so a step that commits nothing, such as
+    /// adding an item to a cart, is not read as a receipt. A candidate Jev gives no answer for still owes its read.
+    pub(super) async fn unread_receipt(&self, state: &mut RunState) -> Step<bool> {
+        if !unread_transaction(state) {
+            return Ok(false);
+        }
+        let pending: Vec<(String, usize)> = state
+            .transaction_candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.outcome_read && c.committing.is_none())
+            .map(|(index, _)| (format!("irreversible_{index}"), index))
+            .collect();
+        self.classify(state, &pending).await?;
+        Ok(unread_transaction(state))
     }
 
     /// Ask Jev which candidates committed something, leaving `committing` unset where it gave no answer.

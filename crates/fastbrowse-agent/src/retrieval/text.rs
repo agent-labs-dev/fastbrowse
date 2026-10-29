@@ -413,34 +413,6 @@ pub(crate) fn counted_heading(title: &str) -> Option<String> {
     chars[at + 1..].iter().all(|c| is_space(*c)).then_some(count)
 }
 
-/// The empty-result sentence `_counted_collections` accepts in place of members, `re.IGNORECASE`, between `\b`s.
-pub(crate) fn states_empty(value: &str) -> bool {
-    let words = |options: &[&str]| Pat::alt(options.iter().map(|option| Pat::ilit(option)).collect());
-    let pattern = Pat::Seq(vec![
-        Pat::Boundary,
-        Pat::alt(vec![
-            Pat::Seq(vec![
-                Pat::ilit("no "),
-                Pat::opt(Pat::ilit("matching ")),
-                words(&["comments", "reviews", "results", "items", "records", "messages", "posts", "entries"]),
-                Pat::lit(" "),
-                words(&["yet", "found", "available"]),
-            ]),
-            Pat::Seq(vec![
-                Pat::ilit("be the first to "),
-                words(&["post", "add", "write", "leave"]),
-                Pat::lit(" "),
-                words(&["a", "an"]),
-                Pat::lit(" "),
-                words(&["comment", "review", "reply", "message", "post"]),
-            ]),
-        ]),
-        Pat::Boundary,
-    ]);
-    let chars: Vec<char> = value.chars().collect();
-    pattern.search(&chars, 0).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

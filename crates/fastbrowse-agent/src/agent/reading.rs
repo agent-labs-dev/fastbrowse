@@ -145,7 +145,7 @@ impl Agent {
         let information = |r: &&Requirement| r.kind == RequirementKind::Information;
         let mut wanted: Vec<Requirement> =
             state.notes.unresolved(&plan).into_iter().filter(|r| information(&r)).collect();
-        let transaction_pending = super::helpers::unread_transaction(state);
+        let transaction_pending = self.unread_receipt(state).await?;
         let owed = transaction_pending || (wanted.is_empty() && state.owes_read && plan.page_answer_expected());
         if owed || (wanted.is_empty() && !state.open_answer_outputs.is_empty()) {
             // Every requirement was evidenced off the page before the last interaction redrew it, so they are asked

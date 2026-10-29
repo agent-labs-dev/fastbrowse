@@ -209,16 +209,14 @@ impl Agent {
                     .into());
                 }
                 let plan = state.await_plan().await?;
+                state.passed_wall = Some(raw.url.clone());
                 if !access_inspection(&plan) {
-                    if Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await? {
-                        continue;
-                    }
-                } else {
-                    state.passed_wall = Some(raw.url.clone());
-                    // A task inspecting an access boundary needs its observed wall read and verified, not passed.
-                    decision = code_decision(Operation::Read, None);
-                    decided_by = Decider::Code;
+                    Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await?;
+                    continue;
                 }
+                // A task inspecting an access boundary needs its observed wall read and verified, not passed.
+                decision = code_decision(Operation::Read, None);
+                decided_by = Decider::Code;
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
             if (!state.open_answer_outputs.is_empty() || uncertain || !not_acting(decision.operation))

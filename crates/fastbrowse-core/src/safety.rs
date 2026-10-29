@@ -48,50 +48,6 @@ pub fn may_be_irreversible(operation: Operation, control: Option<&Control>) -> b
     }
 }
 
-// A playback control: its action is undone by the reverse action, so it commits nothing. The label must name playback
-// and nothing that turns "pause" into a commitment ("pause my subscription").
-const REVERSIBLE_TOGGLE: &[&str] = &["play", "pause", "resume", "unmute", "mute", "replay"];
-const COMMITTED_NOUN: &[&str] = &[
-    "subscription",
-    "membership",
-    "plan",
-    "billing",
-    "payment",
-    "invoice",
-    "order",
-    "shipment",
-    "delivery",
-    "account",
-    "profile",
-    "job",
-    "project",
-    "campaign",
-    "listing",
-    "ad",
-    "deploy",
-    "server",
-    "instance",
-    "customer",
-    "contract",
-    "policy",
-];
-
-/// Whether activating this control only flips playback, which the same control flips back.
-///
-/// Pausing a video, muting audio or resuming playback is reversible by whoever did it, with no effect outside the
-/// page, so it is not a commit to confirm. The label alone decides, and only when it also carries no noun that a pause
-/// would commit (a subscription, a shipment, an ad campaign).
-pub fn reversible_toggle(control: &Control) -> bool {
-    let label = text::strip(&control.label);
-    if text::find_word(label, REVERSIBLE_TOGGLE).is_none() || text::find_word(label, COMMITTED_NOUN).is_some() {
-        return false;
-    }
-    !control
-        .context
-        .as_deref()
-        .is_some_and(|context| !context.is_empty() && text::find_word(context, COMMITTED_NOUN).is_some())
-}
-
 /// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
 /// submits and the address it links to.
 fn describe_control(instructions: &mut String, operation: Operation, control: &Control, destination: Option<&Control>) {
@@ -771,20 +727,6 @@ mod tests {
             link.href = href.map(str::to_string);
             link.download = download;
             assert_eq!(starts_download(&link), expected, "{href:?}");
-        }
-    }
-
-    #[test]
-    fn test_playback_controls_are_reversible() {
-        for label in ["Pause", "Play", "Resume", "Mute"] {
-            assert!(reversible_toggle(&button(label)), "{label}");
-        }
-    }
-
-    #[test]
-    fn test_a_pause_that_commits_something_is_not_reversible() {
-        for label in ["Pause my subscription", "Pause billing", "Play the demo with your order", "Delete account"] {
-            assert!(!reversible_toggle(&button(label)), "{label}");
         }
     }
 
