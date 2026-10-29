@@ -304,7 +304,11 @@ impl Cdp {
             use std::io::Write;
             let ended = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(file, "{}", json!({"m": method, "b": began, "e": ended, "x": message["params"]["expression"].as_str().map(|x| x.chars().take(70).collect::<String>())}));
+                let _ = writeln!(
+                    file,
+                    "{}",
+                    json!({"m": method, "b": began, "e": ended, "x": message["params"]["expression"].as_str().map(|x| x.chars().take(70).collect::<String>())})
+                );
             }
         }
         reply
