@@ -4,7 +4,7 @@ name: CodSpeed
 on:
   pull_request:
     paths: &measured
-      - src/fastbrowse/browser/snapshot.js
+      - crates/fastbrowse-browser/js/snapshot.js
       - crates/fastbrowse-browser/src/**
       - benchmarks/**
       - .github/workflows/codspeed.yml

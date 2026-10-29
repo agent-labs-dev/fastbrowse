@@ -63,10 +63,11 @@ writes the JavaScript SDK's types in `packages/sdk/src/protocol.ts` from the sch
 either committed file differs from what the types produce, and `tests/test_protocol_schema.py` fails when the Python
 models in `src/fastbrowse/protocol.py` no longer describe the same schema.
 
-The npm packages are published at the Python package's version, and the Rust binary reports it too.
-`scripts/npm_versions.py` fails when `packages/sdk/package.json` or the `[workspace.package]` version in
-`Cargo.toml` holds another number, and with `--write` sets both from `pyproject.toml`, along with the workspace's
-own entries in `Cargo.lock`.
+The npm packages and the crates on crates.io are published at the Python package's version, and the Rust binary
+reports it too. `scripts/npm_versions.py` fails when `packages/sdk/package.json`, the `[workspace.package]` version in
+`Cargo.toml` or a crate's pin in `[workspace.dependencies]` holds another number, and with `--write` sets them all from
+`pyproject.toml`, along with the workspace's own entries in `Cargo.lock`. A crate that is published reaches no file
+outside its own directory: `cargo package` in CI builds each one from what would be uploaded.
 
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice, saying
 what changed and why. The docs move with the code in the same PR: update the README, `docs/`,

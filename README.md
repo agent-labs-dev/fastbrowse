@@ -542,6 +542,34 @@ There is no binary for Alpine or another musl system, and none for a platform ou
 that allows programs only by the team that signed them refuses. The Windows binary is not signed. Bun and Deno are
 untested.
 
+## Use it from Rust
+
+The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, with the result's types:
+
+```toml
+[dependencies]
+fastbrowse = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+```rust
+use fastbrowse::{Limits, RunTask, run_task};
+
+let result = run_task(
+    "What is the top story's title?",
+    RunTask {
+        start: Some("https://news.ycombinator.com/".into()),
+        limits: Some(Limits { max_dollars: Some(0.25), ..Limits::default() }),
+        ..RunTask::default()
+    },
+)
+.await?;
+```
+
+The keys come from the environment, as the command reads them. `cargo install fastbrowse-cli` installs the
+`fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
+`fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
+
 ## Use fastbrowse with your agent
 
 Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from an agent that supports Agent Skills. It uses the MCP

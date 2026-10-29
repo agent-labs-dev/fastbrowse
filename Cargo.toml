@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/fastbrowse",
     "crates/fastbrowse-core",
     "crates/fastbrowse-clients",
     "crates/fastbrowse-browser",
@@ -16,7 +17,18 @@ members = [
 version = "0.9.0"
 edition = "2024"
 license = "MIT"
-publish = false
+repository = "https://github.com/agent-labs-dev/fastbrowse"
+homepage = "https://github.com/agent-labs-dev/fastbrowse"
+
+# The crates are published together at one version, each pinned to the others' exact one, as the npm packages are.
+# `scripts/npm_versions.py --write` moves these with the workspace version.
+[workspace.dependencies]
+fastbrowse-core = { path = "crates/fastbrowse-core", version = "=0.9.0" }
+fastbrowse-clients = { path = "crates/fastbrowse-clients", version = "=0.9.0" }
+fastbrowse-browser = { path = "crates/fastbrowse-browser", version = "=0.9.0" }
+fastbrowse-agent = { path = "crates/fastbrowse-agent", version = "=0.9.0" }
+fastbrowse-run = { path = "crates/fastbrowse-run", version = "=0.9.0" }
+fastbrowse-cli = { path = "crates/fastbrowse-cli", version = "=0.9.0" }
 
 [profile.release]
 lto = true

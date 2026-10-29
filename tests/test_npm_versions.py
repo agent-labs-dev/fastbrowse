@@ -39,13 +39,17 @@ def _checkout(
     python: str = "1.2.3",
     sdk: str = "1.2.3",
     rust: str = "1.2.3",
+    crate_pin: str | None = None,
     pins: dict[str, str] | None = None,
 ) -> Path:
     """A directory holding the files the check reads, as a checkout does."""
     (root / "pyproject.toml").write_text(f'[project]\nname = "fastbrowse"\nversion = "{python}"\n')
     (root / "Cargo.toml").write_text(
         f'[workspace]\nmembers = ["crates/fastbrowse-core"]\n\n'
-        f'[workspace.package]\nedition = "2024"\nversion = "{rust}"\n'
+        f'[workspace.package]\nedition = "2024"\nversion = "{rust}"\n\n'
+        f"[workspace.dependencies]\n"
+        f'fastbrowse-core = {{ path = "crates/fastbrowse-core", version = "={crate_pin or rust}" }}\n'
+        f'serde = {{ version = "1" }}\n'
     )
     (root / "Cargo.lock").write_text(LOCK.format(rust=rust))
     manifest = {
@@ -133,6 +137,26 @@ def test_a_rust_workspace_at_another_version_fails_and_is_named(tmp_path: Path) 
     assert "the workspace is 1.2.2" in done.stderr
 
 
+def test_a_crate_pinned_to_another_version_fails_and_is_named(tmp_path: Path) -> None:
+    # crates.io would take a crate depending on another release of its siblings than its own.
+    done = _run(_checkout(tmp_path, crate_pin="1.2.2"))
+
+    assert done.returncode == 1
+    assert "fastbrowse-core is pinned to =1.2.2" in done.stderr
+
+
+def test_a_crate_pin_without_the_equals_sign_is_a_range_and_fails(tmp_path: Path) -> None:
+    # Cargo reads a bare `1.2.3` as `^1.2.3`, which lets a crate resolve a later sibling than its own release.
+    root = _checkout(tmp_path)
+    cargo = root / "Cargo.toml"
+    cargo.write_text(cargo.read_text().replace('version = "=1.2.3"', 'version = "1.2.3"'))
+
+    done = _run(root)
+
+    assert done.returncode == 1
+    assert "fastbrowse-core is pinned to 1.2.3" in done.stderr
+
+
 def test_write_moves_the_rust_workspace_and_its_own_lock_entries_only(tmp_path: Path) -> None:
     root = _checkout(tmp_path, python="2.0.0")
 
@@ -140,6 +164,11 @@ def test_write_moves_the_rust_workspace_and_its_own_lock_entries_only(tmp_path: 
 
     cargo = tomllib.loads((root / "Cargo.toml").read_text())
     assert cargo["workspace"]["package"] == {"edition": "2024", "version": "2.0.0"}
+    # The crates published together pin each other to the release; a registry crate keeps its own requirement.
+    assert cargo["workspace"]["dependencies"] == {
+        "fastbrowse-core": {"path": "crates/fastbrowse-core", "version": "=2.0.0"},
+        "serde": {"version": "1"},
+    }
     lock = tomllib.loads((root / "Cargo.lock").read_text())
     # A registry crate that happens to share the old number keeps it, and so does a member with its own version.
     assert {package["name"]: package["version"] for package in lock["package"]} == {

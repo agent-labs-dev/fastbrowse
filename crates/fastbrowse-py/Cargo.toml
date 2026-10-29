@@ -3,7 +3,7 @@ name = "fastbrowse-py"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 
 [lib]
 # `fastbrowse._native`, built into the `fastbrowse` wheel by maturin from the root pyproject.toml.
@@ -11,14 +11,14 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-fastbrowse-agent = { path = "../fastbrowse-agent" }
-fastbrowse-browser = { path = "../fastbrowse-browser" }
+fastbrowse-agent = { workspace = true }
+fastbrowse-browser = { workspace = true }
 # The CLI the `fastbrowse` command runs, with the hidden `--run-task` stand-ins the binary has (the Python CLI ships
 # its own), so the smoke test drives the wheel as it drives the binary.
-fastbrowse-cli = { path = "../fastbrowse-cli" }
-fastbrowse-clients = { path = "../fastbrowse-clients" }
-fastbrowse-core = { path = "../fastbrowse-core" }
-fastbrowse-run = { path = "../fastbrowse-run" }
+fastbrowse-cli = { workspace = true }
+fastbrowse-clients = { workspace = true }
+fastbrowse-core = { workspace = true }
+fastbrowse-run = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 # abi3: one wheel per platform serves every CPython from 3.13 on.
