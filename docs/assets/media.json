@@ -18,9 +18,9 @@
     },
     "docs/assets/demo.gif": {
       "surface": "670179c94510ea10e12d662b14e1fdc5128b072e2efc8feee9b627e64ae2eb4f",
-      "shows": "A run signing in to saucedemo, adding two products, filling the shipping form, placing the order and reporting the total with its quotes.",
-      "command": "uv run fastbrowse \"...\" --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --local --record",
-      "recorded_at": "2026-10-27"
+      "shows": "A run shopping thepihut.com: it adds a Raspberry Pi Pico 2 W and an in-stock BME280 sensor to the basket, fills in checkout without paying, and answers with each price, the delivery cost and the order total, each cited.",
+      "command": "uv run fastbrowse \"...\" --start https://thepihut.com/ --local --record demo.mp4",
+      "recorded_at": "2026-10-28"
     }
   }
 }
