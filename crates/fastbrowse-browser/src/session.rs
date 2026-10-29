@@ -30,8 +30,8 @@ const SCREENCAST_COMMAND_SECONDS: f64 = 0.5;
 /// its cancellation held the run open with no result while its cloud browser went on billing.
 const FRAME_RELEASE_SECONDS: f64 = 2.0;
 
-pub const SNAPSHOT_JS: &str = include_str!("../../../src/fastbrowse/browser/snapshot.js");
-pub const CAPTURE_JS: &str = include_str!("../../../src/fastbrowse/browser/capture.js");
+pub const SNAPSHOT_JS: &str = include_str!("../js/snapshot.js");
+pub const CAPTURE_JS: &str = include_str!("../js/capture.js");
 /// What a call to the installed snapshot function throws in a document that never installed it.
 pub const SNAPSHOT_UNINSTALLED: &str = "fastbrowse: snapshot.js is not installed in this document";
 
@@ -68,7 +68,7 @@ impl SnapshotScript {
 }
 /// DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
 /// before they paint, so neither the agent's steps nor a recording are spent on one.
-const REFUSE_COOKIES_JS: &str = include_str!("../../../src/fastbrowse/browser/autoconsent/autoconsent.standalone.js");
+const REFUSE_COOKIES_JS: &str = include_str!("../js/autoconsent/autoconsent.standalone.js");
 
 /// The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
 /// there, and a binding or listener in the page's world is a fingerprint any site can read.

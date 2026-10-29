@@ -47,7 +47,7 @@ uvx vulture==2.16 src tests scripts --min-confidence 80 --sort-by-size
 npx --yes jscpd@4.0.8 --silent --reporters json --output .sift/runs/evidence/jscpd src/fastbrowse/*.py src/fastbrowse/evals/*.py src/fastbrowse/audit/*.py scripts tests
 uvx zizmor==1.30.1 --offline .github/workflows
 npx --yes markdownlint-cli2@0.23.3 README.md AGENTS.md CONTRIBUTING.md SECURITY.md 'docs/*.md'
-npx --yes -p typescript@7.0.2 tsc --allowJs --checkJs --noEmit --target es2022 --lib es2022,dom,dom.iterable src/fastbrowse/browser/capture.js src/fastbrowse/browser/snapshot.js
+npx --yes -p typescript@7.0.2 tsc --allowJs --checkJs --noEmit --target es2022 --lib es2022,dom,dom.iterable crates/fastbrowse-browser/js/capture.js crates/fastbrowse-browser/js/snapshot.js
 gitleaks detect --source . --no-banner --redact
 ```
 
@@ -69,7 +69,7 @@ gitleaks detect --source . --no-banner --redact
   at run time by `serve --run-task` in the smoke scripts, and the binary's `scripted` feature answers it.
 - `scripts/` stand-alone programs are called from `ci.yml`, `binaries.yml` and `release.yml`.
 - MCP registers its browse tool and uses its schema/docstrings as model-visible descriptions.
-- `crates/fastbrowse-browser/src/session.rs` compiles in `src/fastbrowse/browser/snapshot.js`, `capture.js` and the autoconsent bundle.
+- `crates/fastbrowse-browser/src/session.rs` compiles in `crates/fastbrowse-browser/js/snapshot.js`, `capture.js` and the autoconsent bundle.
 - CDP event registrations, context-manager methods, pytest fixtures and test discovery call symbols indirectly.
   `benchmarks/` is collected only by `codspeed.yml`, outside `testpaths`.
 - Evals and audit modules have `python -m` entry points; scripts are also called from CI and the justfile.
@@ -87,16 +87,20 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 
 | Paths | Zone |
 |---|---|
-| src/fastbrowse Python and browser/capture.js, browser/snapshot.js | production |
+| src/fastbrowse Python, crates/fastbrowse-browser/js/capture.js and snapshot.js | production |
 | packages/sdk/src/ except protocol.ts | production |
 | packages/sdk/test/ | test |
-| packages/sdk/src/protocol.ts, protocol/schema.json | generated |
+| go/ Go except protocol.go and *_test.go | production |
+| go/*_test.go | test |
+| java/src/main except protocol/ | production |
+| java/src/test/ | test |
+| packages/sdk/src/protocol.ts, protocol/schema.json, go/protocol.go, java/src/main/java/dev/agentlabs/fastbrowse/protocol/ | generated |
 | scripts/ | script |
 | tests/ Python, benchmarks/ Python | test |
 | tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/ | fixture |
 | benchmarks/golden/ | generated |
 | docs/results/, src/fastbrowse/evals/versions.json, packaging/aur/.SRCINFO | generated |
-| src/fastbrowse/browser/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
+| crates/fastbrowse-browser/js/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
 | .github/, packaging/, tool manifests and lockfiles | config |
 | Markdown and .agents/skills/ | docs |
 

@@ -1,7 +1,7 @@
 name: Release
-# One tag publishes one version to PyPI and to npm. Nothing is published until the sdist, the five wheels and the
-# five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there yet:
-# PyPI, the five platform packages, the SDK.
+# One tag publishes one version to PyPI, npm, crates.io, Maven Central and the Go module proxy. Nothing is published until the sdist, the five wheels and
+# the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
+# yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
 # A tag runs the fixture suites itself, before anything is published: the release carries its own proof that the
 # agent still browses well on the exact commit that ships, rather than needing somebody to dispatch a run first.
@@ -124,7 +124,13 @@ jobs:
         with:
           name: notes
           path: notes/
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --notes-file notes/notes.md --verify-tag
+      # The binaries as archives, one per platform, which the Go module downloads and checks against the checksums
+      # its own tag pins.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fastbrowse-rust-*
+          path: rust/
+      - run: gh release create "$GITHUB_REF_NAME" dist/* rust/*/fastbrowse-rust-*.tar.gz --notes-file notes/notes.md --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -213,6 +219,122 @@ jobs:
             # With `./`, or npm reads the argument as a GitHub repository.
             npm publish ./packages/sdk --access public
           fi
+
+  # The Rust crates, by trusted publishing as npm is: crates.io accepts this job's OIDC identity for each crate and
+  # hands back a token that is revoked when the job ends. A crate depends on the others at this exact version, so
+  # each is published after those it depends on, and the facade `fastbrowse` last.
+  crates:
+    needs: pypi
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.13"
+          enable-cache: false
+      - run: echo "VERSION=$(uv version --short)" >> "$GITHUB_ENV"
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      # A version already on crates.io is passed over, so a run that stopped partway can be run again: crates.io
+      # refuses a version twice. rustup installs the toolchain rust-toolchain.toml pins on the first cargo call.
+      - name: Publish the crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          for crate in fastbrowse-core fastbrowse-clients fastbrowse-browser fastbrowse-agent fastbrowse-run \
+            fastbrowse-cli fastbrowse; do
+            if curl -sfo /dev/null -A "fastbrowse release (github.com/agent-labs-dev/fastbrowse)" \
+              "https://crates.io/api/v1/crates/$crate/$VERSION"; then
+              echo "$crate $VERSION is already published"
+            else
+              cargo publish -p "$crate" --locked
+            fi
+          done
+
+  # The Java client on Maven Central: `dev.agentlabs:fastbrowse`, and one `natives-<target>` jar per platform holding
+  # that platform's binary from this release's archives. Central takes no OIDC identity, so the account's token and
+  # the signing key are the `maven-central` environment's secrets. Central refuses a version twice, so a run that
+  # stopped after publishing passes over it.
+  maven:
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    environment: maven-central
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fastbrowse-rust-*
+          path: ${{ runner.temp }}/rust
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      # Each jar's binary sits where the client looks for it on the classpath.
+      - name: Stage the binaries
+        run: |
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
+            into="java/target/natives/$target/dev/agentlabs/fastbrowse/natives/$target"
+            mkdir -p "$into"
+            tar -xzf "$RUNNER_TEMP/rust/fastbrowse-rust-$target/fastbrowse-rust-$target.tar.gz" -C "$into" --strip-components 1
+          done
+      - name: Publish
+        env:
+          VERSION: "${{ needs.build.outputs.version }}"
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          if curl -sfo /dev/null "https://repo1.maven.org/maven2/dev/agentlabs/fastbrowse/$VERSION/fastbrowse-$VERSION.pom"; then
+            echo "dev.agentlabs:fastbrowse $VERSION is already published"
+            exit 0
+          fi
+          # The client's tests need a binary to start; the binaries workflow ran each one already.
+          mvn -B -f java/pom.xml -P release -DskipTests deploy
+
+  # The Go module for this release: the tag `go/vX.Y.Z`, on a commit off `main` that pins the release's binary archives
+  # by their SHA-256. The module downloads its platform's archive from the GitHub release above and refuses one that
+  # is not the archive pinned here, so the commit is made from the same artifacts the release holds.
+  go:
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The token stays in the checkout because this job pushes the tag, and only the tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fastbrowse-rust-*
+          path: ${{ runner.temp }}/rust
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go/go.mod, cache: false}
+      - env: {VERSION: "${{ needs.build.outputs.version }}"}
+        run: python3 scripts/go_binaries.py "$VERSION" "$RUNNER_TEMP"/rust/*/fastbrowse-rust-*.tar.gz
+      - run: test -z "$(gofmt -l go)" && go -C go vet ./...
+      # A tag already there means a run that stopped partway got this far; the module a tag names never changes.
+      - name: Tag the module
+        env: {VERSION: "${{ needs.build.outputs.version }}"}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/go/v$VERSION" > /dev/null; then
+            echo "go/v$VERSION is already tagged"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "go: pin the v$VERSION binaries" go/binaries.go
+          git tag "go/v$VERSION"
+          git push origin "go/v$VERSION"
 
   # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container,
   # then pushed to the AUR so Arch users get the release without anyone copying two files by hand. Its

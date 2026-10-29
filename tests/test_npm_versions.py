@@ -39,13 +39,17 @@ def _checkout(
     python: str = "1.2.3",
     sdk: str = "1.2.3",
     rust: str = "1.2.3",
+    crate_pin: str | None = None,
     pins: dict[str, str] | None = None,
 ) -> Path:
     """A directory holding the files the check reads, as a checkout does."""
     (root / "pyproject.toml").write_text(f'[project]\nname = "fastbrowse"\nversion = "{python}"\n')
     (root / "Cargo.toml").write_text(
         f'[workspace]\nmembers = ["crates/fastbrowse-core"]\n\n'
-        f'[workspace.package]\nedition = "2024"\nversion = "{rust}"\n'
+        f'[workspace.package]\nedition = "2024"\nversion = "{rust}"\n\n'
+        f"[workspace.dependencies]\n"
+        f'fastbrowse-core = {{ path = "crates/fastbrowse-core", version = "={crate_pin or rust}" }}\n'
+        f'serde = {{ version = "1" }}\n'
     )
     (root / "Cargo.lock").write_text(LOCK.format(rust=rust))
     manifest = {
@@ -133,6 +137,26 @@ def test_a_rust_workspace_at_another_version_fails_and_is_named(tmp_path: Path) 
     assert "the workspace is 1.2.2" in done.stderr
 
 
+def test_a_crate_pinned_to_another_version_fails_and_is_named(tmp_path: Path) -> None:
+    # crates.io would take a crate depending on another release of its siblings than its own.
+    done = _run(_checkout(tmp_path, crate_pin="1.2.2"))
+
+    assert done.returncode == 1
+    assert "fastbrowse-core is pinned to =1.2.2" in done.stderr
+
+
+def test_a_crate_pin_without_the_equals_sign_is_a_range_and_fails(tmp_path: Path) -> None:
+    # Cargo reads a bare `1.2.3` as `^1.2.3`, which lets a crate resolve a later sibling than its own release.
+    root = _checkout(tmp_path)
+    cargo = root / "Cargo.toml"
+    cargo.write_text(cargo.read_text().replace('version = "=1.2.3"', 'version = "1.2.3"'))
+
+    done = _run(root)
+
+    assert done.returncode == 1
+    assert "fastbrowse-core is pinned to 1.2.3" in done.stderr
+
+
 def test_write_moves_the_rust_workspace_and_its_own_lock_entries_only(tmp_path: Path) -> None:
     root = _checkout(tmp_path, python="2.0.0")
 
@@ -140,6 +164,11 @@ def test_write_moves_the_rust_workspace_and_its_own_lock_entries_only(tmp_path: 
 
     cargo = tomllib.loads((root / "Cargo.toml").read_text())
     assert cargo["workspace"]["package"] == {"edition": "2024", "version": "2.0.0"}
+    # The crates published together pin each other to the release; a registry crate keeps its own requirement.
+    assert cargo["workspace"]["dependencies"] == {
+        "fastbrowse-core": {"path": "crates/fastbrowse-core", "version": "=2.0.0"},
+        "serde": {"version": "1"},
+    }
     lock = tomllib.loads((root / "Cargo.lock").read_text())
     # A registry crate that happens to share the old number keeps it, and so does a member with its own version.
     assert {package["name"]: package["version"] for package in lock["package"]} == {
@@ -154,3 +183,30 @@ def test_this_checkout_is_in_lockstep() -> None:
     done = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True)
 
     assert done.returncode == 0, done.stderr
+
+
+def _pom(root: Path, version: str) -> Path:
+    pom = root / "java" / "pom.xml"
+    pom.parent.mkdir()
+    pom.write_text(
+        "<project>\n  <groupId>dev.agentlabs</groupId>\n  <artifactId>fastbrowse</artifactId>\n"
+        f"  <version>{version}</version>\n  <dependencies><dependency>\n"
+        "    <artifactId>jackson-databind</artifactId>\n    <version>2.22.4</version>\n"
+        "  </dependency></dependencies>\n</project>\n"
+    )
+    return pom
+
+
+def test_a_java_client_at_another_version_fails_and_write_moves_only_its_own(tmp_path: Path) -> None:
+    root = _checkout(tmp_path)
+    pom = _pom(root, "1.2.2")
+
+    done = _run(root)
+    assert done.returncode == 1
+    assert "the Java client is 1.2.2" in done.stderr
+
+    assert _run(root, "--write").returncode == 0
+    # The project's version moves; a dependency's, written the same way further down, does not.
+    assert "<version>1.2.3</version>" in pom.read_text()
+    assert "<version>2.22.4</version>" in pom.read_text()
+    assert _run(root).returncode == 0

@@ -3,10 +3,12 @@ name = "fastbrowse-clients"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "fastbrowse's model clients: Jev, the LLM providers and the HTTP they share."
 
 [dependencies]
-fastbrowse-core = { path = "../fastbrowse-core" }
+fastbrowse-core = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
 # float_roundtrip: the default parser can land a float one unit off, and a cost read one unit off is a different cost.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

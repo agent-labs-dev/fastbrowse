@@ -128,6 +128,22 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
+      # outside its own directory, or names another without a version, fails here instead of at a release.
+      - run: cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
+      # The Go client against the binary just built, its scripted runs standing in for the agent. Its types are
+      # written from protocol/schema.json and committed; a schema changed without them fails here.
+      - run: cargo build -p fastbrowse-cli --locked
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go/go.mod, cache: false}
+      - run: go -C go generate ./... && git diff --exit-code -- go
+      - run: test -z "$(gofmt -l go)" && go -C go vet ./...
+      - run: FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...
+      # The Java client against the same binary. Its types are written from protocol/schema.json and committed too.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with: {distribution: temurin, java-version: "17"}
+      - run: python3 scripts/java_types.py && git diff --exit-code -- java && test -z "$(git status --porcelain -- java)"
+      - run: FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify
       # Builds the package and its Rust core, `fastbrowse._native`, which the SDK suite's own server runs on.
       - run: uv sync --locked
       - run: cargo build -p fastbrowse-node --release --locked

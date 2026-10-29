@@ -33,9 +33,10 @@ credentials, irreversible actions and spending under the control of code.
 - **One agent, every interface.** A CLI, a Python library, a Node SDK with a native binary and no Python, an MCP
   server, and a skill for coding agents.
 
-![fastbrowse signing in to a shop, adding two products, filling the shipping form, placing the order and reporting the total with its quotes](docs/assets/demo.gif)
+![fastbrowse shopping a live store, adding a Raspberry Pi Pico 2 W and an in-stock BME280 sensor to the basket, filling in checkout without paying, and answering with every price cited](docs/assets/demo.gif)
 
-Recorded on local Chrome: 13 steps, 20.9s and $0.0034 in model calls. Playback is 1.4x faster with pauses cut.
+Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.29 in model calls. Playback is sped
+up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
 Against the hosted Browser Use agent, on 46 tasks with three repeats each, fastbrowse passed 99.2% to 96.3% at
 $0.0296 a run to $0.3180, and took 18.9s to 15.3s. See [How it compares](#how-it-compares).
@@ -406,6 +407,80 @@ and anything but `true` keeps the run from `complete`. The other options are `ru
 
 There is no binary for musl systems such as Alpine; point `binaryPath` or `FASTBROWSE_BINARY` at your own. The
 macOS binaries are ad-hoc signed, not notarized, and the Windows binary is unsigned. Bun and Deno are untested.
+
+## Use it from Rust
+
+The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, with the result's types:
+
+```toml
+[dependencies]
+fastbrowse = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+```rust
+use fastbrowse::{Limits, RunTask, run_task};
+
+let result = run_task(
+    "What is the top story's title?",
+    RunTask {
+        start: Some("https://news.ycombinator.com/".into()),
+        limits: Some(Limits { max_dollars: Some(0.25), ..Limits::default() }),
+        ..RunTask::default()
+    },
+)
+.await?;
+```
+
+The keys come from the environment, as the command reads them. `cargo install fastbrowse-cli` installs the
+`fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
+`fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
+
+## Use it from Go
+
+The [Go module](go) starts the fastbrowse binary and runs tasks over the same protocol the JavaScript SDK uses:
+
+```sh
+go get github.com/agent-labs-dev/fastbrowse/go
+```
+
+```go
+client, err := fastbrowse.Start(ctx, fastbrowse.Options{})
+if err != nil {
+	return err
+}
+defer client.Close(context.Background())
+result, err := client.Run(ctx, "What is the top story's title?", fastbrowse.RunOptions{
+	Start: "https://news.ycombinator.com/",
+})
+```
+
+The first `Start` downloads the release's binary for the platform into the user cache directory, checked against
+the SHA-256 the module pins; `Options.BinaryPath` or `FASTBROWSE_BINARY` names another. Cancelling `ctx` stops a run
+once its browser has closed. `RunOptions` takes the same options as the SDK: `OutputSchema`, `Secrets`, `Until`,
+`OnEvent` and `OnFrame`. One client runs one task at a time.
+
+## Use it from Java or Kotlin
+
+The [Java client](java) is `dev.agentlabs:fastbrowse` on Maven Central, with the binary for each platform in its
+`natives-<platform>` jar. Java 17 or newer:
+
+```kotlin
+implementation("dev.agentlabs:fastbrowse:0.9.0")
+runtimeOnly("dev.agentlabs:fastbrowse:0.9.0:natives-linux-x64")
+```
+
+```java
+try (Fastbrowse fastbrowse = Fastbrowse.start()) {
+    RunResult result = fastbrowse.run("What is the top story's title?", RunOptions.builder()
+            .start("https://news.ycombinator.com/")
+            .build()).join();
+}
+```
+
+`run` returns a `CompletableFuture`, so Kotlin awaits it with `kotlinx-coroutines-jdk8`, and cancelling the future
+stops the run. `RunOptions` takes the same options as the SDK: `outputSchema`, `secrets`, `until`, `onEvent` and
+`onFrame`. One client runs one task at a time.
 
 ## Use fastbrowse with your agent
 

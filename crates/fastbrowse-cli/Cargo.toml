@@ -3,7 +3,9 @@ name = "fastbrowse-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The fastbrowse command: the CLI, the MCP server and `fastbrowse serve` for the language SDKs."
 
 [[bin]]
 name = "fastbrowse"
@@ -16,10 +18,10 @@ default = ["scripted"]
 scripted = ["tokio/signal"]
 
 [dependencies]
-fastbrowse-core = { path = "../fastbrowse-core" }
-fastbrowse-clients = { path = "../fastbrowse-clients" }
-fastbrowse-agent = { path = "../fastbrowse-agent" }
-fastbrowse-run = { path = "../fastbrowse-run" }
+fastbrowse-core = { workspace = true }
+fastbrowse-clients = { workspace = true }
+fastbrowse-agent = { workspace = true }
+fastbrowse-run = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

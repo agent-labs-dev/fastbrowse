@@ -12,8 +12,9 @@ Each platform package has to be pinned to the exact version. A range would let a
 later release than its own.
 
 The Rust workspace is the other: `Cargo.toml`'s `[workspace.package]` version is what the Rust binary prints for
-`--version` and reports to a `serve` client, and the platform packages carry that binary. `--write` moves it and
-the workspace's own packages in `Cargo.lock` with it, so `cargo build --locked` still passes.
+`--version` and reports to a `serve` client, and the platform packages carry that binary. The crates published to
+crates.io pin each other to that version exactly in `[workspace.dependencies]`. `--write` moves all of them and the
+workspace's own packages in `Cargo.lock` with it, so `cargo build --locked` still passes.
 
 Standard library only, so the release can run it before anything is installed.
 """
@@ -31,6 +32,10 @@ REPO = Path(__file__).resolve().parent.parent
 TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64")
 
 _WORKSPACE_VERSION = re.compile(r'(?m)^(\[workspace\.package\]\n(?:[^\[\n].*\n)*?version = ")[^"]*(")')
+# The Java client's own version in `java/pom.xml`: the first `<version>`, right after its `<artifactId>`.
+_POM_VERSION = re.compile(r"(<artifactId>fastbrowse</artifactId>\s*<version>)([^<]*)(</version>)")
+# One workspace crate as another depends on it: `fastbrowse-core = { path = "...", version = "=0.8.3" }`.
+_PIN = re.compile(r'(?m)^(fastbrowse[a-z-]* = \{ path = "[^"]+", version = "=)[^"]*(" \})$')
 
 
 def differences(version: str, manifest: dict[str, object]) -> list[str]:
@@ -56,6 +61,34 @@ def workspace_version(cargo: str) -> object:
     return package.get("version")
 
 
+def pins(cargo: str) -> dict[str, object]:
+    """Each crate's version requirement in `[workspace.dependencies]`, such as `=0.8.3`."""
+    dependencies = tomllib.loads(cargo).get("workspace", {}).get("dependencies", {})
+    return {
+        name: entry.get("version")
+        for name, entry in dependencies.items()
+        if name.startswith("fastbrowse") and isinstance(entry, dict) and "path" in entry
+    }
+
+
+def pom_version(root: Path) -> str | None:
+    """The Java client's version, or None in a checkout without one."""
+    pom = root / "java" / "pom.xml"
+    if not pom.exists():
+        return None
+    found = _POM_VERSION.search(pom.read_text(encoding="utf-8"))
+    return found[2] if found else ""
+
+
+def write_pom(root: Path, version: str) -> None:
+    pom = root / "java" / "pom.xml"
+    if pom.exists():
+        text, count = _POM_VERSION.subn(rf"\g<1>{version}\g<3>", pom.read_text(encoding="utf-8"), count=1)
+        if count != 1:
+            raise SystemExit(f"{pom} has no project version to set")
+        pom.write_text(text, encoding="utf-8")
+
+
 def write_workspace(root: Path, version: str) -> None:
     """Set the Rust workspace's version, and its own packages' entries in `Cargo.lock`, to `version`."""
     cargo = root / "Cargo.toml"
@@ -63,6 +96,11 @@ def write_workspace(root: Path, version: str) -> None:
     text, count = _WORKSPACE_VERSION.subn(rf"\g<1>{version}\g<2>", before)
     if count != 1:
         raise SystemExit(f"{cargo} has no [workspace.package] version to set")
+    text, count = _PIN.subn(rf"\g<1>{version}\g<2>", text)
+    if count != len(pins(before)):
+        raise SystemExit(
+            f"{cargo}: {len(pins(before)) - count} [workspace.dependencies] pins are not in the form to set"
+        )
     cargo.write_text(text, encoding="utf-8")
     lock = root / "Cargo.lock"
     if not lock.exists():
@@ -91,10 +129,19 @@ def main() -> int:
         manifest["optionalDependencies"] = {f"@fastbrowse/{target}": version for target in TARGETS}
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         write_workspace(args.root, version)
+        write_pom(args.root, version)
     found = [f"{path}: {line}" for line in differences(version, manifest)]
     rust = workspace_version(cargo.read_text(encoding="utf-8"))
     if rust != version:
         found.append(f"{cargo}: the workspace is {rust}")
+    found.extend(
+        f"{cargo}: {name} is pinned to {pinned}"
+        for name, pinned in pins(cargo.read_text(encoding="utf-8")).items()
+        if pinned != f"={version}"
+    )
+    java = pom_version(args.root)
+    if java is not None and java != version:
+        found.append(f"{args.root / 'java' / 'pom.xml'}: the Java client is {java}")
     if found:
         print(f"pyproject.toml is {version}, and in", file=sys.stderr)
         for line in found:
