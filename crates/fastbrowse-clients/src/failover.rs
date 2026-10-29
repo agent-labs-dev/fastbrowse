@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question, RetriesExhausted};
+use fastbrowse_core::jev::{DecisionProfile, Evaluation, JevClient, JevError, Question, RetriesExhausted};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
@@ -105,7 +105,9 @@ impl FailoverJevClient {
         let mut cost = result.cost.clone();
         if error.unaccounted_requests > 0 {
             // Only unanswered requests may be billed. Estimate their inputs from the answered request.
-            let discarded = estimated_cost(result.input_tokens * error.unaccounted_requests, 0);
+            // They went to the primary, so they are priced as its.
+            let price = self.primary.profile().dollars_per_input_token;
+            let discarded = estimated_cost(price, result.input_tokens * error.unaccounted_requests, 0);
             cost = fastbrowse_core::models::CostLine { seconds: cost.seconds, ..merged_cost(&[cost, discarded]) };
         }
         let mut answers = held;
@@ -130,5 +132,10 @@ impl JevClient for FailoverJevClient {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
         Box::pin(self.evaluate_paid(state, questions))
+    }
+
+    /// The primary's. Every default backup serves Jev as well, so it accepts what the primary does.
+    fn profile(&self) -> DecisionProfile {
+        self.primary.profile()
     }
 }

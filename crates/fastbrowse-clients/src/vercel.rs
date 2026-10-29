@@ -16,7 +16,7 @@
 //! implementation makes no discovery calls.
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JevClient, JevError, Question};
+use fastbrowse_core::jev::{Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, JevClient, JevError, Question};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -29,6 +29,7 @@ use crate::validation::{
 
 pub const GATEWAY_URL: &str = "https://ai-gateway.vercel.sh";
 const MODEL: &str = "typesafe-ai/jev";
+const PRICE: Option<f64> = Some(JEV_DOLLARS_PER_INPUT_TOKEN);
 
 pub struct VercelGatewayJevClient {
     api_key: String,
@@ -70,7 +71,7 @@ impl VercelGatewayJevClient {
             ("ai-evaluation-model-specification-version", "4"),
         ];
         let response =
-            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch).await?;
+            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch, PRICE).await?;
         let sent = sent.snapshot();
         let empty = Value::Object(Map::new());
         let parsed = (|| {
@@ -85,7 +86,7 @@ impl VercelGatewayJevClient {
             let typesafe = object_value(Some(metadata.get("typesafe").unwrap_or(&empty)))?;
             let confidence = object_value(Some(typesafe.get("confidence").unwrap_or(&empty)))?;
             let cost_value = object_value(Some(metadata.get("gateway").unwrap_or(&empty)))?.get("cost");
-            let cost = reported_cost(cost_value, tokens, output_tokens)?;
+            let cost = reported_cost(cost_value, tokens, output_tokens, PRICE)?;
             Ok::<_, String>(Evaluation {
                 requests: sent.requests,
                 model: MODEL.to_string(),
@@ -107,9 +108,11 @@ impl JevClient for VercelGatewayJevClient {
         Box::pin(asking_open(
             questions,
             move |asked| async move {
-                asking_split(asked, &|batch, attempt, split| Box::pin(self.ask(state, batch, attempt, split))).await
+                asking_split(asked, &|batch, attempt, split| Box::pin(self.ask(state, batch, attempt, split)), PRICE)
+                    .await
             },
             MODEL,
+            PRICE,
         ))
     }
 }

@@ -70,17 +70,18 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
     candidates
 }
 
-fn page_read_candidates(page: &Page<'_>, blocks: &[&Block]) -> Vec<Candidate> {
+/// Every candidate, or none where more than a choice of `max_options` beside its two escapes could offer.
+fn page_read_candidates(page: &Page<'_>, blocks: &[&Block], max_options: usize) -> Vec<Candidate> {
     // Truncation could hide the right answer while leaving a plausible wrong one to choose.
-    let candidates = iter_read_candidates(page, blocks, Some(MAX_CHOICE_OPTIONS - 1));
-    if candidates.len() > MAX_CHOICE_OPTIONS - 2 { Vec::new() } else { candidates }
+    let candidates = iter_read_candidates(page, blocks, Some(max_options - 1));
+    if candidates.len() > max_options - 2 { Vec::new() } else { candidates }
 }
 
-/// `read_candidates(capture, blocks=None)`.
+/// `read_candidates(capture, blocks=None)`, for a choice Jev could ask.
 pub fn read_candidates(capture: &Capture, blocks: Option<&[Block]>) -> Vec<Candidate> {
     let page = Page::new(capture);
     let blocks: Vec<&Block> = blocks.unwrap_or(&capture.blocks).iter().collect();
-    page_read_candidates(&page, &blocks)
+    page_read_candidates(&page, &blocks, MAX_CHOICE_OPTIONS)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -222,7 +223,7 @@ async fn focus<'a>(
         .into_iter()
         .collect();
     let mut kept: Vec<&'a Block> = relevant.iter().flat_map(|i| windows[*i].iter().copied()).collect();
-    let mut candidates = page_read_candidates(page, &kept);
+    let mut candidates = page_read_candidates(page, &kept, jev.profile().max_choice_options);
     // Choosing among what fits would leave out a passage judged relevant, or one never judged, and a choice made without
     // it can close the requirement on an outdated value; the LLM reader reads the whole page instead.
     let fits = || {
@@ -308,7 +309,7 @@ pub(crate) async fn read_choices(
         previous.push(Value::Object(packet));
     }
     let all: Vec<&Block> = capture.blocks.iter().collect();
-    let mut candidates = page_read_candidates(page, &all);
+    let mut candidates = page_read_candidates(page, &all, jev.profile().max_choice_options);
     if candidates.is_empty() && previous.is_empty() && iter_read_candidates(page, &all, Some(1)).is_empty() {
         route(trace, "llm", "no_bounded_candidate_set", None, Vec::new());
         return Ok(ChoiceRead::default());

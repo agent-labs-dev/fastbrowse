@@ -4238,8 +4238,8 @@
      "input_tokens": 389,
      "cost": {
       "component": "jev",
-      "basis": "estimated",
-      "dollars": 1.6338000000000002e-05,
+      "basis": "unknown",
+      "dollars": null,
       "purpose": null,
       "input_tokens": 389,
       "output_tokens": 7,

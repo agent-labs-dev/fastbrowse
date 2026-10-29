@@ -2,7 +2,7 @@
 //! the LLM proposes and code finds in the cited block.
 
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{Answer, ChoiceAnswer, ChoiceQuestion, JevClient, MAX_CHOICE_OPTIONS, Question};
+use fastbrowse_core::jev::{Answer, ChoiceAnswer, ChoiceQuestion, JevClient, Question};
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{CostComponent, CostLine, Evidence, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::output_schema::{OutputField, OutputType};
@@ -460,8 +460,9 @@ pub fn field_question(
     name: Option<&str>,
     task: Option<&str>,
     record_fields: &[String],
+    max_options: usize,
 ) -> Result<ChoiceQuestion> {
-    if candidates.len() >= MAX_CHOICE_OPTIONS {
+    if candidates.len() >= max_options {
         return Err(AgentError::Invalid(
             "Too many candidates for one Jev question; partition candidates before selecting".into(),
         ));
@@ -489,11 +490,11 @@ pub fn field_question(
 
 const FIELD_GROUP_SIZE: usize = 30;
 
-/// Candidates split for a group choice, at most Jev's ceiling minus its none option.
-pub fn field_candidate_groups(candidates: &[Candidate]) -> Vec<Vec<Candidate>> {
-    let mut size = FIELD_GROUP_SIZE;
-    if candidates.len().div_ceil(size) >= MAX_CHOICE_OPTIONS {
-        size = candidates.len().div_ceil(MAX_CHOICE_OPTIONS - 1);
+/// Candidates split for a group choice, at most `max_options` minus its none option.
+pub fn field_candidate_groups(candidates: &[Candidate], max_options: usize) -> Vec<Vec<Candidate>> {
+    let mut size = FIELD_GROUP_SIZE.min(max_options - 1);
+    if candidates.len().div_ceil(size) >= max_options {
+        size = candidates.len().div_ceil(max_options - 1);
     }
     candidates.chunks(size.max(1)).map(<[Candidate]>::to_vec).collect()
 }
@@ -552,9 +553,10 @@ pub async fn choose_candidate(
         }
         Ok(evaluation.answers)
     }
+    let max_options = jev.profile().max_choice_options;
     let mut pool: Vec<Candidate> = candidates.to_vec();
-    while pool.len() >= MAX_CHOICE_OPTIONS {
-        let groups = field_candidate_groups(&pool);
+    while pool.len() >= max_options {
+        let groups = field_candidate_groups(&pool, max_options);
         let key = format!("{name}_group");
         let question = field_group_question(field, &groups, Some(name), Some(task));
         let outer = ask(jev, state, IndexMap::from([(key.clone(), question.into())]), ledger).await?;
@@ -567,7 +569,7 @@ pub async fn choose_candidate(
         };
         pool = group.clone();
     }
-    let question = field_question(field, &pool, Some(name), Some(task), record_fields)?;
+    let question = field_question(field, &pool, Some(name), Some(task), record_fields, max_options)?;
     let answers = ask(jev, state, IndexMap::from([(name.to_string(), question.into())]), ledger).await?;
     Ok(match answers.get(name) {
         Some(Answer::Choice(answer)) => copy_field(answer, &pool),

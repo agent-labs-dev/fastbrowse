@@ -169,7 +169,7 @@ async fn test_direct_encodes_all_question_types_and_estimates_usage() {
         assert_eq!(request.header("authorization"), Some("Bearer key"));
         let payload: Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(payload["state"], json!({"text": "hello"}));
-        assert_eq!(payload["model"], "custom-jev");
+        assert_eq!(payload["model"], "jev-1.13.1");
         assert_eq!(
             payload["questions"],
             json!({
@@ -194,7 +194,7 @@ async fn test_direct_encodes_all_question_types_and_estimates_usage() {
         );
         Box::pin(async move { Ok(response) })
     });
-    let client = TypeSafeJevClient::new("key", http, "https://direct.test/", "custom-jev");
+    let client = TypeSafeJevClient::new("key", http, "https://direct.test/", "jev-1.13.1");
     let result = client.evaluate(&json!({"text": "hello"}), &asked).await.unwrap();
     assert_eq!(result.cost.basis, CostBasis::Estimated);
     assert!((result.cost.dollars.unwrap() - 389.0 * 0.042 / 1_000_000.0).abs() < 1e-15);
@@ -203,6 +203,22 @@ async fn test_direct_encodes_all_question_types_and_estimates_usage() {
     assert_eq!(result.answers["green"], Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.02 }));
     let Answer::Score(score) = &result.answers["score"] else { panic!("a score") };
     assert_eq!(score.score, 1.99);
+}
+
+#[tokio::test]
+async fn test_an_unmetered_answer_from_a_model_with_no_price_is_an_unknown_cost() {
+    let http = answering(|_| {
+        let response = Response::json(
+            200,
+            &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 389}}),
+        );
+        Box::pin(async move { Ok(response) })
+    });
+    let client = TypeSafeJevClient::new("", http, "http://localhost:11434", "nimble");
+    let asked = IndexMap::from([("q".to_string(), NoulQuestion::new("Green?", None, None).into())]);
+    let result = client.evaluate(&json!("hello"), &asked).await.unwrap();
+    assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Unknown, None));
+    assert_eq!(client.profile().max_choice_options, 26);
 }
 
 #[tokio::test]

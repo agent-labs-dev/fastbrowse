@@ -8,7 +8,7 @@ use fastbrowse_agent::memory::Notes;
 use fastbrowse_agent::planner::{Plan, Requirement};
 use fastbrowse_agent::retrieval::{self, *};
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::ChoiceAnswer;
+use fastbrowse_core::jev::{ChoiceAnswer, MAX_CHOICE_OPTIONS};
 use fastbrowse_core::page::{Block, Capture};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -198,6 +198,7 @@ fn replay(case: &Value) -> Result<(), String> {
                 args.get("name").and_then(Value::as_str),
                 args.get("task").and_then(Value::as_str),
                 &record_fields,
+                MAX_CHOICE_OPTIONS,
             ))
         }
         "field_candidates" => match field_candidates(&capture(), &field(&args["field"])) {

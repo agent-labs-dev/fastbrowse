@@ -1,7 +1,7 @@
 //! Port of `clients/typesafe.py`: TypeSafe System One transport for OpenRouter and the direct API.
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::jev::{Evaluation, JEV_MODEL, JevClient, JevError, Question};
+use fastbrowse_core::jev::{DecisionProfile, Evaluation, JEV_MODEL, JevClient, JevError, Question};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -21,6 +21,7 @@ pub struct TypeSafeJevClient {
     http: Http,
     base_url: String,
     model: String,
+    profile: DecisionProfile,
 }
 
 impl TypeSafeJevClient {
@@ -30,6 +31,7 @@ impl TypeSafeJevClient {
             http,
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
+            profile: DecisionProfile::for_model(model),
         }
     }
 
@@ -60,7 +62,9 @@ impl TypeSafeJevClient {
         let sent = Usage::default();
         let body = json!({"model": self.model, "state": state, "questions": wire_questions(questions, false)});
         let url = format!("{}/v1/systemone", self.base_url);
-        let response = post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch).await?;
+        let price = self.profile.dollars_per_input_token;
+        let response =
+            post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch, price).await?;
         let sent = sent.snapshot();
         let parsed = (|| {
             let payload = json_object(&response)?;
@@ -70,7 +74,7 @@ impl TypeSafeJevClient {
                 None => 0,
                 value => token_count(value)?,
             };
-            let cost = reported_cost(usage.get("cost"), tokens, output_tokens)?;
+            let cost = reported_cost(usage.get("cost"), tokens, output_tokens, price)?;
             let model = match payload.get("model") {
                 None => self.model.clone(),
                 Some(Value::String(model)) => model.clone(),
@@ -94,12 +98,19 @@ impl JevClient for TypeSafeJevClient {
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, JevError>> {
+        let price = self.profile.dollars_per_input_token;
         Box::pin(asking_open(
             questions,
             move |asked| async move {
-                asking_split(asked, &|batch, attempt, split| Box::pin(self.ask(state, batch, attempt, split))).await
+                asking_split(asked, &|batch, attempt, split| Box::pin(self.ask(state, batch, attempt, split)), price)
+                    .await
             },
             &self.model,
+            price,
         ))
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.profile.clone()
     }
 }

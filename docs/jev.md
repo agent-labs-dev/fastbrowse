@@ -14,13 +14,27 @@ evals rather than taken from Typesafe.
 | Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `crates/fastbrowse-clients/src/validation.rs` decodes each shape separately; `crates/fastbrowse-agent/src/policy.rs` asks one per control to filter a dense page |
 | Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `crates/fastbrowse-agent/src/policy.rs` (operation and target), `crates/fastbrowse-agent/src/retrieval/` (field and short-fact reads) |
 | Score | Ordered levels, returning a probability-weighted index ([Score](https://docs.typesafe.ai/primitives/score)) | Modelled in `crates/fastbrowse-core/src/jev.rs`, not yet called |
-| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `MAX_CHOICE_OPTIONS = 255` in `crates/fastbrowse-core/src/jev.rs`; the 240 cap and group-then-element selection are **ours** |
+| Options | At most 255 per Choice ([Choice](https://docs.typesafe.ai/primitives/choice)) | `DecisionProfile::jev()` in `crates/fastbrowse-core/src/jev.rs`; the 240 cap and group-then-element selection are **ours** |
 | Tokens | 32k for state plus the largest question, 64k in total ([Models](https://docs.typesafe.ai/models)) | `TokenBudget` (`crates/fastbrowse-core/src/config.rs`) targets 24k and 48k; the headroom and `chars_per_token = 3.0` are **ours**, because tokens are estimated locally. Jev requests also stop at 48,000 characters for state plus the largest question and 96,000 total, because recorded dense JSON used 1.84 characters per token |
 | Rate limits | 1,200 requests a minute and 250k tokens a second on the direct API, subject to change ([Models](https://docs.typesafe.ai/models)); no extra gateway limit on paid tiers ([Gateway limits](https://vercel.com/docs/ai-gateway/rate-limits)) | Retries handle 429 responses; concurrent runs share their provider's limits |
 | Errors | 400/401/403/404/422/429/5xx, with 529 for overload; retry with backoff, honouring server retry headers ([Exceptions](https://docs.typesafe.ai/sdk/python/api/exceptions)) | `post_with_retry` retries 408, 429, 500, 502, 503, 504, 520 to 524 and 529 (not the 4xx request errors) and honours `retry-after-ms` and `retry-after`, capped at 10s |
-| Price | $0.042 per million input tokens; output is free ([Models](https://docs.typesafe.ai/models), [gateway catalog](https://ai-gateway.vercel.sh/v1/models)) | `CostComponent::Jev` on the ledger |
+| Price | $0.042 per million input tokens; output is free ([Models](https://docs.typesafe.ai/models), [gateway catalog](https://ai-gateway.vercel.sh/v1/models)) | `DecisionProfile::jev()`, and `CostComponent::Jev` on the ledger |
 | Latency | Provider timings do not establish end-to-end run time | The retry budget in `crates/fastbrowse-clients/src/validation.rs` is **ours**; published run timings are on the [benchmark page](https://fastbrowse.ai/benchmarks) |
 | Streaming | Gateway evaluation does not stream ([AI SDK evaluation](https://ai-sdk.dev/docs/ai-sdk-core/evaluation)) | Not needed: answers are a few numbers |
+
+## Other decision models
+
+Every limit and price above is Jev's, and fastbrowse reads them from the model's `DecisionProfile`
+(`crates/fastbrowse-core/src/jev.rs`) rather than from constants. A model's limits bound every request, including
+a caller's own `Config`: the choices the policy offers, the group size and shortlist that follow from them, the
+token budget, and the questions per request. Its thresholds apply only when the caller passes no `Config`.
+
+A model fastbrowse has no record of, such as one pinned with `FASTBROWSE_JEV_MODEL`, gets the tightest limits any
+documented System One host sets: 26 options a Choice, 64 questions and 64 KiB a request ([System
+One](https://pydantic.dev/docs/ai/models/system-one/)). It has no list price, so a call it does not meter is an
+unknown cost, which a dollar limit treats as unaffordable. Its thresholds are Jev's, which no eval has checked against
+it, and the run's trace says so with a `decision_unvalidated` event. A Jev release other than 1.13 keeps Jev's limits
+and price but is unvalidated too.
 
 ## Choosing a provider
 

@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::BoxFuture;
+use crate::config::{Config, Thresholds};
 use crate::models::{CostLine, MaybeUnavailable};
 use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
@@ -305,6 +306,116 @@ impl MaybeUnavailable for JevError {
     }
 }
 
+/// What one decision model accepts and costs, and the thresholds measured on it.
+///
+/// A limit is the model's, so it bounds a caller's [`Config`] too; thresholds are a starting point, so they apply only
+/// when the caller brings none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionProfile {
+    /// Most options one Choice may offer.
+    pub max_choice_options: usize,
+    /// Most levels one Score may have.
+    pub max_score_levels: usize,
+    /// Most questions one request may carry; `None` where the provider documents no cap.
+    pub max_questions: Option<usize>,
+    /// Input tokens allowed for the state plus its largest question.
+    pub max_largest_tokens: i64,
+    /// Input tokens allowed for the state plus every question.
+    pub max_total_tokens: i64,
+    /// Largest request body, where the server caps bytes rather than tokens.
+    pub max_request_bytes: Option<i64>,
+    /// List price; `None` where none is published, so an unmetered call is an unknown cost.
+    pub dollars_per_input_token: Option<f64>,
+    /// Whether the model may be sent image input.
+    pub images: bool,
+    /// Thresholds tuned on the evals against this model; `None` when it was never measured.
+    pub thresholds: Option<Thresholds>,
+}
+
+/// Share of a provider's token limit a request is budgeted to, because tokens are estimated locally.
+const TOKEN_HEADROOM: f64 = 0.75;
+
+impl DecisionProfile {
+    /// Jev 1.13, whose limits and price TypeSafe documents and on which every default threshold was tuned.
+    pub fn jev() -> DecisionProfile {
+        DecisionProfile {
+            max_choice_options: MAX_CHOICE_OPTIONS,
+            max_score_levels: 10,
+            max_questions: None,
+            max_largest_tokens: 32_000,
+            max_total_tokens: 64_000,
+            max_request_bytes: None,
+            dollars_per_input_token: Some(JEV_DOLLARS_PER_INPUT_TOKEN),
+            images: true,
+            thresholds: Some(Thresholds::default()),
+        }
+    }
+
+    /// A model fastbrowse has no record of: the tightest limits any documented System One host sets, no price, and no
+    /// thresholds of its own.
+    pub fn unknown() -> DecisionProfile {
+        DecisionProfile {
+            max_choice_options: 26,
+            max_score_levels: 10,
+            max_questions: Some(64),
+            max_largest_tokens: 32_000,
+            max_total_tokens: 64_000,
+            max_request_bytes: Some(64 * 1024),
+            dollars_per_input_token: None,
+            images: false,
+            thresholds: None,
+        }
+    }
+
+    /// The profile of a model id as a provider names it.
+    pub fn for_model(model: &str) -> DecisionProfile {
+        let bare = model.rsplit('/').next().unwrap_or(model);
+        if bare == "jev" || bare.starts_with("jev-1.13") {
+            return DecisionProfile::jev();
+        }
+        // Another Jev release keeps the family's limits and price, but nothing was tuned on it.
+        if bare.starts_with("jev-") {
+            return DecisionProfile { thresholds: None, ..DecisionProfile::jev() };
+        }
+        DecisionProfile::unknown()
+    }
+
+    /// Whether the thresholds a run would start from were measured on this model.
+    pub fn validated(&self) -> bool {
+        self.thresholds.is_some()
+    }
+
+    /// The configuration a run uses against this model: the caller's, or this model's thresholds when there is none,
+    /// with every limit brought within the model's.
+    pub fn fit(&self, config: Option<Config>) -> Config {
+        let mut config = config
+            .unwrap_or_else(|| Config { thresholds: self.thresholds.clone().unwrap_or_default(), ..Config::default() });
+        let options = self.max_choice_options.max(2) as i64;
+        let observation = &mut config.observation;
+        observation.max_choice_options = observation.max_choice_options.min(options);
+        observation.group_size = observation.group_size.min(observation.max_choice_options);
+        // A group choice offers at most `max_choice_options` groups of `group_size`, so a denser shortlist cannot be
+        // asked at all.
+        observation.max_offered_controls =
+            observation.max_offered_controls.min(observation.group_size * observation.max_choice_options);
+        let mut total = self.max_total_tokens as f64;
+        if let Some(bytes) = self.max_request_bytes {
+            total = total.min(bytes as f64 / config.tokens.chars_per_token);
+        }
+        let largest = (self.max_largest_tokens as f64).min(total);
+        let tokens = &mut config.tokens;
+        tokens.state_plus_largest_question =
+            tokens.state_plus_largest_question.min((largest * TOKEN_HEADROOM) as i64).max(1);
+        tokens.state_plus_all_questions = tokens.state_plus_all_questions.min((total * TOKEN_HEADROOM) as i64).max(1);
+        config
+    }
+
+    /// The input price of `input_tokens`, or `None` where the model has none.
+    pub fn input_dollars(&self, input_tokens: f64) -> Option<f64> {
+        self.dollars_per_input_token.map(|price| input_tokens * price)
+    }
+}
+
 pub trait JevClient: Send + Sync {
     /// Answer every question against one state. Fails with `InputTooLarge` or another `JevError`.
     fn evaluate<'a>(
@@ -312,4 +423,49 @@ pub trait JevClient: Send + Sync {
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, JevError>>;
+
+    /// The model this client asks. A client that does not say is taken to ask Jev.
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jev_leaves_the_default_config_as_it_is() {
+        assert_eq!(DecisionProfile::jev().fit(None), Config::default());
+    }
+
+    #[test]
+    fn a_pinned_or_routed_jev_is_jev() {
+        for model in ["jev-1.13", "jev-1.13.0", "typesafe/jev-1.13", "typesafe-ai/jev"] {
+            assert!(DecisionProfile::for_model(model).validated(), "{model}");
+        }
+        assert!(!DecisionProfile::for_model("nimble").validated());
+        let later = DecisionProfile::for_model("typesafe/jev-1.14");
+        assert_eq!((later.validated(), later.max_choice_options), (false, MAX_CHOICE_OPTIONS));
+    }
+
+    #[test]
+    fn a_small_model_bounds_the_choices_offered_and_the_request() {
+        let config = DecisionProfile::unknown().fit(None);
+        assert_eq!(config.observation.max_choice_options, 26);
+        assert_eq!(config.observation.group_size, 26);
+        assert_eq!(config.observation.max_offered_controls, 160);
+        // 64 KiB at three characters a token, budgeted to three quarters.
+        assert_eq!(config.tokens.state_plus_all_questions, 16_384);
+        assert_eq!(config.tokens.state_plus_largest_question, 16_384);
+    }
+
+    #[test]
+    fn a_callers_thresholds_stand_and_its_limits_are_bounded() {
+        let mut given = Config::default();
+        given.thresholds.recover_below = 0.4;
+        let fitted = DecisionProfile::unknown().fit(Some(given));
+        assert_eq!(fitted.thresholds.recover_below, 0.4);
+        assert_eq!(fitted.observation.max_choice_options, 26);
+    }
 }
