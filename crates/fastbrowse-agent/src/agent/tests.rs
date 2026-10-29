@@ -1248,9 +1248,10 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
 
 // -- A stall is put to Jev first, and the LLM only hears of it when Jev stays unsure --------------------------------
 
-/// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it.
+/// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it, and that has moved on from
+/// the observation asked about when its flag is set.
 #[derive(Default)]
-struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>);
+struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>, bool);
 
 /// A PNG's signature and header, which is all of it the image limits read.
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -1267,7 +1268,8 @@ impl Page for Screenshots {
     }
 
     fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
-        unreachable!("recovery does not observe")
+        let moved = self.1;
+        Box::pin(async move { Ok(moved) })
     }
 
     fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
@@ -1283,7 +1285,7 @@ impl Page for Screenshots {
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
-        unreachable!("recovery does not watch")
+        Box::pin(async { Ok(false) })
     }
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
@@ -1458,18 +1460,20 @@ impl DecisionClient for Seeing {
     }
 }
 
-async fn click_where_seen(images: bool, shown: f64) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
-    let page = Arc::new(Screenshots::default());
+async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
+    let page = Arc::new(Screenshots(Default::default(), moved));
     let jev = Arc::new(Seeing { images, shown, asked: Default::default() });
     let agent = Agent::new(page.clone(), jev.clone(), Arc::new(Recoverer::default()));
     let mut state = run_state().await;
-    let clicked = agent.click_where_seen(&mut state, &button("Pick a date")).await.expect("asked");
+    let target = button("Pick a date");
+    let seen = observation(std::slice::from_ref(&target));
+    let clicked = agent.click_where_seen(&mut state, &seen, &target).await.expect("asked");
     (clicked, page, jev)
 }
 
 #[tokio::test]
 async fn test_a_covered_control_jev_sees_is_clicked_at_the_centre_of_its_box() {
-    let (clicked, page, jev) = click_where_seen(true, 0.9).await;
+    let (clicked, page, jev) = click_where_seen(true, 0.9, false).await;
     assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Executed));
     let (x, y) = page.0.lock().unwrap()[0];
     assert!((x - 0.3).abs() < 1e-9 && (y - 0.6).abs() < 1e-9, "{x}, {y}");
@@ -1483,10 +1487,16 @@ async fn test_a_covered_control_jev_sees_is_clicked_at_the_centre_of_its_box() {
 
 #[tokio::test]
 async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
-    let (clicked, page, _) = click_where_seen(true, 0.2).await;
+    let (clicked, page, _) = click_where_seen(true, 0.2, false).await;
     assert!(clicked.is_none() && page.0.lock().unwrap().is_empty());
-    let (clicked, page, jev) = click_where_seen(false, 0.9).await;
+    let (clicked, page, jev) = click_where_seen(false, 0.9, false).await;
     assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && jev.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_screenshot() {
+    let (clicked, page, jev) = click_where_seen(true, 0.9, true).await;
+    assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && !jev.asked.lock().unwrap().is_empty());
 }
 
 // -- Jev reads a step as text, and sees the page only when that leaves it unsure ---------------------------------------

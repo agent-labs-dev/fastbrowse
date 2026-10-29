@@ -712,7 +712,7 @@ impl Agent {
             if result.outcome == StepOutcome::Covered
                 && action.operation == Operation::Click
                 && let Some(target) = &decision.target
-                && let Some(clicked) = self.click_where_seen(state, target).await?
+                && let Some(clicked) = self.click_where_seen(state, &raw, target).await?
             {
                 result = clicked;
             }
