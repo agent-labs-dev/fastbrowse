@@ -9,8 +9,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::models::{Authorization, Event, Image, Limits, LocalChrome, SecretRef};
+use crate::models::{Authorization, Event, Image, Limits, LocalChrome, RunResult, SecretRef};
 use crate::py::{base64, lax};
+use crate::schema::{Field, Mode, ModelTy, Schema, Ty, definitions};
 
 /// Changes only when the wire format does, so it is not the package version: a release that leaves the messages alone
 /// leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
@@ -44,6 +45,7 @@ impl<'de> Deserialize<'de> for RequestId {
 
 str_enum! {
     /// What a client can ask of the server.
+    doc: "What a client can ask of the server.";
     pub enum Method {
         Initialize = "initialize",
         Run = "run",
@@ -54,6 +56,7 @@ str_enum! {
 
 str_enum! {
     /// What the server sends without being asked.
+    doc: "What the server sends without being asked.";
     pub enum ServerMethod {
         RunEvent = "run/event",
         RunFrame = "run/frame",
@@ -370,6 +373,334 @@ pub struct SecretsResolveParams {
 pub struct RunUntilParams {
     pub run_id: String,
     pub url: String,
+}
+
+/// A model of this module that ignores a field it does not know. Its fields have no descriptions: Python's protocol
+/// models never read attribute docstrings, as `Frozen` does.
+fn message(name: &str, doc: Option<&str>, fields: Vec<Field>) -> ModelTy {
+    let model = ModelTy { name: name.into(), module: "fastbrowse.protocol", doc: None, forbid_extra: false, fields };
+    match doc {
+        Some(doc) => model.doc(doc),
+        None => model,
+    }
+}
+
+/// A method's params, which refuse a field they do not know.
+fn params(name: &str, doc: Option<&str>, fields: Vec<Field>) -> ModelTy {
+    ModelTy { forbid_extra: true, ..message(name, doc, fields) }
+}
+
+fn jsonrpc() -> Field {
+    Field::default("jsonrpc", JsonRpc::ty(), "2.0")
+}
+
+impl Schema for RequestId {
+    fn ty() -> Ty {
+        Ty::Alias("RequestId", Box::new(Ty::Union(vec![Ty::Int, Ty::Str])))
+    }
+}
+
+impl Schema for ErrorCode {
+    fn ty() -> Ty {
+        Ty::Enum(std::sync::Arc::new(crate::schema::EnumTy {
+            name: "ErrorCode",
+            doc: Some("Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own."),
+            values: ErrorCode::ALL.iter().map(|code| code.code().into()).collect(),
+        }))
+    }
+}
+
+impl Schema for Request {
+    fn ty() -> Ty {
+        let positional = Ty::Union(vec![Ty::map(Ty::Any), Ty::list(Ty::Any)]);
+        message(
+            "Request",
+            Some("A call in either direction. One without an id is a notification and gets no reply."),
+            vec![
+                jsonrpc(),
+                Field::default("id", Ty::optional(RequestId::ty()), Value::Null),
+                Field::required("method", Ty::Str),
+                Field::default("params", Ty::optional(positional), Value::Null),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl Schema for Response {
+    fn ty() -> Ty {
+        message(
+            "Response",
+            None,
+            vec![jsonrpc(), Field::required("id", RequestId::ty()), Field::required("result", Ty::Any)],
+        )
+        .ty()
+    }
+}
+
+impl Schema for Error {
+    fn ty() -> Ty {
+        message("Error", None, vec![Field::required("code", ErrorCode::ty()), Field::required("message", Ty::Str)]).ty()
+    }
+}
+
+impl Schema for ErrorResponse {
+    fn ty() -> Ty {
+        message(
+            "ErrorResponse",
+            None,
+            vec![
+                jsonrpc(),
+                Field::required("id", Ty::optional(RequestId::ty())),
+                Field::required("error", Error::ty()),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl Schema for NoParams {
+    fn ty() -> Ty {
+        params("NoParams", None, vec![]).ty()
+    }
+}
+
+impl Schema for InitializeParams {
+    fn ty() -> Ty {
+        message(
+            "InitializeParams",
+            Some(
+                "The client's side of the handshake.\n\nUnknown fields are allowed here and nowhere else: a client on a later protocol may send some, and it has to\nget the server's version back to report the mismatch, which a refusal of its params would hide.",
+            ),
+            vec![Field::required("protocol_version", Ty::Int)],
+        )
+        .ty()
+    }
+}
+
+impl Schema for InitializeResult {
+    fn ty() -> Ty {
+        message(
+            "InitializeResult",
+            None,
+            vec![Field::required("protocol_version", Ty::Int), Field::required("fastbrowse_version", Ty::Str)],
+        )
+        .ty()
+    }
+}
+
+impl Schema for RunAttachment {
+    fn ty() -> Ty {
+        params(
+            "RunAttachment",
+            Some("An `Attachment` as it travels: JSON has no bytes, so the content is base64."),
+            vec![
+                Field::required("name", Ty::Str),
+                Field::required("mime_type", Ty::Str),
+                Field::required("content", Ty::Base64),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl Schema for RunParams {
+    fn ty() -> Ty {
+        let text = || Ty::optional(Ty::Str);
+        let path = || Ty::optional(Ty::Path);
+        let none = || Value::Null;
+        let empty = || Value::Array(vec![]);
+        params(
+            "RunParams",
+            Some(
+                "One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
+            ),
+            vec![
+                Field::required("run_id", Ty::Str.constrained("minLength", 1)),
+                Field::required("task", Ty::Str),
+                Field::default("start", text(), none()),
+                Field::default("context", text(), none()),
+                Field::default("inputs", Ty::optional(Ty::map(Ty::Str)), none()),
+                Field::default("attachments", Ty::list(RunAttachment::ty()), empty()),
+                Field::default("limits", Ty::optional(Limits::ty()), none()),
+                Field::default("authorization", Ty::optional(Authorization::ty()), none()),
+                Field::default("output_schema", Ty::optional(Ty::map(Ty::Any)), none()),
+                Field::default("secrets", Ty::list(SecretRef::ty()), empty()),
+                Field::default("frames", Ty::Bool, false),
+                Field::default("until", Ty::Bool, false),
+                Field::default("downloads", path(), none()),
+                Field::default("record", path(), none()),
+                Field::default("cursor", Ty::Bool, false),
+                Field::default("local", Ty::Bool, false),
+                Field::default("chrome", Ty::optional(LocalChrome::ty()), none()),
+                Field::default("cloud_profile", text(), none()),
+                Field::default("cdp_url", text(), none()),
+                Field::default("cdp_port", Ty::optional(Ty::Int), none()),
+                Field::default("attach", Ty::Bool, false),
+                Field::default("target_match", text(), none()),
+                Field::default("foreground", Ty::Bool, false),
+                Field::default("proxy_country", text(), none()),
+                Field::default("viewport", Ty::optional(Ty::Tuple(vec![Ty::Int, Ty::Int])), none()),
+                Field::default("cloud_allow_resizing", Ty::Bool, false),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl Schema for RunCancelParams {
+    fn ty() -> Ty {
+        params(
+            "RunCancelParams",
+            Some(
+                "Which run to stop. One that is not active, because it finished or never was, is left as it is.\n\nThe reply says only that the request was read. The run's own reply is what says it was cancelled: the\n`cancelled` error, written after its browser has closed.",
+            ),
+            vec![Field::required("run_id", Ty::Str)],
+        )
+        .ty()
+    }
+}
+
+impl Schema for RunEvent {
+    fn ty() -> Ty {
+        message(
+            "RunEvent",
+            Some("The params of `run/event`: one thing a run did, written before that run's reply."),
+            vec![Field::required("run_id", Ty::Str), Field::required("event", Event::ty())],
+        )
+        .ty()
+    }
+}
+
+impl Schema for RunFrame {
+    fn ty() -> Ty {
+        message(
+            "RunFrame",
+            Some(
+                "The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`.",
+            ),
+            vec![Field::required("run_id", Ty::Str), Field::required("frame", Ty::Image)],
+        )
+        .ty()
+    }
+}
+
+impl Schema for Notification {
+    fn ty() -> Ty {
+        message(
+            "Notification",
+            Some(
+                "A message from the server that takes no reply. It has no `id` member at all, which is what marks it.",
+            ),
+            vec![jsonrpc(), Field::required("method", ServerMethod::ty()), Field::required("params", Ty::Any)],
+        )
+        .ty()
+    }
+}
+
+impl Schema for ServerRequest {
+    fn ty() -> Ty {
+        message(
+            "ServerRequest",
+            Some(
+                "A call from the server that the client answers, with a `Response` or an `ErrorResponse` carrying its id.\n\nThe ids are the server's own and count up from one. A client's ids may be the same numbers: a reply is\ntold from a request by having no `method`, so the two never meet.",
+            ),
+            vec![
+                jsonrpc(),
+                Field::required("id", Ty::Int),
+                Field::required("method", ServerMethod::ty()),
+                Field::required("params", Ty::Any),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl Schema for SecretsResolveParams {
+    fn ty() -> Ty {
+        message(
+            "SecretsResolveParams",
+            Some(
+                "The params of `secrets/resolve`: one value the run is about to type. The reply is the value, or null.",
+            ),
+            vec![
+                Field::required("run_id", Ty::Str),
+                Field::required("name", Ty::Str),
+                Field::required("origin", Ty::Str),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl Schema for RunUntilParams {
+    fn ty() -> Ty {
+        message(
+            "RunUntilParams",
+            Some(
+                "The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run\nfrom `complete`.",
+            ),
+            vec![Field::required("run_id", Ty::Str), Field::required("url", Ty::Str)],
+        )
+        .ty()
+    }
+}
+
+/// `SCREAMING_SNAKE` of a variant's Rust name, the name the member had in Python.
+fn member_name(variant: impl std::fmt::Debug) -> String {
+    let mut name = String::new();
+    for (index, letter) in format!("{variant:?}").chars().enumerate() {
+        if letter.is_uppercase() && index > 0 {
+            name.push('_');
+        }
+        name.push(letter.to_ascii_uppercase());
+    }
+    name
+}
+
+/// Every message on the wire as JSON Schema, one definition each under `$defs`, and beside them under `constants`
+/// the values a client has to hold the same as the server: the protocol version, the error codes and the method
+/// names. `constants` is no part of JSON Schema. Each client's types are generated from this document, which is
+/// committed as `protocol/schema.json`.
+///
+/// Params are what the server reads, so a field with a default may be left out of them. Everything else is what it
+/// writes, where every field is there.
+pub fn schema() -> Value {
+    let read = |ty: Ty| (ty, Mode::Validation);
+    let written = |ty: Ty| (ty, Mode::Serialization);
+    let mut document = definitions(&[
+        read(params(
+            "Params",
+            Some("A method's params. An unknown field is refused, so a misspelled option is never dropped in silence."),
+            vec![],
+        )
+        .ty()),
+        read(NoParams::ty()),
+        read(RunAttachment::ty()),
+        read(RunParams::ty()),
+        read(RunCancelParams::ty()),
+        written(Request::ty()),
+        written(Response::ty()),
+        written(Error::ty()),
+        written(ErrorResponse::ty()),
+        written(InitializeParams::ty()),
+        written(InitializeResult::ty()),
+        written(RunEvent::ty()),
+        written(RunFrame::ty()),
+        written(Notification::ty()),
+        written(ServerRequest::ty()),
+        written(SecretsResolveParams::ty()),
+        written(RunUntilParams::ty()),
+        written(RunResult::ty()),
+    ]);
+    let members = |pairs: Vec<(String, Value)>| Value::Object(pairs.into_iter().collect());
+    document["constants"] = serde_json::json!({
+        "ErrorCode": members(ErrorCode::ALL.iter().map(|code| (member_name(code), code.code().into())).collect()),
+        "Method": members(Method::ALL.iter().map(|method| (member_name(method), method.as_str().into())).collect()),
+        "PROTOCOL_VERSION": PROTOCOL_VERSION,
+        "ServerMethod": members(ServerMethod::ALL.iter().map(|method| (member_name(method), method.as_str().into())).collect()),
+    });
+    document
 }
 
 #[cfg(test)]

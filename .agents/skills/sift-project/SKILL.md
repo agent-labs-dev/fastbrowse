@@ -90,7 +90,7 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | src/fastbrowse Python and browser/capture.js, browser/snapshot.js | production |
 | packages/sdk/src/ except protocol.ts | production |
 | packages/sdk/test/ | test |
-| packages/sdk/src/protocol.ts | generated |
+| packages/sdk/src/protocol.ts, protocol/schema.json | generated |
 | scripts/ | script |
 | tests/ Python, benchmarks/ Python | test |
 | tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/ | fixture |

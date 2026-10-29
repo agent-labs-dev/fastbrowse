@@ -1,0 +1,1727 @@
+{
+  "$defs": {
+    "Artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "uri": {
+          "description": "Reference returned by the caller's `ArtifactSink`; fastbrowse never keeps bytes past the run.",
+          "title": "Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "mime_type",
+        "size_bytes",
+        "sha256",
+        "uri"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "download"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "Authorization": {
+      "additionalProperties": false,
+      "properties": {
+        "irreversible_actions": {
+          "default": false,
+          "description": "Allow submit/pay/delete/send style actions without pausing for confirmation.",
+          "title": "Irreversible Actions",
+          "type": "boolean"
+        }
+      },
+      "title": "Authorization",
+      "type": "object"
+    },
+    "BrowserEvent": {
+      "additionalProperties": false,
+      "description": "Sent once, when the browser is open and before the first step.",
+      "properties": {
+        "type": {
+          "const": "browser",
+          "default": "browser",
+          "title": "Type",
+          "type": "string"
+        },
+        "live_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where a cloud browser can be watched live; None for local Chrome.",
+          "title": "Live Url"
+        },
+        "browser_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The cloud browser's id, for a caller that may have to stop it out of band. None when the run did not\nstart a browser of its own (local Chrome, or one handed over through `cdp_url`).",
+          "title": "Browser Id"
+        }
+      },
+      "required": [
+        "type",
+        "live_url",
+        "browser_id"
+      ],
+      "title": "BrowserEvent",
+      "type": "object"
+    },
+    "BudgetStop": {
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "enum": [
+            "steps",
+            "dollars",
+            "seconds",
+            "jev_calls",
+            "llm_calls"
+          ],
+          "title": "Resource",
+          "type": "string"
+        },
+        "limit": {
+          "title": "Limit",
+          "type": "number"
+        }
+      },
+      "required": [
+        "resource",
+        "limit"
+      ],
+      "title": "BudgetStop",
+      "type": "object"
+    },
+    "Citation": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The number used by this fact's links in the answer, stable within a run.",
+          "minimum": 1,
+          "title": "Id",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "requirement_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requirement Id"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        },
+        "deep_link": {
+          "title": "Deep Link",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "requirement_id",
+        "url",
+        "quote",
+        "deep_link"
+      ],
+      "title": "Citation",
+      "type": "object"
+    },
+    "CostBasis": {
+      "enum": [
+        "metered",
+        "estimated",
+        "bounded",
+        "unknown"
+      ],
+      "title": "CostBasis",
+      "type": "string"
+    },
+    "CostBreakdown": {
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CostLine"
+          },
+          "title": "Lines",
+          "type": "array"
+        }
+      },
+      "required": [
+        "lines"
+      ],
+      "title": "CostBreakdown",
+      "type": "object"
+    },
+    "CostComponent": {
+      "enum": [
+        "jev",
+        "llm",
+        "browser",
+        "proxy"
+      ],
+      "title": "CostComponent",
+      "type": "string"
+    },
+    "CostLine": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/CostComponent"
+        },
+        "basis": {
+          "$ref": "#/$defs/CostBasis"
+        },
+        "dollars": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dollars"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMPurpose"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wall time of the call, retries included. None for a line that is not one call, such as browser time.",
+          "title": "Seconds"
+        }
+      },
+      "required": [
+        "component",
+        "basis",
+        "dollars",
+        "purpose",
+        "input_tokens",
+        "output_tokens",
+        "seconds"
+      ],
+      "title": "CostLine",
+      "type": "object"
+    },
+    "Decider": {
+      "description": "The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\nreader's, because the reader asked for the rest of the list.",
+      "enum": [
+        "jev",
+        "llm"
+      ],
+      "title": "Decider",
+      "type": "string"
+    },
+    "Error": {
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "Error",
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.",
+      "enum": [
+        -32700,
+        -32600,
+        -32601,
+        -32602,
+        -32603,
+        -32001,
+        -32002,
+        -32003,
+        -32004
+      ],
+      "title": "ErrorCode",
+      "type": "integer"
+    },
+    "ErrorResponse": {
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Jsonrpc",
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "frame_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Frame Id"
+        },
+        "captured_at": {
+          "format": "date-time",
+          "title": "Captured At",
+          "type": "string"
+        },
+        "capture_sha256": {
+          "title": "Capture Sha256",
+          "type": "string"
+        },
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        },
+        "complete_source": {
+          "default": false,
+          "description": "The quote covers an entire downloaded text file, apart from surrounding whitespace.",
+          "title": "Complete Source",
+          "type": "boolean"
+        },
+        "control_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceControl"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rendered_text": {
+          "default": true,
+          "description": "False for typed DOM observations whose quote is not literal rendered page text.",
+          "title": "Rendered Text",
+          "type": "boolean"
+        },
+        "heading_path": {
+          "default": [],
+          "description": "The headings the quote sits under on the page: which record a bare \"£10.69\" is the price of.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Heading Path",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_id",
+        "url",
+        "frame_id",
+        "captured_at",
+        "capture_sha256",
+        "start",
+        "end",
+        "quote",
+        "complete_source",
+        "control_context",
+        "rendered_text",
+        "heading_path"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "FactReader": {
+      "enum": [
+        "jev_choice",
+        "llm"
+      ],
+      "title": "FactReader",
+      "type": "string"
+    },
+    "InitializeParams": {
+      "description": "The client's side of the handshake.\n\nUnknown fields are allowed here and nowhere else: a client on a later protocol may send some, and it has to\nget the server's version back to report the mismatch, which a refusal of its params would hide.",
+      "properties": {
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol_version"
+      ],
+      "title": "InitializeParams",
+      "type": "object"
+    },
+    "InitializeResult": {
+      "properties": {
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "integer"
+        },
+        "fastbrowse_version": {
+          "title": "Fastbrowse Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "fastbrowse_version"
+      ],
+      "title": "InitializeResult",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "LLMPurpose": {
+      "enum": [
+        "plan",
+        "read",
+        "field_text",
+        "recover",
+        "verify",
+        "compose",
+        "shortcut"
+      ],
+      "title": "LLMPurpose",
+      "type": "string"
+    },
+    "Limits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_steps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is\nnot counted; the stall budget ends a page that keeps redrawing.",
+          "title": "Max Steps"
+        },
+        "max_jev_calls": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Logical Jev evaluations. A retried request adds cost but not a call.",
+          "title": "Max Jev Calls"
+        },
+        "max_llm_calls": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Llm Calls"
+        },
+        "max_dollars": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its\ncost is reported in the result but cannot stop the run that incurred it.",
+          "title": "Max Dollars"
+        },
+        "max_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stops active work at the time budget. Returning also waits for owned request and browser cleanup.",
+          "title": "Max Seconds"
+        }
+      },
+      "title": "Limits",
+      "type": "object"
+    },
+    "LocalChrome": {
+      "additionalProperties": false,
+      "properties": {
+        "binary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A name or path that replaces discovery of the Chrome binary.",
+          "title": "Binary"
+        },
+        "headed": {
+          "default": false,
+          "description": "Show the window, to watch a run.",
+          "title": "Headed",
+          "type": "boolean"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A profile directory kept between runs, so a site signed into there stays signed in. Without one,\nevery run starts from a fresh profile that is deleted afterwards.",
+          "title": "Profile"
+        }
+      },
+      "title": "LocalChrome",
+      "type": "object"
+    },
+    "NoParams": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "NoParams",
+      "type": "object"
+    },
+    "Notification": {
+      "description": "A message from the server that takes no reply. It has no `id` member at all, which is what marks it.",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Jsonrpc",
+          "type": "string"
+        },
+        "method": {
+          "$ref": "#/$defs/ServerMethod"
+        },
+        "params": {
+          "title": "Params"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "title": "Notification",
+      "type": "object"
+    },
+    "Operation": {
+      "enum": [
+        "click",
+        "hover",
+        "drag",
+        "fill",
+        "select",
+        "enter",
+        "escape",
+        "scroll",
+        "scroll_up",
+        "back",
+        "switch_tab",
+        "upload",
+        "dialog",
+        "read",
+        "done",
+        "escalate",
+        "navigate"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "Params": {
+      "additionalProperties": false,
+      "description": "A method's params. An unknown field is refused, so a misspelled option is never dropped in silence.",
+      "properties": {},
+      "title": "Params",
+      "type": "object"
+    },
+    "Request": {
+      "description": "A call in either direction. One without an id is a notification and gets no reply.",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Jsonrpc",
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Params"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Request",
+      "type": "object"
+    },
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Response": {
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Jsonrpc",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "result": {
+          "title": "Result"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "title": "Response",
+      "type": "object"
+    },
+    "RunAttachment": {
+      "additionalProperties": false,
+      "description": "An `Attachment` as it travels: JSON has no bytes, so the content is base64.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "content": {
+          "format": "base64",
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "mime_type",
+        "content"
+      ],
+      "title": "RunAttachment",
+      "type": "object"
+    },
+    "RunCancelParams": {
+      "additionalProperties": false,
+      "description": "Which run to stop. One that is not active, because it finished or never was, is left as it is.\n\nThe reply says only that the request was read. The run's own reply is what says it was cancelled: the\n`cancelled` error, written after its browser has closed.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunCancelParams",
+      "type": "object"
+    },
+    "RunEvent": {
+      "description": "The params of `run/event`: one thing a run did, written before that run's reply.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepEvent"
+            },
+            {
+              "$ref": "#/$defs/BrowserEvent"
+            }
+          ],
+          "title": "Event"
+        }
+      },
+      "required": [
+        "run_id",
+        "event"
+      ],
+      "title": "RunEvent",
+      "type": "object"
+    },
+    "RunFrame": {
+      "description": "The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "frame": {
+          "title": "Frame",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "frame"
+      ],
+      "title": "RunFrame",
+      "type": "object"
+    },
+    "RunParams": {
+      "additionalProperties": false,
+      "description": "One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
+      "properties": {
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task": {
+          "title": "Task",
+          "type": "string"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "inputs": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inputs"
+        },
+        "attachments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RunAttachment"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Limits"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "authorization": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Authorization"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Schema"
+        },
+        "secrets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SecretRef"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "frames": {
+          "default": false,
+          "title": "Frames",
+          "type": "boolean"
+        },
+        "until": {
+          "default": false,
+          "title": "Until",
+          "type": "boolean"
+        },
+        "downloads": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downloads"
+        },
+        "record": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record"
+        },
+        "cursor": {
+          "default": false,
+          "title": "Cursor",
+          "type": "boolean"
+        },
+        "local": {
+          "default": false,
+          "title": "Local",
+          "type": "boolean"
+        },
+        "chrome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalChrome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cloud_profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cloud Profile"
+        },
+        "cdp_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cdp Url"
+        },
+        "cdp_port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cdp Port"
+        },
+        "attach": {
+          "default": false,
+          "title": "Attach",
+          "type": "boolean"
+        },
+        "target_match": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Match"
+        },
+        "foreground": {
+          "default": false,
+          "title": "Foreground",
+          "type": "boolean"
+        },
+        "proxy_country": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proxy Country"
+        },
+        "viewport": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Viewport"
+        },
+        "cloud_allow_resizing": {
+          "default": false,
+          "title": "Cloud Allow Resizing",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "task"
+      ],
+      "title": "RunParams",
+      "type": "object"
+    },
+    "RunResult": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetStop"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Answer"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/StepResult"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "cost": {
+          "$ref": "#/$defs/CostBreakdown"
+        },
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "citations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Citation"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "final_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the browser was last observed; what a caller checks when the task was to arrive somewhere.",
+          "title": "Final Url"
+        },
+        "would_fire": {
+          "default": [],
+          "description": "Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration.",
+          "items": {
+            "$ref": "#/$defs/Tripwire"
+          },
+          "title": "Would Fire",
+          "type": "array"
+        },
+        "recordings": {
+          "default": [],
+          "description": "The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.",
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "title": "Recordings",
+          "type": "array"
+        },
+        "wall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Wall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one."
+        }
+      },
+      "required": [
+        "status",
+        "budget",
+        "answer",
+        "data",
+        "evidence",
+        "steps",
+        "cost",
+        "artifacts",
+        "citations",
+        "error",
+        "final_url",
+        "would_fire",
+        "recordings",
+        "wall"
+      ],
+      "title": "RunResult",
+      "type": "object"
+    },
+    "RunUntilParams": {
+      "description": "The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run\nfrom `complete`.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "url"
+      ],
+      "title": "RunUntilParams",
+      "type": "object"
+    },
+    "SecretRef": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "origins": {
+          "description": "Origins (scheme://host[:port]) the value may be typed into; models only ever see `name`.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Origins",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "origins"
+      ],
+      "title": "SecretRef",
+      "type": "object"
+    },
+    "SecretsResolveParams": {
+      "description": "The params of `secrets/resolve`: one value the run is about to type. The reply is the value, or null.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "name",
+        "origin"
+      ],
+      "title": "SecretsResolveParams",
+      "type": "object"
+    },
+    "ServerMethod": {
+      "description": "What the server sends without being asked.",
+      "enum": [
+        "run/event",
+        "run/frame",
+        "run/until",
+        "secrets/resolve"
+      ],
+      "title": "ServerMethod",
+      "type": "string"
+    },
+    "ServerRequest": {
+      "description": "A call from the server that the client answers, with a `Response` or an `ErrorResponse` carrying its id.\n\nThe ids are the server's own and count up from one. A client's ids may be the same numbers: a reply is\ntold from a request by having no `method`, so the two never meet.",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Jsonrpc",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "method": {
+          "$ref": "#/$defs/ServerMethod"
+        },
+        "params": {
+          "title": "Params"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ServerRequest",
+      "type": "object"
+    },
+    "SourceControl": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        }
+      },
+      "required": [
+        "role",
+        "label",
+        "context"
+      ],
+      "title": "SourceControl",
+      "type": "object"
+    },
+    "Status": {
+      "enum": [
+        "complete",
+        "unverified",
+        "needs_confirmation",
+        "needs_login",
+        "blocked",
+        "needs_input",
+        "stuck",
+        "budget_exceeded",
+        "observation_limit",
+        "unavailable",
+        "error"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "StepEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "step",
+          "default": "step",
+          "title": "Type",
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/StepResult"
+        },
+        "frame": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.",
+          "title": "Frame"
+        }
+      },
+      "required": [
+        "type",
+        "step",
+        "frame"
+      ],
+      "title": "StepEvent",
+      "type": "object"
+    },
+    "StepFact": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "requirement_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requirement Id"
+        },
+        "quote": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "None for a count, total or winner derived from other facts rather than read from the page.",
+          "title": "Quote"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "reader": {
+          "$ref": "#/$defs/FactReader"
+        },
+        "deep_link": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deep Link"
+        }
+      },
+      "required": [
+        "text",
+        "requirement_id",
+        "quote",
+        "url",
+        "reader",
+        "deep_link"
+      ],
+      "title": "StepFact",
+      "type": "object"
+    },
+    "StepOutcome": {
+      "enum": [
+        "executed",
+        "covered",
+        "stale",
+        "failed"
+      ],
+      "title": "StepOutcome",
+      "type": "string"
+    },
+    "StepResult": {
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "decided_by": {
+          "$ref": "#/$defs/Decider"
+        },
+        "outcome": {
+          "$ref": "#/$defs/StepOutcome"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable label of the chosen element; never contains a secret value.",
+          "title": "Target"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "facts": {
+          "default": [],
+          "description": "Facts added to the notes by this step, with resolved secrets redacted.",
+          "items": {
+            "$ref": "#/$defs/StepFact"
+          },
+          "title": "Facts",
+          "type": "array"
+        },
+        "page_changed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the page's fingerprint changed; None for steps that do not act (read, escalate).",
+          "title": "Page Changed"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "operation",
+        "decided_by",
+        "outcome",
+        "url",
+        "target",
+        "confidence",
+        "note",
+        "facts",
+        "page_changed",
+        "duration_ms"
+      ],
+      "title": "StepResult",
+      "type": "object"
+    },
+    "Tripwire": {
+      "enum": [
+        "no_progress",
+        "action_repetition",
+        "plan_stagnation"
+      ],
+      "title": "Tripwire",
+      "type": "string"
+    },
+    "Wall": {
+      "additionalProperties": false,
+      "description": "The wall a `needs_login` or `blocked` run stopped at, typed so a caller can route it without parsing `error`.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/WallKind"
+        },
+        "origin": {
+          "description": "The origin of the page that showed the wall.",
+          "title": "Origin",
+          "type": "string"
+        },
+        "fields": {
+          "default": [],
+          "description": "The visible labels of the fields it asked for, redacted as the error is.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "seen_at_ms": {
+          "description": "When the run stopped at it, in UTC epoch milliseconds.",
+          "title": "Seen At Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "origin",
+        "fields",
+        "seen_at_ms"
+      ],
+      "title": "Wall",
+      "type": "object"
+    },
+    "WallKind": {
+      "description": "What a sign-in or bot wall asks of the person who has to get the run past it.",
+      "enum": [
+        "password",
+        "one_time_code",
+        "sign_in",
+        "bot_check"
+      ],
+      "title": "WallKind",
+      "type": "string"
+    }
+  },
+  "constants": {
+    "ErrorCode": {
+      "PARSE_ERROR": -32700,
+      "INVALID_REQUEST": -32600,
+      "METHOD_NOT_FOUND": -32601,
+      "INVALID_PARAMS": -32602,
+      "INTERNAL_ERROR": -32603,
+      "BUSY": -32001,
+      "CANCELLED": -32002,
+      "CONFIGURATION": -32003,
+      "UNSUPPORTED_SCHEMA": -32004
+    },
+    "Method": {
+      "INITIALIZE": "initialize",
+      "RUN": "run",
+      "RUN_CANCEL": "run/cancel",
+      "SHUTDOWN": "shutdown"
+    },
+    "PROTOCOL_VERSION": 1,
+    "ServerMethod": {
+      "RUN_EVENT": "run/event",
+      "RUN_FRAME": "run/frame",
+      "RUN_UNTIL": "run/until",
+      "SECRETS_RESOLVE": "secrets/resolve"
+    }
+  }
+}
