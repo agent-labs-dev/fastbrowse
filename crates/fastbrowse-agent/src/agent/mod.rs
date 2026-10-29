@@ -622,6 +622,7 @@ impl Agent {
             transaction_evidence_ids: transactions,
             preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
             background: state.context.clone(),
+            trace: self.trace.clone(),
             ..ComposeOptions::new()
         };
         let generated = compose(&*self.llm, &state.task, &plan, &state.notes, &options).await.ok()?;

@@ -624,6 +624,7 @@ impl Agent {
             verified,
             independent_fields: state.oversized_answer,
             background: state.context.clone(),
+            trace: self.trace.clone(),
         })
     }
 

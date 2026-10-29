@@ -1232,7 +1232,7 @@ pub async fn extract(
     schema: &RecordSchema,
     options: &ExtractOptions<'_>,
 ) -> Result<Extraction> {
-    use crate::retrieval::{Annotation, READ_CHUNK_CHARS};
+    use crate::retrieval::Annotation;
     let mut values: Map<String, Value> = Map::new();
     let mut evidence: Vec<Evidence> = Vec::new();
     let text_fields: IndexMap<String, ScalarField> = schema
@@ -1265,8 +1265,7 @@ pub async fn extract(
             .collect();
         if !unseen.is_empty() {
             let (found, _) =
-                propose_text_fields(llm, task, capture, &unseen, READ_CHUNK_CHARS, &options.tokens, options.ledger)
-                    .await?;
+                propose_text_fields(llm, task, capture, &unseen, None, &options.tokens, options.ledger).await?;
             proposed.extend(found);
         }
         for (name, (value, quoted)) in proposed {
