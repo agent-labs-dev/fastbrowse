@@ -20,13 +20,12 @@ use serde_json::{Value, json};
 
 use super::choices::read_choices;
 use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_message, source_marker};
-use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search, numbers};
+use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search};
 use super::{notes_room, route};
 use crate::comparison::{NumericComparison, QuotedField, digit};
 use crate::error::{AgentError, Result};
 use crate::memory::{Comparison, Fact, Notes, RenderOptions, Tally, fact_id, unique};
 use crate::planner::{FIELD_CATEGORIES, Requirement, RequirementKind};
-use crate::support::generate;
 
 pub(super) fn counted_kind(kind: BlockKind) -> bool {
     matches!(kind, BlockKind::Record | BlockKind::ListItem)
@@ -37,18 +36,6 @@ pub(super) fn counted_kind(kind: BlockKind) -> bool {
 const COMPARISON: &str = "For a lowest/highest/top-N ranking by one numeric field whose requested output is only record labels and values: the order, number of results, and literal delimiters around each record's label and displayed value (including its currency). Empty delimiter means the quote boundary. Use only when these fields occur exactly once in every matching record, and all remaining pages are needed. Apply the task's filters in records as usual. Null for counts, calculations, extra output fields, tie rules or values requiring unit conversion. Related requirements asking for the same winners' labels or values use the same comparison and records.";
 const TALLIES: &str = "For every count of matching records, including filtered counts, or ranking by count. Group matching records by their stated label, or use key=null for an ungrouped count. Use explicit record ranges when matches are not contiguous. Leave records empty.";
 const THROUGH_END: &str = "True only when the task needs every remaining page of this list. False when the task bounds the pages (such as this page and the next), or the rest is behind an expander rather than a pager.";
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ListOrder {
-    pub confirmed: bool,
-}
-
-impl Schema for ListOrder {
-    fn ty() -> Ty {
-        ModelTy::frozen("_ListOrder", vec![Field::required("confirmed", Ty::Bool)]).ty()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -285,8 +272,6 @@ pub(crate) struct RecordsResponse {
     #[serde(default)]
     pub context: Vec<Cite>,
     #[serde(default)]
-    pub requested_scope_complete: Vec<String>,
-    #[serde(default)]
     pub ended: Vec<String>,
 }
 
@@ -297,7 +282,6 @@ impl Schema for RecordsResponse {
             vec![
                 Field::required("continues", Ty::list(RecordSet::ty())),
                 Field::default("context", Ty::list(Cite::ty()), json!([])),
-                Field::default("requested_scope_complete", Ty::list(Ty::Str), json!([])).doc("Requirement ids whose requested bounded page scope is complete, even if another pager remains. Do not use for physical list exhaustion."),
                 Field::default("ended", Ty::list(Ty::Str), json!([])).doc("Requirement ids whose requested list this capture shows reaching its end. Empty for a partial list, a loading page, an unrelated page, or a list continuing behind any control."),
             ],
         )
@@ -354,7 +338,6 @@ pub struct ReadOutcome {
     pub through_end: Vec<String>,
     pub continuation_records: IndexMap<String, Vec<String>>,
     pub ended: Vec<String>,
-    pub requested_scope_complete: Vec<String>,
     pub tally_readers: Vec<TallyReader>,
     pub comparisons: IndexMap<String, NumericComparison>,
 }
@@ -385,7 +368,6 @@ impl ReadOutcome {
             through_end: Vec::new(),
             continuation_records: IndexMap::new(),
             ended: Vec::new(),
-            requested_scope_complete: Vec::new(),
             tally_readers: Vec::new(),
             comparisons: IndexMap::new(),
         }
@@ -665,44 +647,6 @@ pub(crate) fn heading_facts(page: &Page<'_>, quote: &Evidence, reader: FactReade
     facts
 }
 
-fn quoted_count(fact: &Fact, notes: &Notes, records: &IndexMap<String, Fact>, page: &Page<'_>) -> bool {
-    let Some(quote) = &fact.evidence else { return false };
-    let capture = page.capture;
-    if !fact.basis.is_empty() {
-        let facts = notes.facts_by_id();
-        let mut counted: HashSet<String> = records.keys().cloned().collect();
-        counted.extend(notes.comparison_records(None));
-        counted.extend(notes.tallies().into_iter().flat_map(|t| t.records));
-        for key in &fact.basis {
-            // Scope quotes may accompany a stated total; counted records cannot turn a page number into that total.
-            let Some(context) = facts.get(key) else { return false };
-            let Some(span) = &context.evidence else { return false };
-            if counted.contains(key) || !context.basis.is_empty() || context.tally.is_some() {
-                return false;
-            }
-            if span.capture_sha256 != capture.sha256 {
-                return false;
-            }
-            let blocks: Vec<&Block> =
-                capture.blocks.iter().filter(|b| b.start < span.end && b.end > span.start).collect();
-            if blocks.is_empty()
-                || blocks.iter().any(|b| !matches!(b.kind, BlockKind::Heading | BlockKind::Paragraph | BlockKind::Link))
-            {
-                return false;
-            }
-            if blocks
-                .iter()
-                .any(|b| b.frame_id != span.frame_id || b.source_url.as_deref().unwrap_or(&capture.url) != span.url)
-            {
-                return false;
-            }
-        }
-    }
-    let stated = numbers(&fact.text);
-    let shown: HashSet<String> = numbers(&quote.quote).into_iter().map(|n| n.replace(',', "")).collect();
-    stated.len() == 1 && shown.contains(&stated[0].replace(',', ""))
-}
-
 fn field_groups(page: &Page<'_>, part: &Chunk, field: &TallyField) -> Option<Vec<TallyGroup>> {
     let span = cited(page, part, &field.span)?;
     let blocks: Vec<&Block> =
@@ -959,9 +903,6 @@ pub struct ReadOptions<'a> {
     pub ledger: Option<&'a Ledger>,
     pub jev: Option<&'a dyn DecisionClient>,
     pub requirements: Vec<Requirement>,
-    /// What the caller knows about the page that its text does not say, such as its next-page control; it goes with
-    /// every question the reader is asked, however the question is narrowed.
-    pub notice: String,
     /// The requirements an earlier page already said run past it.
     pub continuing: Vec<String>,
     pub incomplete: Vec<String>,
@@ -974,7 +915,6 @@ pub struct ReadOptions<'a> {
     /// The plan's information requirements, read or not, which decide whether a counted list must name the target it
     /// covers.
     pub targets: Option<Vec<Requirement>>,
-    pub skip_order_shortcuts: Vec<String>,
     pub trace: Trace,
 }
 
@@ -991,19 +931,14 @@ const READER_PAGES: &str = "# Lists over several pages\nA count, total or superl
 // records, paging guidance where the page offers no pager. Which sections ship is decided by the page and the plan,
 // never by the task's wording.
 /// The reader's instructions for this capture, carrying only the sections its records and controls can use.
-fn reader_system(
-    capture: &Capture,
-    notice: &str,
-    continuing: &[String],
-    counting: &IndexMap<String, String>,
-) -> String {
+fn reader_system(capture: &Capture, continuing: &[String], counting: &IndexMap<String, String>) -> String {
     let records = capture.blocks.iter().any(|block| counted_kind(block.kind));
     let mut text = READER_BASE.to_string();
     if records || !counting.is_empty() {
         text.push_str(READER_TALLIES);
         text.push_str(READER_RANKINGS);
     }
-    if records || !notice.is_empty() || !continuing.is_empty() {
+    if records || !continuing.is_empty() {
         text.push_str(READER_PAGES);
     }
     text.push_str(&format!("\n\n# Trust\n{UNTRUSTED} Never infer facts the capture and evidence do not show."));
@@ -1014,7 +949,7 @@ const COLLECTION_EVIDENCE: &str = "\n\n# Collection evidence\nFor a collection s
 
 const FIELD_COLLECTIONS: &str = " Also fill collections independently of claims: quote the boundary and every member of each inspected collection, even when another section or field is still missing. Code records completeness from the page's stated total and captured list members. A navigation link to a section is not its contents. If no member matches a requested field, include the entire collection and its boundary in collections, including excluded members. Prior summaries cannot establish that absence. ";
 
-const PAGE_RECORDS: &str = "# Page records\nCollect the records on this page for the requested requirements. Return each requirement in continues even when no records match. For counts of matching records, including filtered counts, or rankings by count, use continues.tallies, grouped by the label stated in each record (key=null for an ungrouped count). Select only matching records. If excluded records separate matches, list each matching block range explicitly in the group's records. A page with no matches contributes an empty group. For comparisons of record values, use continues.records, including the compared value and the attributes that show each record matches. Prefer a tally field range for complete record blocks with the grouping label between the same exact prefix and suffix: key=null, records=[], field={span, prefix, suffix}. Delimiters must occur once per record; include the newline for a field starting a line. Every block in that range must be a matching record. When using tallies, leave the continuation's records empty. Omit records excluded by the task's filters, but never select only the page's winners. Earlier pages are being read separately. Use context for source block ranges needed to interpret these records, such as filters or table headers. If the task asks for a bounded page scope and this capture completes that scope, list its requirement id in requested_scope_complete even when another pager remains. Do not conclude comparisons.\n\n# Trust\n";
+const PAGE_RECORDS: &str = "# Page records\nCollect the records on this page for the requested requirements. Return each requirement in continues even when no records match. For counts of matching records, including filtered counts, or rankings by count, use continues.tallies, grouped by the label stated in each record (key=null for an ungrouped count). Select only matching records. If excluded records separate matches, list each matching block range explicitly in the group's records. A page with no matches contributes an empty group. For comparisons of record values, use continues.records, including the compared value and the attributes that show each record matches. Prefer a tally field range for complete record blocks with the grouping label between the same exact prefix and suffix: key=null, records=[], field={span, prefix, suffix}. Delimiters must occur once per record; include the newline for a field starting a line. Every block in that range must be a matching record. When using tallies, leave the continuation's records empty. Omit records excluded by the task's filters, but never select only the page's winners. Earlier pages are being read separately. Use context for source block ranges needed to interpret these records, such as filters or table headers. Do not conclude comparisons.\n\n# Trust\n";
 
 const FIELD_REPAIR: &str = "Your tally field range could not be resolved into complete matching records. Read the same capture again. Use explicit record block ranges when the field's delimiters or range cannot be verified. The [source id] and (block kind) annotations are not literal record text. A field range must contain only complete record blocks, with key=null and records=[]. Retain every matching record and keep the requirement open unless the evidence covers the entire requested list.";
 
@@ -1097,14 +1032,11 @@ async fn read_inner(
     let mut costs: Vec<CostLine> = Vec::new();
     let mut continues: IndexSet<String> = IndexSet::new();
     let mut lost: IndexSet<String> = IndexSet::new();
-    let mut requested_scope_complete: Vec<String> = Vec::new();
     let mut found: Vec<Fact> = Vec::new();
     let mut collections: Vec<Fact> = Vec::new();
     let mut rejected = 0;
     let mut uncovered = 0;
     let mut ordered: IndexSet<String> = IndexSet::new();
-    let mut unconfirmed_orders: IndexSet<String> = IndexSet::new();
-    let mut stated_counts: HashSet<(String, String)> = HashSet::new();
     let mut expands: Option<String> = None;
     let mut tally_complete: IndexSet<String> = IndexSet::new();
     let mut through_end: Vec<String> = Vec::new();
@@ -1130,10 +1062,8 @@ async fn read_inner(
         })
         .cloned()
         .collect();
-    // A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
     if let Some(jev) = options.jev
         && !wanted.is_empty()
-        && options.notice.is_empty()
         && !options.records_only
     {
         let earlier = if options.revalidate { None } else { Some(&*notes) };
@@ -1159,27 +1089,6 @@ async fn read_inner(
             .collect();
         question.push_str(&format!("\n\nRead only these remaining requirements:\n{}", remaining.join("\n")));
     }
-    if !options.notice.is_empty() {
-        question.push_str(&format!("\n\n{}", options.notice));
-    }
-    // A list an earlier page said runs on is the requirement a reader most often drops on the next page, so each one is
-    // named with the only two things that may happen to it.
-    let open: Vec<String> = options
-        .requirements
-        .iter()
-        .filter(|r| options.continuing.contains(&r.id) && requirement_ids.contains(&r.id))
-        .map(|r| match notes.comparison_records(Some(&r.id)).len() {
-            0 => format!("- {}: {}", r.id, r.text),
-            1 => format!("- {}: {} (1 record collected so far)", r.id, r.text),
-            n => format!("- {}: {} ({n} records collected so far)", r.id, r.text),
-        })
-        .collect();
-    if !open.is_empty() {
-        question.push_str(&format!(
-            "\n\nOpen from earlier pages:\n{}\nFor each of these, either add it to continues with this capture's records when the list goes on past this capture, or conclude it with a claim that takes its requirement id, includes this chunk's records and draws on the earlier ones. Never leave one out.",
-            open.join("\n")
-        ));
-    }
     if options.require_all_evidence {
         question.push_str("\n\nCode attaches every earlier comparison record to each requirement's conclusion. You need not repeat those references in draws_on; use it for any extra context the claim needs. Still include every compared record from this capture in records, and state the requested values in the answer.");
     }
@@ -1194,7 +1103,7 @@ async fn read_inner(
     let system = if options.records_only {
         format!("{PAGE_RECORDS}{UNTRUSTED}")
     } else {
-        let mut system = reader_system(capture, &options.notice, &options.continuing, &counting);
+        let mut system = reader_system(capture, &options.continuing, &counting);
         if options.preserve_collections {
             system.push_str(COLLECTION_EVIDENCE);
         }
@@ -1260,13 +1169,6 @@ async fn read_inner(
         if options.records_only {
             let collected = ask_reader::<RecordsResponse>(llm, &messages, schema.clone(), tokens, ledger).await?;
             ended = collected.data.ended.iter().filter(|key| requirement_ids.contains(key)).cloned().collect();
-            requested_scope_complete = collected
-                .data
-                .requested_scope_complete
-                .iter()
-                .filter(|key| requirement_ids.contains(key))
-                .cloned()
-                .collect();
             // Context is no requirement's record, so a cite that does not resolve loses none of them.
             let context: Vec<ReadClaim> = collected
                 .data
@@ -1668,7 +1570,7 @@ async fn read_inner(
             if options.preserve_collections && !records.is_empty() {
                 context_records.insert(fact_id(&fact), records.keys().cloned().collect());
             }
-            let mut requirement_id = claim.requirement_id.clone().filter(|id| requirement_ids.contains(id));
+            let requirement_id = claim.requirement_id.clone().filter(|id| requirement_ids.contains(id));
             if let Some(id) = &requirement_id {
                 let earlier = so_far.comparison_records(Some(id));
                 if !records.is_empty() || !earlier.is_empty() {
@@ -1679,70 +1581,18 @@ async fn read_inner(
                     });
                 }
             }
-            let stated_count = requirement_id.as_ref().is_some_and(|id| counting.contains_key(id))
-                && quoted_count(&fact, &so_far, &records, &page);
-            if stated_count && let Some(id) = &requirement_id {
-                stated_counts.insert((id.clone(), fact_id(&fact)));
-            }
-            if let Some(id) = &requirement_id
-                && notes.tallies().iter().any(|t| &t.requirement_id == id)
-                && !stated_count
-            {
-                // A derived total needs complete tallies. A total the page states has its own quote to verify.
-                requirement_id = None;
-            }
-            // A site that sorts or filters its own list by the quantity compared settles the superlative on its leading
-            // record: the rest of the list cannot beat it. The page has to say so, in its own text, and that statement
-            // is kept as a fact so the claim rests on it and the claim check can judge it. Only a claim resting on that
-            // one record qualifies: a count or total draws on every record it counts, and the part of a list one page
-            // shows does not settle it however the site sorts it.
-            if let Some(id) = requirement_id.clone()
-                && !options.skip_order_shortcuts.contains(&id)
+            // A page that states its own order backs the leading record it cites: the statement is kept beside it.
+            if requirement_id.is_some()
                 && let Some(orders_list) = &claim.orders_list
-                && claim.draws_on.is_empty()
+                && let Some(ordering) = cited(&page, &part, orders_list)
             {
-                let ordering = cited(&page, &part, orders_list);
-                let mut confirmed = false;
-                if let Some(ordering) = &ordering {
-                    // Offering a sort link does not establish which order is active on the current list.
-                    let messages = [
-                        Message::system(format!(
-                            "{UNTRUSTED} Confirm only when the quoted source explicitly states the current list is ordered or filtered by the quantity and direction needed for the requested superlative. Available sort options, navigation links, a URL and the reader's assertion do not establish active ordering. Do not infer sorting from the order of the shown records. Return false when uncertain."
-                        )),
-                        Message::user(dumps(&json!({"question": question, "quote": ordering.quote}))),
-                    ];
-                    let assessed =
-                        generate::<ListOrder>(llm, LLMPurpose::Read, &messages, tokens.read_output_tokens, ledger)
-                            .await?;
-                    if let Some(ledger) = ledger {
-                        ledger.record([assessed.cost.clone()])?;
-                    }
-                    costs.push(assessed.cost.clone());
-                    confirmed = assessed.data.confirmed;
+                let stated = quoted(ordering);
+                fact.basis.push(fact_id(&stated));
+                so_far.add(stated.clone());
+                found.push(stated);
+                if let Some(id) = &requirement_id {
+                    ordered.insert(id.clone());
                 }
-                match ordering.filter(|_| confirmed) {
-                    None => {
-                        unconfirmed_orders.insert(id);
-                        requirement_id = None;
-                    }
-                    Some(ordering) => {
-                        let stated = quoted(ordering);
-                        fact.basis.push(fact_id(&stated));
-                        so_far.add(stated.clone());
-                        found.push(stated);
-                        ordered.insert(id);
-                    }
-                }
-            }
-            if let Some(id) = requirement_id.clone()
-                && (options.continuing.contains(&id) || !so_far.comparison_records(Some(&id)).is_empty())
-                && !options.notice.is_empty()
-                && !ordered.contains(&id)
-                && !options.skip_order_shortcuts.contains(&id)
-            {
-                // A reader can omit orders_list while still claiming a winner on a continuing list.
-                unconfirmed_orders.insert(id);
-                requirement_id = None;
             }
             found.push(Fact { requirement_id, ..fact });
             accepted += 1;
@@ -1781,7 +1631,6 @@ async fn read_inner(
             && accepted > 0
             && rejected_here == 0
             && continues.is_empty()
-            && options.notice.is_empty()
             && !options.records_only
             && (tally_reads.is_empty() || part.index == part.total - 1)
         {
@@ -1794,9 +1643,12 @@ async fn read_inner(
             "cannot access local variable 'part' where it is not associated with a value".into(),
         ));
     };
-    // A lost record leaves later comparisons incomplete too; the page's own stated order can still settle a winner.
-    for key in &ordered {
+    // A claim the reader gave a requirement id concludes that requirement: the list it ranged over is not open, and a
+    // record the reader cited badly elsewhere does not undo it.
+    let concluded: IndexSet<String> = found.iter().filter_map(|fact| fact.requirement_id.clone()).collect();
+    for key in ordered.iter().chain(&concluded) {
         continues.shift_remove(key);
+        lost.shift_remove(key);
     }
     for requirement_id in &tally_complete {
         // Earlier continuation quotes have no tally key, so counting only later pages would omit them.
@@ -1805,31 +1657,17 @@ async fn read_inner(
         }
     }
     let mut blocked: HashSet<String> =
-        options.incomplete.iter().cloned().chain(lost.iter().cloned()).filter(|key| !ordered.contains(key)).collect();
+        options.incomplete.iter().cloned().chain(lost.iter().cloned()).filter(|key| !concluded.contains(key)).collect();
     if options.records_only {
         blocked.extend(requirement_ids.iter().cloned());
     }
     for mut fact in found {
-        let key = fact_id(&fact);
-        // Missing records invalidate a derived tally, but a separately quoted total does not depend on them.
-        let stated_count = fact.requirement_id.as_ref().is_some_and(|id| {
-            stated_counts.contains(&(id.clone(), key.clone())) && !lost.contains(id) && !options.records_only
-        });
-        if fact
-            .requirement_id
-            .as_ref()
-            .is_some_and(|id| continues.contains(id) || (blocked.contains(id) && !stated_count))
-        {
-            fact.requirement_id = None;
-        }
         if let Some(comparison) = &mut fact.comparison {
-            // A pager the caller knows of outranks the reader's belief that the list ended, and another requirement
-            // left open says nothing about this one's collection.
+            // Another requirement left open says nothing about this one's collection.
             comparison.complete = fact.requirement_id.as_ref().is_some_and(|id| {
                 (!options.field_outputs || options.require_all_evidence || ordered.contains(id))
                     && (answered || requirement_ids.len() > 1)
                     && part.index == part.total - 1
-                    && (options.notice.is_empty() || ordered.contains(id))
             });
         }
         // Its quote was verified against this capture when the chunk was read.
@@ -1843,28 +1681,23 @@ async fn read_inner(
     }
     for mut collection in collections {
         if let Some(comparison) = &mut collection.comparison
-            && (!options.notice.is_empty()
-                || continues.contains(&comparison.requirement_id)
-                || blocked.contains(&comparison.requirement_id))
+            && (continues.contains(&comparison.requirement_id) || blocked.contains(&comparison.requirement_id))
         {
             comparison.complete = false;
         }
         notes.add(collection.clone());
         facts.insert((fact_id(&collection), None), collection);
     }
-    let collection_facts = if options.notice.is_empty() {
-        let open: Vec<String> = requirement_ids.iter().filter(|key| !blocked.contains(*key)).cloned().collect();
-        counted_collections(&page, &open, part.end, &options.requirements, options.targets.as_deref())
-    } else {
-        Vec::new()
-    };
+    let open: Vec<String> = requirement_ids.iter().filter(|key| !blocked.contains(*key)).cloned().collect();
+    let collection_facts =
+        counted_collections(&page, &open, part.end, &options.requirements, options.targets.as_deref());
     if options.field_outputs {
         for fact in &collection_facts {
             notes.add(fact.clone());
             facts.insert((fact_id(fact), None), fact.clone());
         }
     }
-    let mut outcome = ReadOutcome {
+    let outcome = ReadOutcome {
         facts: facts.into_values().collect(),
         collection_facts,
         coverage,
@@ -1877,129 +1710,10 @@ async fn read_inner(
         through_end: through_end.into_iter().filter(|key| continues.contains(key)).collect(),
         continuation_records: continuation_records.into_iter().map(|(key, records)| (key, unique(records))).collect(),
         ended: ended.into_iter().filter(|key| !lost.contains(key)).collect(),
-        requested_scope_complete: requested_scope_complete.into_iter().filter(|key| !lost.contains(key)).collect(),
         tally_readers: tally_readers.into_iter().filter(|reader| !lost.contains(&reader.requirement_id)).collect(),
         comparisons: comparisons.into_iter().filter(|(key, _)| !lost.contains(key)).collect(),
     };
-    unconfirmed_orders.retain(|key| !ordered.contains(key));
-    if !unconfirmed_orders.is_empty() {
-        // A rejected sorting shortcut has uncollected records, not permanently missing records.
-        let mut pending: Vec<String> = unconfirmed_orders.iter().cloned().collect();
-        pending.sort();
-        let targets = Some(options.targets.clone().unwrap_or_else(|| options.requirements.clone()));
-        let collecting = ReadOptions {
-            max_chars: options.max_chars,
-            tokens: tokens.clone(),
-            ledger,
-            jev: None,
-            requirements: options.requirements.iter().filter(|r| unconfirmed_orders.contains(&r.id)).cloned().collect(),
-            targets: targets.clone(),
-            records_only: true,
-            preserve_collections: options.preserve_collections,
-            trace: options.trace.clone(),
-            ..ReadOptions::default()
-        };
-        let collected = read(llm, capture, &question, &pending, notes, &collecting).await?;
-        let scope_ids: Vec<String> = collected
-            .requested_scope_complete
-            .iter()
-            .filter(|key| unconfirmed_orders.contains(*key) && !collected.incomplete.contains(key))
-            .cloned()
-            .collect();
-        let scoped = if scope_ids.is_empty() {
-            None
-        } else {
-            let scoping = ReadOptions {
-                max_chars: options.max_chars,
-                tokens: tokens.clone(),
-                ledger,
-                jev: None,
-                requirements: options.requirements.iter().filter(|r| scope_ids.contains(&r.id)).cloned().collect(),
-                targets,
-                require_all_evidence: true,
-                skip_order_shortcuts: scope_ids.clone(),
-                preserve_collections: options.preserve_collections,
-                trace: options.trace.clone(),
-                ..ReadOptions::default()
-            };
-            Some(read(llm, capture, &question, &scope_ids, notes, &scoping).await?)
-        };
-        outcome = merge_outcomes(outcome, collected, scoped, &unconfirmed_orders, &scope_ids);
-    }
     Ok(outcome)
-}
-
-fn merge_outcomes(
-    outcome: ReadOutcome,
-    collected: ReadOutcome,
-    scoped: Option<ReadOutcome>,
-    unconfirmed: &IndexSet<String>,
-    scope_ids: &[String],
-) -> ReadOutcome {
-    let scoped_ref = scoped.as_ref();
-    let all = |pick: fn(&ReadOutcome) -> &Vec<String>| -> Vec<String> {
-        unique(pick(&outcome).iter().chain(pick(&collected)).chain(scoped_ref.map(pick).into_iter().flatten()).cloned())
-    };
-    let mut facts = outcome.facts.clone();
-    facts.extend(collected.facts.iter().cloned());
-    let mut cost_lines = outcome.cost_lines.clone();
-    cost_lines.extend(collected.cost_lines.iter().cloned());
-    let mut tally_readers = outcome.tally_readers.clone();
-    tally_readers.extend(collected.tally_readers.iter().cloned());
-    let mut comparisons = outcome.comparisons.clone();
-    comparisons.extend(collected.comparisons.clone());
-    let mut continuation_records = outcome.continuation_records.clone();
-    continuation_records.extend(collected.continuation_records.clone());
-    let mut rejected = outcome.rejected_claims + collected.rejected_claims;
-    let mut uncovered = outcome.uncovered + collected.uncovered;
-    if let Some(scoped) = scoped_ref {
-        facts.extend(scoped.facts.iter().cloned());
-        cost_lines.extend(scoped.cost_lines.iter().cloned());
-        tally_readers.extend(scoped.tally_readers.iter().cloned());
-        comparisons.extend(scoped.comparisons.clone());
-        continuation_records.extend(scoped.continuation_records.clone());
-        rejected += scoped.rejected_claims;
-        uncovered += scoped.uncovered;
-    }
-    let continues: Vec<String> = all(|o| &o.continues)
-        .into_iter()
-        .filter(|key| !(scoped_ref.is_some_and(|s| scope_ids.contains(key) && !s.continues.contains(key))))
-        .collect();
-    let incomplete = unique(
-        outcome
-            .incomplete
-            .iter()
-            .filter(|key| !unconfirmed.contains(*key))
-            .chain(&collected.incomplete)
-            .chain(scoped_ref.map(|s| &s.incomplete).into_iter().flatten())
-            .cloned(),
-    );
-    let expands = scoped_ref.and_then(|s| s.expands.clone()).or(collected.expands.clone()).or(outcome.expands.clone());
-    ReadOutcome {
-        facts,
-        collection_facts: outcome.collection_facts.clone(),
-        coverage: unique_ints(outcome.coverage.iter().chain(&collected.coverage).copied()),
-        rejected_claims: rejected,
-        cost_lines,
-        continues,
-        incomplete,
-        uncovered,
-        expands,
-        through_end: all(|o| &o.through_end),
-        continuation_records,
-        ended: all(|o| &o.ended),
-        requested_scope_complete: all(|o| &o.requested_scope_complete),
-        tally_readers,
-        comparisons,
-    }
-}
-
-fn unique_ints(values: impl Iterator<Item = i64>) -> Vec<i64> {
-    let mut seen = IndexSet::new();
-    for value in values {
-        seen.insert(value);
-    }
-    seen.into_iter().collect()
 }
 
 #[cfg(test)]

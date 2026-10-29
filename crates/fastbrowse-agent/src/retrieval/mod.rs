@@ -22,9 +22,8 @@ use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::schema::{Ty, json_schema};
 
 pub use answers::{
-    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, OUTPUT_MISSING, Stage, TRANSACTION_CONTRADICTED,
-    assemble_answer, claim_check_questions, compose, draft_answer, partial_answer, retain_fields,
-    transaction_check_question,
+    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, partial_answer,
+    retain_fields,
 };
 pub use choices::read_candidates;
 pub use chunks::{Chunk, chunk, page_quotes, read_message_for};
@@ -72,7 +71,6 @@ pub fn response_schema(name: &str) -> Option<fastbrowse_core::validation::ModelS
         "_CollectionResponse" => reading::read_response_ty(true),
         "_RecordsResponse" => reading::RecordsResponse::ty(),
         "_TextProposals" => fields::TextProposals::ty(),
-        "_ListOrder" => reading::ListOrder::ty(),
         "_AnswerDraft" => answers::AnswerDraft::ty(),
         "_FieldAnswerDraft" => answers::field_answer_draft(&[
             (0, "The price of the first item".into()),

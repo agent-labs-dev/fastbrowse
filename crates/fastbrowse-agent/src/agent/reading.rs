@@ -15,9 +15,7 @@ use serde_json::{Map, json};
 
 use super::Agent;
 use super::driving::StepOptions;
-use super::helpers::{
-    answer_evidence, code_decision, describe, lookup, next_page_control, next_page_notice, read_question, sources,
-};
+use super::helpers::{answer_evidence, code_decision, describe, lookup, next_page_control, read_question};
 use super::state::{Flow, ReadKey, RunState, Spawned, Step};
 use crate::comparison::complete_comparison;
 use crate::error::AgentError;
@@ -134,7 +132,6 @@ impl Agent {
             Some(capture) => capture,
             None => self.capture().await?,
         };
-        state.lineage.read(&capture.sha256, &sources(&capture), state.guessing);
         let plan = state.await_plan().await?;
         if lookup(&plan) {
             // Reader-selected excerpts cannot decide whether the full sources fit together in one prompt.
@@ -254,7 +251,6 @@ impl Agent {
         if needs_context {
             question += "\nAlso keep quotes containing values needed for the task's remaining actions, even when they do not answer an information requirement. Give these context claims a null requirement_id.";
         }
-        let notice = next_page_notice(following.as_ref());
         let before = state.notes.facts().len();
         let known = answer_evidence(&state.notes, false);
         let evidenced: Vec<String> =
@@ -274,7 +270,6 @@ impl Agent {
                 || !state.finish_partitions.is_empty()
                 || !state.open_answer_outputs.is_empty(),
             field_outputs: state.oversized_answer && !state.finish_partitions.is_empty(),
-            notice,
             continuing: sorted(state.continuing.iter().cloned()),
             incomplete: state.incomplete.iter().cloned().collect(),
             require_all_evidence: require_all_evidence || (state.through_end && state.pages > 0),
@@ -405,8 +400,6 @@ impl Agent {
         wanted: &[Requirement],
         last: bool,
     ) -> Spawned<ReadOutcome> {
-        // Pages read in a run of pages never pass through `read`, and their readings are judged the same way.
-        state.lineage.read(&capture.sha256, &sources(capture), state.guessing);
         let question = read_question(&state.task, wanted, state.first_url.as_deref());
         Spawned::spawn(page_records(
             self.jev.clone(),

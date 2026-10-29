@@ -177,18 +177,6 @@ fn replay(case: &Value) -> Result<(), String> {
             let plan: Plan = parse(&args["plan"]);
             json!({"result": draft_answer(&plan, notes.as_ref().unwrap()).map(|a| a.dump())})
         }
-        "transaction_check_question" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let question =
-                transaction_check_question(&composed, notes.as_ref().unwrap(), &strings(&args["ids"]), &tokens);
-            json!({"result": question.map(|q| q.dump())})
-        }
-        "claim_check_questions" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let check = args.get("check_omission").and_then(Value::as_bool).unwrap_or(true);
-            let checks = strings(args.get("answer_checks").unwrap_or(&Value::Null));
-            outcome(claim_check_questions(&composed, notes.as_ref().unwrap(), &tokens, check, &checks))
-        }
         "field_question" => {
             let candidates: Vec<Candidate> = parse(&args["candidates"]);
             let record_fields = strings(args.get("record_fields").unwrap_or(&Value::Null));
@@ -299,7 +287,6 @@ fn replay(case: &Value) -> Result<(), String> {
                     .filter(|j| !j.is_null())
                     .map(|_| &jev as &dyn fastbrowse_core::decision::DecisionClient),
                 requirements: opt(args, "requirements").unwrap_or_default(),
-                notice: args.get("notice").and_then(Value::as_str).unwrap_or("").to_string(),
                 continuing: strings(args.get("continuing").unwrap_or(&Value::Null)),
                 incomplete: strings(args.get("incomplete").unwrap_or(&Value::Null)),
                 records_only: flag(args, "records_only"),
@@ -309,7 +296,6 @@ fn replay(case: &Value) -> Result<(), String> {
                 preserve_collections: flag(args, "preserve_collections"),
                 field_outputs: flag(args, "field_outputs"),
                 targets: opt(args, "targets"),
-                skip_order_shortcuts: strings(args.get("_skip_order_shortcuts").unwrap_or(&Value::Null)),
                 trace: trace.clone(),
             };
             let capture = capture();

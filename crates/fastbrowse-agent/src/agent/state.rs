@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use fastbrowse_core::decision::{DecisionError, NoulQuestion};
 use fastbrowse_core::llm::{Generation, LLMError};
@@ -20,7 +20,6 @@ use crate::memory::{Fact, Notes};
 use crate::planner::{OutputTarget, Plan};
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::{AnswerCorrection, ComposedAnswer, TallyReader};
-use crate::verification::LLMVerdict;
 
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
@@ -152,67 +151,6 @@ pub(crate) struct TransactionCandidate {
     pub outcome_read: bool,
 }
 
-/// Whether the page was on the guess, kept per browser history entry and per read, never per address.
-///
-/// A form or single-page app can keep its search outside the address, so a run that left a guessed search and set the
-/// same search up itself arrived back at the guessed address. The browser's own history says which page the run is
-/// on: Back, Forward and a reload return to an entry, and its lineage with it. A read is judged by what the run was
-/// doing when it read, so a quote read on the guess stays guessed.
-///
-/// A hold `Notes::discredit` keeps asks the lineage again each time it is checked, as Python's closure over the run's
-/// one `_Lineage` does, so the readings and addresses are shared by every clone rather than copied: a snapshot kept a
-/// reading held after the run read the same page again off the guess.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Lineage {
-    /// Each history entry, by whether the run was on the guess when the entry was made.
-    pub entries: HashMap<String, bool>,
-    /// Each history entry's address when last observed, so a site action that moved it there is told apart.
-    pub entry_addresses: HashMap<String, String>,
-    /// Each address by the lineage of the entry last observed there, for a quote with no recorded reading.
-    addresses: Arc<Mutex<HashMap<String, bool>>>,
-    /// Each reading, by source address and capture, by whether it was read on the guess.
-    captures: Arc<Mutex<HashMap<(String, String), bool>>>,
-}
-
-fn locked<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
-    shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-impl Lineage {
-    pub fn read(&mut self, capture: &str, sources: &[String], guessing: bool) {
-        // The same page read again off the guess is the page the run reached itself, so that reading stands. Text
-        // alone does not name a page: another address drawing identical text released the guessed one's hold.
-        let mut captures = locked(&self.captures);
-        for source in sources {
-            let key = (fastbrowse_core::addresses::search_address(source), capture.to_string());
-            if guessing {
-                captures.entry(key).or_insert(true);
-            } else {
-                captures.insert(key, false);
-            }
-        }
-    }
-
-    /// Whether this reading, by search address and capture, was taken on the guess.
-    pub fn reading(&self, address: &str, capture: &str) -> Option<bool> {
-        locked(&self.captures).get(&(address.to_string(), capture.to_string())).copied()
-    }
-
-    /// Whether the entry last observed at this search address was on the guess.
-    pub fn address(&self, address: &str) -> Option<bool> {
-        locked(&self.addresses).get(address).copied()
-    }
-
-    pub fn set_address(&mut self, address: String, guessing: bool) {
-        locked(&self.addresses).insert(address, guessing);
-    }
-}
-
-/// Checked answers by task, plan, answer and transaction evidence: the answer held, its missing outputs and
-/// corrections.
-pub(crate) type AnswerChecks =
-    HashMap<(String, String, String, Vec<String>), (Option<ComposedAnswer>, Vec<String>, Vec<AnswerCorrection>)>;
-
 pub(crate) type ReadKey = (String, String, Vec<String>, Vec<String>);
 /// One action on its targets, from one page state: the key both the cycle count and the no-op memory are kept by.
 pub(crate) type Signature = (Operation, Option<String>, Option<String>, String);
@@ -302,14 +240,10 @@ pub(crate) struct RunState {
     pub verified_answer: Option<ComposedAnswer>,
     pub missing_answer_outputs: Vec<String>,
     pub answer_corrections: Vec<AnswerCorrection>,
-    /// Verifier verdicts by the digest of the exact request that produced them, within this run.
-    pub verify_cache: HashMap<String, Generation<LLMVerdict>>,
     /// Bot-check documents this run has already reloaded once, so a challenge that survives is reported.
     pub challenge_reloads: HashSet<String>,
     pub open_answer_outputs: Vec<String>,
     pub rejected_answer_evidence: Option<BTreeSet<EvidenceKey>>,
-    pub answer_check_evidence: Option<String>,
-    pub answer_check_cache: AnswerChecks,
     pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
     pub history: Vec<HistoryEntry>,
@@ -358,10 +292,7 @@ pub(crate) struct RunState {
     /// Addresses this run built from the task rather than reached by clicking.
     pub invented: HashSet<String>,
     /// The page is an invented address, or one the page itself moved to from one.
-    pub guessing: bool,
-    pub lineage: Lineage,
     /// The last action itself took the page elsewhere, as the page reports it; read by the next observation only.
-    pub moved_by_action: bool,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
     /// An interaction changed the page after the notes last read it.
@@ -473,12 +404,9 @@ impl RunState {
             verified_answer: None,
             missing_answer_outputs: Vec::new(),
             answer_corrections: Vec::new(),
-            verify_cache: HashMap::new(),
             challenge_reloads: HashSet::new(),
             open_answer_outputs: Vec::new(),
             rejected_answer_evidence: None,
-            answer_check_evidence: None,
-            answer_check_cache: HashMap::new(),
             relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
             history: Vec::new(),
@@ -508,9 +436,6 @@ impl RunState {
             acted_from: None,
             ready_plan: None,
             invented: HashSet::new(),
-            guessing: false,
-            lineage: Lineage::default(),
-            moved_by_action: false,
             downloads_forbidden: None,
             owes_read: false,
             read_here: false,
@@ -546,11 +471,6 @@ impl RunState {
             form_rejected: HashSet::new(),
             form_values: HashMap::new(),
         }
-    }
-
-    pub fn reset_answer_check(&mut self) {
-        self.missing_answer_outputs.clear();
-        self.answer_corrections.clear();
     }
 
     /// The plan, for code that only runs after `await_plan`: reading, judging DONE and answering.

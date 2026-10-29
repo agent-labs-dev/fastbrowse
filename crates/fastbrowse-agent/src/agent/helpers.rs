@@ -7,7 +7,7 @@ use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::effects::{SETTING_ROLES, state_key};
 use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
-use fastbrowse_core::page::{Capture, Control, Dialog, Observation, pager_link};
+use fastbrowse_core::page::{Control, Dialog, Observation, pager_link};
 use fastbrowse_core::py::dump::{Dump, include, to_value};
 use fastbrowse_core::py::json::{Style, dumps, write};
 use fastbrowse_core::py::{sha256_hex, text};
@@ -16,22 +16,16 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 use url::Url;
 
-use super::state::{Lineage, RunState, Signature};
+use super::state::{RunState, Signature};
 use crate::memory::{Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry, Reduction};
-use crate::verification::LLMVerdict;
 
 pub(crate) const STALE_LINK_FAILURES: i64 = 2;
 
 /// Operations that do not act on the page: a read changes nothing, and DONE is judged again by the finish.
 pub(crate) fn not_acting(operation: Operation) -> bool {
     matches!(operation, Operation::Read | Operation::Done)
-}
-
-/// What the run does through the page's own controls, so what follows is the site's doing, not the run's guess.
-pub(crate) fn site_action(operation: Operation) -> bool {
-    operation.is_targeted() || operation == Operation::Dialog
 }
 
 /// Recovery can direct page operations without a control; directed DONE still requires verification.
@@ -171,9 +165,7 @@ pub(crate) fn read_exhausted(state: &RunState) -> String {
         .map(|r| format!("{}: {}", r.id, r.text))
         .collect();
     let missing = if missing.is_empty() { state.task.clone() } else { missing.join("; ") };
-    format!(
-        "Still missing evidence for {missing}. Re-reading this unchanged content will not supply it; find additional content."
-    )
+    format!("Still missing evidence for {missing}.")
 }
 
 /// Name which one was chosen, not just what it read: a label alone cannot identify one of six identically labelled
@@ -189,118 +181,6 @@ pub(crate) fn describe(control: &Control) -> String {
 pub(crate) fn place(url: &str) -> (String, String) {
     let path = path_of(url);
     (origin_of(url), if path.is_empty() { "/".into() } else { path })
-}
-
-/// The requirements with a fact read on an address the run built from the task rather than clicked to.
-pub(crate) fn guessed(
-    plan: &Plan,
-    notes: &Notes,
-    invented: &HashSet<String>,
-    searches: bool,
-    lineage: Option<&Lineage>,
-) -> HashSet<String> {
-    let judge = guessed_page(invented, lineage, searches);
-    plan.requirements
-        .iter()
-        .filter(|r| notes.supporting_evidence(&r.id).iter().any(&judge))
-        .map(|r| r.id.clone())
-        .collect()
-}
-
-/// Whether a fact read at an address was read on the guess, judged as `guessed` judges it, so what a refusal blocks
-/// is exactly what the verifier was shown as guessed.
-pub(crate) fn guessed_page(
-    invented: &HashSet<String>,
-    lineage: Option<&Lineage>,
-    searches: bool,
-) -> impl Fn(&Evidence) -> bool + Send + Sync + 'static {
-    let places: IndexMap<(String, String), bool> =
-        invented.iter().map(|url| (place(url), fastbrowse_core::addresses::searched(url))).collect();
-    // A clone shares the run's lineage, so a later reading off the guess frees what this judges held.
-    let known = lineage.cloned().unwrap_or_default();
-    move |evidence: &Evidence| {
-        let url = &evidence.url;
-        // Lineage only clears a path match, never adds one: a page clicked to off the guess is judged by its path.
-        let address = fastbrowse_core::addresses::search_address(url);
-        let on_guess = known.reading(&address, &evidence.capture_sha256).or_else(|| known.address(&address));
-        let here = place(url);
-        on_guess != Some(false)
-            && places.contains_key(&here)
-            && (!searches || places[&here] || fastbrowse_core::addresses::searched(url))
-    }
-}
-
-/// Every address a quote cut from this capture can cite: the page's, and each child frame's own.
-pub(crate) fn sources(capture: &Capture) -> Vec<String> {
-    let mut found: Vec<String> = vec![capture.url.clone()];
-    for block in &capture.blocks {
-        if let Some(url) = &block.source_url
-            && !url.is_empty()
-            && !found.contains(url)
-        {
-            found.push(url.clone());
-        }
-    }
-    found
-}
-
-/// The requirements the verifier says were read off the wrong page, where that page was a guessed address.
-pub(crate) fn misread(
-    verdict: &LLMVerdict,
-    plan: &Plan,
-    notes: &Notes,
-    invented: &HashSet<String>,
-    lineage: Option<&Lineage>,
-) -> HashSet<String> {
-    let named = plan_ids(&verdict.ungrounded, plan);
-    let guessed = guessed(plan, notes, invented, false, lineage);
-    named.intersection(&guessed).cloned().collect()
-}
-
-fn id_key(raw: &str) -> String {
-    raw.to_lowercase().chars().filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit()).collect()
-}
-
-/// The plan's requirements the verifier named, however it spelled their ids.
-pub(crate) fn plan_ids(ids: &[String], plan: &Plan) -> HashSet<String> {
-    let known: IndexMap<String, String> = plan.requirements.iter().map(|r| (id_key(&r.id), r.id.clone())).collect();
-    let numbered: IndexMap<String, String> = plan
-        .requirements
-        .iter()
-        .filter_map(|r| {
-            let digits: String = r.id.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
-            (!digits.is_empty()).then(|| (digits.chars().rev().collect(), r.id.clone()))
-        })
-        .collect();
-    let mut found = HashSet::new();
-    for raw in ids {
-        let key = id_key(raw);
-        let matched = known.get(&key).cloned().or_else(|| {
-            (!key.is_empty() && key.chars().all(|c| c.is_ascii_digit())).then(|| numbered.get(&key).cloned()).flatten()
-        });
-        if let Some(matched) = matched {
-            found.insert(matched);
-        }
-    }
-    found
-}
-
-/// The plan's requirements the verifier named missing or ungrounded, in the order it named them.
-pub(crate) fn doubted(verdict: &LLMVerdict, plan: &Plan) -> Vec<String> {
-    let mut named: Vec<String> = Vec::new();
-    for raw in verdict.missing.iter().chain(&verdict.ungrounded) {
-        for id in plan_ids(std::slice::from_ref(raw), plan) {
-            if !named.contains(&id) {
-                named.push(id);
-            }
-        }
-    }
-    named
-}
-
-/// Whether the verifier confirms the run finished: complete, with nothing in the plan named missing or ungrounded.
-pub(crate) fn verified(verdict: &LLMVerdict, plan: &Plan) -> bool {
-    verdict.complete && doubted(verdict, plan).is_empty()
 }
 
 /// The kind of value the field declares it takes, when the text cannot be one, else None.
@@ -478,17 +358,6 @@ pub fn read_question(task: &str, wanted: &[Requirement], began_at: Option<&str>)
         None => question,
         Some(began) => format!(
             "{question}\n\nThe task's \"this page\" is {began}, where the run began, and \"the next page\" is the one after it. A task that names how many pages it covers ends at the last one it names."
-        ),
-    }
-}
-
-pub fn next_page_notice(following: Option<&Control>) -> String {
-    // The capture is text: a "Next" link reads the same as any other word unless the page's controls say so.
-    match following {
-        None => String::new(),
-        Some(control) => format!(
-            "This page has a next-page control ({}): a list on it may continue. A requirement about the page that control opens is not answered by this page, whatever this page holds: leave it unanswered until that page is read.",
-            text::repr(&control.label)
         ),
     }
 }
