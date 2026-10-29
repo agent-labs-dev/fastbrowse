@@ -5,14 +5,15 @@
 //! span; any other returns [`UnsupportedField`] so callers can choose another strategy.
 //!
 //! Python's one module is split here by what each part reads: `chunks` cuts a capture into prompts and spans,
-//! `choices` is Jev's short-fact read, `reading` the LLM reader, `fields` scalar extraction and `answers` the composer
-//! and the claim checks. Everything public is re-exported here under its Python name.
+//! `choices` is Jev's short-fact read, `records` Jev's record reader, `reading` the LLM reader, `fields` scalar
+//! extraction and `answers` the composer and the claim checks. Everything public is re-exported here under its Python name.
 
 mod answers;
 mod choices;
 mod chunks;
 mod fields;
 mod reading;
+mod records;
 pub(crate) mod text;
 
 use fastbrowse_core::config::TokenBudget;
@@ -33,9 +34,9 @@ pub use fields::{
     merge_candidates, propose_text_fields, propose_text_fields_from_notes,
 };
 pub use reading::{
-    ReadOptions, ReadOutcome, TallyReader, counted_collections_for, filter_tallies, names_subject, read, read_tallies,
-    subject_words,
+    ReadOptions, ReadOutcome, TallyReader, counted_collections_for, names_subject, read, read_tallies, subject_words,
 };
+pub use records::filter_tallies;
 
 /// `_route`: records which reader answers a read and why, so a run's trace shows where its LLM reads come from.
 pub(crate) fn route(

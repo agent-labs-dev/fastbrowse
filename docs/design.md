@@ -64,11 +64,19 @@ requirement evidenced.
 Missing or uncertain answers use the normal readers. This check is omitted when the full comparison does
 not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.
 
-A filtered count or a comparison over a list that runs to further pages is read by the LLM on its first page,
-which cites the matching records. Each later page of the same shape is then put to Jev in one request, a yes or
-no for each block shaped like those records, and code counts the matches or keeps them as the comparison's
-records. A record Jev judges between 0.20 and 0.70 sends that page back to the LLM reader, and so does a page
-whose title or record shape differs. The last page is still read by the LLM, which closes the list.
+A count is read by Jev and code on every page of its list. Code finds the page's record run, the largest
+unbroken run of record blocks sharing a heading, a frame and a kind. Jev is asked whether that list is the
+whole of what the requirement counts (every page when code found a next-page control, this page when it
+did not) and, for each record, whether it passes the requirement's filters, matched against the
+requirement's own text. Code counts the matches, pages the list, and ends the count on the page with no
+next-page control. A record Jev judges between 0.20 and 0.70 is sent to the LLM on its own, with only the
+records Jev was unsure of; a page whose title or record shape differs goes to the LLM reader. A count of
+none on a list that ends on its first page, a grouped count and a count Jev does not place on the whole
+list stay with the LLM reader.
+
+A comparison over a list that runs to further pages is read by the LLM on its first page, which cites the
+matching records and the delimiters around each record's label and value. Each later page is matched by Jev
+as a count is, and code ranks the kept records by those delimiters.
 
 For a count, total or superlative, the reader cites every compared record on every page. Its conclusion
 lists those facts in `draws_on`, using evidence ids from collected notes or `claim:N` for earlier claims in

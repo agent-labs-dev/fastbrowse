@@ -147,7 +147,7 @@ fn replay(case: &Value) -> Result<(), String> {
         "filter_tallies" => {
             let readers: Vec<TallyReader> = parse(&args["readers"]);
             let ids = strings(&args["requirement_ids"]);
-            match block_on(filter_tallies(&jev, &capture(), &readers, &ids, &tokens, ledger.as_ref(), &trace)) {
+            match block_on(filter_tallies(&jev, &llm, &capture(), &readers, &ids, &tokens, ledger.as_ref(), &trace)) {
                 Ok(found) => json!({"result": found.as_ref().map(read_outcome)}),
                 Err(error) => error_outcome(&error),
             }

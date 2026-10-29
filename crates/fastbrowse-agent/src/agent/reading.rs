@@ -73,6 +73,9 @@ fn sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
 /// Read `capture`'s records for `wanted` alone, as a page in a run of pages is read: from a counted field when the
 /// reader set one up, else by Jev's record filter, else by the reader, retried once on a saved capture that lost a
 /// record.
+///
+/// On the `last` page, the one with no next-page control, a list code counted ends there: the readers exist only for a
+/// list whose every page is needed.
 #[allow(clippy::too_many_arguments)]
 async fn page_records(
     jev: Arc<dyn DecisionClient>,
@@ -83,18 +86,19 @@ async fn page_records(
     wanted: Vec<Requirement>,
     question: String,
     tokens: fastbrowse_core::config::TokenBudget,
-    tally_readers: Option<Vec<TallyReader>>,
+    tally_readers: Vec<TallyReader>,
+    last: bool,
 ) -> Result<ReadOutcome, AgentError> {
     let ids: Vec<String> = wanted.iter().map(|r| r.id.clone()).collect();
-    if let Some(readers) = &tally_readers
-        && let Some(counted) = read_tallies(&capture, readers, &ids)?
-    {
-        return Ok(counted);
+    let mut counted = None;
+    if !tally_readers.is_empty() {
+        counted = read_tallies(&capture, &tally_readers, &ids)?;
     }
-    if let Some(readers) = &tally_readers
-        && let Some(matched) = filter_tallies(&*jev, &capture, readers, &ids, &tokens, Some(&ledger), &trace).await?
-    {
-        return Ok(matched);
+    if counted.is_none() {
+        counted = filter_tallies(&*jev, &*llm, &capture, &tally_readers, &ids, &tokens, Some(&ledger), &trace).await?;
+    }
+    if let Some(counted) = counted {
+        return Ok(if last { ReadOutcome { ended: ids, ..counted } } else { counted });
     }
     let mut costs: Vec<CostLine> = Vec::new();
     let mut retried = false;
@@ -404,7 +408,7 @@ impl Agent {
         state: &mut RunState,
         capture: &Capture,
         wanted: &[Requirement],
-        reuse: bool,
+        last: bool,
     ) -> Spawned<ReadOutcome> {
         // Pages read in a run of pages never pass through `read`, and their readings are judged the same way.
         state.lineage.read(&capture.sha256, &sources(capture), state.guessing);
@@ -418,7 +422,8 @@ impl Agent {
             wanted.to_vec(),
             question,
             self.config.tokens.clone(),
-            reuse.then(|| state.tally_readers.clone()),
+            state.tally_readers.clone(),
+            last,
         ))
     }
 
@@ -436,8 +441,7 @@ impl Agent {
             Err(error) if Flow::from(error.clone()).is_llm() => {
                 // The browser has moved on, so retry the saved capture, never the page now on screen.
                 state.paging_failed = true;
-                // The last page is read by the LLM, which closes the list; a retry keeps that.
-                let retry = self.start_page(state, &page.capture, wanted, !last);
+                let retry = self.start_page(state, &page.capture, wanted, last);
                 match retry.wait().await.unwrap_or_else(|| Err(super::state::cancelled())) {
                     Ok(outcome) => outcome,
                     Err(error) if Flow::from(error.clone()).is_llm() => {
@@ -600,13 +604,15 @@ impl Agent {
                 let mut computable: std::collections::HashSet<String> =
                     state.notes.tallies().into_iter().map(|t| t.requirement_id).collect();
                 computable.extend(state.comparisons.keys().cloned());
+                // A count Jev matches every page of is code's even before a page holds a match.
+                computable.extend(state.tally_readers.iter().map(|reader| reader.requirement_id.clone()));
                 let fallback_room = state.comparisons.is_empty()
                     || (Self::steps_room(state, pending.len(), 2) && Self::calls_room(state, 2));
                 let frames = self.on_event.is_some() && self.config.step_frames;
                 if following.is_none() && wanted.iter().all(|r| computable.contains(&r.id)) && fallback_room {
                     // Rankings and counts merge in code, so the last read need not wait for earlier pages.
                     let frame = if frames { self.frame().await? } else { None };
-                    let task = self.start_page(state, &page, &wanted, false);
+                    let task = self.start_page(state, &page, &wanted, true);
                     pending.push(PageRead {
                         capture: page,
                         observation: observation.clone(),
@@ -627,7 +633,7 @@ impl Agent {
                     break;
                 }
                 let frame = if frames { self.frame().await? } else { None };
-                let task = self.start_page(state, &page, &wanted, true);
+                let task = self.start_page(state, &page, &wanted, false);
                 pending.push(PageRead {
                     capture: page,
                     observation: observation.clone(),
