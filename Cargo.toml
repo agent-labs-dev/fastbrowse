@@ -30,6 +30,13 @@ fastbrowse-agent = { path = "crates/fastbrowse-agent", version = "=0.9.0" }
 fastbrowse-run = { path = "crates/fastbrowse-run", version = "=0.9.0" }
 fastbrowse-cli = { path = "crates/fastbrowse-cli", version = "=0.9.0" }
 
+# Development and test builds keep line tables and nothing more: a backtrace still names its file and
+# line, without the full debug info that made `target/` reach 2.3 GB and `cargo test --workspace
+# --no-run` take 62 s on four cores. Line tables alone measure 42 s and 1.3 GB for the same command.
+# A session that needs to read values in a debugger can ask for them: CARGO_PROFILE_DEV_DEBUG=2.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = true
 codegen-units = 1
