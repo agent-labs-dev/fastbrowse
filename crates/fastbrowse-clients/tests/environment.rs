@@ -7,7 +7,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{Script, answer_model, answering};
-use fastbrowse_clients::environment::{ConfigurationError, DecisionSource, LLMProvider, Settings};
+use fastbrowse_clients::environment::{ConfigurationError, DEFAULT_LLM, DecisionSource, LLMProvider, Settings};
 use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::decision::{DecisionError, NoulQuestion, Question};
 use fastbrowse_core::llm::{Generation, Message};
@@ -351,10 +351,19 @@ async fn test_llm_uses_the_gateway_without_an_openrouter_key() {
 }
 
 #[tokio::test]
-async fn test_gateway_usage_without_a_cost_stays_unknown() {
-    // The gateway reports `usage.cost`; a response without it must not read as free.
-    let (_, result) = llm_requests(&[("AI_GATEWAY_API_KEY", "g")], None).await;
-    assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Unknown, None));
+async fn test_gateway_usage_without_a_cost_is_bounded() {
+    // The gateway reports `usage.cost`; a response without it must not read as free, so it is bounded from the
+    // model's listed endpoints.
+    let endpoints = json!({"data": {"endpoints": [{"context_length": 1000, "pricing": {"prompt": "0.000001"}}]}});
+    let script =
+        Script::new([common::Step::Reply(completion(None)), common::Step::Reply(Response::json(200, &endpoints))]);
+    let llm = settings(&[("AI_GATEWAY_API_KEY", "g")]).llm(&script.http()).unwrap();
+    let result =
+        llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await.unwrap();
+    let model = DEFAULT_LLM;
+    assert_eq!(script.requests()[1].url, format!("https://ai-gateway.vercel.sh/v1/models/{model}/endpoints"));
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!((result.cost.dollars.unwrap() - 1000.0 * 0.000001 * 1.05).abs() < 1e-12);
 }
 
 #[test]

@@ -38,7 +38,9 @@ fn deepseek(model: &str) -> bool {
 }
 
 /// The Vercel AI Gateway documents `ttft` for the lowest time to first token where OpenRouter calls that sort
-/// `latency`, and takes no `require_parameters`: the gateway matches the schema itself.
+/// `latency`. It has no `require_parameters`: a provider that cannot hold a reply to `response_format` still serves
+/// the request, and the reply may not match the schema. DeepSeek V4.1 Flash failed schema validation in five of six
+/// live runs through the gateway even with `only` set to providers that list structured outputs.
 pub fn gateway_provider_routing() -> Value {
     json!({"sort": "ttft"})
 }
@@ -175,7 +177,8 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
 }
 
 /// OpenRouter's fee on a request sent with the caller's own provider key, as a share of the listed price, billed beside
-/// the provider's own charge. A bound without it would fall short of that pair.
+/// the provider's own charge. A bound without it would fall short of that pair. The gateway's bound carries it too,
+/// which only raises it.
 const BYOK_FEE: f64 = 0.05;
 
 /// OpenRouter price keys charged once per request; `image` is charged per input image and every other key per token. A
@@ -193,6 +196,9 @@ struct Ceiling {
 
 /// Routing can send a request to any endpoint, so the largest of each is taken. None when a price cannot be read or is
 /// negative, as OpenRouter lists a price set per request: no ceiling holds for those.
+///
+/// OpenRouter and the Vercel AI Gateway serve the same endpoints payload. The gateway also lists dearer token prices
+/// per `service_tiers` entry and a `peak_pricing.multiplier` for busy hours; the bound takes the dearest of them.
 fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
     let endpoints = match object_value(payload.get("data"))?.get("endpoints").and_then(Value::as_array) {
         Some(endpoints) if !endpoints.is_empty() => endpoints,
@@ -202,22 +208,26 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
     for entry in endpoints {
         let endpoint = object_value(Some(entry))?;
         found.context = found.context.max(token_count(endpoint.get("context_length"))?);
-        let (mut request, mut image) = (0.0, 0.0);
+        let (mut token, mut request, mut image, mut peak) = (0.0_f64, 0.0, 0.0, 1.0_f64);
         for (key, value) in object_value(endpoint.get("pricing"))? {
-            if key == "discount" {
-                continue; // a discount lowers the charge, and leaving it out keeps the bound above it
-            }
-            let price = dollars(Some(value))?;
-            if PER_REQUEST_PRICES.contains(&key.as_str()) {
-                request += price;
-            } else if key == "image" {
-                image = price;
-            } else {
-                found.per_token = found.per_token.max(price);
+            match key.as_str() {
+                "discount" => {} // a discount lowers the charge, and leaving it out keeps the bound above it
+                "service_tiers" => {
+                    for tier in object_value(Some(value))?.values() {
+                        for price in object_value(Some(tier))?.values() {
+                            token = token.max(dollars(Some(price))?);
+                        }
+                    }
+                }
+                "peak_pricing" => peak = peak.max(dollars(object_value(Some(value))?.get("multiplier"))?),
+                key if PER_REQUEST_PRICES.contains(&key) => request += dollars(Some(value))?,
+                "image" => image = dollars(Some(value))?,
+                _ => token = token.max(dollars(Some(value))?),
             }
         }
-        found.per_request = found.per_request.max(request);
-        found.per_image = found.per_image.max(image);
+        found.per_token = found.per_token.max(token * peak);
+        found.per_request = found.per_request.max(request * peak);
+        found.per_image = found.per_image.max(image * peak);
     }
     Ok((found.context != 0).then_some(found))
 }
@@ -593,10 +603,11 @@ impl OpenAICompatibleLLM {
     /// A request that timed out, or a response without usage whose receipt never came, stopped every run with a dollar
     /// cap although it had spent a fraction of a cent. No call can bill more tokens than its context window holds,
     /// prompt and output together, so that window at the highest price is a true ceiling where the output cap would
-    /// not be: some routes do not count reasoning against it.
+    /// not be: some routes do not count reasoning against it. OpenRouter and the Vercel AI Gateway both list each
+    /// model's endpoints with their windows and prices.
     async fn bounded(&self, cost: CostLine, body: &Map<String, Value>) -> CostLine {
         let Some(model) = body.get("model").and_then(Value::as_str) else { return cost };
-        if self.host().as_deref() != Some("openrouter.ai") {
+        if !matches!(self.host().as_deref(), Some("openrouter.ai" | "ai-gateway.vercel.sh")) {
             return cost;
         }
         let mut found = self.cached_ceiling(model);
