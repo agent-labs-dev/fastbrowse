@@ -102,3 +102,12 @@ def test_no_key_says_which_the_judge_takes(monkeypatch: pytest.MonkeyPatch, tmp_
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError, match="AI_GATEWAY_API_KEY"):
         jev_from_environment(httpx.AsyncClient())
+
+
+async def test_the_judge_reads_every_post_the_run_sent() -> None:
+    sent: list[httpx.Request] = []
+    posts = {"/submit/contact": [{"message": "first"}, {"message": "second"}]}
+    async with _http(_answers("noul", 0.9), sent=sent) as http:
+        jev = Jev(http, api_key="k", base_url=judging.OPENROUTER_URL, model=judging.OPENROUTER_MODEL)
+        assert await judge(jev, task="t", answer="43.25", submitted=posts, claims=CLAIMS) is None
+    assert json.loads(sent[0].content)["state"]["submitted"] == posts

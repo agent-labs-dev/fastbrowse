@@ -138,7 +138,7 @@ async def judge(
     task: str,
     answer: str | None = None,
     data: JsonValue = None,
-    submitted: Mapping[str, object] | None = None,
+    submitted: Mapping[str, list[dict[str, str]]] | None = None,
     claims: Sequence[Claim] = (),
 ) -> str | None:
     """Why the run's output does not state every claim, or None when it states them all.
@@ -149,7 +149,9 @@ async def judge(
         return None
     state: dict[str, JsonValue] = {"task": task, "answer": (answer or "").strip() or None, "data": data}
     if submitted:
-        state["submitted"] = {name: str(value) for name, value in submitted.items()}
+        state["submitted"] = {
+            path: [{name: value for name, value in post.items()} for post in posts] for path, posts in submitted.items()
+        }
     questions: dict[str, JsonValue] = {
         f"claim_{index}": {
             "instructions": (

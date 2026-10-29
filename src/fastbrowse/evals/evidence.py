@@ -141,10 +141,10 @@ def _project(row: Mapping[str, Any], source: Source, index: int, selected: bool)
         passed = None
     return Attempt(
         id=_digest(f"{source.path}:{source.sha256}:{index}".encode()),
-        task=data.get("task") or row.get("task") or "unknown",
+        task=data.get("task") or row["task"],
         task_version=str(task_version) if task_version is not None else None,
-        suite=data.get("suite") or (data.get("source") if corpus else None) or "unknown",
-        arm=data.get("arm") or row.get("arm") or "unknown",
+        suite=data.get("suite") or data["source" if corpus else "suite"],
+        arm=data.get("arm") or row["arm"],
         repeat=data.get("repeat", row.get("repeat", 0)),
         retry=row.get("retry", data.get("retries") or 0),
         selected=selected,

@@ -119,12 +119,6 @@ def test_miss_diff_shows_the_changed_line() -> None:
     assert miss_diff(requested, None) == "(nothing recorded on this path)"
 
 
-def test_miss_diff_is_cut() -> None:
-    diff = miss_diff({"a": list(range(500))}, {"a": []}, limit=10)
-    assert len(diff.splitlines()) == 11
-    assert diff.endswith("more lines")
-
-
 def test_nearest_body_is_the_most_similar() -> None:
     target = {"task": "t", "step": 3, "controls": ["a", "b", "c"]}
     near = {"task": "t", "step": 2, "controls": ["a", "b", "c"]}

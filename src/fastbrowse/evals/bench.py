@@ -151,16 +151,6 @@ def _jev(http: httpx.AsyncClient, proxy: str) -> Jev:
     return Jev(http, api_key=PLACEHOLDER_KEY, base_url=proxy + JEV_MOUNT, model=OPENROUTER_MODEL)
 
 
-def _submitted(submissions: dict[str, list[dict[str, str]]]) -> dict[str, str]:
-    """The fields the last post to each path carried, flattened for the judge to read."""
-    return {
-        f"{path} {name}": value
-        for path, posts in submissions.items()
-        for post in posts[-1:]
-        for name, value in post.items()
-    }
-
-
 @contextmanager
 def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
     """The task's site on its own port, and the suite's grader bound to what that site records."""
@@ -177,7 +167,7 @@ def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
                             task=local.task,
                             answer=result.answer,
                             data=result.data,
-                            submitted=_submitted(recorder.snapshot()),
+                            submitted=recorder.snapshot(),
                             claims=local.claims,
                         )
                 return failure, {}
