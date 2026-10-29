@@ -661,14 +661,17 @@ impl CdpPage {
             return Ok(Some(Refusal { outcome: StepOutcome::Stale, detail: Some(CHANGED.into()) }));
         }
         let node = local_id.unwrap_or(target.2);
-        if matches!(self.cover(&target.0, node).await?, Cover::Obstruction | Cover::Other) {
-            let handed = (target.0.clone(), target.1.clone(), node, target.3.clone());
-            return Ok(Some(Refusal {
-                outcome: StepOutcome::Covered,
-                detail: Some(self.covered_detail(&handed).await),
-            }));
+        let cover = self.cover(&target.0, node).await?;
+        Ok(self.cover_refusal(target, node, cover).await)
+    }
+
+    /// The refusal [`Self::keys_reach`] gives a field `node` that `cover` was measured over after focus.
+    async fn cover_refusal(&self, target: &Target, node: i64, cover: Cover) -> Option<Refusal> {
+        if !matches!(cover, Cover::Obstruction | Cover::Other) {
+            return None;
         }
-        Ok(None)
+        let handed = (target.0.clone(), target.1.clone(), node, target.3.clone());
+        Some(Refusal { outcome: StepOutcome::Covered, detail: Some(self.covered_detail(&handed).await) })
     }
 
     async fn guard_holds(&self, target: &Target) -> Result<bool, BrowserError> {
@@ -739,45 +742,50 @@ impl CdpPage {
         // A field a band still covers is focused and typed into, as a keyboard user would; there is nothing of its own
         // to click, and a click there lands on the band.
         let keyboard = matches!(route, Route::Keyboard);
-        let (handed, native_date, mut focused): (Option<i64>, bool, Option<bool>) = match route {
-            Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
-            Route::At(x, y) => {
-                // Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing. Focus alone
-                // bypasses pointer handlers that open autocomplete and calendar pickers.
-                let (outcome, detail) = self.click_point(target, (x, y), true, drawn).await?;
-                if outcome != StepOutcome::Executed {
-                    return Ok((outcome, detail));
-                }
-                let script = format!(
-                    "({handed})({local_id}, {secret}).then(async id => {{ \
+        // On the pointer route, the field focus landed on is checked for covers in the same evaluate, once focus took.
+        let (handed, native_date, mut focused, mut covered): (Option<i64>, bool, Option<bool>, Option<Cover>) =
+            match route {
+                Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
+                Route::At(x, y) => {
+                    // Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing. Focus alone
+                    // bypasses pointer handlers that open autocomplete and calendar pickers.
+                    let (outcome, detail) = self.click_point(target, (x, y), true, drawn).await?;
+                    if outcome != StepOutcome::Executed {
+                        return Ok((outcome, detail));
+                    }
+                    let script = format!(
+                        "({handed})({local_id}, {secret}).then(async id => {{ \
                      const native = {types}.includes(window.__fastbrowse?.nodes.get(id)?.type); \
                      const focused = id === null || (native && !{secret}) ? false : \
                      await ({focus})(id, false); \
-                     return [id, native, focused]; }})",
-                    handed = *HANDED_FOCUS_JS,
-                    secret = py_json(&json!(secret)),
-                    types = py_json(&json!(DATE_INPUT_TYPES)),
-                    focus = focus_script(true, secret),
-                );
-                let raw = self.evaluate(session_id, &script).await?;
-                let Some([id, native, focused]) = raw.as_array().map(Vec::as_slice) else {
-                    return Err(bad("tuple[int | None, bool, bool | None]"));
-                };
-                let focused = match focused {
-                    Value::Null => None,
-                    v => Some(v.as_bool().ok_or_else(|| bad("tuple[int | None, bool, bool | None]"))?),
-                };
-                (opt_i64(id)?, native.as_bool().ok_or_else(|| bad("bool"))?, focused)
-            }
-            Route::Keyboard => {
-                let script = format!(
-                    "{}.includes(window.__fastbrowse?.nodes.get({local_id})?.type)",
-                    py_json(&json!(DATE_INPUT_TYPES))
-                );
-                let native = self.evaluate(session_id, &script).await?;
-                (Some(local_id), native == Value::Bool(true), None)
-            }
-        };
+                     return [id, native, focused, focused === true ? ({cover})(id) : null]; }})",
+                        handed = *HANDED_FOCUS_JS,
+                        secret = py_json(&json!(secret)),
+                        types = py_json(&json!(DATE_INPUT_TYPES)),
+                        focus = focus_script(true, secret),
+                        cover = *COVER_JS,
+                    );
+                    let raw = self.evaluate(session_id, &script).await?;
+                    let shape = "tuple[int | None, bool, bool | None, _Cover | None]";
+                    let Some([id, native, focused, cover]) = raw.as_array().map(Vec::as_slice) else {
+                        return Err(bad(shape));
+                    };
+                    let focused = match focused {
+                        Value::Null => None,
+                        v => Some(v.as_bool().ok_or_else(|| bad(shape))?),
+                    };
+                    let covered = if focused == Some(true) { Some(parse_cover(cover)?) } else { None };
+                    (opt_i64(id)?, native.as_bool().ok_or_else(|| bad("bool"))?, focused, covered)
+                }
+                Route::Keyboard => {
+                    let script = format!(
+                        "{}.includes(window.__fastbrowse?.nodes.get({local_id})?.type)",
+                        py_json(&json!(DATE_INPUT_TYPES))
+                    );
+                    let native = self.evaluate(session_id, &script).await?;
+                    (Some(local_id), native == Value::Bool(true), None, None)
+                }
+            };
         let Some(handed) = handed else {
             return Ok((
                 StepOutcome::Failed,
@@ -793,13 +801,18 @@ impl CdpPage {
             if attempt > 0 || focused.is_none() {
                 let activate = focused.is_none();
                 focused = Some(self.focus(session_id, local_id, true, secret, activate).await?);
+                covered = None;
             }
             if focused != Some(true) {
                 return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
             }
             // No pointer press rechecked the field on the keyboard route, so the text goes only to the field that was
             // authorized, and on either route only to a field nothing has since been drawn over.
-            if let Some(refusal) = self.keys_reach(target, keyboard, Some(local_id)).await? {
+            let refusal = match covered.take() {
+                Some(cover) => self.cover_refusal(target, local_id, cover).await,
+                None => self.keys_reach(target, keyboard, Some(local_id)).await?,
+            };
+            if let Some(refusal) = refusal {
                 return Ok((refusal.outcome, refusal.detail));
             }
             if secret {
