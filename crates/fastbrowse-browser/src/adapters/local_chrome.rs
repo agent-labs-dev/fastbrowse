@@ -188,6 +188,40 @@ fn temp_dir() -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Throwaway profiles earlier processes left behind. `close` and `Drop` remove a run's own, but nothing runs when the
+/// process is killed, and each killed run left about 140MB: 262 of them filled a 16GB `/tmp`. A profile's name carries
+/// its owner's pid, so one whose owner has exited is removed.
+fn sweep_orphaned_profiles(dir: &Path) {
+    if !cfg!(unix) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let own = std::process::id().to_string();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("fastbrowse-chrome-"))
+            .and_then(|rest| rest.split('-').next())
+        else {
+            continue;
+        };
+        if pid == own || pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_or(true, |status| status.success());
+        if !alive {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Chrome's stderr log, as `tempfile.TemporaryFile`: unlinked at once where the system allows an open file to be,
 /// else removed on close. Returns the file and the path still to remove, if any.
 fn temp_log() -> std::io::Result<(File, Option<PathBuf>)> {
@@ -257,6 +291,7 @@ impl LocalChromeProcess {
         let profile = match &options.profile {
             Some(kept) => expand_user(kept),
             None => {
+                sweep_orphaned_profiles(&std::env::temp_dir());
                 let created = temp_dir()?;
                 self.temp_profile = Some(created.clone());
                 created
@@ -451,6 +486,23 @@ fn tail(log: &mut File) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_profile_whose_process_has_exited_is_removed_and_a_live_ones_kept() {
+        let dir = std::env::temp_dir().join(format!("fastbrowse-sweep-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut exited = std::process::Command::new("true").spawn().unwrap();
+        exited.wait().unwrap();
+        let orphan = dir.join(format!("fastbrowse-chrome-{}-1-0", exited.id()));
+        let live = dir.join(format!("fastbrowse-chrome-{}-1-0", std::process::id()));
+        let other = dir.join("fastbrowse-chrome-test-1-0");
+        for path in [&orphan, &live, &other] {
+            std::fs::create_dir_all(path.join("Default")).unwrap();
+        }
+        sweep_orphaned_profiles(&dir);
+        assert!(!orphan.exists() && live.exists() && other.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use super::*;
 
     /// A directory of this test's own.
