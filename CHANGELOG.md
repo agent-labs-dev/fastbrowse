@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **An action on a cloud browser waits one round trip less.** Each click, fill or key press read the page address before sending its input, a round trip of over 100ms to a Browser Use browser; it now takes the address from the observation the action was checked against.
 - **A trace records every model request and reply in full.** `--trace` now writes an `http` event for each POST a run makes: the URL, the request body, the status and the parsed reply, with its start and end times. Headers are left out, and an API key the reply echoes is blanked. A trace can show exactly what a model was asked and what it answered, which is what found the providers that drop citations. Those requests carry the page text the models read, so a trace is now as sensitive as the pages a run visited.
 - **A local run clears the Chrome profiles that killed runs left behind.** A run stopped by a signal or a Chrome crash never removed its throwaway profile, about 140MB each in the temporary directory, and 262 of them filled a 16GB `/tmp` until runs failed with a full disk. On Linux and macOS each launch now removes the profiles whose owning process has exited. Profiles given with `--profile` are never touched.
 
