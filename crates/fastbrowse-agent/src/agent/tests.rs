@@ -1453,3 +1453,72 @@ async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
         assert_eq!(gated.is_ok(), acts, "requested {requested}");
     }
 }
+
+/// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered.
+struct FieldReader(&'static str);
+
+impl fastbrowse_core::decision::DecisionClient for FieldReader {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        use fastbrowse_core::decision::{Answer, ChoiceAnswer, Question};
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let Question::Choice(question) = question else { panic!("{key} is not a read choice") };
+                let (choice, _) = question
+                    .criteria
+                    .iter()
+                    .find(|(_, offered)| offered.get("value").and_then(serde_json::Value::as_str) == Some(self.0))
+                    .unwrap_or_else(|| panic!("{} is not offered: {:?}", self.0, question.criteria));
+                let probabilities =
+                    question.criteria.keys().map(|c| (c.clone(), f64::from(u8::from(c == choice)))).collect();
+                let answer =
+                    ChoiceAnswer { kind: Default::default(), choice: choice.clone(), probabilities, confidence: 0.97 };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(async move {
+            Ok(fastbrowse_core::decision::Evaluation {
+                model: "jev".into(),
+                answers,
+                input_tokens: 0,
+                cost: free(),
+                requests: 1,
+            })
+        })
+    }
+
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
+    let field = "Date Picker 2: 27/12/2026";
+    // The scripted LLM has no reader reply, so a read that reached it would fail.
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(field)), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    state.ready_plan = Some(Plan::new(
+        vec![
+            Requirement::new("pick", "Pick the last Sunday of December 2026 in Date Picker 2", RequirementKind::Action),
+            Requirement::new("shown", "Report the date shown in the Date Picker 2 field", INFO),
+        ],
+        true,
+    ));
+    // How a capture states a form field: its label, then the value it holds.
+    let page = capture(&[
+        (BlockKind::Heading, "Date Picker"),
+        (BlockKind::Paragraph, "Date Picker 1: 01/01/2026"),
+        (BlockKind::Paragraph, field),
+    ]);
+    let (added, skipped) = agent.read(&mut state, Some(page), None, false).await.expect("a read");
+    assert!(added && !skipped);
+    let fact = state.notes.facts().into_iter().find(|f| f.requirement_id.as_deref() == Some("shown")).expect("a fact");
+    assert_eq!(fact.reader, FactReader::JevChoice);
+    assert_eq!(fact.text, field);
+    assert_eq!(fact.evidence.as_ref().map(|e| e.quote.as_str()), Some(field));
+}
