@@ -41,6 +41,8 @@ npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk                                   # starts `fastbrowse serve` from the uv environment
 go -C go generate ./... && git diff --exit-code -- go && go -C go vet ./...
 FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli
+python3 scripts/java_types.py && git diff --exit-code -- java
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify    # Java 17+, Maven
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
@@ -148,6 +150,10 @@ The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/
 - **[go](go)** is the Go client. It starts `serve` as the SDK does, and its [types](go/protocol.go) are generated
   from `protocol/schema.json` (`go -C go generate ./...`). A release tags the module on a commit off `main` that pins
   its binary archives by SHA-256 ([scripts/go_binaries.py](scripts/go_binaries.py)).
+- **[java](java)** is the Java client, `dev.agentlabs:fastbrowse` on Maven Central. It starts `serve` as the SDK
+  does, and its [types](java/src/main/java/dev/agentlabs/fastbrowse/protocol) are generated from
+  `protocol/schema.json` by [scripts/java_types.py](scripts/java_types.py). The release ships each platform's binary
+  in a `natives-<platform>` jar beside it.
 - **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
   the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from `protocol/schema.json` (`npm run generate:sdk`).
   What it starts is the Rust `fastbrowse` binary ([crates/fastbrowse-cli](crates/fastbrowse-cli)), with the Node addon beside it

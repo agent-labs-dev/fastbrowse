@@ -32,6 +32,8 @@ REPO = Path(__file__).resolve().parent.parent
 TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64")
 
 _WORKSPACE_VERSION = re.compile(r'(?m)^(\[workspace\.package\]\n(?:[^\[\n].*\n)*?version = ")[^"]*(")')
+# The Java client's own version in `java/pom.xml`: the first `<version>`, right after its `<artifactId>`.
+_POM_VERSION = re.compile(r"(<artifactId>fastbrowse</artifactId>\s*<version>)([^<]*)(</version>)")
 # One workspace crate as another depends on it: `fastbrowse-core = { path = "...", version = "=0.8.3" }`.
 _PIN = re.compile(r'(?m)^(fastbrowse[a-z-]* = \{ path = "[^"]+", version = "=)[^"]*(" \})$')
 
@@ -67,6 +69,24 @@ def pins(cargo: str) -> dict[str, object]:
         for name, entry in dependencies.items()
         if name.startswith("fastbrowse") and isinstance(entry, dict) and "path" in entry
     }
+
+
+def pom_version(root: Path) -> str | None:
+    """The Java client's version, or None in a checkout without one."""
+    pom = root / "java" / "pom.xml"
+    if not pom.exists():
+        return None
+    found = _POM_VERSION.search(pom.read_text(encoding="utf-8"))
+    return found[2] if found else ""
+
+
+def write_pom(root: Path, version: str) -> None:
+    pom = root / "java" / "pom.xml"
+    if pom.exists():
+        text, count = _POM_VERSION.subn(rf"\g<1>{version}\g<3>", pom.read_text(encoding="utf-8"), count=1)
+        if count != 1:
+            raise SystemExit(f"{pom} has no project version to set")
+        pom.write_text(text, encoding="utf-8")
 
 
 def write_workspace(root: Path, version: str) -> None:
@@ -109,6 +129,7 @@ def main() -> int:
         manifest["optionalDependencies"] = {f"@fastbrowse/{target}": version for target in TARGETS}
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         write_workspace(args.root, version)
+        write_pom(args.root, version)
     found = [f"{path}: {line}" for line in differences(version, manifest)]
     rust = workspace_version(cargo.read_text(encoding="utf-8"))
     if rust != version:
@@ -118,6 +139,9 @@ def main() -> int:
         for name, pinned in pins(cargo.read_text(encoding="utf-8")).items()
         if pinned != f"={version}"
     )
+    java = pom_version(args.root)
+    if java is not None and java != version:
+        found.append(f"{args.root / 'java' / 'pom.xml'}: the Java client is {java}")
     if found:
         print(f"pyproject.toml is {version}, and in", file=sys.stderr)
         for line in found:

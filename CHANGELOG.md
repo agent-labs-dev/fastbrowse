@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A Java client, for Kotlin too.** `dev.agentlabs:fastbrowse` on Maven Central runs tasks from the JVM over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. `run` returns a `CompletableFuture`, and cancelling it stops the run. Each platform's binary ships in a `natives-<platform>` jar beside the client, unpacked once into the user cache directory. Java 17 or newer.
+
 - **A Go client.** `go get github.com/agent-labs-dev/fastbrowse/go` runs tasks from Go over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames, and cancellation through `context`. The first start downloads the release's binary for the platform and refuses one whose SHA-256 is not the one the module's tag pins. Each release tags the module `go/vX.Y.Z`.
 
 - **fastbrowse is on crates.io.** `cargo add fastbrowse` gives a Rust program `run_task` in its own process and the result's types, from the same core the CLI, the Python package and the JavaScript SDK run on. `cargo install fastbrowse-cli` installs the `fastbrowse` command. Each release publishes the crates at the same version as PyPI and npm.
