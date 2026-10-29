@@ -16,6 +16,7 @@ mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
+mod seeing;
 mod sign_in;
 pub(crate) mod state;
 

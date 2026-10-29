@@ -723,6 +723,13 @@ impl Agent {
             {
                 result = retried;
             }
+            if result.outcome == StepOutcome::Covered
+                && action.operation == Operation::Click
+                && let Some(target) = &decision.target
+                && let Some(clicked) = self.click_where_seen(state, target).await?
+            {
+                result = clicked;
+            }
             if action.operation == Operation::Click
                 && let Some(stale) = &stale_link
             {

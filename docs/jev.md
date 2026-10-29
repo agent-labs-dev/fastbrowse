@@ -81,6 +81,13 @@ backup are asked the rest of the state, without the image or its reference, so p
 through a router. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
 this policy.
 
+A click the hit test refuses, because another element is topmost at every point of the control it tried,
+is put to Jev's [Box](https://docs.typesafe.ai/primitives/box) on the same route. Jev is shown the viewport and
+the control, and asked whether the control is shown with nothing drawn over it, and where it is. Box always
+answers with a box, so the click lands at the box's centre only when both answers reach the bar an action's
+target is held to (`recover_below`); otherwise the click stays refused. The step's irreversible-action check
+runs on that click as on any other.
+
 ## Provider failover
 
 Provider selection is **ours**: a supplied `TYPESAFE_API_KEY` selects direct TypeSafe for Jev, the
@@ -170,7 +177,5 @@ and where fastbrowse follows it:
 - **Score** for graded judgments such as relevance.
 - **Full Choice distributions** for trying a second-best target, rather than only the top pick
   ([hierarchical classification](https://docs.typesafe.ai/cookbooks/hierarchical_classification)).
-- **Box** ([Box](https://docs.typesafe.ai/primitives/box)): not used by fastbrowse. Like images, it is
-  direct-only.
 
 No faster Jev tier, cross-request cache or logprob access is documented.

@@ -13,7 +13,8 @@ use std::time::Duration;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, DecisionError, Evaluation, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
+    Answer, BoxAnswer, ChoiceAnswer, DecisionError, Edges, Evaluation, NoulAnswer, Question, RetriesExhausted,
+    ScoreAnswer,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 use fastbrowse_core::py::json::{dumps, float_str};
@@ -54,6 +55,10 @@ pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> 
                 body.insert("instructions".into(), q.instructions.clone().into());
                 body.insert("type".into(), "score".into());
                 body.insert("criteria".into(), q.criteria.clone().into());
+            }
+            Question::Box(q) => {
+                body.insert("instructions".into(), q.instructions.clone().into());
+                body.insert("type".into(), "box".into());
             }
         }
         result.insert(key.clone(), Value::Object(body));
@@ -677,6 +682,7 @@ pub fn parse_answers(
             Question::Noul(_) if gateway => "boolean",
             Question::Noul(_) => "noul",
             Question::Score(_) => "score",
+            Question::Box(_) => "box",
         };
         if answer.get("type").and_then(Value::as_str) != Some(expected_type) {
             return Err(format!("incorrect answer type for {key}"));
@@ -714,6 +720,16 @@ pub fn parse_answers(
                 }
                 let confidence = probability(confidence_value)?;
                 Answer::Score(ScoreAnswer { kind: Default::default(), score, probabilities: probs, confidence })
+            }
+            Question::Box(_) => {
+                let edges = object_value(answer.get("box"))?;
+                let edge = |name: &str| probability(edges.get(name));
+                let edges =
+                    Edges { top: edge("top")?, bottom: edge("bottom")?, left: edge("left")?, right: edge("right")? };
+                if edges.top > edges.bottom || edges.left > edges.right {
+                    return Err(format!("box edges cross for {key}"));
+                }
+                Answer::Box(BoxAnswer { kind: Default::default(), edges, confidence: probability(confidence_value)? })
             }
         };
         answers.insert(key.clone(), parsed);
