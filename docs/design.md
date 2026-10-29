@@ -66,10 +66,12 @@ not fit the input budget or the read needs pagination, continuation or incomplet
 
 A filtered count or a comparison over a list that runs to further pages is read by the LLM on its first page,
 which cites the matching records, and for a comparison the delimiters around each record's label and value.
-The cited records name the list and say whether the count is grouped. Each later page of the same shape is then
-put to Jev in one request, a yes or no for each record of the one run of blocks shaped like those records, matched
-against the requirement's own text. Code counts the matches, or ranks the kept records by the comparison's
-delimiters, and ends the list on the page with no next-page control. A record Jev judges between 0.20 and 0.70
+The cited records name the list and say whether the count is grouped. When the reader says the list goes on, Jev
+is asked, with the task, whether the requirement needs every page of the list or only pages the task names; the
+reader does not decide this. From a yes at 0.70 or above, code pages the list itself and each later page of the
+same shape is put to Jev in one request, a yes or no for each record of the one run of blocks shaped like those
+records, matched against the requirement's own text. Code counts the matches, or ranks the kept records by the
+comparison's delimiters, and ends the list on the page with no next-page control. A record Jev judges between 0.20 and 0.70
 is sent to the LLM on its own, with only the records Jev was unsure of; a page whose title or record shape
 differs goes to the LLM reader.
 

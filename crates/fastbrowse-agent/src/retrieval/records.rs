@@ -28,6 +28,8 @@ use crate::memory::{Notes, Tally, fact_id};
 /// record leaves no trace, so a rejection needs more certainty than a match.
 const RECORD_MATCH_FROM: f64 = 0.70;
 const RECORD_REJECT_TO: f64 = 0.20;
+/// A yes from here pages a list to its end; TypeSafe's documented starting bar for a yes/no question.
+const EVERY_PAGE_FROM: f64 = 0.70;
 
 type Shape = (Vec<String>, Option<String>, BlockKind);
 
@@ -63,6 +65,43 @@ fn record_question(requirement: &str, record: &str) -> Question {
         Some("No, this record does not match."),
     )
     .into()
+}
+
+fn scope_question(requirement: &str) -> Question {
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\n\n# Requirement\n{requirement}\n\n# List\nThis page shows one page of a list that goes on to further pages.\n\nDoes the task need the matching records from every page of this list?"
+        ),
+        Some("Yes: the task covers the whole list, to its last page."),
+        Some("No: the task names only some pages, or is about another list."),
+    )
+    .into()
+}
+
+/// The requirements, of those whose list the LLM reader found going on past this page, that Jev places on every page of
+/// it, and what asking cost. Jev is asked with the task, because a task can bound the pages it covers ("this page and
+/// the next"). The reader used to say this itself, and one LLM said no for a whole-site list another said yes for, so
+/// which model was configured decided whether Jev or the LLM read every later page.
+pub(crate) async fn through_end(
+    jev: &dyn DecisionClient,
+    task: &str,
+    capture: &Capture,
+    requirements: &[(String, String)],
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<(Vec<String>, Vec<CostLine>)> {
+    let questions: IndexMap<String, Question> =
+        requirements.iter().map(|(id, text)| (id.clone(), scope_question(text))).collect();
+    let state = json!({"task": task, "page": {"url": capture.url, "title": capture.title}});
+    let Some(answered) = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await? else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let whole = requirements
+        .iter()
+        .filter(|(id, _)| probability(&answered.answers, id).is_some_and(|p| p >= EVERY_PAGE_FROM))
+        .map(|(id, _)| id.clone())
+        .collect();
+    Ok((whole, answered.cost))
 }
 
 fn probability(answers: &IndexMap<String, Answer>, key: &str) -> Option<f64> {
@@ -281,13 +320,17 @@ mod tests {
     use std::sync::Mutex;
 
     use fastbrowse_core::BoxFuture;
-    use fastbrowse_core::decision::{DecisionError, DecisionProfile, Evaluation, NoulAnswer, NoulTag};
+    use fastbrowse_core::decision::{
+        ChoiceAnswer, ChoiceTag, DecisionError, DecisionProfile, Evaluation, NoulAnswer, NoulTag,
+    };
     use fastbrowse_core::llm::{Generation, LLMError, ResponseSchema};
     use fastbrowse_core::models::{CostBasis, CostComponent, LLMPurpose};
     use serde_json::Value;
 
     use super::*;
     use crate::comparison::{NumericComparison, Order, QuotedField, complete_comparison};
+    use crate::planner::{Requirement, RequirementKind};
+    use crate::retrieval::reading::{ReadOptions, read};
     use crate::retrieval::testing::capture;
     use crate::support::testing::block_on;
 
@@ -379,6 +422,68 @@ mod tests {
             compares: comparison.is_some(),
             record_kind: Some(BlockKind::ListItem),
             comparison,
+        }
+    }
+
+    /// Answers every yes/no question with its one probability and sends every choice to the LLM reader.
+    struct Scope(f64);
+
+    impl DecisionClient for Scope {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let answers = questions
+                .iter()
+                .map(|(key, question)| {
+                    let answer = match question {
+                        Question::Noul(_) => Answer::Noul(NoulAnswer { kind: NoulTag, probability: self.0 }),
+                        _ => Answer::Choice(ChoiceAnswer {
+                            kind: ChoiceTag,
+                            choice: "synthesis".into(),
+                            probabilities: IndexMap::from([("synthesis".to_string(), 1.0)]),
+                            confidence: 1.0,
+                        }),
+                    };
+                    (key.clone(), answer)
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn jev_not_the_reader_says_whether_a_count_needs_every_page_of_its_list() {
+        let captured = packages();
+        let text = "Count every available package";
+        let reply = json!({"claims": [], "answered": false, "continues": [{"requirement_id": "r", "tallies": [
+            {"key": null, "records": [{"first": "s0", "last": "s0"}, {"first": "s1", "last": "s1"}]},
+        ]}]});
+        let ids = vec!["r".to_string()];
+        for (probability, every_page) in [(0.9, true), (0.1, false)] {
+            let llm = Llm { reply: Some(reply.clone()), shown: Mutex::new(Vec::new()) };
+            let requirement =
+                Requirement { count_records: true, ..Requirement::new("r", text, RequirementKind::Information) };
+            let jev = Scope(probability);
+            let options = ReadOptions { jev: Some(&jev), requirements: vec![requirement], ..ReadOptions::default() };
+            let outcome = block_on(read(&llm, &captured, text, &ids, &mut Notes::default(), &options)).unwrap();
+            assert_eq!(outcome.continues, ids);
+            let (through_end, readers) =
+                if every_page { (ids.clone(), vec![reader(&captured, text, None)]) } else { (Vec::new(), Vec::new()) };
+            assert_eq!((outcome.through_end, outcome.tally_readers), (through_end, readers), "{probability}");
         }
     }
 
