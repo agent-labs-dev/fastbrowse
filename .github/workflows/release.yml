@@ -1,5 +1,5 @@
 name: Release
-# One tag publishes one version to PyPI, npm and crates.io. Nothing is published until the sdist, the five wheels and
+# One tag publishes one version to PyPI, npm, crates.io and the Go module proxy. Nothing is published until the sdist, the five wheels and
 # the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
 # yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
@@ -124,7 +124,13 @@ jobs:
         with:
           name: notes
           path: notes/
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --notes-file notes/notes.md --verify-tag
+      # The binaries as archives, one per platform, which the Go module downloads and checks against the checksums
+      # its own tag pins.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fastbrowse-rust-*
+          path: rust/
+      - run: gh release create "$GITHUB_REF_NAME" dist/* rust/*/fastbrowse-rust-*.tar.gz --notes-file notes/notes.md --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -249,6 +255,39 @@ jobs:
               cargo publish -p "$crate" --locked
             fi
           done
+
+  # The Go module for this release: the tag `go/vX.Y.Z`, on a commit off `main` that pins the release's binary archives
+  # by their SHA-256. The module downloads its platform's archive from the GitHub release above and refuses one that
+  # is not the archive pinned here, so the commit is made from the same artifacts the release holds.
+  go:
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The token stays in the checkout because this job pushes the tag, and only the tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fastbrowse-rust-*
+          path: ${{ runner.temp }}/rust
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go/go.mod, cache: false}
+      - env: {VERSION: "${{ needs.build.outputs.version }}"}
+        run: python3 scripts/go_binaries.py "$VERSION" "$RUNNER_TEMP"/rust/*/fastbrowse-rust-*.tar.gz
+      - run: test -z "$(gofmt -l go)" && go -C go vet ./...
+      # A tag already there means a run that stopped partway got this far; the module a tag names never changes.
+      - name: Tag the module
+        env: {VERSION: "${{ needs.build.outputs.version }}"}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/go/v$VERSION" > /dev/null; then
+            echo "go/v$VERSION is already tagged"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "go: pin the v$VERSION binaries" go/binaries.go
+          git tag "go/v$VERSION"
+          git push origin "go/v$VERSION"
 
   # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container,
   # then pushed to the AUR so Arch users get the release without anyone copying two files by hand. Its

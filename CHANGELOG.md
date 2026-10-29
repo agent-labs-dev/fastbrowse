@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A Go client.** `go get github.com/agent-labs-dev/fastbrowse/go` runs tasks from Go over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames, and cancellation through `context`. The first start downloads the release's binary for the platform and refuses one whose SHA-256 is not the one the module's tag pins. Each release tags the module `go/vX.Y.Z`.
+
 - **fastbrowse is on crates.io.** `cargo add fastbrowse` gives a Rust program `run_task` in its own process and the result's types, from the same core the CLI, the Python package and the JavaScript SDK run on. `cargo install fastbrowse-cli` installs the `fastbrowse` command. Each release publishes the crates at the same version as PyPI and npm.
 
 - **`FASTBROWSE_LLM_PROVIDER=anthropic` holds Claude to the schema.** Anthropic's OpenAI-compatible endpoint ignores `response_format`, so the preset stated the schema in the prompt and a reply that drifted cost a second call. Claude is now reached through the Messages API with the schema as structured output, the key as `x-api-key`, and `FASTBROWSE_LLM_REASONING` as `output_config.effort`, `low` by default since Claude 5 models think by default and thinking counts against the output cap. Schema keywords structured outputs refuses, such as numeric bounds, are left out of the request and still checked against the reply. The retries, repair, truncation retry and ledger are the ones every LLM call uses. `FASTBROWSE_LLM_REASONING=none` is refused for Claude.
