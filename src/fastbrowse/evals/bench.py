@@ -86,10 +86,9 @@ AGENT_ENV_DROPPED = ("OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_K
 PLACEHOLDER_KEY = "bench-placeholder-key"
 
 LLM = "google/gemini-3.8-flash"
-FIELD_TEXT_LLM = "google/gemini-3.5-flash-lite"
 REASONING = "low"
-"""The models and reasoning effort the cassettes were recorded with: the defaults a run keyed with
-OPENROUTER_API_KEY used then (README, Models). Pinned here, since a replay asking other models misses."""
+"""The model and reasoning effort the cassettes were recorded with, for every purpose. Pinned here, since a replay
+asking another model misses."""
 
 
 def default_agent() -> str:
@@ -116,8 +115,6 @@ def agent_environment(proxy: str) -> dict[str, str]:
         "FASTBROWSE_LLM_BASE_URL": proxy + LLM_MOUNT,
         "FASTBROWSE_LLM_API_KEY": PLACEHOLDER_KEY,
         "FASTBROWSE_LLM_MODEL": LLM,
-        "FASTBROWSE_LLM_MODEL_FIELD_TEXT": FIELD_TEXT_LLM,
-        "FASTBROWSE_LLM_MODEL_SHORTCUT": FIELD_TEXT_LLM,
         "FASTBROWSE_LLM_REASONING": REASONING,
     }
 
@@ -605,7 +602,7 @@ async def run_suite(args: argparse.Namespace) -> int:
                 meta={
                     "recorded_at": datetime.now(UTC).date().isoformat(),
                     "agent_fastbrowse": version("fastbrowse"),
-                    "models": {"llm": LLM, "llm_field_text": FIELD_TEXT_LLM, "jev": "openrouter"},
+                    "models": {"llm": LLM, "jev": "openrouter"},
                     "port": task.port,
                 },
             )

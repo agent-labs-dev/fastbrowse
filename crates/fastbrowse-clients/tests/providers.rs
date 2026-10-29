@@ -235,7 +235,7 @@ fn test_a_preset_without_a_default_model_asks_for_one() {
 async fn test_presets_with_defaults_use_them_and_a_pin_wins() {
     let groq = [("FASTBROWSE_LLM_PROVIDER", "groq"), ("GROQ_API_KEY", "k")];
     assert_eq!(body(&one(&groq).await)["model"], "openai/gpt-oss-120b");
-    let pinned = [groq.as_slice(), &[("FASTBROWSE_LLM_MODEL_READ", "llama")]].concat();
+    let pinned = [groq.as_slice(), &[("FASTBROWSE_LLM_MODEL", "llama")]].concat();
     assert_eq!(body(&one(&pinned).await)["model"], "llama");
     let providers = settings(&groq).providers();
     assert!(providers.contains("LLM openai/gpt-oss-120b via Groq"), "{providers}");
@@ -255,9 +255,6 @@ async fn test_reasoning_effort_goes_in_the_field_the_preset_documents() {
     let vllm =
         [("FASTBROWSE_LLM_PROVIDER", "vllm"), ("FASTBROWSE_LLM_MODEL", "m"), ("FASTBROWSE_LLM_REASONING", "high")];
     assert_eq!(body(&one(&vllm).await)["reasoning"], json!({"effort": "high"}));
-    // One purpose's effort goes in the same field, and only for that purpose.
-    let read = [env.as_slice(), &[("FASTBROWSE_LLM_REASONING_READ", "high")]].concat();
-    assert_eq!(body(&one(&read).await)["reasoning_effort"], "high");
 }
 
 #[test]
@@ -271,13 +268,6 @@ fn test_reasoning_on_a_preset_that_takes_none_is_a_configuration_error() {
         ]);
         let error = config_error(loaded.llm(&Script::default().http()));
         assert!(error.contains("FASTBROWSE_LLM_REASONING"), "{provider}: {error}");
-        let one_purpose = settings(&[
-            ("FASTBROWSE_LLM_PROVIDER", provider),
-            (key, "k"),
-            ("FASTBROWSE_LLM_MODEL", "m"),
-            ("FASTBROWSE_LLM_REASONING_VERIFY", "none"),
-        ]);
-        assert!(config_error(one_purpose.llm(&Script::default().http())).contains("_<PURPOSE>"), "{provider}");
     }
 }
 

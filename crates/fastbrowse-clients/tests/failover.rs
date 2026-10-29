@@ -59,7 +59,7 @@ fn settings(primary: Option<DecisionSource>, direct_key: bool) -> Settings {
         env.push(("TYPESAFE_API_KEY", "direct-key"));
     }
     if let Some(primary) = primary {
-        env.push(("FASTBROWSE_JEV_SOURCE", primary.as_str()));
+        env.push(("FASTBROWSE_DECISION_SOURCE", primary.as_str()));
     }
     Settings::from_sources(&env, None).unwrap()
 }

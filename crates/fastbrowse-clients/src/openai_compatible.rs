@@ -348,7 +348,6 @@ pub struct OpenAICompatibleLLM {
     base_url: String,
     models: HashMap<LLMPurpose, String>,
     reasoning_effort: Option<ReasoningEffort>,
-    purpose_reasoning: HashMap<LLMPurpose, ReasoningEffort>,
     provider_routing: Option<Value>,
     ceilings: Mutex<HashMap<String, Ceiling>>,
 }
@@ -357,8 +356,6 @@ pub struct OpenAICompatibleLLM {
 #[derive(Debug, Clone)]
 pub struct LLMOptions {
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Efforts for single purposes, over `reasoning_effort`.
-    pub purpose_reasoning: HashMap<LLMPurpose, ReasoningEffort>,
     pub reasoning_field: ReasoningField,
     pub provider_routing: Option<Value>,
     pub strict: bool,
@@ -374,7 +371,6 @@ impl Default for LLMOptions {
     fn default() -> Self {
         LLMOptions {
             reasoning_effort: None,
-            purpose_reasoning: HashMap::new(),
             reasoning_field: ReasoningField::OpenRouter,
             provider_routing: Some(openrouter_provider_routing()),
             strict: true,
@@ -488,7 +484,6 @@ impl OpenAICompatibleLLM {
             base_url: base_url.trim_end_matches('/').to_string(),
             models,
             reasoning_effort: options.reasoning_effort,
-            purpose_reasoning: options.purpose_reasoning,
             provider_routing: options.provider_routing,
             ceilings: Mutex::new(HashMap::new()),
         })
@@ -678,7 +673,7 @@ impl OpenAICompatibleLLM {
                 messages,
                 &json_schema,
                 max_output_tokens,
-                self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort),
+                self.reasoning_effort,
             )?;
             return self.billed(body, purpose, schema, max_output_tokens, ledger, model).await;
         }
@@ -710,7 +705,7 @@ impl OpenAICompatibleLLM {
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
         }
-        if let Some(effort) = self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort) {
+        if let Some(effort) = self.reasoning_effort {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
         self.billed(body, purpose, schema, max_output_tokens, ledger, model).await

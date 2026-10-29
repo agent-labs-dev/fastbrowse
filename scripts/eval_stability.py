@@ -46,9 +46,8 @@ _JEV_SECRET = {"typesafe": "TYPESAFE_API_KEY", "openrouter": "OPENROUTER_API_KEY
 
 
 def jev_source(env: Mapping[str, str]) -> str:
-    """The source Jev starts on: FASTBROWSE_DECISION_SOURCE (formerly FASTBROWSE_JEV_SOURCE), else the first keyed
-    one, else the gateway."""
-    if chosen := env.get("FASTBROWSE_DECISION_SOURCE") or env.get("FASTBROWSE_JEV_SOURCE"):
+    """The source Jev starts on: FASTBROWSE_DECISION_SOURCE, else the first keyed one, else the gateway."""
+    if chosen := env.get("FASTBROWSE_DECISION_SOURCE"):
         if chosen not in _JEV_SECRET:
             raise ValueError(f"FASTBROWSE_DECISION_SOURCE is {chosen!r}, not one of {', '.join(_JEV_SECRET)}")
         return chosen
