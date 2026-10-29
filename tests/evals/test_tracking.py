@@ -155,29 +155,54 @@ def test_read_back_accepts_the_v2_index(tmp_path: Path) -> None:
     path = rows_file(tmp_path, [row("mock-basket")])
     wanted = tracking.expected(path, tracking.read_rows(path))
     seen: list[str] = []
+    asked: list[httpx.QueryParams] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
+        asked.append(request.url.params)
         return httpx.Response(200, json={"data": [stored(next(iter(wanted.values())))], "meta": {}})
 
     tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
     assert seen == ["/api/public/v2/observations"]
+    # The index omits the run id and the output unless the field groups are named, so both must be asked for.
+    assert set(asked[0]["fields"].split(",")) >= {"io", "metadata"}
 
 
-def test_read_back_falls_back_to_the_trace_while_the_index_lags(tmp_path: Path) -> None:
+def test_a_lagging_index_is_waited_for_not_read_from_a_retired_endpoint(tmp_path: Path) -> None:
+    # The trace endpoint read-back used to fall back to is retired on 2026-11-16, so a span that is not in the
+    # index yet must be waited for: the two answers are "not yet" and "readable", never "ask somewhere else".
     path = rows_file(tmp_path, [row("mock-basket")])
     wanted = tracking.expected(path, tracking.read_rows(path))
-    spec = next(iter(wanted.values()))
+    seen: list[str] = []
+    answers = [0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        answers[0] += 1
+        if answers[0] == 1:
+            return httpx.Response(200, json={"data": [], "meta": {}})
+        return httpx.Response(200, json={"data": [stored(next(iter(wanted.values())))], "meta": {}})
+
+    tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=3, delay=0)
+    assert seen == ["/api/public/v2/observations", "/api/public/v2/observations"]
+
+
+def test_the_retired_trace_endpoint_is_never_asked(tmp_path: Path) -> None:
+    path = rows_file(tmp_path, [row("mock-basket"), row("mock-sign-in")])
+    wanted = tracking.expected(path, tracking.read_rows(path))
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
-        if request.url.path == "/api/public/v2/observations":
-            return httpx.Response(200, json={"data": [], "meta": {}})
-        return httpx.Response(200, json={"metadata": {"run_id": spec["run_id"]}, "observations": [stored(spec)]})
+        if request.url.path != "/api/public/v2/observations":
+            return httpx.Response(200, json={"metadata": {"run_id": "abc123"}, "observations": []})
+        trace = request.url.params["traceId"]
+        rows = [stored(wanted[trace])] if trace == next(iter(wanted)) else []
+        return httpx.Response(200, json={"data": rows, "meta": {}})
 
-    tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
-    assert seen == ["/api/public/v2/observations", f"/api/public/traces/{next(iter(wanted))}"]
+    with pytest.raises(tracking.RowsError, match="not readable"):
+        tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
+    assert set(seen) == {"/api/public/v2/observations"}
 
 
 def test_an_older_trace_under_a_reused_id_does_not_count(tmp_path: Path) -> None:
@@ -187,10 +212,8 @@ def test_an_older_trace_under_a_reused_id_does_not_count(tmp_path: Path) -> None
     spec = next(iter(wanted.values()))
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/public/v2/observations":
-            return httpx.Response(200, json={"data": [], "meta": {}})
         stale = stored(spec, output={**spec["output"], "dollars": 9.99}, run_id="previous-run")
-        return httpx.Response(200, json={"metadata": {"run_id": "previous-run"}, "observations": [stale]})
+        return httpx.Response(200, json={"data": [stale], "meta": {}})
 
     with pytest.raises(tracking.RowsError, match="not readable"):
         tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
@@ -238,9 +261,21 @@ def test_an_unreadable_trace_fails_the_upload(tmp_path: Path) -> None:
     wanted = tracking.expected(path, tracking.read_rows(path))
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/public/v2/observations":
-            return httpx.Response(200, json={"data": [], "meta": {}})
-        return httpx.Response(404, json={"message": "not found"})
+        return httpx.Response(200, json={"data": [], "meta": {}})
+
+    with pytest.raises(tracking.RowsError, match="not readable"):
+        tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
+
+
+def test_a_row_without_the_run_id_does_not_count_as_this_upload(tmp_path: Path) -> None:
+    # If the metadata field group were dropped from the request the index would return no run id, and every
+    # row would read as a stranger's: the check has to fail closed rather than match on the output alone.
+    path = rows_file(tmp_path, [row("mock-basket")])
+    wanted = tracking.expected(path, tracking.read_rows(path))
+    spec = next(iter(wanted.values()))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{**stored(spec), "metadata": None}], "meta": {}})
 
     with pytest.raises(tracking.RowsError, match="not readable"):
         tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
