@@ -59,7 +59,8 @@ The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-
 The protocol's messages are the types in `crates/fastbrowse-core/src/protocol.rs` and the models those use, and
 `protocol/schema.json` is their JSON Schema. After changing one, run
 `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrowse-core --test protocol_schema`, then `npm run generate:sdk`, which
-writes the JavaScript SDK's types in `packages/sdk/src/protocol.ts` from the schema, and commit both. CI fails when
+writes the JavaScript SDK's types in `packages/sdk/src/protocol.ts` from the schema, and `go -C go generate ./...`,
+which writes the Go client's in `go/protocol.go`, and commit all three. CI fails when
 either committed file differs from what the types produce, and `tests/test_protocol_schema.py` fails when the Python
 models in `src/fastbrowse/protocol.py` no longer describe the same schema.
 

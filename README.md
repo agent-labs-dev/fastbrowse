@@ -570,6 +570,30 @@ The keys come from the environment, as the command reads them. `cargo install fa
 `fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
 `fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
 
+## Use it from Go
+
+The [Go module](go) starts the fastbrowse binary and runs tasks over the same protocol the JavaScript SDK uses:
+
+```sh
+go get github.com/agent-labs-dev/fastbrowse/go
+```
+
+```go
+client, err := fastbrowse.Start(ctx, fastbrowse.Options{})
+if err != nil {
+	return err
+}
+defer client.Close(context.Background())
+result, err := client.Run(ctx, "What is the top story's title?", fastbrowse.RunOptions{
+	Start: "https://news.ycombinator.com/",
+})
+```
+
+The first `Start` downloads the release's binary for the platform into the user cache directory, checked against
+the SHA-256 the module pins; `Options.BinaryPath` or `FASTBROWSE_BINARY` names another. Cancelling `ctx` stops a run
+once its browser has closed. `RunOptions` takes the same options as the SDK: `OutputSchema`, `Secrets`, `Until`,
+`OnEvent` and `OnFrame`. One client runs one task at a time.
+
 ## Use fastbrowse with your agent
 
 Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from an agent that supports Agent Skills. It uses the MCP
