@@ -33,17 +33,28 @@ from fastbrowse.telemetry import traced
 CHROME = str(Path.home() / ".cache/ms-playwright/chromium-1243/chrome-linux64/chrome")
 SUITES = {"core": TASKS, "dev": DEV, "heldout": HELDOUT, "stretch-dev": STRETCH_DEV, "stretch-heldout": STRETCH_HELDOUT}
 
-OBSERVE = """(() => {
+# The final page as 0.7.1's grader read it (src/fastbrowse/evals/observe.py at v0.7.1): evidence first, then the
+# agent's own snapshot of every control with modal-hidden ones unhidden, so a cart's Remove button or a flight
+# listing is a control the checks can find.
+SNAPSHOT_JS = (Path(os.environ.get("FASTBROWSE_TREE", ".")) / "crates/fastbrowse-browser/js/snapshot.js").read_text()
+EVIDENCE = """(() => {
   const nav = performance.getEntriesByType('navigation')[0];
-  const text = document.body ? document.body.innerText : '';
-  const label = el => (el.labels && el.labels[0] && el.labels[0].innerText) || el.getAttribute('aria-label')
-    || el.getAttribute('placeholder') || el.name || el.id || '';
-  const controls = [...document.querySelectorAll('input, select, textarea')]
-    .filter(el => el.type !== 'hidden').map(el => [label(el).trim(), el.type === 'checkbox' || el.type === 'radio'
-      ? (el.checked ? 'on' : 'off') : (el.value ?? null)]);
-  return {url: location.href, status: nav ? nav.responseStatus : null, title: document.title,
-    text: text.slice(0, 2000), text_length: text.length, inner_width: innerWidth, inner_height: innerHeight,
-    device_pixel_ratio: devicePixelRatio, controls};
+  const text = (document.body?.innerText || '').trim();
+  return {url: location.href, status: nav?.responseStatus || null, title: document.title || null,
+    text: text.slice(0, 300), text_length: text.length,
+    inner_width: window.innerWidth, inner_height: window.innerHeight, device_pixel_ratio: window.devicePixelRatio};
+})()"""
+UNHIDE = """(() => {
+  const marked = [...document.querySelectorAll('[aria-hidden="true"],[inert]')];
+  window.__fastbrowseHidden = marked.map(e => [e, e.getAttribute('aria-hidden'), e.hasAttribute('inert')]);
+  marked.forEach(e => { e.removeAttribute('aria-hidden'); e.removeAttribute('inert'); });
+})()"""
+RESTORE = """(() => {
+  for (const [e, hidden, inert] of window.__fastbrowseHidden || []) {
+    if (hidden !== null) e.setAttribute('aria-hidden', hidden);
+    if (inert) e.setAttribute('inert', '');
+  }
+  delete window.__fastbrowseHidden;
 })()"""
 
 
@@ -71,16 +82,29 @@ async def observe(port, final_url):
     chosen = chosen or next((p for p in reversed(pages) if p["url"] != "about:blank"), pages[-1] if pages else None)
     if chosen is None:
         return None, [p["url"] for p in pages]
-    async with websockets.connect(chosen["webSocketDebuggerUrl"], max_size=2**24) as ws:
-        await ws.send(
-            json.dumps(
-                {"id": 1, "method": "Runtime.evaluate", "params": {"expression": OBSERVE, "returnByValue": True}}
+    async with websockets.connect(chosen["webSocketDebuggerUrl"], max_size=2**26) as ws:
+        ids = iter(range(1, 100))
+
+        async def evaluate(expression):
+            n = next(ids)
+            await ws.send(
+                json.dumps(
+                    {"id": n, "method": "Runtime.evaluate", "params": {"expression": expression, "returnByValue": True}}
+                )
             )
-        )
-        while True:
-            reply = json.loads(await ws.recv())
-            if reply.get("id") == 1:
-                return reply.get("result", {}).get("result", {}).get("value"), [p["url"] for p in pages]
+            while True:
+                reply = json.loads(await ws.recv())
+                if reply.get("id") == n:
+                    return reply.get("result", {}).get("result", {}).get("value")
+
+        seen = await evaluate(EVIDENCE) or {}
+        await evaluate(UNHIDE)
+        try:
+            snapshot = await evaluate(SNAPSHOT_JS.strip().rstrip(";") + "('snapshot')") or {}
+        finally:
+            await evaluate(RESTORE)
+        seen["controls"] = [[c.get("label") or "", c.get("value")] for c in snapshot.get("controls", [])]
+        return seen, [p["url"] for p in pages]
 
 
 async def one(task, suite, repeat, worker, args, http):
