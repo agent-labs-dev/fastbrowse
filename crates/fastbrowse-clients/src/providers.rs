@@ -1,11 +1,12 @@
 //! The LLM providers FASTBROWSE_LLM_PROVIDER names, each a preset over the OpenAI-compatible client: where it lives,
-//! which variable holds its key, how it takes a schema and a reasoning effort, and the models it defaults to.
+//! which variable holds its key, how it takes a schema and a reasoning effort, and the models it defaults to. Anthropic
+//! alone speaks its native Messages API, since its OpenAI-compatible endpoint ignores the schema.
 //!
 //! Every value here is checked against the provider's own documentation; docs/llm-providers.md cites each one.
 
 use fastbrowse_core::models::LLMPurpose;
 
-use crate::openai_compatible::{OutputFormat, ReasoningField};
+use crate::openai_compatible::{OutputFormat, ReasoningField, Wire};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LLMProvider {
@@ -54,6 +55,7 @@ pub enum Endpoint {
 #[derive(Debug, Clone, Copy)]
 pub struct Preset {
     pub provider: LLMProvider,
+    pub wire: Wire,
     pub endpoint: Endpoint,
     pub key: KeySource,
     /// The header carrying the key in place of `Authorization: Bearer`.
@@ -70,6 +72,7 @@ pub struct Preset {
 
 const BASE: Preset = Preset {
     provider: LLMProvider::Custom,
+    wire: Wire::ChatCompletions,
     endpoint: Endpoint::Custom,
     key: KeySource::Local,
     auth_header: None,
@@ -178,12 +181,10 @@ impl LLMProvider {
                 output_cap_field: "max_completion_tokens",
                 ..hosted("https://api.openai.com/v1", "OPENAI_API_KEY")
             },
-            // Anthropic's compatibility layer ignores response_format and reasoning_effort, so the schema is stated in
-            // the prompt and the effort is not sent.
+            // Anthropic's compatibility layer ignores response_format and reasoning_effort, so Claude is reached
+            // through the Messages API, whose structured outputs decode against the schema and which takes an effort.
             LLMProvider::Anthropic => Preset {
-                output_format: OutputFormat::JsonObject,
-                strict: false,
-                reasoning: None,
+                wire: Wire::AnthropicMessages,
                 models: Some(claude_model),
                 ..hosted("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY")
             },

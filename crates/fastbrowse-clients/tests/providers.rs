@@ -74,7 +74,7 @@ struct Hosted {
     cap: &'static str,
 }
 
-const HOSTED: [Hosted; 10] = [
+const HOSTED: [Hosted; 9] = [
     Hosted {
         provider: "openai",
         url: "https://api.openai.com/v1/chat/completions",
@@ -82,14 +82,6 @@ const HOSTED: [Hosted; 10] = [
         format: "json_schema",
         strict: true,
         cap: "max_completion_tokens",
-    },
-    Hosted {
-        provider: "anthropic",
-        url: "https://api.anthropic.com/v1/chat/completions",
-        key: "anthropic-secret",
-        format: "json_object",
-        strict: false,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "gemini",
@@ -241,14 +233,12 @@ fn test_a_preset_without_a_default_model_asks_for_one() {
 
 #[tokio::test]
 async fn test_presets_with_defaults_use_them_and_a_pin_wins() {
-    let anthropic = [("FASTBROWSE_LLM_PROVIDER", "anthropic"), ("ANTHROPIC_API_KEY", "k")];
-    assert_eq!(body(&one(&anthropic).await)["model"], "claude-sonnet-5-5");
     let groq = [("FASTBROWSE_LLM_PROVIDER", "groq"), ("GROQ_API_KEY", "k")];
     assert_eq!(body(&one(&groq).await)["model"], "openai/gpt-oss-120b");
-    let pinned = [anthropic.as_slice(), &[("FASTBROWSE_LLM_MODEL_READ", "claude-opus-5-5")]].concat();
-    assert_eq!(body(&one(&pinned).await)["model"], "claude-opus-5-5");
-    let providers = settings(&anthropic).providers();
-    assert!(providers.contains("LLM claude-haiku-5-5, claude-sonnet-5-5 via Anthropic"), "{providers}");
+    let pinned = [groq.as_slice(), &[("FASTBROWSE_LLM_MODEL_READ", "llama")]].concat();
+    assert_eq!(body(&one(&pinned).await)["model"], "llama");
+    let providers = settings(&groq).providers();
+    assert!(providers.contains("LLM openai/gpt-oss-120b via Groq"), "{providers}");
 }
 
 #[tokio::test]
@@ -272,7 +262,7 @@ async fn test_reasoning_effort_goes_in_the_field_the_preset_documents() {
 
 #[test]
 fn test_reasoning_on_a_preset_that_takes_none_is_a_configuration_error() {
-    for (provider, key) in [("anthropic", "ANTHROPIC_API_KEY"), ("deepseek", "DEEPSEEK_API_KEY")] {
+    for (provider, key) in [("together", "TOGETHER_API_KEY"), ("deepseek", "DEEPSEEK_API_KEY")] {
         let loaded = settings(&[
             ("FASTBROWSE_LLM_PROVIDER", provider),
             (key, "k"),

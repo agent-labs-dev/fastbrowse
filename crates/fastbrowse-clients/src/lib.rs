@@ -5,6 +5,7 @@
 //! the response Python recorded. Timeouts and retry delays are Python's constants, read on tokio's clock
 //! so a test can pause it.
 
+pub mod anthropic;
 pub mod environment;
 pub mod failover;
 pub mod http;

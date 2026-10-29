@@ -35,10 +35,11 @@ use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
 use serde_json::{Map, Value};
 
+use crate::anthropic::AnthropicLLM;
 use crate::failover::FailoverDecisionClient;
 use crate::http::Http;
 use crate::openai_compatible::{
-    LLMOptions, OpenAICompatibleLLM, ReasoningEffort, ReasoningField, gateway_provider_routing,
+    LLMOptions, OpenAICompatibleLLM, ReasoningEffort, ReasoningField, Wire, gateway_provider_routing,
     openrouter_provider_routing, reserved_clashes,
 };
 use crate::openai_decisions::{OPENAI_DECISIONS_MODEL, OPENAI_URL, OpenAIDecisionsClient};
@@ -779,6 +780,21 @@ impl Settings {
                 }
             },
         };
+        if preset.wire == Wire::AnthropicMessages {
+            // Claude thinks by default, and on a short output cap a default effort can spend the cap before the
+            // answer, so the effort is always sent, low unless FASTBROWSE_LLM_REASONING says otherwise.
+            let models = self.preset_models(&preset)?;
+            return AnthropicLLM::new(
+                key,
+                http.clone(),
+                &base_url,
+                models,
+                Some(self.llm_reasoning),
+                self.extra_body()?,
+            )
+            .map(|llm| Box::new(llm) as Box<dyn LLMClient>)
+            .map_err(ConfigurationError);
+        }
         // The effort goes only where it was asked for: a strict server answers HTTP 400 to a field it does not know,
         // and each provider's own default is a better guess than OpenRouter's for its models.
         let purpose_reasoning = self.purpose_reasoning();
