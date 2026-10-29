@@ -6,10 +6,10 @@ export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unknown';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
 export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'verify' | 'compose' | 'shortcut';
 /**
- * The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
- * reader's, because the reader asked for the rest of the list.
+ * Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
+ * next page of a list or DONE once a lookup is answered.
  */
-export type Decider = 'jev' | 'llm';
+export type Decider = 'jev' | 'llm' | 'code';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
  */

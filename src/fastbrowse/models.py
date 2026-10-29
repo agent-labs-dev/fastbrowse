@@ -75,11 +75,12 @@ class Operation(StrEnum):
 
 
 class Decider(StrEnum):
-    """The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-    reader's, because the reader asked for the rest of the list."""
+    """Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
+    next page of a list or DONE once a lookup is answered."""
 
     JEV = "jev"
     LLM = "llm"
+    CODE = "code"
 
 
 class StepOutcome(StrEnum):

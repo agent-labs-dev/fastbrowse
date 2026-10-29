@@ -112,11 +112,12 @@ impl Operation {
 }
 
 str_enum! {
-    /// The model whose choice a step carries out, even when code dispatches it.
-    doc: "The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\nreader's, because the reader asked for the rest of the list.";
+    /// Who chose a step: Jev, the LLM, or a rule in code.
+    doc: "Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the\nnext page of a list or DONE once a lookup is answered.";
     pub enum Decider {
         Jev = "jev",
         Llm = "llm",
+        Code = "code",
     }
 }
 

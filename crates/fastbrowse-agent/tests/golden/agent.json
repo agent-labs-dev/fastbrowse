@@ -5083,7 +5083,7 @@
     {
      "index": 1,
      "operation": "fill",
-     "decided_by": "llm",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://forms.test/",
      "target": "Last name",
@@ -5162,7 +5162,7 @@
     "step": {
      "index": 1,
      "operation": "fill",
-     "decided_by": "llm",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://forms.test/",
      "target": "Last name",
@@ -10606,11 +10606,11 @@
     {
      "index": 2,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://air.test/fares",
      "target": null,
-     "confidence": 0.9,
+     "confidence": null,
      "note": "Read this content.",
      "facts": [],
      "page_changed": null,
@@ -10800,11 +10800,11 @@
     "step": {
      "index": 2,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://air.test/fares",
      "target": null,
-     "confidence": 0.9,
+     "confidence": null,
      "note": "Read this content.",
      "facts": [],
      "page_changed": null,
@@ -11467,7 +11467,7 @@
     {
      "index": 1,
      "operation": "click",
-     "decided_by": "llm",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://shop.test/list?page=1",
      "target": "Next",
@@ -11480,7 +11480,7 @@
     {
      "index": 2,
      "operation": "read",
-     "decided_by": "llm",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://shop.test/list?page=2",
      "target": null,
@@ -11677,7 +11677,7 @@
     "step": {
      "index": 1,
      "operation": "click",
-     "decided_by": "llm",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://shop.test/list?page=1",
      "target": "Next",
@@ -11693,7 +11693,7 @@
     "step": {
      "index": 2,
      "operation": "read",
-     "decided_by": "llm",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://shop.test/list?page=2",
      "target": null,
@@ -14017,11 +14017,11 @@
     {
      "index": 0,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://forum.test/thread",
      "target": null,
-     "confidence": 1.0,
+     "confidence": null,
      "note": "Read this content. Still missing evidence for r1: Find how many replies the thread has. Re-reading this unchanged content will not supply it; find additional content.",
      "facts": [],
      "page_changed": null,
@@ -14076,11 +14076,11 @@
     "step": {
      "index": 0,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://forum.test/thread",
      "target": null,
-     "confidence": 1.0,
+     "confidence": null,
      "note": "Read this content. Still missing evidence for r1: Find how many replies the thread has. Re-reading this unchanged content will not supply it; find additional content.",
      "facts": [],
      "page_changed": null,
@@ -14958,11 +14958,11 @@
     {
      "index": 1,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://wiki.test/Dune",
      "target": null,
-     "confidence": 0.9,
+     "confidence": null,
      "note": "Read this content.",
      "facts": [
       {
@@ -15091,11 +15091,11 @@
     "step": {
      "index": 1,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://wiki.test/Dune",
      "target": null,
-     "confidence": 0.9,
+     "confidence": null,
      "note": "Read this content.",
      "facts": [
       {
@@ -16452,11 +16452,11 @@
     {
      "index": 0,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://news.test/story",
      "target": null,
-     "confidence": 0.9,
+     "confidence": null,
      "note": "Read this content.",
      "facts": [
       {
@@ -16542,11 +16542,11 @@
     "step": {
      "index": 0,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://news.test/story",
      "target": null,
-     "confidence": 0.9,
+     "confidence": null,
      "note": "Read this content.",
      "facts": [
       {
@@ -18399,11 +18399,11 @@
     {
      "index": 0,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://admin.test/settings",
      "target": null,
-     "confidence": 1.0,
+     "confidence": null,
      "note": "Read this content. Still missing evidence for r1: Find whether the settings page needs sign-in. Re-reading this unchanged content will not supply it; find additional content.",
      "facts": [],
      "page_changed": null,
@@ -18476,11 +18476,11 @@
     "step": {
      "index": 0,
      "operation": "read",
-     "decided_by": "jev",
+     "decided_by": "code",
      "outcome": "executed",
      "url": "https://admin.test/settings",
      "target": null,
-     "confidence": 1.0,
+     "confidence": null,
      "note": "Read this content. Still missing evidence for r1: Find whether the settings page needs sign-in. Re-reading this unchanged content will not supply it; find additional content.",
      "facts": [],
      "page_changed": null,
