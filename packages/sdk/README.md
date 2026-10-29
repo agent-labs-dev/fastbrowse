@@ -46,10 +46,46 @@ try {
 stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or `bot_check`, with the page's
 `origin`, the labels of the `fields` it asked for and `seen_at_ms`.
 
+## Processes and errors
+
+`Fastbrowse.start` starts one fastbrowse process and `run` sends it a task. The process serves one run at a time:
+a second `run` while one is active rejects with the busy error, so start more instances to run side by side.
+`close()` shuts the process down and waits for it, and the process also exits when yours does.
+
+`run` rejects only when no run took place or none finished: with `RpcError` when the server refuses the request
+before a browser opens (a bad option, a missing key, a busy server), with `AbortError` when `signal` stopped the
+run, and with `ProcessExitedError` when the process is gone. A run that fails after it starts, including one whose
+callback throws, resolves with status `error`.
+
+## Options
+
+The result is the `RunResult` the Python library returns. Its fields keep their Python names, such as
+`final_url`, since the types are generated from the protocol's schema; the options are camelCase.
+
+`output` is `data` after a Zod (4.2 or newer) or ArkType schema's validation and transforms, or a Valibot schema
+wrapped by `@valibot/to-json-schema`, typed as the schema's output. Data the schema refuses rejects with
+`OutputValidationError`, which carries the result. A plain JSON Schema object is accepted too; `output` is then
+`data`, typed `unknown`. The server accepts nested objects, arrays, `enum`, `const` and optional values and refuses
+any other keyword by name, but a run fills only a flat object of required string, number, integer and boolean
+fields. With any other field it ends `unverified` with no data.
+
+`run` also takes `context`, `inputs`, `attachments` as bytes, `downloads`, `record`, `onFrame` (JPEG frames of the
+active tab; none are sent without it), and the browser choices `chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`,
+`attach`, `targetMatch`, `foreground`, `proxyCountry`, `viewport` and `cloudAllowResizing`. `Fastbrowse.start`
+takes the browser choices as defaults for every run, and a run passes `null` for one to go without that default.
+`env` in `Fastbrowse.start` adds to the environment the process inherits.
+
+## Platforms
+
+There is no binary for Alpine or another musl system, and none for a platform outside the five. There
+`Fastbrowse.start` rejects with an error that names the platform; name a binary of your own with `binaryPath` or
+`FASTBROWSE_BINARY`. The macOS binaries carry an ad-hoc signature and are not notarized, which a Mac that allows
+programs only by the team that signed them refuses. The Windows binary is not signed. Bun and Deno are untested.
+
 ## The rest
 
 [Use it from JavaScript](https://github.com/agent-labs-dev/fastbrowse#use-it-from-javascript) in the repository
-README covers output typed by a Zod or JSON Schema, secrets your own code resolves, the `until` check, step
-events, live frames and stopping a run with an `AbortSignal`.
+README has a fuller example: output typed by a Zod schema, secrets your own code resolves, the `until` check,
+step events and stopping a run with an `AbortSignal`.
 
 MIT licence.
