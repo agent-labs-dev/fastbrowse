@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::jev::{Answer, JEV_DOLLARS_PER_INPUT_TOKEN, JevClient, JevError, Question};
+use fastbrowse_core::jev::{Answer, JevClient, JevError, Question};
 use fastbrowse_core::models::{CostComponent, CostLine};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
@@ -81,6 +81,8 @@ pub async fn evaluate_batches(
     let mut batch_size = 0.0;
     let mut sent_chars = 0usize;
     let limit = tokens.batch_tokens.min(tokens.state_plus_all_questions) as f64;
+    let profile = jev.profile();
+    let most = profile.max_questions.unwrap_or(usize::MAX);
     for (key, question) in questions {
         let json = question.dump_json();
         let size = text::len(&json) as f64 / ratio;
@@ -88,7 +90,7 @@ pub async fn evaluate_batches(
             continue;
         }
         if !batch.is_empty()
-            && (state_size + batch_size + size > limit || {
+            && (batch.len() >= most || state_size + batch_size + size > limit || {
                 let with: Vec<&str> = written.iter().map(String::as_str).chain([json.as_str()]).collect();
                 state_chars > tokens.input_chars(&with, true)
             })
@@ -113,7 +115,7 @@ pub async fn evaluate_batches(
         // The batches run together, so a limit checked per batch would pass them all and learn of the overrun only
         // once billed: the whole pass is priced, and every call counted, before any is sent.
         let sent = sent_chars as f64 / ratio;
-        let estimate = (batches.len() as f64 * state_size + sent) * JEV_DOLLARS_PER_INPUT_TOKEN;
+        let estimate = profile.input_dollars(batches.len() as f64 * state_size + sent).unwrap_or(0.0);
         ledger.reserve(CostComponent::Jev, estimate, batches.len() as i64)?;
     }
 
@@ -176,7 +178,7 @@ mod tests {
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
 
-    use fastbrowse_core::jev::{Evaluation, NoulAnswer, NoulQuestion, NoulTag};
+    use fastbrowse_core::jev::{DecisionProfile, Evaluation, NoulAnswer, NoulQuestion, NoulTag};
     use fastbrowse_core::models::{BudgetResource, CostBasis, Limits};
     use serde_json::json;
 
@@ -197,6 +199,7 @@ mod tests {
     struct Fake {
         sent: Mutex<Vec<Vec<String>>>,
         stall: &'static str,
+        max_questions: Option<usize>,
     }
 
     impl JevClient for Fake {
@@ -223,10 +226,14 @@ mod tests {
                 })
             })
         }
+
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile { max_questions: self.max_questions, ..DecisionProfile::jev() }
+        }
     }
 
     fn fake(stall: &'static str) -> Fake {
-        Fake { sent: Mutex::new(Vec::new()), stall }
+        Fake { sent: Mutex::new(Vec::new()), stall, max_questions: None }
     }
 
     #[test]
@@ -271,6 +278,18 @@ mod tests {
         assert_eq!(answered.answers.len(), 40);
         let sent = jev.sent.lock().unwrap();
         assert!(sent.len() > 1 && sent.iter().all(|batch| batch.len() < 40));
+    }
+
+    #[test]
+    fn a_request_carries_no_more_questions_than_the_model_takes() {
+        let jev = Fake { max_questions: Some(3), ..fake("") };
+        let many: IndexMap<String, Question> =
+            (0..7).map(|i| (format!("q{i}"), NoulQuestion::new("x", None, None).into())).collect();
+        let answered =
+            block_on(evaluate_batches(&jev, &json!({}), &many, &TokenBudget::default(), None, None, true)).unwrap();
+        assert_eq!(answered.unwrap().answers.len(), 7);
+        let sizes: Vec<usize> = jev.sent.lock().unwrap().iter().map(Vec::len).collect();
+        assert_eq!(sizes, [3, 3, 1]);
     }
 
     #[test]

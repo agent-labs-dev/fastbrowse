@@ -247,11 +247,12 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(page: Arc<dyn Page>, jev: Arc<dyn JevClient>, llm: Arc<dyn LLMClient>) -> Agent {
+        let config = jev.profile().fit(None);
         Agent {
             page,
             jev,
             llm,
-            config: Config::default(),
+            config,
             secrets: None,
             on_event: None,
             trace: Trace::disabled(),
@@ -259,8 +260,9 @@ impl Agent {
         }
     }
 
+    /// Run with `config`, its limits brought within the decision model's.
     pub fn with_config(mut self, config: Config) -> Agent {
-        self.config = config;
+        self.config = self.jev.profile().fit(Some(config));
         self
     }
 

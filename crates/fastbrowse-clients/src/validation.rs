@@ -13,8 +13,7 @@ use std::time::Duration;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::jev::{
-    Answer, ChoiceAnswer, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, JevError, NoulAnswer, Question, RetriesExhausted,
-    ScoreAnswer,
+    Answer, ChoiceAnswer, Evaluation, JevError, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 use fastbrowse_core::py::json::{dumps, float_str};
@@ -468,6 +467,7 @@ fn dumped_chars(body: &Value) -> usize {
 struct CancelledJev<'a> {
     spend: Option<JevSpend>,
     body: &'a Value,
+    price: Option<f64>,
     usage: &'a Usage,
     trace: &'a Trace,
     armed: bool,
@@ -482,7 +482,7 @@ impl Drop for CancelledJev<'_> {
         let tokens = (dumped_chars(self.body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
         let unaccounted = self.usage.lock().unaccounted_requests;
         if let Some(spend) = &self.spend {
-            spend.record((0..unaccounted).map(|_| estimated_cost(tokens, 0)));
+            spend.record((0..unaccounted).map(|_| estimated_cost(self.price, tokens, 0)));
         }
         if unaccounted > 0 {
             self.trace.event("cancelled_request_cost", || {
@@ -490,7 +490,7 @@ impl Drop for CancelledJev<'_> {
                 fields.insert("call".into(), "jev".into());
                 fields.insert("requests".into(), unaccounted.into());
                 fields.insert("estimated_input_tokens".into(), tokens.into());
-                fields.insert("dollars_per_input_token".into(), JEV_DOLLARS_PER_INPUT_TOKEN.into());
+                fields.insert("dollars_per_input_token".into(), self.price.into());
                 fields
             });
         }
@@ -507,10 +507,11 @@ pub(crate) async fn post(
     usage: &Usage,
     start_attempt: usize,
     split_batch: bool,
+    price: Option<f64>,
 ) -> Result<Response, AskError> {
     let spend = JevSpend::current();
     // Priced before sending, so a split single or a retry cannot carry the run past its dollar cap.
-    let estimate = body_dollars(body);
+    let estimate = body_dollars(body, price);
     let check = || check_jev_spend(spend.as_ref(), estimate);
     check().map_err(JevError::Budget)?;
     let started = Instant::now();
@@ -523,7 +524,7 @@ pub(crate) async fn post(
         start_attempt,
         split_batch,
     };
-    let mut cancelled = CancelledJev { spend: spend.clone(), body, usage, trace: &http.trace, armed: true };
+    let mut cancelled = CancelledJev { spend: spend.clone(), body, price, usage, trace: &http.trace, armed: true };
     let sent = post_with_retry(http, url, body, &auth, &attempts, usage).await;
     cancelled.armed = false;
     let response = match sent {
@@ -840,8 +841,9 @@ pub fn record_jev_spend(costs: impl IntoIterator<Item = CostLine>) {
     }
 }
 
-fn body_dollars(body: &Value) -> f64 {
-    dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * JEV_DOLLARS_PER_INPUT_TOKEN
+/// A request's input estimate at `price`; an unpriced model reserves nothing, and its receipt says what it cost.
+fn body_dollars(body: &Value, price: Option<f64>) -> f64 {
+    dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * price.unwrap_or(0.0)
 }
 
 /// Refuse a request whose estimate, beside every receipt held so far, would break the ledger's limits.
@@ -904,7 +906,11 @@ impl Drop for PaidOnDrop {
 }
 
 /// Ask a batch, then its questions one at a time within the retries left once it failed twice with a 5xx.
-pub(crate) async fn asking_split(questions: IndexMap<String, Question>, ask: &Ask<'_>) -> Result<Evaluation, JevError> {
+pub(crate) async fn asking_split(
+    questions: IndexMap<String, Question>,
+    ask: &Ask<'_>,
+    price: Option<f64>,
+) -> Result<Evaluation, JevError> {
     if questions.len() < 2 {
         return ask(questions, 0, false).await.map_err(AskError::into_jev);
     }
@@ -955,7 +961,7 @@ pub(crate) async fn asking_split(questions: IndexMap<String, Question>, ask: &As
     let input_tokens: i64 = answered.iter().map(|result| result.input_tokens).sum();
     if usage.unaccounted_requests > 0 {
         // The failed batch carried all questions; estimate its unanswered requests from the answered singles.
-        let discarded = estimated_cost(input_tokens * usage.unaccounted_requests, 0);
+        let discarded = estimated_cost(price, input_tokens * usage.unaccounted_requests, 0);
         cost = merged_cost(&[cost, discarded]);
     }
     Ok(Evaluation {
@@ -976,6 +982,7 @@ pub(crate) async fn asking_open<F>(
     questions: &IndexMap<String, Question>,
     ask: impl FnOnce(IndexMap<String, Question>) -> F,
     model: &str,
+    price: Option<f64>,
 ) -> Result<Evaluation, JevError>
 where
     F: Future<Output = Result<Evaluation, JevError>>,
@@ -1008,7 +1015,7 @@ where
             model: model.to_string(),
             answers: forced,
             input_tokens: 0,
-            cost: estimated_cost(0, 0),
+            cost: estimated_cost(price, 0, 0),
             requests: 0,
         });
     }
@@ -1017,7 +1024,12 @@ where
     Ok(evaluation)
 }
 
-pub fn reported_cost(value: Option<&Value>, input_tokens: i64, output_tokens: i64) -> Result<CostLine, String> {
+pub fn reported_cost(
+    value: Option<&Value>,
+    input_tokens: i64,
+    output_tokens: i64,
+    price: Option<f64>,
+) -> Result<CostLine, String> {
     let cost = match value {
         None | Some(Value::Null) => None,
         Some(value) => Some(dollars(Some(value))?),
@@ -1033,15 +1045,16 @@ pub fn reported_cost(value: Option<&Value>, input_tokens: i64, output_tokens: i6
             output_tokens,
             seconds: None,
         }),
-        _ => Ok(estimated_cost(input_tokens, output_tokens)),
+        _ => Ok(estimated_cost(price, input_tokens, output_tokens)),
     }
 }
 
-pub fn estimated_cost(input_tokens: i64, output_tokens: i64) -> CostLine {
+/// `input_tokens` at the model's list `price`; without one the cost is unknown, never zero.
+pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64) -> CostLine {
     CostLine {
         component: CostComponent::Jev,
-        basis: CostBasis::Estimated,
-        dollars: Some(input_tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN),
+        basis: if price.is_some() { CostBasis::Estimated } else { CostBasis::Unknown },
+        dollars: price.map(|price| input_tokens as f64 * price),
         purpose: None,
         input_tokens,
         output_tokens,

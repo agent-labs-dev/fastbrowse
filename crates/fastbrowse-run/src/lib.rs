@@ -460,7 +460,6 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
 
 /// Open `start`, pursue `task`, and return what the run could prove.
 pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, RunError> {
-    let config = options.config.clone().unwrap_or_default();
     let settings = match options.settings.take() {
         Some(settings) => settings,
         None => Settings::load()?,
@@ -527,6 +526,12 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         Some(jev) => jev,
         None => Arc::from(settings.jev(&http)?),
     };
+    let profile = jev.profile();
+    if !profile.validated() {
+        // No thresholds were measured on this model, so the run starts from Jev's: an eval reads its result with that.
+        http.trace.event("decision_unvalidated", Map::new);
+    }
+    let config = profile.fit(options.config.clone());
     let llm: Arc<dyn LLMClient> = match options.llm.take() {
         Some(llm) => llm,
         None => Arc::from(settings.llm(&http)?),
