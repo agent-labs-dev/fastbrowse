@@ -140,9 +140,9 @@ The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/
 - **[cli.rs](crates/fastbrowse-cli/src/cli.rs)**, **[mcp](crates/fastbrowse-cli/src/mcp)**, **[serve.rs](crates/fastbrowse-cli/src/serve.rs)** and **`run_task`** are the four entry points; [options.rs](crates/fastbrowse-cli/src/options.rs) holds the rules
   they share, so a flag means the same thing in all of them. `serve` is `fastbrowse serve --stdio`: it calls
   `run_task` for another process over JSON-RPC, one run at a time, and adds no agent logic. Its messages are the
-  models in [protocol.py](src/fastbrowse/protocol.py); [output_schema.rs](crates/fastbrowse-core/src/output_schema.rs) turns a caller's JSON Schema into an `output_schema`.
+  types in [protocol.rs](crates/fastbrowse-core/src/protocol.rs), written as JSON Schema to [protocol/schema.json](protocol/schema.json); [output_schema.rs](crates/fastbrowse-core/src/output_schema.rs) turns a caller's JSON Schema into an `output_schema`.
 - **[packages/sdk](packages/sdk)** is the TypeScript SDK, `fastbrowse` on npm. It starts `serve` and knows the agent by
-  the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from the Python models (`npm run generate:sdk`).
+  the protocol alone; [its types](packages/sdk/src/protocol.ts) are generated from `protocol/schema.json` (`npm run generate:sdk`).
   What it starts is the Rust `fastbrowse` binary ([crates/fastbrowse-cli](crates/fastbrowse-cli)), with the Node addon beside it
   for `inProcess`, shipped as one `@fastbrowse/<os>-<arch>` npm package per platform.
 

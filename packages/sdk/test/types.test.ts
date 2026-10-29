@@ -1,9 +1,10 @@
-// The step from the models' JSON Schema to the SDK's types. `tests/test_sdk_schema.py` covers the step before it.
+// The step from `protocol/schema.json` to the SDK's types. `crates/fastbrowse-core/tests/protocol_schema.rs` covers
+// the step before it.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { render } from '../scripts/generate-types.ts';
+import { forTheTypeGenerator, render } from '../scripts/generate-types.ts';
 
 const ping = {
   type: 'object',
@@ -42,4 +43,20 @@ test('a constant becomes an exported value, and an enum an object of its members
   assert.match(types, /^export const Method = \{\n {2}RUN_CANCEL: 'run\/cancel',\n {2}RUN: 'run',\n\} as const;$/m);
   assert.match(types, /export interface Ping \{/);
   assert.equal(types.match(/^export /gm)?.length, 4);
+});
+
+test('a field keeps no title for the generator to name a type after, and a model keeps its own', () => {
+  const schema = {
+    $defs: { Ping: { ...ping, properties: { title: { title: 'Title', type: 'string' } } } },
+  };
+  assert.deepEqual(forTheTypeGenerator(schema), {
+    $defs: { Ping: { ...ping, properties: { title: { type: 'string' } } } },
+  });
+});
+
+test('a fixed-length tuple is written as a list in `items`, the form the generator reads', async () => {
+  const pair = { type: 'array', prefixItems: [{ type: 'integer' }, { type: 'integer' }], minItems: 2, maxItems: 2 };
+  const schema = { $defs: { Ping: { ...ping, properties: { viewport: pair }, required: ['viewport'] } } };
+  const types = await render(forTheTypeGenerator(schema) as Parameters<typeof render>[0]);
+  assert.match(types, /viewport: \[number, number\];/);
 });

@@ -1,5 +1,5 @@
-// Generated from the models in src/fastbrowse/protocol.py and src/fastbrowse/models.py.
-// Do not edit: change the models, then run `npm run generate:sdk`.
+// Generated from protocol/schema.json, which crates/fastbrowse-core/src/protocol.rs writes.
+// Do not edit: change the types there, then run `npm run generate:sdk`.
 
 export type ArtifactKind = 'download';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unknown';

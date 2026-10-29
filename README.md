@@ -501,7 +501,7 @@ server refuses the request before a browser opens (a bad option, a missing key, 
 fails after it has started resolves with status `error`.
 
 The result is the `RunResult` the Python library returns, with the same statuses, citations and cost lines.
-Its fields keep their Python names, such as `final_url`, since the types are generated from the Python models;
+Its fields keep their Python names, such as `final_url`, since the types are generated from the protocol's schema;
 the options are camelCase. The structured data is in `data`, as in Python. The SDK adds
 `output`: with a Zod (4.2 or newer) or ArkType schema, or a Valibot schema wrapped by
 `@valibot/to-json-schema`, `output` is `data` after the schema's own validation and transforms, and has the

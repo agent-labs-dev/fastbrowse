@@ -1,28 +1,27 @@
-// Writes `src/protocol.ts`, the SDK's types for everything on the wire, from the Python models.
+// Writes `src/protocol.ts`, the SDK's types for everything on the wire, from `protocol/schema.json`.
 //
 //     npm run generate:sdk
 //
-// `scripts/sdk_schema.py` prints the models as JSON Schema, and json-schema-to-typescript turns that into types.
-// The protocol version, the error codes and the method names come with it and are written as values, so the
-// SDK holds no copy of one that could fall behind the server's.
+// The Rust core writes the messages as JSON Schema into `protocol/schema.json`, and json-schema-to-typescript
+// turns that into types. The protocol version, the error codes and the method names come with it and are written
+// as values, so the SDK holds no copy of one that could fall behind the server's.
 
-import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { compile, type JSONSchema } from 'json-schema-to-typescript';
 
-const repository = fileURLToPath(new URL('../../../', import.meta.url));
+const document = fileURLToPath(new URL('../../../protocol/schema.json', import.meta.url));
 const output = fileURLToPath(new URL('../src/protocol.ts', import.meta.url));
 
-const BANNER = `// Generated from the models in src/fastbrowse/protocol.py and src/fastbrowse/models.py.
-// Do not edit: change the models, then run \`npm run generate:sdk\`.`;
+const BANNER = `// Generated from protocol/schema.json, which crates/fastbrowse-core/src/protocol.rs writes.
+// Do not edit: change the types there, then run \`npm run generate:sdk\`.`;
 
 const ROOT = 'GeneratedRoot';
 
 type Constant = number | string;
 
-/** What `scripts/sdk_schema.py` prints: the models as JSON Schema, and the values both sides have to agree on. */
+/** What `protocol/schema.json` holds: the models as JSON Schema, and the values both sides have to agree on. */
 type Document = JSONSchema & { constants?: Record<string, Constant | Record<string, Constant>> };
 
 function literal(value: Constant): string {
@@ -38,6 +37,33 @@ function renderConstants(constants: NonNullable<Document['constants']>): string 
       return `export const ${name} = {\n${members.join('')}} as const;\n`;
     })
     .join('');
+}
+
+/**
+ * The same schema in the dialect json-schema-to-typescript reads.
+ *
+ * It names a type after any `title` it finds, and the schema titles every field, which would turn `run_id` into a
+ * `RunId` alias of `string`. It also predates `prefixItems`, and reads a tuple only from a list in `items`.
+ */
+export function forTheTypeGenerator(node: unknown, named = false): unknown {
+  if (Array.isArray(node)) return node.map(item => forTheTypeGenerator(item));
+  if (typeof node !== 'object' || node === null) return node;
+  return Object.fromEntries(
+    Object.entries(node)
+      .filter(([key]) => key !== 'title' || named)
+      .map(([key, value]) => [
+        key === 'prefixItems' ? 'items' : key,
+        // The values of `$defs` and `properties` are schemas keyed by name, and a name may be "title".
+        key === '$defs' || key === 'properties'
+          ? Object.fromEntries(
+              Object.entries(value as object).map(([name, schema]) => [
+                name,
+                forTheTypeGenerator(schema, key === '$defs'),
+              ]),
+            )
+          : forTheTypeGenerator(value),
+      ]),
+  );
 }
 
 /**
@@ -65,6 +91,6 @@ export async function render({ constants = {}, ...schema }: Document): Promise<s
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const schema = execFileSync('uv', ['run', 'python', 'scripts/sdk_schema.py'], { cwd: repository, encoding: 'utf8' });
-  writeFileSync(output, await render(JSON.parse(schema)));
+  const schema = forTheTypeGenerator(JSON.parse(readFileSync(document, 'utf8'))) as Document;
+  writeFileSync(output, await render(schema));
 }

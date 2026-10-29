@@ -173,7 +173,7 @@ impl Validator {
             Ty::Any | Ty::JsonValue => Ok(value.clone()),
             // No response model carries these; a string is taken as written rather than reparsed.
             Ty::DateTime => scalar_string(value, "datetime_type", "Input should be a valid datetime"),
-            Ty::Bytes => scalar_string(value, "bytes_type", "Input should be a valid bytes"),
+            Ty::Bytes | Ty::Base64 | Ty::Image => scalar_string(value, "bytes_type", "Input should be a valid bytes"),
             Ty::Path => scalar_string(value, "path_type", "Input is not a valid path"),
             Ty::List(item) => self.items(item, value, &[], "tuple_type", "Input should be a valid array"),
             Ty::Set(item) => self.items(item, value, &[], "frozen_set_type", "Input should be a valid frozenset"),

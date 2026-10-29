@@ -102,7 +102,7 @@ jobs:
       # The SDK's tests start `fastbrowse serve --stdio` from this environment, so they meet the real server.
       - run: uv sync --locked
       - run: npm ci --ignore-scripts
-      # The SDK's types are written from the Python models and committed. A model changed without them fails here.
+      # The SDK's types are written from protocol/schema.json and committed. A schema changed without them fails here.
       - run: npm run generate:sdk
       - run: git diff --exit-code -- packages/sdk/src/protocol.ts
       - run: npm run check:sdk
