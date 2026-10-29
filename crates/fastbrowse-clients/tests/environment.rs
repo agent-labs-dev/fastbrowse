@@ -143,7 +143,29 @@ const JEV_KEYS: [(&str, &str); 3] =
 async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
     // Settings, then the URL, Authorization header and model every request carries.
     type Case<'a> = (&'a [(&'a str, &'a str)], &'a str, Option<&'a str>, &'a str);
-    let cases: [Case; 5] = [
+    let cases: [Case; 8] = [
+        (
+            &[("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")],
+            "https://api.aimlapi.com/v1/decisions",
+            Some("Bearer m"),
+            "typesafe/jev-1.13",
+        ),
+        (
+            &[
+                ("FASTBROWSE_DECISION_SOURCE", "aimlapi"),
+                ("AIMLAPI_API_KEY", "m"),
+                ("FASTBROWSE_DECISION_MODEL", "openai/gpt-6-luna"),
+            ],
+            "https://api.aimlapi.com/v1/decisions",
+            Some("Bearer m"),
+            "openai/gpt-6-luna",
+        ),
+        (
+            &[("FASTBROWSE_DECISION_SOURCE", "perplexity"), ("PERPLEXITY_API_KEY", "p")],
+            "https://api.perplexity.ai/v1/decisions",
+            Some("Bearer p"),
+            "pplx-decider-v1.2",
+        ),
         (
             &[("FASTBROWSE_DECISION_SOURCE", "openai"), ("OPENAI_API_KEY", "a")],
             "https://api.openai.com/v1/decisions",
@@ -193,8 +215,22 @@ async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
         let requests = script.requests();
         assert!(requests.iter().all(|request| request.url == url), "{env:?}");
         assert!(requests.iter().all(|request| request.header("authorization") == auth), "{env:?}");
-        assert_eq!(script.bodies()[0]["model"], model);
+        let body = &script.bodies()[0];
+        assert_eq!(body["model"], model);
+        // gpt-6-luna takes OpenAI's shape wherever it is served; every other model System One's.
+        assert_eq!(body.get("input").is_some(), model.ends_with("gpt-6-luna"), "{env:?}");
     }
+}
+
+#[tokio::test]
+async fn test_a_resellers_unmetered_call_is_an_unknown_cost_not_the_models_list_price() {
+    let answered = json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 100}});
+    let script = Script::new([common::reply(200, answered)]);
+    let env = [("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")];
+    let jev = settings(&env).decision(&script.http()).unwrap();
+    assert!(jev.profile().validated(), "the same Jev 1.13 the thresholds were tuned on");
+    let evaluation = jev.evaluate(&json!("page"), &question()).await.unwrap();
+    assert_eq!((evaluation.cost.basis, evaluation.cost.dollars), (CostBasis::Unknown, None));
 }
 
 #[test]
@@ -203,6 +239,8 @@ fn test_another_decision_host_names_what_it_is_missing() {
     let cases = [
         (vec![("FASTBROWSE_DECISION_SOURCE", "telnyx")], "TELNYX_API_KEY"),
         (vec![("FASTBROWSE_DECISION_SOURCE", "openai")], "OPENAI_API_KEY"),
+        (vec![("FASTBROWSE_DECISION_SOURCE", "aimlapi")], "AIMLAPI_API_KEY"),
+        (vec![("FASTBROWSE_DECISION_SOURCE", "perplexity")], "PERPLEXITY_API_KEY"),
         (vec![("FASTBROWSE_DECISION_SOURCE", "ollama")], "FASTBROWSE_DECISION_MODEL"),
         (
             vec![("FASTBROWSE_DECISION_SOURCE", "custom"), ("FASTBROWSE_DECISION_MODEL", "m")],

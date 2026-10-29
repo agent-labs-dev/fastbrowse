@@ -38,6 +38,8 @@ _SCRUBBED = frozenset(
         "OPENROUTER_API_KEY",
         "TELNYX_API_KEY",
         "OPENAI_API_KEY",
+        "AIMLAPI_API_KEY",
+        "PERPLEXITY_API_KEY",
         "FASTBROWSE_DECISION_API_KEY",
         "BROWSER_USE_API_KEY",
         "FASTBROWSE_MCP_TOKEN",
