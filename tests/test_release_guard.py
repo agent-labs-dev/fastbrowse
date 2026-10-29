@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -15,11 +16,17 @@ assert _spec is not None and _spec.loader is not None
 release_guard = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release_guard)
 
+# Kept before the autouse fixture replaces the module attribute, so the tests about the eval gate can call it.
+_EVAL_EVIDENCE = release_guard.eval_evidence_problems
+
 
 @pytest.fixture(autouse=True)
 def _stub_publication_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ancestry and green checks are what these tests cover; the gate reuse has its own test below."""
     monkeypatch.setattr(release_guard, "publication_problems", lambda *_: [])
+    # The eval-evidence check reads Langfuse and fails closed without credentials; the tests that are not
+    # about it assume a build that has its run recorded, and the two that are about it patch it themselves.
+    monkeypatch.setattr(release_guard, "eval_evidence_problems", lambda *_: [])
 
 
 def _root(tmp_path: Path, version: str, rows: list[dict]) -> Path:
@@ -286,3 +293,44 @@ def test_evals_green_refuses_a_positive_count_without_a_run(monkeypatch: pytest.
     )
     with pytest.raises(RuntimeError, match="unexpected response shape"):
         release_guard._evals_green("org/repo", "b" * 40, "token")
+
+
+def test_a_release_without_a_recorded_eval_run_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build nobody measured is refused, not waved through on a green job from some other commit."""
+    monkeypatch.setattr(release_guard, "eval_evidence_problems", _EVAL_EVIDENCE)
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    issues = release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path)
+    assert any("LANGFUSE_PUBLIC_KEY" in issue for issue in issues), issues
+
+
+def test_a_release_with_a_recorded_eval_run_passes_the_evidence_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(release_guard, "eval_evidence_problems", _EVAL_EVIDENCE)
+    monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setattr(release_guard, "_langfuse_read", lambda *_a, **_k: {"data": [{"id": "observation-1"}]})
+    assert release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path) == []
+
+
+def test_a_lagging_eval_index_is_retried_rather_than_read_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transient read is not evidence of absence: it is retried, then fails closed if it never answers."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    seen: list[int] = []
+
+    def _flaky(*_args: object, **_kwargs: object) -> io.StringIO:
+        # The retries live inside the read, so a blip has to be simulated at the transport, not above it.
+        # StringIO is the response: it is a context manager and `.read()` returns the body.
+        seen.append(1)
+        if len(seen) < release_guard.LANGFUSE_ATTEMPTS:
+            raise urllib.error.URLError("connection reset")
+        return io.StringIO(json.dumps({"data": [{"id": "late"}]}))
+
+    monkeypatch.setattr(release_guard.urllib.request, "urlopen", _flaky)
+    monkeypatch.setattr(release_guard.time, "sleep", lambda *_: None)
+    assert _EVAL_EVIDENCE("0.5.19", "b" * 40) == []
+    assert len(seen) == release_guard.LANGFUSE_ATTEMPTS

@@ -90,6 +90,10 @@ jobs:
       - name: Check the release evals guard
         env:
           GH_TOKEN: ${{ github.token }}
+          # Held here as well as in the eval job: with the suites already green in this run the guard does
+          # not read them, but a maintainer re-running the step without --evals-ran-here still can.
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: uv run python scripts/release_guard.py "$(uv version --short)" --evals-ran-here
 
   # All five targets, each built and smoke-tested on a runner of its own kind, alongside the eval run rather
