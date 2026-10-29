@@ -13,7 +13,7 @@ export OPENROUTER_API_KEY=...
 ```
 
 `TYPESAFE_API_KEY` is the recommended Jev route. `OPENROUTER_API_KEY` serves the LLM and, when it is the
-only Jev key, Jev text; it is not the recommended Jev route and never receives Jev image input. Without it,
+only Jev key, Jev; it is not the recommended Jev route. Without it,
 the LLM uses `AI_GATEWAY_API_KEY`.
 
 With it npm installs the binary for your platform as an optional dependency: `@fastbrowse/darwin-arm64`,

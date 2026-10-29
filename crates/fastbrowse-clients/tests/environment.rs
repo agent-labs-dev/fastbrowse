@@ -616,7 +616,7 @@ fn the_example_dotenv_reads_as_python_dotenv_reads_it() {
     // `#` go with the `=` (checked against dotenv_values), so an example copied and never filled sends it as a key.
     assert_eq!(
         loaded.openrouter_api_key.as_ref().map(|key| key.expose()),
-        Some("# the LLM, and a supported Jev text route, https://openrouter.ai/keys")
+        Some("# the LLM, and a supported Jev route, https://openrouter.ai/keys")
     );
     assert_eq!(loaded.llm_source(), LLMProvider::OpenRouter);
     assert!(loaded.ai_gateway_api_key.is_none());

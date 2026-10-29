@@ -8,8 +8,8 @@ evals rather than taken from Typesafe.
 
 | | Documented | Where fastbrowse relies on it |
 |:--|:--|:--|
-| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `crates/fastbrowse-clients/src/system_one.rs` with base URL `https://openrouter.ai/api`; a supported Jev text route when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended, and never sent Jev image input |
-| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `crates/fastbrowse-clients/src/system_one.rs`, selected with `FASTBROWSE_DECISION_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route, and the only one that may receive Jev image input |
+| OpenRouter | `POST https://openrouter.ai/api/v1/systemone`, bearer key, TypeSafe request and response shapes, plus `usage.cost` in dollars, `id` and `provider`; bare model ids map to `typesafe/` ([SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)) | `crates/fastbrowse-clients/src/system_one.rs` with base URL `https://openrouter.ai/api`; a supported Jev route, images included, when `OPENROUTER_API_KEY` is set and no direct TypeSafe key is supplied. Not recommended |
+| Direct API | `POST https://api.typesafe.ai/v1/systemone`, bearer key, body `{model, state, questions}`; response `{model, answers, usage}` ([API](https://docs.typesafe.ai/api), [OpenAPI](https://api.typesafe.ai/openapi.json)) | `crates/fastbrowse-clients/src/system_one.rs`, selected with `FASTBROWSE_DECISION_SOURCE=typesafe`, or when `TYPESAFE_API_KEY` is set and no source override is supplied. The recommended Jev route |
 | Gateway | Model `typesafe-ai/jev` via `https://ai-gateway.vercel.sh/v4/ai/evaluation-model`, body `{state, questions}` ([Gateway](https://vercel.com/docs/ai-gateway/modalities/evaluation), [transport source](https://github.com/vercel/ai/blob/main/packages/gateway/src/gateway-evaluation-model.ts)) | `crates/fastbrowse-clients/src/vercel.rs`, used with `AI_GATEWAY_API_KEY` as a backup for an outage or the last resort when no other Jev key is supplied. A last resort rather than the recommended Jev route, and it receives no Jev image input. `FASTBROWSE_DECISION_BASE_URL` retargets the selected source |
 | Yes/no (Noul) | Direct returns `{type: "noul", noul: P(yes)}`; the gateway returns `probability`. Optional `true`/`false` criteria define the boundary ([Noul](https://docs.typesafe.ai/primitives/noul), [v1 migration](https://docs.typesafe.ai/migrating-to-v1)) | `crates/fastbrowse-clients/src/validation.rs` decodes each shape separately; `crates/fastbrowse-agent/src/policy.rs` asks one per control to filter a dense page |
 | Choice | The top `choice`, every option's probability, and a `confidence` ([Choice](https://docs.typesafe.ai/primitives/choice)) | `crates/fastbrowse-agent/src/policy.rs` (operation and target), `crates/fastbrowse-agent/src/retrieval/` (field and short-fact reads) |
@@ -63,22 +63,21 @@ preference rather than calibrated probability, so no Jev threshold is known to h
 ## Choosing a provider
 
 Use direct TypeSafe. It is the recommended Jev route: one service between fastbrowse and the model, the
-published direct-API price, and the only route that may receive Jev image input. Set
+published direct-API price. Set
 `TYPESAFE_API_KEY`; `FASTBROWSE_DECISION_SOURCE=typesafe` makes the choice explicit.
 
-OpenRouter is supported for Jev text when it is the only Jev key, but it is not recommended. It adds a
-third party between fastbrowse and TypeSafe, and it never receives Jev image input. Treat it as a
+OpenRouter is supported for Jev, images included, when it is the only Jev key, but it is not recommended. It
+adds a third party between fastbrowse and TypeSafe. Treat it as a
 convenience for a machine that has no direct key, not as the production route.
 
 The Vercel AI Gateway is a last resort rather than the recommended Jev route. `AI_GATEWAY_API_KEY` alone
 serves the LLM and also serves Jev as the last resort; beside a direct or OpenRouter key it adds a Jev backup.
 
-Jev images are direct-only. On the direct route each step's action decision is sent the viewport
+Jev images go to TypeSafe's own API and to OpenRouter. On those routes each step's action decision is sent the viewport
 screenshot: the state names it `viewport_screenshot`, and the request carries the PNG in TypeSafe's
 `assets` map with the `TypeSafe-Danger-Zone-Images` header. A screenshot outside TypeSafe's documented
-sizes, or one taken while a secret shows as page text, is not sent. OpenRouter, the gateway and every
-backup are asked the rest of the state, without the image or its reference, so pixels never travel
-through a router. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
+sizes, or one taken while a secret shows as page text, is not sent. The gateway and every backup
+are asked the rest of the state, without the image or its reference. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
 this policy.
 
 A click the hit test refuses, because another element is topmost at every point of the control it tried,

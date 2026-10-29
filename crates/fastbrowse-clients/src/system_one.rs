@@ -68,11 +68,16 @@ impl SystemOneClient {
         self
     }
 
+    /// A route that passes Jev image input through, sent with TypeSafe's images header.
+    pub fn images(mut self) -> SystemOneClient {
+        self.profile.images = true;
+        self
+    }
+
     /// TypeSafe's own API, which grants long context and image input only to a request carrying their headers.
     pub fn typesafe(mut self) -> SystemOneClient {
         self.headers.push(LONG_CONTEXT_HEADER);
-        self.profile.images = true;
-        self.long_context()
+        self.images().long_context()
     }
 
     /// The same body sent to `path` instead of `/v1/systemone`.
