@@ -408,6 +408,13 @@ async fn test_openrouter_still_gets_the_default_reasoning_effort() {
     assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "low"}));
 }
 
+#[tokio::test]
+async fn test_openrouter_gets_reasoning_turned_off_when_asked() {
+    let (seen, _) =
+        llm_requests(&[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_REASONING", "none")], Some(0.0001)).await;
+    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "none"}));
+}
+
 #[test]
 fn test_a_blank_model_on_a_local_endpoint_is_unset() {
     for blank in ["", "   "] {

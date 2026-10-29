@@ -225,7 +225,8 @@ The LLM defaults to `google/gemini-3.8-flash` at low reasoning effort, with
 `google/gemini-3.5-flash-lite` for proposing a direct address and typing field text.
 Override with `FASTBROWSE_LLM_MODEL` (every purpose), `FASTBROWSE_LLM_MODEL_<PURPOSE>` (`PLAN`,
 `READ`, `FIELD_TEXT`, `SHORTCUT`, `RECOVER`, `COMPOSE`, `VERIFY`) and `FASTBROWSE_LLM_REASONING`
-(`low`, `medium`, `high`).
+(`none`, `low`, `medium`, `high`). `none` turns reasoning off, for a model such as DeepSeek V4.1 Flash that
+reasons at every effort and can spend a short output cap before it answers.
 
 `FASTBROWSE_LLM_BASE_URL` sends every LLM call to another OpenAI-compatible chat completions endpoint instead
 of OpenRouter and the gateway, such as a local vLLM server at `http://127.0.0.1:8000/v1`. Name the model it
