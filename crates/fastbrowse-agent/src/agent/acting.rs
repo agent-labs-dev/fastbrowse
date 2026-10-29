@@ -732,14 +732,7 @@ impl Agent {
                 ..observation
             };
             self.note_effect(state, &observation);
-            let (undone, renews, put_back) = self.reversal(state);
-            let stalled = self.settle(state, &observation, renews, put_back);
-            if let Some(reason) = undone.or(stalled) {
-                let reason = if reason.is_empty() { "form changed".to_string() } else { reason };
-                Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
-                completed = false;
-                break;
-            }
+            self.settle(state, &observation);
         }
         if completed {
             state.form_rejected.remove(&form_key);

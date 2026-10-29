@@ -111,6 +111,18 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         return;
     }
     let html = ("Content-Type", "text/html".to_owned());
+    if let Some(query) = path.strip_prefix("/slow?ms=") {
+        // A response that takes as long as asked, for a page that answers an action over fetch.
+        thread::sleep(std::time::Duration::from_millis(query.parse().unwrap_or(0)));
+        let body = b"{}";
+        respond(
+            &mut stream,
+            200,
+            &[("Content-Type", "application/json".to_owned()), ("Content-Length", "2".into())],
+            body,
+        );
+        return;
+    }
     if let Some(status) = path.strip_prefix("/http-error/") {
         let body = b"<html><body>Sorry</body></html>";
         respond(&mut stream, status.parse().unwrap_or(500), &[html, ("Content-Length", body.len().to_string())], body);

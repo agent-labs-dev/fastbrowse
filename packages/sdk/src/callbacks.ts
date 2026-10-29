@@ -139,7 +139,6 @@ function endedBy(failure: string): RunResult {
     citations: [],
     error: failure,
     final_url: null,
-    would_fire: [],
     recordings: [],
     wall: null,
   };

@@ -3,7 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::TripwireMode;
 use crate::py::{lax, text};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -185,32 +184,15 @@ pub struct StallRules {
     pub unchanged_actions: i64,
     #[serde(deserialize_with = "lax::int_ge0")]
     pub max_recoveries: i64,
-    /// Times one interaction on one target with one value may recur before `tripwires` has an opinion.
-    #[serde(deserialize_with = "lax::int_gt1")]
-    pub repeated_actions: i64,
     /// Reads of one page state, for one set of open requirements, that may add no fact before the run has to act
     /// instead. A page that rewrites its own text on every observation otherwise mints a new read key each time.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub barren_reads: i64,
-    /// Steps the unresolved requirements may stay exactly the same for. Above `unchanged_actions`, because a page
-    /// can take several moves -- opening a menu, filling a field -- before it evidences one.
-    #[serde(deserialize_with = "lax::int_gt1")]
-    pub stagnant_plan_steps: i64,
-    /// Whether `repeated_actions` and `stagnant_plan_steps` recover or only log what they would have done. Shadow
-    /// by default: a tripwire that ends a run about to succeed costs more than one that never fires.
-    pub tripwires: TripwireMode,
 }
 
 impl Default for StallRules {
     fn default() -> Self {
-        StallRules {
-            unchanged_actions: 3,
-            max_recoveries: 2,
-            repeated_actions: 3,
-            barren_reads: 2,
-            stagnant_plan_steps: 4,
-            tripwires: TripwireMode::Shadow,
-        }
+        StallRules { unchanged_actions: 3, max_recoveries: 2, barren_reads: 2 }
     }
 }
 
@@ -273,8 +255,8 @@ mod tests {
 
     #[test]
     fn a_partial_config_keeps_every_other_default() {
-        let config: Config = serde_json::from_str(r#"{"stall": {"tripwires": "armed"}, "max_pages": "3"}"#).unwrap();
-        assert_eq!(config.stall.tripwires, TripwireMode::Armed);
+        let config: Config = serde_json::from_str(r#"{"stall": {"max_recoveries": 4}, "max_pages": "3"}"#).unwrap();
+        assert_eq!(config.stall.max_recoveries, 4);
         assert_eq!(config.stall.unchanged_actions, 3);
         assert_eq!(config.max_pages, 3);
         assert!(serde_json::from_str::<Config>(r#"{"observation": {"group_size": 1}}"#).is_err());

@@ -216,7 +216,6 @@ pub fn result(status: Status) -> RunResult {
         error: None,
         final_url: None,
         final_frame: None,
-        would_fire: Vec::new(),
         recordings: Vec::new(),
         wall: None,
     }

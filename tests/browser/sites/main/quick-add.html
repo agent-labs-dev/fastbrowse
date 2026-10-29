@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head><title>Quick add</title></head>
+<body>
+  <h1>Pico 2 W</h1>
+  <p>Cart: <span id="count">0</span> items</p>
+  <!-- The cart answers over fetch and redraws only when the response arrives, as a Shopify quick-add does. -->
+  <button id="add" onclick="fetch('/slow?ms=800').then(() => {
+    document.getElementById('count').textContent = '1';
+    const checkout = document.createElement('button');
+    checkout.textContent = 'Checkout';
+    document.body.append(checkout);
+  })">Add to cart</button>
+  <!-- A click whose request changes nothing on the page, as an analytics call does. -->
+  <button id="track" onclick="fetch('/slow?ms=300')">Track</button>
+</body>
+</html>

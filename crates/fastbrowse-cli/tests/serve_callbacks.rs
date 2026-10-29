@@ -121,7 +121,7 @@ fn errored(error: &str) -> Value {
     json!({
         "status": "error", "budget": null, "answer": null, "data": null, "evidence": [], "steps": [],
         "cost": {"lines": []}, "artifacts": [], "citations": [], "error": error, "final_url": null,
-        "would_fire": [], "recordings": [], "wall": null,
+        "recordings": [], "wall": null,
     })
 }
 

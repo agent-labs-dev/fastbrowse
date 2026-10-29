@@ -54,7 +54,7 @@ impl Schema for Recovery {
                 .doc("The index of the one listed control the subgoal acts on, or null if none."),
             Field::default("operation", Ty::optional(Operation::ty()), Value::Null)
                 .doc("Operation on the control or page; scroll goes down and scroll_up goes up."),
-            Field::required("give_up", Ty::Bool).doc("True only when the task cannot progress without the user."),
+            Field::required("give_up", Ty::Bool).doc("True only when the task cannot progress without the user: false while an observed control or listed address still offers a way on, including an alternative the task allows."),
             Field::default("text", Ty::optional(Ty::Str), Value::Null).doc(
                 "For a fill correction only: the exact non-secret value supplied by the task or notes for the chosen observed field. Null for other operations, secrets, or an uncertain value.",
             ),
@@ -121,7 +121,6 @@ impl Agent {
             ));
             state.unchanged = 0;
             state.recovered_at = state.history.len();
-            state.plan_marks.clear();
             return Ok(());
         }
         let remaining = state.ready_plan.as_ref().map(|plan| state.notes.unresolved(plan)).unwrap_or_default();
@@ -191,7 +190,6 @@ impl Agent {
         // Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
         state.unchanged = 0;
         state.recovered_at = state.history.len();
-        state.plan_marks.clear();
         // Recovery that could not see a release's address clicked its download link to look for it, in a task that
         // said not to download. Asked before the controls are listed, a link the task rules out is never offered.
         if observation.controls.iter().any(starts_download) {

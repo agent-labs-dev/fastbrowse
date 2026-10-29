@@ -67,26 +67,6 @@ pub trait MaybeUnavailable {
 }
 
 str_enum! {
-    pub enum TripwireMode {
-        /// Evaluate and log what would have fired; change nothing about the run.
-        Shadow = "shadow",
-        /// Send the run to recovery, as the unchanged-page count already does.
-        Armed = "armed",
-    }
-}
-
-str_enum! {
-    pub enum Tripwire {
-        /// The page has not changed for N actions.
-        NoProgress = "no_progress",
-        /// One interaction, on one target, with one value, keeps recurring.
-        ActionRepetition = "action_repetition",
-        /// The set of requirements still wanting evidence has not shrunk for N steps.
-        PlanStagnation = "plan_stagnation",
-    }
-}
-
-str_enum! {
     pub enum Operation {
         Click = "click",
         Hover = "hover",
@@ -572,9 +552,6 @@ pub struct RunResult {
     /// A safe final PNG when step frames are enabled; kept out of text results.
     #[serde(skip)]
     pub final_frame: Option<Vec<u8>>,
-    /// Shadow tripwires retain each occurrence so eval counts do not depend on logging configuration.
-    #[serde(default)]
-    pub would_fire: Vec<Tripwire>,
     /// The videos this run finished writing, captioned then plain.
     #[serde(default)]
     pub recordings: Vec<PathBuf>,

@@ -25,8 +25,6 @@ use crate::retrieval::{names_subject, subject_words};
 use crate::verification::LLMVerdict;
 
 pub(crate) const STALE_LINK_FAILURES: i64 = 2;
-/// Actions named when a run arrives back at a page state, the most recent last.
-pub(crate) const CYCLE_SHOWN: usize = 4;
 pub(crate) const RECOVERY_CHARS: usize = 240;
 
 /// Operations that do not act on the page: a read changes nothing, and DONE is judged again by the finish.
@@ -50,12 +48,6 @@ pub(crate) fn page_operation(operation: Operation) -> bool {
             | Operation::Escape
             | Operation::Done
     )
-}
-
-/// Operations not taken twice from a page state where they changed nothing. A hover can reveal content through CSS
-/// alone, which leaves the DOM as it was, so it is not judged by the DOM.
-pub(crate) fn idle_checked(operation: Operation) -> bool {
-    matches!(operation, Operation::Click | Operation::Enter | Operation::Drag | Operation::Navigate)
 }
 
 pub(crate) fn parse(url: &str) -> Option<Url> {
@@ -333,11 +325,6 @@ pub(crate) fn verified(
         cited.iter().filter(|id| !misread.contains(*id) && !held_unmet.contains(*id)).cloned().collect();
     let doubted: Vec<&String> = named.iter().filter(|id| !excused.contains(*id)).collect();
     doubted.is_empty() && (verdict.complete || !named.is_empty())
-}
-
-pub(crate) fn described(entry: &HistoryEntry) -> String {
-    let operation = entry.operation.map_or("open", |o| o.as_str());
-    format!("{operation} {}", entry.target.as_deref().unwrap_or_default()).trim().to_string()
 }
 
 /// The recent actions in full, after the earlier ones without the effects that make an entry long.
