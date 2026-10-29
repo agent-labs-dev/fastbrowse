@@ -548,7 +548,7 @@ The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, w
 
 ```toml
 [dependencies]
-fastbrowse = "0.8"
+fastbrowse = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

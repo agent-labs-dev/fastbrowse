@@ -6,7 +6,7 @@ resolution, cost limits, and whether a run may call itself finished.
 
 ```toml
 [dependencies]
-fastbrowse = "0.8"
+fastbrowse = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
