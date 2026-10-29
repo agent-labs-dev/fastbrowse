@@ -22,8 +22,14 @@ type conn struct {
 	// serve answers a request the server makes; what it returns is the result, and an error is the error reply.
 	// It runs on a goroutine of its own, so a slow callback does not hold up the replies behind it.
 	serve func(method string, params json.RawMessage) (any, error)
-	// notify takes a notification, in the order they came, on the goroutine that reads.
+	// notify takes a notification. Notifications and replies are delivered in the order they came, one at a time.
 	notify func(method string, params json.RawMessage)
+
+	// The messages read and not yet delivered. The reader only queues them, so it reads on to the end of the stream
+	// while a callback runs, and the process's exit is seen even when that callback is waiting on it.
+	queued  []func()
+	waking  chan struct{}
+	drained bool
 }
 
 type reply struct {
@@ -49,7 +55,41 @@ type incoming struct {
 }
 
 func newConn(output io.Writer) *conn {
-	return &conn{output: output, pending: map[int64]chan reply{}, nextID: 1}
+	c := &conn{output: output, pending: map[int64]chan reply{}, nextID: 1, waking: make(chan struct{}, 1)}
+	go c.deliver()
+	return c
+}
+
+// queue hands delivery to the goroutine that delivers, in the order of the calls.
+func (c *conn) queue(delivery func()) {
+	c.mu.Lock()
+	c.queued = append(c.queued, delivery)
+	c.mu.Unlock()
+	select {
+	case c.waking <- struct{}{}:
+	default:
+	}
+}
+
+// deliver runs what is queued, until the connection has ended and everything before the end is delivered.
+func (c *conn) deliver() {
+	for range c.waking {
+		for {
+			c.mu.Lock()
+			if len(c.queued) == 0 {
+				drained := c.drained
+				c.mu.Unlock()
+				if drained {
+					return
+				}
+				break
+			}
+			delivery := c.queued[0]
+			c.queued = c.queued[1:]
+			c.mu.Unlock()
+			delivery()
+		}
+	}
 }
 
 // read takes messages from input until it ends, then returns.
@@ -80,10 +120,11 @@ func (c *conn) receive(line []byte) bool {
 		return false
 	}
 	if m.Method != nil {
+		method := *m.Method
 		if len(m.ID) == 0 || string(m.ID) == "null" {
-			c.notify(*m.Method, m.Params)
+			c.queue(func() { c.notify(method, m.Params) })
 		} else {
-			go c.answer(m.ID, *m.Method, m.Params)
+			c.queue(func() { go c.answer(m.ID, method, m.Params) })
 		}
 		return true
 	}
@@ -98,11 +139,12 @@ func (c *conn) receive(line []byte) bool {
 	if !ok {
 		return true
 	}
+	answered := reply{result: m.Result}
 	if m.Error != nil {
-		waiting <- reply{err: &RPCError{Code: m.Error.Code, Message: m.Error.Message}}
-	} else {
-		waiting <- reply{result: m.Result}
+		answered = reply{err: &RPCError{Code: m.Error.Code, Message: m.Error.Message}}
 	}
+	// After the notifications before it, so a run's events have all been delivered when its reply is.
+	c.queue(func() { waiting <- answered })
 	return true
 }
 
@@ -158,16 +200,24 @@ func (c *conn) send(m message) {
 	_, _ = c.output.Write(append(line, '\n'))
 }
 
-// end says the other side is gone. Every request still waiting gets reason, and so does any made later.
+// end says the other side is gone. Every request still waiting gets reason once what came before is delivered, and
+// any made later gets it at once.
 func (c *conn) end(reason error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.ended != nil {
+		c.mu.Unlock()
 		return
 	}
 	c.ended = reason
-	for id, waiting := range c.pending {
-		waiting <- reply{err: reason}
-		delete(c.pending, id)
-	}
+	waiting := c.pending
+	c.pending = map[int64]chan reply{}
+	c.mu.Unlock()
+	c.queue(func() {
+		for _, each := range waiting {
+			each <- reply{err: reason}
+		}
+		c.mu.Lock()
+		c.drained = true
+		c.mu.Unlock()
+	})
 }

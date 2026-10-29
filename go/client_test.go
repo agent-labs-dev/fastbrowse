@@ -301,3 +301,21 @@ func TestStructuredDataIsReadIntoTheCallersType(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+func TestCloseFromACallbackReturns(t *testing.T) {
+	client := scripted(t, "never_ends", Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ran := make(chan error, 1)
+	go func() {
+		_, err := client.Run(context.Background(), "t", RunOptions{OnEvent: func(Event) error {
+			return client.Close(ctx)
+		}})
+		ran <- err
+	}()
+	select {
+	case <-ran:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close called from OnEvent never returned")
+	}
+}
