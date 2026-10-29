@@ -73,10 +73,12 @@ convenience for a machine that has no direct key, not as the production route.
 The Vercel AI Gateway is a last resort rather than the recommended Jev route. `AI_GATEWAY_API_KEY` alone
 serves the LLM and also serves Jev as the last resort; beside a direct or OpenRouter key it adds a Jev backup.
 
-Jev's Images and Box surfaces are Dreamer-ready and are not used by fastbrowse. When they are used, they
-are direct-only: the client sends the `TypeSafe-Danger-Zone-Images` header and an `assets` map only on the
-direct route. A run configured with only OpenRouter keeps Jev image input off, so pixels never travel
-through the router. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
+Jev images are direct-only. On the direct route each step's action decision is sent the viewport
+screenshot: the state names it `viewport_screenshot`, and the request carries the PNG in TypeSafe's
+`assets` map with the `TypeSafe-Danger-Zone-Images` header. A screenshot outside TypeSafe's documented
+sizes, or one taken while a secret shows as page text, is not sent. OpenRouter, the gateway and every
+backup are asked the rest of the state, without the image or its reference, so pixels never travel
+through a router. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
 this policy.
 
 ## Provider failover
@@ -168,8 +170,7 @@ and where fastbrowse follows it:
 - **Score** for graded judgments such as relevance.
 - **Full Choice distributions** for trying a second-best target, rather than only the top pick
   ([hierarchical classification](https://docs.typesafe.ai/cookbooks/hierarchical_classification)).
-- **Images and Box** ([Images](https://docs.typesafe.ai/images), [Box](https://docs.typesafe.ai/primitives/box)):
-  not used by fastbrowse. When they are, they are direct-only; OpenRouter never receives page pixels, and a
-  run with only an OpenRouter Jev key keeps image input off.
+- **Box** ([Box](https://docs.typesafe.ai/primitives/box)): not used by fastbrowse. Like images, it is
+  direct-only.
 
 No faster Jev tier, cross-request cache or logprob access is documented.

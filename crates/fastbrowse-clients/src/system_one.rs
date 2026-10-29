@@ -3,7 +3,10 @@
 //! same body at `/v1/decisions`. A host with no key is sent no Authorization header.
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, JEV_MODEL, Question};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, JEV_MODEL, NO_IMAGES, Question, without_images,
+};
+use fastbrowse_core::py::base64;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -31,6 +34,8 @@ pub const PERPLEXITY_MODEL: &str = "pplx-decider-v1.2";
 pub const SYSTEM_ONE_PATH: &str = "/v1/systemone";
 /// TypeSafe's opt-in to Jev's long context, sent on each request that needs it.
 pub const LONG_CONTEXT_HEADER: (&str, &str) = ("TypeSafe-Danger-Zone-Long-Context", "true");
+/// TypeSafe's opt-in to image input, sent on each request that carries an image.
+pub const IMAGES_HEADER: (&str, &str) = ("TypeSafe-Danger-Zone-Images", "true");
 /// Where AIMLAPI and Perplexity take a System One body.
 pub const DECISIONS_PATH: &str = "/v1/decisions";
 
@@ -63,9 +68,10 @@ impl SystemOneClient {
         self
     }
 
-    /// TypeSafe's own API, which grants long context only to a request carrying its header.
+    /// TypeSafe's own API, which grants long context and image input only to a request carrying their headers.
     pub fn typesafe(mut self) -> SystemOneClient {
         self.headers.push(LONG_CONTEXT_HEADER);
+        self.profile.images = true;
         self.long_context()
     }
 
@@ -90,28 +96,41 @@ impl SystemOneClient {
         &self,
         state: &Value,
         questions: IndexMap<String, Question>,
+        images: &Images,
         start_attempt: usize,
         split_batch: bool,
     ) -> Result<Evaluation, AskError> {
         // The span covers the parse as well as the request: a 200 whose body is not a valid answer is a failed call.
-        self.http.trace.call_span("jev", Map::new(), self.request(state, &questions, start_attempt, split_batch)).await
+        let asked = self.request(state, &questions, images, start_attempt, split_batch);
+        self.http.trace.call_span("jev", Map::new(), asked).await
     }
 
     async fn request(
         &self,
         state: &Value,
         questions: &IndexMap<String, Question>,
+        images: &Images,
         start_attempt: usize,
         split_batch: bool,
     ) -> Result<Evaluation, AskError> {
         let started = Instant::now();
         let sent = Usage::default();
-        let body = json!({"model": self.model, "state": state, "questions": wire_questions(questions, false)});
+        let mut body = json!({"model": self.model, "state": state, "questions": wire_questions(questions, false)});
+        let mut headers = self.headers.clone();
+        if !images.is_empty() {
+            let assets: Map<String, Value> = images
+                .iter()
+                .map(|(key, png)| {
+                    (key.clone(), json!({"type": "image", "format": "png", "data_base64": base64::encode(png)}))
+                })
+                .collect();
+            body["assets"] = Value::Object(assets);
+            headers.push(IMAGES_HEADER);
+        }
         let url = format!("{}{}", self.base_url, self.path);
         let price = self.profile.dollars_per_input_token;
         let response =
-            post(&self.http, &url, &self.api_key, &body, &self.headers, &sent, start_attempt, split_batch, price)
-                .await?;
+            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch, price).await?;
         let sent = sent.snapshot();
         let parsed = (|| {
             let payload = json_object(&response)?;
@@ -139,22 +158,44 @@ impl SystemOneClient {
     }
 }
 
+impl SystemOneClient {
+    async fn answer(
+        &self,
+        state: &Value,
+        questions: &IndexMap<String, Question>,
+        images: &Images,
+    ) -> Result<Evaluation, DecisionError> {
+        let price = self.profile.dollars_per_input_token;
+        let ask = |batch, attempt, split| -> BoxFuture<'_, Result<Evaluation, AskError>> {
+            Box::pin(self.ask(state, batch, images, attempt, split))
+        };
+        asking_open(questions, move |asked| async move { asking_split(asked, &ask, price).await }, &self.model, price)
+            .await
+    }
+}
+
 impl DecisionClient for SystemOneClient {
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        let price = self.profile.dollars_per_input_token;
-        Box::pin(asking_open(
-            questions,
-            move |asked| async move {
-                asking_split(asked, &|batch, attempt, split| Box::pin(self.ask(state, batch, attempt, split)), price)
-                    .await
-            },
-            &self.model,
-            price,
-        ))
+        Box::pin(self.answer(state, questions, &NO_IMAGES))
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            if self.profile.images {
+                self.answer(state, questions, images).await
+            } else {
+                self.answer(&without_images(state, images), questions, &NO_IMAGES).await
+            }
+        })
     }
 
     fn profile(&self) -> DecisionProfile {

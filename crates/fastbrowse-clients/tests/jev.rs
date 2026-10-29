@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 use common::{Script, answering, reply, text};
 use fastbrowse_clients::failover::FailoverDecisionClient;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
-use fastbrowse_clients::system_one::{OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient};
+use fastbrowse_clients::system_one::{IMAGES_HEADER, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spend};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN,
-    NoulAnswer, NoulQuestion, Question, ScoreQuestion,
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images,
+    JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, NoulAnswer, NoulQuestion, Question, ScoreQuestion,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, Limits};
 use fastbrowse_core::telemetry::Ledger;
@@ -108,30 +108,89 @@ async fn test_openrouter_uses_systemone_and_records_cost() {
     }
 }
 
-/// Jev images are direct-only and the agent sends none yet, so no request on either System One route carries pixels.
-/// A run keyed only for OpenRouter keeps image input off, and the router never receives a page's pixels. An image path
-/// added later changes this test with the direct-only capability it adds, rather than turning the header or assets on
-/// for every route.
+/// Jev images are direct-only: TypeSafe's own API is sent the image in its documented format with the images header,
+/// and OpenRouter never receives a page's pixels, nor the reference to them.
 #[tokio::test]
-async fn test_jev_requests_carry_no_image_input() {
-    for (key, base_url) in [("openrouter-key", OPENROUTER_URL), ("key", "https://direct.test")] {
+async fn test_only_typesafe_is_sent_images() {
+    let images = Images::from([("shot-1".to_string(), b"png bytes".to_vec())]);
+    let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
+    for typesafe in [false, true] {
         let http = answering(move |request| {
-            assert!(
-                !request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("typesafe-danger-zone-images")),
-                "{base_url}"
-            );
+            let flagged = request
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case(IMAGES_HEADER.0) && value == "true");
             let body: Value = serde_json::from_slice(&request.body).unwrap();
-            assert!(body.get("assets").is_none(), "{base_url}");
+            if typesafe {
+                assert!(flagged);
+                assert_eq!(
+                    body["assets"],
+                    json!({"shot-1": {"type": "image", "format": "png", "data_base64": "cG5nIGJ5dGVz"}})
+                );
+                assert_eq!(body["state"], json!({"page": "text", "viewport_screenshot": "shot-1"}));
+            } else {
+                assert!(!flagged);
+                assert!(body.get("assets").is_none());
+                assert_eq!(body["state"], json!({"page": "text"}));
+            }
             let response = Response::json(
                 200,
                 &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}),
             );
             Box::pin(async move { Ok(response) })
         });
-        let client = SystemOneClient::new(key, http, base_url, OPENROUTER_MODEL);
-        let result = client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
+        let client = if typesafe {
+            SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe()
+        } else {
+            SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).long_context()
+        };
+        let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();
         assert!(matches!(result.answers["q"], Answer::Noul(_)));
     }
+}
+
+/// A run that fails over from TypeSafe's own API asks its backup without the image or the reference to it.
+#[tokio::test]
+async fn test_a_backup_route_is_asked_without_images() {
+    let images = Images::from([("shot-1".to_string(), b"png bytes".to_vec())]);
+    let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
+    let http = answering(|request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let response = if request.url.starts_with("https://direct.test") {
+            assert!(body.get("assets").is_some());
+            Response::json(401, &json!({"error": "bad key"}))
+        } else {
+            assert!(!request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(IMAGES_HEADER.0)));
+            assert!(body.get("assets").is_none());
+            assert_eq!(body["state"], json!({"page": "text"}));
+            Response::json(200, &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}))
+        };
+        Box::pin(async move { Ok(response) })
+    });
+    let client = FailoverDecisionClient::new(
+        Box::new(SystemOneClient::new("key", http.clone(), "https://direct.test", JEV_MODEL).typesafe()),
+        Box::new(SystemOneClient::new("openrouter-key", http.clone(), OPENROUTER_URL, OPENROUTER_MODEL)),
+        http,
+    );
+    let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();
+    assert!(matches!(result.answers["q"], Answer::Noul(_)));
+}
+
+/// A request with no image never asks for image input, even on TypeSafe's own API.
+#[tokio::test]
+async fn test_a_request_without_images_carries_no_image_input() {
+    let http = answering(|request| {
+        assert!(!request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(IMAGES_HEADER.0)));
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert!(body.get("assets").is_none());
+        let response = Response::json(
+            200,
+            &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}),
+        );
+        Box::pin(async move { Ok(response) })
+    });
+    let client = SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe();
+    client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
 }
 
 #[tokio::test]

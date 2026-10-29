@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use fastbrowse_core::decision::jev_takes_png;
 use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
 use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult, WallKind};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
@@ -152,7 +153,8 @@ impl Agent {
             let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
-                    let context = self.context(state, secrets, check_login, fresh)?;
+                    let mut context = self.context(state, secrets, check_login, fresh)?;
+                    context.screenshot = self.viewport().await?;
                     let redecided = state.redecided;
                     let deciding = decide(
                         &*self.jev,
@@ -1206,6 +1208,14 @@ impl Agent {
             blocks,
             ..capture.clone()
         })
+    }
+
+    /// The viewport for Jev's action decision, on a route that takes images and only within the sizes it accepts.
+    pub(super) async fn viewport(&self) -> Step<Option<Vec<u8>>> {
+        if !self.jev.profile().images {
+            return Ok(None);
+        }
+        Ok(self.screenshots().await?.into_iter().find(|png| jev_takes_png(png)))
     }
 
     /// No image while a secret shows as page text: pixels cannot be masked like text. Typed fields are masked by the

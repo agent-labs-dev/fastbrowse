@@ -419,6 +419,7 @@ impl Agent {
             }
         }
         context.problem = Some(problem);
+        context.screenshot = self.viewport().await?;
         let decision = decide(
             &*self.jev,
             &offered,

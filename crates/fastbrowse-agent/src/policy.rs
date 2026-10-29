@@ -12,14 +12,15 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, NoulAnswer, NoulQuestion, Question,
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images, NoulAnswer, NoulQuestion,
+    Question,
 };
 use fastbrowse_core::models::{CostComponent, CostLine, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, loads_more, pager_link};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
-use fastbrowse_core::py::{lax, text};
+use fastbrowse_core::py::{lax, sha256_hex, text};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -180,6 +181,9 @@ pub struct StepContext {
     /// Fields the task gives no value for: filling one ends the run needing input.
     #[serde(default)]
     pub no_value_fields: Vec<String>,
+    /// The viewport as a PNG, given to a route that takes images.
+    #[serde(skip)]
+    pub screenshot: Option<Vec<u8>>,
     /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_actions: usize,
@@ -211,6 +215,7 @@ impl StepContext {
             problem: None,
             withheld: Vec::new(),
             no_value_fields: Vec::new(),
+            screenshot: None,
         }
     }
 }
@@ -261,6 +266,8 @@ impl Decision {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub state: Value,
+    /// The images the state refers to, keyed by the reference written in it.
+    pub images: Images,
     pub questions: IndexMap<String, Question>,
     pub targets: IndexMap<Operation, Vec<Control>>,
     pub groups: IndexMap<Operation, Vec<Vec<Control>>>,
@@ -895,6 +902,7 @@ pub fn build_request(
     }
     Request {
         state: state(observation, controls, context, compact),
+        images: context.screenshot.iter().map(|png| (screenshot_reference(png), png.clone())).collect(),
         questions,
         targets,
         groups,
@@ -923,7 +931,7 @@ async fn evaluate(
         if let Some(ledger) = ledger {
             ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         }
-        let answered = jev.evaluate(&request.state, questions).await?;
+        let answered = jev.evaluate_images(&request.state, questions, &request.images).await?;
         if let Some(ledger) = ledger {
             ledger.record([answered.cost.clone()])?;
         }
@@ -1096,7 +1104,16 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     if observation.tabs.len() > 1 {
         state.insert("tabs".into(), Value::Array(observation.tabs.iter().map(Dump::dump_exclude_none).collect()));
     }
+    if let Some(png) = &context.screenshot {
+        state.insert("viewport_screenshot".into(), screenshot_reference(png).into());
+    }
     Value::Object(state)
+}
+
+/// Jev reads an image wherever its reference appears, even inside page text, so the reference is one no page could
+/// contain by chance: the image's own digest.
+fn screenshot_reference(png: &[u8]) -> String {
+    format!("screenshot-{}", sha256_hex(png))
 }
 
 fn sorted_operations(control: &Control) -> Value {
@@ -1539,6 +1556,19 @@ mod tests {
             (&state["task"], &state["background"]),
             (&json!("Find the price"), &json!("Asked by email from Ana."))
         );
+    }
+
+    #[test]
+    fn test_the_step_state_refers_to_the_viewport_it_is_sent() {
+        let page = observation(vec![]);
+        let mut context = StepContext::new("Pick the red square");
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false);
+        assert!(request.state.get("viewport_screenshot").is_none() && request.images.is_empty());
+        context.screenshot = Some(b"png".to_vec());
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false);
+        let reference = format!("screenshot-{}", sha256_hex(b"png"));
+        assert_eq!(request.state["viewport_screenshot"], json!(reference));
+        assert_eq!(request.images, Images::from([(reference, b"png".to_vec())]));
     }
 
     #[test]

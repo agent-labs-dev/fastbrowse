@@ -935,6 +935,7 @@ impl Agent {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect(),
+            screenshot: None,
         })
     }
 
