@@ -8,17 +8,27 @@ import pytest
 from fastbrowse.evals import storage, tracking
 
 
-def row(task: str, *, repeat: int = 0, passed: bool = True, seconds: float = 5.0, **overrides: object) -> dict:
+def run(**overrides: object) -> dict:
     value = {
-        "run": {
-            "run_id": "abc123",
-            "run_started": "2026-10-29T10:00:00+00:00",
-            "fastbrowse_version": "0.7.1",
-            "git_sha": "a" * 40,
-            "git_dirty": False,
-            "providers": "Jev openrouter; LLM via OpenRouter",
-        },
-        "suite": "mock",
+        "run_id": "abc123",
+        "run_started": "2026-10-29T10:00:00+00:00",
+        "fastbrowse_version": "0.7.1",
+        "git_sha": "a" * 40,
+        "git_dirty": False,
+        "providers": "Jev openrouter; LLM via OpenRouter",
+        # The runner embeds per-suite limits here, so these differ between the local and mock rows of one run.
+        "agent_limits": {"max_steps": 40, "max_jev_calls": None},
+    }
+    value.update(overrides)
+    return value
+
+
+def row(
+    task: str, *, repeat: int = 0, passed: bool = True, seconds: float = 5.0, suite: str = "mock", **overrides: object
+) -> dict:
+    value = {
+        "run": run(agent_limits={"max_steps": 40 if suite == "mock" else 25, "max_jev_calls": None}),
+        "suite": suite,
         "task": task,
         "repeat": repeat,
         "passed": passed,
@@ -49,6 +59,15 @@ def client_for(handler) -> httpx.Client:
     return httpx.Client(base_url=storage.HOST, transport=httpx.MockTransport(handler))
 
 
+def stored(spec: dict, *, output: dict | None = None, run_id: str | None = None) -> dict:
+    return {
+        "id": "x",
+        "name": "anything",
+        "output": spec["output"] if output is None else output,
+        "metadata": {"run_id": spec["run_id"] if run_id is None else run_id},
+    }
+
+
 def test_every_span_names_the_build_and_the_attempt(tmp_path: Path) -> None:
     path = rows_file(tmp_path, [row("mock-basket"), row("mock-sign-in", repeat=1)])
     body = tracking.payload(path, tracking.read_rows(path))
@@ -65,16 +84,52 @@ def test_every_span_names_the_build_and_the_attempt(tmp_path: Path) -> None:
     assert spans[0]["traceId"] != spans[1]["traceId"]
 
 
-def test_a_repeat_is_the_same_trace_and_another_campaign_is_not(tmp_path: Path) -> None:
+def test_boundary_headers_ask_for_real_time_ingestion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = rows_file(tmp_path, [row("mock-basket")])
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.url.path == tracking.OTLP_PATH:
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={"data": [stored(next(iter(wanting.values())))], "meta": {}})
+
+    wanting = tracking.expected(path, tracking.read_rows(path))
+    monkeypatch.setattr(tracking, "connection", lambda: _context(client_for(handler)))
+    tracking.publish(path, attempts=1, delay=0)
+
+    upload = next(request for request in sent if request.url.path == tracking.OTLP_PATH)
+    assert upload.headers["x-langfuse-ingestion-version"] == "4"
+
+
+class _context:
+    def __init__(self, client: httpx.Client) -> None:
+        self.client = client
+
+    def __enter__(self) -> httpx.Client:
+        return self.client
+
+    def __exit__(self, *_exc: object) -> None:
+        self.client.close()
+
+
+def test_a_repeat_is_the_same_trace_and_another_campaign_is_not() -> None:
     first, second = row("mock-basket"), row("mock-basket")
     assert tracking.trace_id("campaign", first) == tracking.trace_id("campaign", second)
     assert tracking.trace_id("campaign", first) != tracking.trace_id("other", first)
     assert tracking.trace_id("campaign", first) != tracking.trace_id("campaign", row("mock-sign-in", repeat=1))
 
 
-def test_rows_mixing_two_builds_are_refused(tmp_path: Path) -> None:
+def test_two_suites_with_different_limits_are_one_run(tmp_path: Path) -> None:
+    # The nightly job runs local and mock into one rows file, and their agent limits legitimately differ.
+    path = rows_file(tmp_path, [row("mock-basket"), row("search", suite="local")])
+    body = tracking.payload(path, tracking.read_rows(path))
+    assert len(body["resourceSpans"][0]["scopeSpans"][0]["spans"]) == 2
+
+
+def test_rows_from_two_runs_are_refused(tmp_path: Path) -> None:
     other = row("mock-sign-in")
-    other["run"] = {**other["run"], "git_sha": "b" * 40}
+    other["run"] = {**other["run"], "run_id": "def456"}
     path = rows_file(tmp_path, [row("mock-basket"), other])
     with pytest.raises(tracking.RowsError, match="mix"):
         tracking.payload(path, tracking.read_rows(path))
@@ -103,7 +158,7 @@ def test_read_back_accepts_the_v2_index(tmp_path: Path) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
-        return httpx.Response(200, json={"data": [{"id": "x", "name": "anything"}], "meta": {}})
+        return httpx.Response(200, json={"data": [stored(next(iter(wanted.values())))], "meta": {}})
 
     tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
     assert seen == ["/api/public/v2/observations"]
@@ -111,19 +166,71 @@ def test_read_back_accepts_the_v2_index(tmp_path: Path) -> None:
 
 def test_read_back_falls_back_to_the_trace_while_the_index_lags(tmp_path: Path) -> None:
     path = rows_file(tmp_path, [row("mock-basket")])
-    rows = tracking.read_rows(path)
-    wanted = tracking.expected(path, rows)
-    name = next(iter(wanted.values()))
+    wanted = tracking.expected(path, tracking.read_rows(path))
+    spec = next(iter(wanted.values()))
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
         if request.url.path == "/api/public/v2/observations":
             return httpx.Response(200, json={"data": [], "meta": {}})
-        return httpx.Response(200, json={"name": name, "observations": []})
+        return httpx.Response(200, json={"metadata": {"run_id": spec["run_id"]}, "observations": [stored(spec)]})
 
     tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
     assert seen == ["/api/public/v2/observations", f"/api/public/traces/{next(iter(wanted))}"]
+
+
+def test_an_older_trace_under_a_reused_id_does_not_count(tmp_path: Path) -> None:
+    # A rerun reuses the trace id on purpose, so an id that already existed must not pass as this upload.
+    path = rows_file(tmp_path, [row("mock-basket")])
+    wanted = tracking.expected(path, tracking.read_rows(path))
+    spec = next(iter(wanted.values()))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/public/v2/observations":
+            return httpx.Response(200, json={"data": [], "meta": {}})
+        stale = stored(spec, output={**spec["output"], "dollars": 9.99}, run_id="previous-run")
+        return httpx.Response(200, json={"metadata": {"run_id": "previous-run"}, "observations": [stale]})
+
+    with pytest.raises(tracking.RowsError, match="not readable"):
+        tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
+
+
+def test_a_verified_trace_is_not_asked_for_again(tmp_path: Path) -> None:
+    path = rows_file(tmp_path, [row("mock-basket"), row("mock-sign-in")])
+    wanted = tracking.expected(path, tracking.read_rows(path))
+    first, second = list(wanted)
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/public/v2/observations":
+            trace = request.url.params["traceId"]
+            asked.append(trace)
+            if trace == first or asked.count(second) == 3:
+                return httpx.Response(200, json={"data": [stored(wanted[trace])], "meta": {}})
+            return httpx.Response(200, json={"data": [], "meta": {}})
+        return httpx.Response(404, json={"message": "not found"})
+
+    tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=3, delay=0)
+    assert asked.count(first) == 1
+    assert asked.count(second) == 3
+
+
+def test_a_rate_limited_read_is_waited_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = rows_file(tmp_path, [row("mock-basket")])
+    wanted = tracking.expected(path, tracking.read_rows(path))
+    slept: list[float] = []
+    calls: list[str] = []
+    monkeypatch.setattr(tracking.time, "sleep", slept.append)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"retry-after": "7"})
+        return httpx.Response(200, json={"data": [stored(next(iter(wanted.values())))], "meta": {}})
+
+    tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
+    assert slept[0] == 7.0  # the retry-after Langfuse named, not our own delay
 
 
 def test_an_unreadable_trace_fails_the_upload(tmp_path: Path) -> None:
@@ -137,19 +244,6 @@ def test_an_unreadable_trace_fails_the_upload(tmp_path: Path) -> None:
 
     with pytest.raises(tracking.RowsError, match="not readable"):
         tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
-
-
-def test_a_trace_read_back_under_another_name_does_not_count(tmp_path: Path) -> None:
-    path = rows_file(tmp_path, [row("mock-basket")])
-    wanted = tracking.expected(path, tracking.read_rows(path))
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/public/v2/observations":
-            return httpx.Response(200, json={"data": [], "meta": {}})
-        return httpx.Response(200, json={"name": "someone-elses-run", "observations": []})
-
-    with pytest.raises(tracking.RowsError, match="not readable"):
-        tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
 
 
 def test_dry_run_prints_the_build_and_posts_nothing(

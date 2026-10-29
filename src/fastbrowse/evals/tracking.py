@@ -11,13 +11,15 @@ Three properties make a published trace usable as evidence, and each is enforced
 - Every trace names the build. The rows must all come from one clean commit, and that commit, the run id and
   the task and suite versions go on the trace, so a figure traces back to the code that produced it.
 - A re-run maps to the same traces. A trace id is a digest of the campaign and the attempt, so a retried job
-  overwrites its own traces instead of publishing a second copy of one measurement.
+  overwrites its own traces instead of publishing a second copy of one measurement; read-back therefore checks
+  the run id and output on the trace, because an id that already existed is not proof this upload landed.
 - Upload is not approval. Nothing here writes `docs/results` or a benchmark feed, and fixture rows are never
   a comparison figure.
 
-Upload uses the OTLP endpoint, the path Langfuse serves for live data; its v1 ingestion API is closing. Read-back
-asks the v2 observation index first and falls back to the trace itself, because that index does not yet return
-every span ingested through OTLP.
+Upload uses the OTLP endpoint, the path Langfuse serves for live data, and asks for real-time ingestion: without
+that header Langfuse may take many minutes to expose a direct export through the read API. Read-back asks the v2
+observation index first and falls back to the trace itself, because that index does not yet return every span
+ingested through OTLP.
 """
 
 import argparse
@@ -37,6 +39,9 @@ from fastbrowse.evals.storage import connection
 OTLP_PATH = "/api/public/otel/v1/traces"
 """The endpoint Langfuse ingests live spans through."""
 
+OTLP_HEADERS = {"x-langfuse-ingestion-version": "4"}
+"""Ask for real-time ingestion: a direct exporter without this can take up to fifteen minutes to be readable."""
+
 SCOPE = "fastbrowse.evals"
 """The instrumentation scope a reviewer sees on the trace beside the build."""
 
@@ -47,9 +52,24 @@ VERIFY_DELAY_SECONDS = 5.0
 """Seconds between read-backs. Langfuse queued an upload for over four minutes when this was measured, so the
 deadline is generous on purpose: a run that is simply still queueing is not a failed upload."""
 
+PROVENANCE = ("run_id", "git_sha", "fastbrowse_version", "run_started", "git_dirty", "providers")
+"""What identifies the run. `run` also carries per-suite agent limits, which differ between the local and mock
+rows of one run, so the whole object cannot be the identity: a normal nightly file would read as many runs."""
+
+OUTPUT = ("passed", "status", "normalized_status", "seconds", "dollars", "unknown_cost", "error")
+"""The measured values read-back compares, so an old trace under a reused id cannot pass as this upload."""
+
 
 class RowsError(ValueError):
     """The rows cannot be published as one attributable run, so nothing is uploaded."""
+
+
+class RateLimited(Exception):
+    """Langfuse refused a read for now; the caller waits the time it named instead of guessing."""
+
+    def __init__(self, retry_after: float) -> None:
+        super().__init__(f"rate limited for {retry_after}s")
+        self.retry_after = retry_after
 
 
 def read_rows(path: Path) -> list[dict[str, Any]]:
@@ -61,9 +81,9 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
 
 def run_of(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """One run, or a refusal: a mixed file or a dirty tree is not a measurement anyone can check."""
-    runs = {json.dumps(row.get("run"), sort_keys=True) for row in rows}
-    if len(runs) != 1:
-        raise RowsError(f"rows mix {len(runs)} runs; one upload carries exactly one build")
+    identities = {tuple(str((row.get("run") or {}).get(key)) for key in PROVENANCE) for row in rows}
+    if len(identities) != 1:
+        raise RowsError(f"rows mix {len(identities)} runs; one upload carries exactly one build")
     run = dict(rows[0]["run"])
     if not run.get("git_sha"):
         raise RowsError("rows carry no git_sha, so a trace could not be attributed to a build")
@@ -83,13 +103,21 @@ def _attempt(row: Mapping[str, Any]) -> str:
 
 def trace_id(name: str, row: Mapping[str, Any]) -> str:
     """Stable and campaign-scoped: the same attempt maps to the same trace however often it is uploaded."""
-    return hashlib.sha256(f"{name}|{_attempt(row)}|{row.get('run_id') or ''}".encode()).hexdigest()[:32]
+    return hashlib.sha256(f"{name}|{_attempt(row)}".encode()).hexdigest()[:32]
 
 
-def expected(path: Path, rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-    """Every trace the upload is answerable for: its id, and the name read-back must find."""
-    name = campaign(path, run_of(rows))
-    return {trace_id(name, row): f"{name}/{_attempt(row)}" for row in rows}
+def _output(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: row.get(key) for key in OUTPUT}
+
+
+def expected(path: Path, rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Every trace the upload is answerable for: its id, the name and run id it must carry, and its output."""
+    run = run_of(rows)
+    name = campaign(path, run)
+    return {
+        trace_id(name, row): {"name": f"{name}/{_attempt(row)}", "run_id": run.get("run_id"), "output": _output(row)}
+        for row in rows
+    }
 
 
 def _value(value: Any) -> dict[str, Any]:
@@ -106,27 +134,17 @@ def _attribute(key: str, value: Any) -> dict[str, Any]:
 
 def _span(name: str, run: Mapping[str, Any], row: Mapping[str, Any], at: datetime) -> dict[str, Any]:
     """One task attempt as one OTLP span, carrying the build, the run and the numbers it produced."""
-    trace = trace_id(name, row)
     attributes = [
         _attribute("langfuse.observation.type", "span"),
         _attribute("langfuse.trace.name", f"{name}/{_attempt(row)}"),
         _attribute("langfuse.release", name),
         _attribute("langfuse.version", run["fastbrowse_version"]),
         _attribute("langfuse.observation.input", json.dumps({"task": row.get("task"), "suite": row.get("suite")})),
-        _attribute(
-            "langfuse.observation.output",
-            json.dumps(
-                {
-                    key: row.get(key)
-                    for key in ("passed", "status", "normalized_status", "seconds", "dollars", "unknown_cost", "error")
-                },
-                sort_keys=True,
-            ),
-        ),
+        _attribute("langfuse.observation.output", json.dumps(_output(row), sort_keys=True)),
     ]
     for key, value in (
-        ("build", run["git_sha"]),
         ("run_id", run.get("run_id")),
+        ("build", run["git_sha"]),
         ("providers", run.get("providers")),
         ("suite_version", row.get("suite_version")),
         ("task_version", row.get("task_version")),
@@ -141,7 +159,7 @@ def _span(name: str, run: Mapping[str, Any], row: Mapping[str, Any], at: datetim
             attributes.append(_attribute(f"langfuse.trace.metadata.{key}", value))
     seconds = float(row.get("seconds") or 0)
     return {
-        "traceId": trace,
+        "traceId": trace_id(name, row),
         "spanId": hashlib.sha256(f"{name}|{_attempt(row)}".encode()).hexdigest()[:16],
         "name": _attempt(row),
         "kind": 1,
@@ -178,39 +196,74 @@ def payload(path: Path, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _readable(client: httpx.Client, trace: str, name: str, since: datetime) -> bool:
-    """Whether one trace is readable now, through the v2 index or, while that lags, the trace itself."""
+def _retry_after(response: httpx.Response) -> float:
+    try:
+        return float(response.headers.get("retry-after", "5"))
+    except ValueError:
+        return 5.0
+
+
+def _matches(observation: Mapping[str, Any], spec: Mapping[str, Any]) -> bool:
+    """Whether this stored observation is the one this upload wrote, not an older one under the same name."""
+    output = observation.get("output")
+    if isinstance(output, str):
+        try:
+            output = json.loads(output)
+        except json.JSONDecodeError:
+            return False
+    metadata = observation.get("metadata") or {}
+    recorded = metadata.get("run_id") if isinstance(metadata, Mapping) else None
+    return recorded == spec["run_id"] and output == spec["output"]
+
+
+def _readable(client: httpx.Client, trace: str, spec: Mapping[str, Any], since: datetime) -> bool:
+    """Whether this upload's version of one trace is readable now, through the index or the trace itself."""
     params: dict[str, Any] = {
         "traceId": trace,
         "fromStartTime": since.isoformat(),
-        "fields": "core,basic",
+        "fields": "core,basic,io",
         "limit": "10",
     }
-    indexed = client.get("/api/public/v2/observations", params=params)
-    if indexed.status_code == 200 and indexed.json().get("data"):
+    index = client.get("/api/public/v2/observations", params=params)
+    if index.status_code == 429:
+        raise RateLimited(_retry_after(index))
+    if index.status_code == 200 and any(_matches(row, spec) for row in index.json().get("data") or []):
         return True
     detail = client.get(f"/api/public/traces/{trace}")
+    if detail.status_code == 429:
+        raise RateLimited(_retry_after(detail))
     if detail.status_code != 200:
         return False
     body = detail.json()
-    return body.get("name") == name or any(o.get("name") == name for o in body.get("observations") or [])
+    if (body.get("metadata") or {}).get("run_id") != spec["run_id"]:
+        return False
+    return any(_matches(row, spec) for row in body.get("observations") or [])
 
 
 def verify(
     client: httpx.Client,
-    wanted: Mapping[str, str],
+    wanted: Mapping[str, Mapping[str, Any]],
     *,
     since: datetime,
     attempts: int = VERIFY_ATTEMPTS,
     delay: float = VERIFY_DELAY_SECONDS,
 ) -> None:
     """Fail unless every trace is readable: an upload nobody can read back is not evidence."""
+    seen: set[str] = set()
     for attempt in range(1, attempts + 1):
-        missing = [trace for trace, name in wanted.items() if not _readable(client, trace, name, since)]
-        if not missing:
+        for trace in [trace for trace in wanted if trace not in seen]:
+            try:
+                if _readable(client, trace, wanted[trace], since):
+                    seen.add(trace)
+            except RateLimited as exc:
+                # The read API is limited per minute, and a big upload would otherwise spend the window on
+                # retries it is refused; waiting what Langfuse asks keeps the tail of the run from starving.
+                time.sleep(exc.retry_after)
+        if len(seen) == len(wanted):
             return
         if attempt < attempts:
             time.sleep(delay)
+    missing = [trace for trace in wanted if trace not in seen]
     raise RowsError(f"{len(missing)} of {len(wanted)} traces are not readable in Langfuse: {', '.join(missing[:5])}")
 
 
@@ -221,7 +274,7 @@ def publish(rows_path: Path, *, attempts: int = VERIFY_ATTEMPTS, delay: float = 
     wanted = expected(rows_path, rows)
     since = datetime.fromisoformat(run["run_started"]).astimezone(UTC) - timedelta(hours=1)
     with connection() as client:
-        client.post(OTLP_PATH, json=payload(rows_path, rows)).raise_for_status()
+        client.post(OTLP_PATH, json=payload(rows_path, rows), headers=OTLP_HEADERS).raise_for_status()
         verify(client, wanted, since=since, attempts=attempts, delay=delay)
     return {
         "campaign": campaign(rows_path, run),
