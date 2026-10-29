@@ -110,6 +110,14 @@ async fn test_the_key_goes_to_anthropic_alone() {
 }
 
 #[tokio::test]
+async fn test_an_error_that_echoes_the_key_is_scrubbed() {
+    let refused = Step::Reply(Response::json(401, &json!({"error": {"message": "bad key anthropic-secret"}})));
+    let (_, result) = generate(&ENV, &[Message::user("?")], vec![refused]).await;
+    let error = result.unwrap_err().to_string();
+    assert!(!error.contains("anthropic-secret") && error.contains("[api key]"), "{error}");
+}
+
+#[tokio::test]
 async fn test_cost_counts_cached_input_and_stays_unknown_without_a_price() {
     let (seen, result) = generate(&ENV, &[Message::user("?")], vec![answer(r#"{"answer":"ok"}"#)]).await;
     // No receipt or price lookup: those belong to OpenRouter and the gateway.
