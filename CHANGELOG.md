@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-29
+
 - **A .NET client.** `dotnet add package Fastbrowse` runs tasks from .NET over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. Cancelling the `CancellationToken` stops a run once its browser has closed. The package carries each platform's binary. .NET 10 or newer.
 
 - **A Java client, for Kotlin too.** `dev.agentlabs:fastbrowse` on Maven Central runs tasks from the JVM over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. `run` returns a `CompletableFuture`, and cancelling it stops the run. Each platform's binary ships in a `natives-<platform>` jar beside the client, unpacked once into the user cache directory. Java 17 or newer.
@@ -32,8 +34,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **The decision model's settings are named for any decision model, not for Jev.** `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_DECISION_BASE_URL` and `FASTBROWSE_DECISION_MODEL` replace `FASTBROWSE_JEV_SOURCE`, `FASTBROWSE_JEV_BASE_URL` and `FASTBROWSE_JEV_MODEL`. The former names are still read when the new one is unset. In the Rust crates, `fastbrowse_core::jev` is now `fastbrowse_core::decision`, `JevClient` is `DecisionClient`, `JevError` is `DecisionError` and `FailoverJevClient` is `FailoverDecisionClient`. What a run reports is unchanged: its cost lines and trace spans still say `jev`, and `--max-jev-calls` keeps its name.
 
 - **A decision model other than Jev 1.13 is held to its own limits.** The choice ceiling, token limits and price were Jev's constants, so a model pinned with `FASTBROWSE_JEV_MODEL` on another System One host was sent 240-option choices and priced as Jev. Each model now has a profile of what it accepts and costs. A model fastbrowse does not know gets the tightest documented limits (26 options a choice, 64 questions and 64 KiB a request) and no price, so its unmetered calls are an unknown cost rather than Jev's. Its thresholds are still Jev's, and the trace says so with a `decision_unvalidated` event. Jev 1.13 runs exactly as before.
-
-## [0.9.0] - 2026-10-29
 
 - **The Rust core is the only core: the Python one is removed.** `FASTBROWSE_PYTHON_CORE=1` no longer selects anything, and the modules it ran (`fastbrowse.agent`, `fastbrowse.browser`, `fastbrowse.clients`, `fastbrowse.cli`, `fastbrowse.mcp_server`, `fastbrowse.serve` and the rest) are gone with their tests, the PyInstaller build and the `cdp-use`, `pydantic-settings` and `websockets` dependencies. `run_task`, `connect_cdp`, `resolve_cdp_port`, `traced` and the pydantic models keep their signatures. `ConfigurationError` and `RecordingError` are now in `fastbrowse.models`, and every browser error `connect_cdp` raises is in `fastbrowse.page`. The kept modules lose what only the Python core used: `fastbrowse.page.Page`, `fastbrowse.models.BrowserConnection` and `SecretValue`, `fastbrowse.jev.JEV_MODEL`, `fastbrowse.llm.recorded` and `fastbrowse.telemetry.trace_to`, and `fastbrowse.telemetry.Ledger` is now the protocol of the ledger the core hands a caller's `llm=` client, not one to construct. The Arch package builds fastbrowse alone. The `mcp` and `browser-use` extras are removed, since the commands need neither: `uvx --from fastbrowse fastbrowse-mcp` serves MCP.
 
