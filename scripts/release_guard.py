@@ -237,7 +237,7 @@ def _langfuse_read(path: str, params: dict[str, str]) -> dict[str, Any] | None:
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
             pass
         if attempt < LANGFUSE_ATTEMPTS:
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
     return None
 
 

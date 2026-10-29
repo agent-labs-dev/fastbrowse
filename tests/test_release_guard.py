@@ -295,9 +295,7 @@ def test_evals_green_refuses_a_positive_count_without_a_run(monkeypatch: pytest.
         release_guard._evals_green("org/repo", "b" * 40, "token")
 
 
-def test_a_release_without_a_recorded_eval_run_is_blocked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_release_without_a_recorded_eval_run_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A build nobody measured is refused, not waved through on a green job from some other commit."""
     monkeypatch.setattr(release_guard, "eval_evidence_problems", _EVAL_EVIDENCE)
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)
@@ -314,15 +312,11 @@ def test_a_release_with_a_recorded_eval_run_passes_the_evidence_gate(
     monkeypatch.setattr(release_guard, "_evals_green", lambda *_: True)
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
-    monkeypatch.setattr(
-        release_guard, "_langfuse_read", lambda *_a, **_k: {"data": [{"id": "observation-1"}]}
-    )
+    monkeypatch.setattr(release_guard, "_langfuse_read", lambda *_a, **_k: {"data": [{"id": "observation-1"}]})
     assert release_guard.problems("0.5.19", "b" * 40, "org/repo", "token", root=tmp_path) == []
 
 
-def test_a_lagging_eval_index_is_retried_rather_than_read_as_missing(
-    monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_lagging_eval_index_is_retried_rather_than_read_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """A transient read is not evidence of absence: it is retried, then fails closed if it never answers."""
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
