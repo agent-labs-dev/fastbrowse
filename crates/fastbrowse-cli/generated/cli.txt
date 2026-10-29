@@ -6,7 +6,7 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
                   [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
                   [--downloads DOWNLOADS] [--json] [--record FILE] [--fetch]
-                  [--trace FILE] [--cursor]
+                  [--fetch-first] [--trace FILE] [--cursor]
                   task
 
 Run one browser task.
@@ -63,6 +63,9 @@ options:
                         only has to read one (no clicking, forms or
                         screenshots; a step that needs the browser ends the
                         run blocked)
+  --fetch-first         read over HTTP first and start a browser only if the
+                        run needs one: a step that clicks, fills or looks at
+                        the page, or a page the static read cannot see
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every

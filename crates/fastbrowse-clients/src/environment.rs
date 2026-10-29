@@ -13,8 +13,8 @@
 //! chat completions endpoint (for example a local vLLM server) instead, and FASTBROWSE_LLM_API_KEY supplies its bearer
 //! token when it has one; that endpoint never receives the OpenRouter or gateway key. FASTBROWSE_LLM_STRICT and
 //! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only. FASTBROWSE_LLM_MODEL overrides every purpose at
-//! once, and FASTBROWSE_LLM_MODEL_<PURPOSE> overrides one. FASTBROWSE_LLM_REASONING sets the reasoning effort: low
-//! (default), medium or high.
+//! once, and FASTBROWSE_LLM_MODEL_<PURPOSE> overrides one. FASTBROWSE_LLM_REASONING sets the reasoning effort: none,
+//! low (default), medium or high.
 //!
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.

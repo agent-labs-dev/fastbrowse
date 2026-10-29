@@ -220,8 +220,12 @@ fn bound(cost: CostLine, ceiling: Ceiling, body: &Map<String, Value>) -> CostLin
 }
 
 /// How much hidden reasoning a model may spend before it answers, in OpenRouter's normalized terms.
+///
+/// `None` turns reasoning off. A model that reasons at every effort and does not scale it to `max_tokens`, such as
+/// DeepSeek V4.1 Flash, spends a verdict's whole 400-token cap thinking and answers nothing, so it needs this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReasoningEffort {
+    None,
     Low,
     Medium,
     High,
@@ -230,6 +234,7 @@ pub enum ReasoningEffort {
 impl ReasoningEffort {
     pub fn as_str(self) -> &'static str {
         match self {
+            ReasoningEffort::None => "none",
             ReasoningEffort::Low => "low",
             ReasoningEffort::Medium => "medium",
             ReasoningEffort::High => "high",
@@ -237,7 +242,9 @@ impl ReasoningEffort {
     }
 
     pub fn parse(value: &str) -> Option<ReasoningEffort> {
-        [ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High].into_iter().find(|e| e.as_str() == value)
+        [ReasoningEffort::None, ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High]
+            .into_iter()
+            .find(|e| e.as_str() == value)
     }
 }
 

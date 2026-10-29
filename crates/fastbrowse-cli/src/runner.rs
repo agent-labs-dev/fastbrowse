@@ -48,6 +48,7 @@ pub struct RunArgs {
     pub record: Option<PathBuf>,
     pub cursor: bool,
     pub fetch: bool,
+    pub fetch_first: bool,
     /// Tripped when the caller stops the run. Python cancels the task; a Rust run watches this instead, closes its
     /// browser and returns [`RunError::Cancelled`].
     pub cancel: Cancel,
@@ -83,6 +84,7 @@ impl RunArgs {
             record: None,
             cursor: false,
             fetch: false,
+            fetch_first: false,
             cancel: Cancel::default(),
         }
     }
@@ -226,6 +228,7 @@ fn run_options(args: &RunArgs) -> Result<fastbrowse_run::RunTask, RunError> {
         record: args.record.clone(),
         cursor: args.cursor,
         fetch: args.fetch,
+        fetch_first: args.fetch_first,
         ..fastbrowse_run::RunTask::default()
     })
 }
