@@ -199,9 +199,13 @@ impl Http {
     }
 
     async fn send(&self, request: Request, seconds: f64) -> Result<Response, TransportError> {
+        // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too.
         let credential = request
             .header("authorization")
-            .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).trim().to_string())
+            .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
+            .or_else(|| request.header("x-api-key"))
+            .or_else(|| request.header("api-key"))
+            .map(|value| value.trim().to_string())
             .unwrap_or_default();
         match tokio::time::timeout(Duration::from_secs_f64(seconds), self.transport.send(request)).await {
             Ok(Ok(mut response)) => {

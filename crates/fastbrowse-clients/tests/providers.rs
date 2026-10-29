@@ -404,3 +404,22 @@ fn test_the_provider_is_named_and_parsed() {
         assert_eq!(LLMProvider::parse(provider.as_str()), Some(provider));
     }
 }
+
+#[tokio::test]
+async fn test_an_error_that_echoes_a_key_outside_the_authorization_header_is_scrubbed() {
+    let env = [
+        ("FASTBROWSE_LLM_PROVIDER", "azure"),
+        ("AZURE_OPENAI_API_KEY", "azure-secret"),
+        ("FASTBROWSE_LLM_MODEL", "m"),
+        ("FASTBROWSE_LLM_BASE_URL", "https://example.openai.azure.com/openai/v1"),
+    ];
+    let script =
+        Script::new([Step::Reply(Response::json(401, &json!({"error": {"message": "bad key azure-secret"}})))]);
+    let llm = settings(&env).llm(&script.http()).unwrap();
+    let error = llm
+        .generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("azure-secret") && error.contains("[api key]"), "{error}");
+}
