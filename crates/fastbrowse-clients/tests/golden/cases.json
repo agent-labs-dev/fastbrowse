@@ -7819,7 +7819,7 @@
    "which": "jev",
    "env": {
     "OPENROUTER_API_KEY": "o",
-    "FASTBROWSE_JEV_BASE_URL": "http://replay.test/jev/",
+    "FASTBROWSE_DECISION_BASE_URL": "http://replay.test/jev/",
     "FASTBROWSE_LLM_BASE_URL": "http://replay.test/llm/v1",
     "FASTBROWSE_LLM_MODEL": "recorded-model"
    }
@@ -7907,7 +7907,7 @@
    "which": "llm",
    "env": {
     "OPENROUTER_API_KEY": "o",
-    "FASTBROWSE_JEV_BASE_URL": "http://replay.test/jev/",
+    "FASTBROWSE_DECISION_BASE_URL": "http://replay.test/jev/",
     "FASTBROWSE_LLM_BASE_URL": "http://replay.test/llm/v1",
     "FASTBROWSE_LLM_MODEL": "recorded-model"
    }
@@ -8222,7 +8222,6 @@
    "env": {
     "FASTBROWSE_LLM_BASE_URL": "http://127.0.0.1:8000/v1/",
     "FASTBROWSE_LLM_MODEL": "qwen",
-    "FASTBROWSE_LLM_MODEL_READ": "qwen-reader",
     "FASTBROWSE_LLM_API_KEY": " local-key ",
     "FASTBROWSE_LLM_STRICT": "0",
     "FASTBROWSE_LLM_EXTRA_BODY": "{\"top_k\": 20, \"chat_template_kwargs\": {\"enable_thinking\": false}}",
@@ -8262,8 +8261,8 @@
      "authorization": "Bearer ***",
      "content-type": "application/json"
     },
-    "body": "{\"top_k\":20,\"chat_template_kwargs\":{\"enable_thinking\":false},\"model\":\"qwen-reader\",\"max_tokens\":2000,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":false}},\"reasoning\":{\"effort\":\"high\"}}",
-    "canonical": "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":2000,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"qwen-reader\",\"reasoning\":{\"effort\":\"high\"},\"response_format\":{\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":false},\"type\":\"json_schema\"},\"top_k\":20}"
+    "body": "{\"top_k\":20,\"chat_template_kwargs\":{\"enable_thinking\":false},\"model\":\"qwen\",\"max_tokens\":2000,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":false}},\"reasoning\":{\"effort\":\"high\"}}",
+    "canonical": "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":2000,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"qwen\",\"reasoning\":{\"effort\":\"high\"},\"response_format\":{\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":false},\"type\":\"json_schema\"},\"top_k\":20}"
    }
   ],
   "results": [

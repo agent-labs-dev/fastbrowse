@@ -207,10 +207,10 @@ def test_record_forwards_everything_and_fill_only_misses() -> None:
 def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "real")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "real")
-    monkeypatch.setenv("FASTBROWSE_LLM_MODEL_PLAN", "other")
+    monkeypatch.setenv("FASTBROWSE_HEADED", "1")
     env = agent_environment("http://127.0.0.1:9")
     assert "real" not in env.values()
-    assert "FASTBROWSE_LLM_MODEL_PLAN" not in env and "AI_GATEWAY_API_KEY" not in env
+    assert "FASTBROWSE_HEADED" not in env and "AI_GATEWAY_API_KEY" not in env
     assert env["FASTBROWSE_DECISION_BASE_URL"] == "http://127.0.0.1:9/jev"
     assert env["FASTBROWSE_LLM_BASE_URL"] == "http://127.0.0.1:9/llm"
 
