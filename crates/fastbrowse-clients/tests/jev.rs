@@ -354,7 +354,7 @@ async fn test_gateway_remaps_wire_types_confidence_and_cost() {
                 ("authorization", "Bearer key"),
                 ("ai-gateway-auth-method", "api-key"),
                 ("ai-gateway-protocol-version", "0.0.1"),
-                ("ai-model-id", "typesafe-ai/jev"),
+                ("ai-model-id", "typesafe-ai/jev-1.13.0"),
                 ("ai-evaluation-model-specification-version", "4"),
             ] {
                 assert_eq!(request.header(key), Some(value));
