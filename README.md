@@ -98,7 +98,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
-| `--trace FILE` | append each model call, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP |
+| `--trace FILE` | append each model call with its full request and reply, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
 | `--cursor` | draw the agent's cursor over a visible Chrome with [Cua Driver](https://github.com/trycua/cua) (needs `cua-driver`, and X11 on Linux) |
 
