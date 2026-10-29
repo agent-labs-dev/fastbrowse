@@ -17,9 +17,9 @@ Three properties make a published trace usable as evidence, and each is enforced
   a comparison figure.
 
 Upload uses the OTLP endpoint, the path Langfuse serves for live data, and asks for real-time ingestion: without
-that header Langfuse may take many minutes to expose a direct export through the read API. Read-back asks the v2
-observation index first and falls back to the trace itself, because that index does not yet return every span
-ingested through OTLP.
+that header Langfuse may take many minutes to expose a direct export through the read API. Read-back reads the v2
+observation index, the read path Langfuse keeps: the trace endpoint it once fell back to is retired on 2026-11-16,
+so a span that is not in the index yet is waited for rather than looked up somewhere that will not exist.
 """
 
 import argparse
@@ -51,6 +51,10 @@ VERIFY_ATTEMPTS = 60
 VERIFY_DELAY_SECONDS = 5.0
 """Seconds between read-backs. Langfuse queued an upload for over four minutes when this was measured, so the
 deadline is generous on purpose: a run that is simply still queueing is not a failed upload."""
+
+READ_FIELDS = "core,basic,io,metadata"
+"""The v2 field groups read-back asks for. `io` carries the measured output, and `metadata` carries the run id: the
+index omits both unless they are named, so requesting less would read every row as somebody else's upload."""
 
 PROVENANCE = ("run_id", "git_sha", "fastbrowse_version", "run_started", "git_dirty", "providers")
 """What identifies the run. `run` also carries per-suite agent limits, which differ between the local and mock
@@ -156,7 +160,12 @@ def _span(name: str, run: Mapping[str, Any], row: Mapping[str, Any], at: datetim
         ("tokens_per_second", row.get("tokens_per_second")),
     ):
         if value is not None:
+            # Both namespaces, because they are read separately: the v2 observation index answers with
+            # observation metadata, which Langfuse maps from `langfuse.observation.metadata.*`, while a trace
+            # read answers with trace metadata from `langfuse.trace.metadata.*`. Writing one and reading the
+            # other left every upload unverifiable, which is a silent failure of the whole evidence chain.
             attributes.append(_attribute(f"langfuse.trace.metadata.{key}", value))
+            attributes.append(_attribute(f"langfuse.observation.metadata.{key}", value))
     seconds = float(row.get("seconds") or 0)
     return {
         "traceId": trace_id(name, row),
@@ -211,33 +220,36 @@ def _matches(observation: Mapping[str, Any], spec: Mapping[str, Any]) -> bool:
             output = json.loads(output)
         except json.JSONDecodeError:
             return False
-    metadata = observation.get("metadata") or {}
-    recorded = metadata.get("run_id") if isinstance(metadata, Mapping) else None
-    return recorded == spec["run_id"] and output == spec["output"]
+    return _run_id(observation) == spec["run_id"] and output == spec["output"]
+
+
+def _run_id(observation: Mapping[str, Any]) -> Any:
+    """The run id this stored observation carries, from whichever metadata namespace the read path returned.
+
+    The index answers with observation metadata; a trace read answers with the trace's. Both are written by
+    the upload, so either one naming this run is the same evidence - and a row carrying neither is not ours.
+    """
+    for field in ("metadata", "traceMetadata"):
+        metadata = observation.get(field)
+        if isinstance(metadata, Mapping) and metadata.get("run_id") is not None:
+            return metadata["run_id"]
+    return None
 
 
 def _readable(client: httpx.Client, trace: str, spec: Mapping[str, Any], since: datetime) -> bool:
-    """Whether this upload's version of one trace is readable now, through the index or the trace itself."""
+    """Whether this upload's version of one trace is readable now, in the observation index."""
     params: dict[str, Any] = {
         "traceId": trace,
         "fromStartTime": since.isoformat(),
-        "fields": "core,basic,io",
+        "fields": READ_FIELDS,
         "limit": "10",
     }
     index = client.get("/api/public/v2/observations", params=params)
     if index.status_code == 429:
         raise RateLimited(_retry_after(index))
-    if index.status_code == 200 and any(_matches(row, spec) for row in index.json().get("data") or []):
-        return True
-    detail = client.get(f"/api/public/traces/{trace}")
-    if detail.status_code == 429:
-        raise RateLimited(_retry_after(detail))
-    if detail.status_code != 200:
+    if index.status_code != 200:
         return False
-    body = detail.json()
-    if (body.get("metadata") or {}).get("run_id") != spec["run_id"]:
-        return False
-    return any(_matches(row, spec) for row in body.get("observations") or [])
+    return any(_matches(row, spec) for row in index.json().get("data") or [])
 
 
 def verify(
