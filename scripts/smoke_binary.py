@@ -158,7 +158,7 @@ def check_initialize(executable: Path) -> None:
         raise Failed(f"--version exited with status {told.returncode}: {told.stderr.strip()}")
     with serving(executable) as client:
         version = handshake(client)
-    if told.stdout.split() != ["fastbrowse", version]:
+    if told.stdout.split()[:2] != ["fastbrowse", version]:
         raise Failed(f"--version printed {told.stdout.strip()!r} and initialize reported {version!r}")
     print(f"initialize: fastbrowse {version}, protocol {PROTOCOL_VERSION}")
 

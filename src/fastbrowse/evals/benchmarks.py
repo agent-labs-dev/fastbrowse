@@ -134,8 +134,14 @@ class Group(PublicModel):
 class Fixture(PublicModel):
     head_sha: Sha
     run_id: Annotated[int, Field(gt=0)]
-    passed: Literal[108]
-    total: Literal[108]
+    passed: Annotated[int, Field(gt=0)]
+    total: Annotated[int, Field(gt=0)]
+
+    @model_validator(mode="after")
+    def all_passed(self) -> Self:
+        if self.passed != self.total:
+            raise ValueError("every fixture row must pass")
+        return self
 
 
 class ExportReceipt(PublicModel):
@@ -508,8 +514,10 @@ def check_fixture(candidate: Candidate) -> None:
             raise ValueError("the fixture artifact must contain one complete ledger")
         rows = [json.loads(line) for line in paths[0].read_text().splitlines() if line.strip()]
     slots = [(row["task"], row["repeat"]) for row in rows]
-    if len(slots) != len(set(slots)) or set(slots) != expected or len(rows) != 108:
-        raise ValueError("fixture artifact coverage must be 36 tasks across three repeats")
+    if len(slots) != len(set(slots)) or set(slots) != expected:
+        raise ValueError("fixture artifact coverage must be every fixture task across three repeats")
+    if candidate.fixture.total != len(rows):
+        raise ValueError("the fixture receipt must claim every row the artifact holds")
     if any(
         row["passed"] is not True
         or row["run"]["git_sha"] != candidate.agent_sha
