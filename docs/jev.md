@@ -126,7 +126,7 @@ the answer.
 
 Every threshold in `crates/fastbrowse-core/src/config.rs` (`recover_below` 0.55, `claim_problem_above` 0.70)
 and in `crates/fastbrowse-agent/src/retrieval/` (the 0.90 read cut; a record on a later page of a filtered count or comparison matches from
-0.70 and is rejected at 0.20 or below) is **ours**. None is a Typesafe recommendation. Each is set per
+0.70 and is rejected at 0.20 or below, and a list is taken to be needed through its last page from 0.70) is **ours**. None is a Typesafe recommendation. Each is set per
 question on the evals.
 
 ## How the questions are written

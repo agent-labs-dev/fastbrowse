@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 
 use super::choices::read_choices;
 use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_message, source_marker};
+use super::records::through_end as scope;
 use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search};
 use super::{notes_room, route};
 use crate::comparison::{NumericComparison, QuotedField, digit};
@@ -35,7 +36,6 @@ pub(super) fn counted_kind(kind: BlockKind) -> bool {
 
 const COMPARISON: &str = "For a lowest/highest/top-N ranking by one numeric field whose requested output is only record labels and values: the order, number of results, and literal delimiters around each record's label and displayed value (including its currency). Empty delimiter means the quote boundary. Use only when these fields occur exactly once in every matching record, and all remaining pages are needed. Apply the task's filters in records as usual. Null for counts, calculations, extra output fields, tie rules or values requiring unit conversion. Related requirements asking for the same winners' labels or values use the same comparison and records.";
 const TALLIES: &str = "For every count of matching records, including filtered counts, or ranking by count. Group matching records by their stated label, or use key=null for an ungrouped count. Use explicit record ranges when matches are not contiguous. Leave records empty.";
-const THROUGH_END: &str = "True only when the task needs every remaining page of this list. False when the task bounds the pages (such as this page and the next), or the rest is behind an expander rather than a pager.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,8 +155,6 @@ pub(crate) struct Continuation {
     pub tallies: Vec<TallyGroup>,
     #[serde(default)]
     pub reuse_field: bool,
-    #[serde(default)]
-    pub through_end: bool,
     pub requirement_id: String,
     #[serde(default)]
     pub expands: Option<String>,
@@ -172,7 +170,6 @@ impl Schema for Continuation {
                 Field::default("comparison", Ty::optional(NumericComparison::ty()), Value::Null).doc(COMPARISON),
                 Field::default("tallies", Ty::list(TallyGroup::ty()), json!([])).doc(TALLIES),
                 Field::default("reuse_field", Ty::Bool, false).doc("True only for an unfiltered count of EVERY record in this entire paginated list, grouped by the same field. Never for a count conditioned on any record attribute. Code may reuse the field on later pages only while every record has the same structure."),
-                Field::default("through_end", Ty::Bool, false).doc(THROUGH_END),
                 Field::required("requirement_id", Ty::Str).doc("A requirement whose answer ranges over a list this capture shows only part of, because it continues on further pages or behind a load-more control, and the collected evidence does not cover the rest."),
                 Field::default("expands", Ty::optional(Ty::Str), Value::Null).doc("The exact label of the control on this page that shows the rest of the list, when one is offered. Null when nothing on the page expands it."),
                 Field::default("records", Ty::list(Cite::ty()), json!([])).doc("For comparisons of record values, not counts: every record this capture adds to that comparison, each as the run of source blocks holding it and the value being compared. A later page cannot show what its winner beat unless this page names the records it was compared against, so list every one this capture shows; a capture holding only the pager lists none."),
@@ -242,8 +239,6 @@ pub(crate) struct RecordSet {
     #[serde(default)]
     pub comparison: Option<NumericComparison>,
     #[serde(default)]
-    pub through_end: bool,
-    #[serde(default)]
     pub tallies: Vec<TallyGroup>,
     #[serde(default)]
     pub records: Vec<Cite>,
@@ -256,7 +251,6 @@ impl Schema for RecordSet {
             vec![
                 Field::required("requirement_id", Ty::Str),
                 Field::default("comparison", Ty::optional(NumericComparison::ty()), Value::Null).doc(COMPARISON),
-                Field::default("through_end", Ty::Bool, false).doc(THROUGH_END),
                 Field::default("tallies", Ty::list(TallyGroup::ty()), json!([])).doc(TALLIES),
                 Field::default("records", Ty::list(Cite::ty()), json!([])).doc("For comparisons of record values, not counts: every matching record as source block ranges including the compared value and attributes that show it matches. Counts belong in tallies."),
             ],
@@ -1040,6 +1034,10 @@ async fn read_inner(
     let mut expands: Option<String> = None;
     let mut tally_complete: IndexSet<String> = IndexSet::new();
     let mut through_end: Vec<String> = Vec::new();
+    // Jev's word on whether a continuing requirement needs every page of its list, asked once per page read.
+    let mut asked: HashSet<String> = HashSet::new();
+    let mut every_page: HashSet<String> = HashSet::new();
+    let task = question.clone();
     let mut continuation_records: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut context_records: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut ended: Vec<String> = Vec::new();
@@ -1203,7 +1201,6 @@ async fn read_inner(
                             comparison: c.comparison,
                             tallies: c.tallies,
                             reuse_field: false,
-                            through_end: c.through_end,
                             requirement_id: c.requirement_id,
                             expands: None,
                             records: c.records,
@@ -1274,15 +1271,39 @@ async fn read_inner(
             })
             .collect();
         continues = carried.iter().map(|c| c.requirement_id.clone()).collect();
-        through_end = carried.iter().filter(|c| c.through_end).map(|c| c.requirement_id.clone()).collect();
+        let texts: IndexMap<&str, &str> =
+            options.requirements.iter().map(|r| (r.id.as_str(), r.text.as_str())).collect();
+        // A records-only read is a page of a list already being paged, and its caller takes no scope from it.
+        if let Some(jev) = options.jev
+            && !options.records_only
+        {
+            let unasked: Vec<(String, String)> = carried
+                .iter()
+                .filter(|c| asked.insert(c.requirement_id.clone()))
+                .filter_map(|c| Some((c.requirement_id.clone(), texts.get(c.requirement_id.as_str())?.to_string())))
+                .collect();
+            if !unasked.is_empty() {
+                let (whole, spent) = scope(jev, &task, capture, &unasked, tokens, ledger).await?;
+                costs.extend(spent);
+                every_page.extend(whole);
+            }
+        }
+        through_end = carried
+            .iter()
+            .filter(|c| every_page.contains(&c.requirement_id))
+            .map(|c| c.requirement_id.clone())
+            .collect();
         comparisons = carried
             .iter()
-            .filter(|c| c.through_end && !counting.contains_key(&c.requirement_id))
+            .filter(|c| through_end.contains(&c.requirement_id) && !counting.contains_key(&c.requirement_id))
             .filter_map(|c| c.comparison.clone().map(|comparison| (c.requirement_id.clone(), comparison)))
             .collect();
         expands = carried.iter().find_map(|c| c.expands.clone().filter(|label| !label.is_empty()));
         for continuation in &carried {
-            if !continuation.reuse_field || !continuation.through_end || continuation.tallies.len() != 1 {
+            if !continuation.reuse_field
+                || !through_end.contains(&continuation.requirement_id)
+                || continuation.tallies.len() != 1
+            {
                 continue;
             }
             let group = &continuation.tallies[0];
@@ -1318,8 +1339,6 @@ async fn read_inner(
                 }
             }
         }
-        let texts: IndexMap<&str, &str> =
-            options.requirements.iter().map(|r| (r.id.as_str(), r.text.as_str())).collect();
         for continuation in &carried {
             // A filtered count or a comparison names its matches record by record, so a later page of the same list
             // is matched by Jev record by record rather than read again by the LLM. Code counts the matches, or picks
@@ -1327,7 +1346,7 @@ async fn read_inner(
             let compares = continuation.comparison.is_some() && !counting.contains_key(&continuation.requirement_id);
             let Some(requirement_text) = texts.get(continuation.requirement_id.as_str()).copied() else { continue };
             if continuation.reuse_field
-                || !continuation.through_end
+                || !through_end.contains(&continuation.requirement_id)
                 || tally_readers.iter().any(|r| r.requirement_id == continuation.requirement_id)
                 || !(compares
                     || (counting.contains_key(&continuation.requirement_id)
