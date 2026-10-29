@@ -1,5 +1,5 @@
-//! Port of `clients/failover.py`: keep a run on its backup after the chosen Jev provider exhausts its retries, or the
-//! LLM's provider refuses its key.
+//! Port of `clients/failover.py`: keep a run on its backup after the chosen Jev provider exhausts its retries or refuses
+//! its key, or the LLM's provider refuses its key.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -85,6 +85,15 @@ impl FailoverDecisionClient {
         let client = if on_backup { &self.backup } else { &self.primary };
         let error = match client.evaluate(state, questions).await {
             Err(DecisionError::RetriesExhausted(error)) if !on_backup => error,
+            // A revoked OPENROUTER_API_KEY failed every run at its first Jev call with a working gateway key beside it.
+            Err(DecisionError::Rejected(reason)) if !on_backup => Box::new(RetriesExhausted {
+                message: reason.clone(),
+                seconds: 0.0,
+                unaccounted_requests: 0,
+                requests: 1,
+                answered: Vec::new(),
+                last: reason,
+            }),
             other => return other,
         };
         // Calls already in flight may fail together; assigning the same backup without awaiting cannot flap.

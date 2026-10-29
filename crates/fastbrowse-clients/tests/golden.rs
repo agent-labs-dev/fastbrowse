@@ -157,6 +157,7 @@ fn jev_error(error: &DecisionError) -> Value {
         DecisionError::InputTooLarge(_) => "JevInputTooLarge",
         DecisionError::TransportFailed(_) => "JevTransportFailed",
         DecisionError::RetriesExhausted(_) => "JevRetriesExhausted",
+        DecisionError::Rejected(_) => "JevRejected",
         DecisionError::Budget(_) => "BudgetExceeded",
     };
     let mut dumped = json!({"type": kind, "message": normalized(&error.to_string())});

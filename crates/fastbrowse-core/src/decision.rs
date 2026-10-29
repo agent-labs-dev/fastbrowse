@@ -296,6 +296,9 @@ pub enum DecisionError {
     TransportFailed(String),
     #[error("{}", .0.message)]
     RetriesExhausted(Box<RetriesExhausted>),
+    /// The provider refused the key (HTTP 401 or 403), which no retry on that provider can change.
+    #[error("{0}")]
+    Rejected(String),
     /// A request would break a limit, so it was not sent. Python raises `BudgetExceeded` through `evaluate` itself.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),

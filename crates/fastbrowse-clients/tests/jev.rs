@@ -810,3 +810,33 @@ async fn test_split_singletons_share_the_remaining_request_budget() {
         assert!(!seen.contains_key(&vec!["b".to_string()]));
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn test_a_refused_key_moves_jev_to_the_backup_at_once() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let http = answering(move |request| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        let response = if host(request) == "primary.test" {
+            Response::json(401, &json!({"error": {"message": "User not found."}}))
+        } else {
+            Response::json(200, &json!({"answers": {"a": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100}}))
+        };
+        Box::pin(async move { Ok(response) })
+    });
+    let client = FailoverDecisionClient::new(
+        Box::new(SystemOneClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0")),
+        Box::new(SystemOneClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0")),
+        http.clone(),
+    );
+    let asked = questions([("a", noul("a"))]);
+    let result = client.evaluate(&json!("page"), &asked).await.unwrap();
+    assert_eq!(result.answers.keys().collect::<Vec<_>>(), ["a"]);
+    // A refusal is not retried: one request to the primary, one to the backup.
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let alone = SystemOneClient::new("key", http, "https://primary.test", "jev-1.13.0");
+    let error = alone.evaluate(&json!("page"), &asked).await.unwrap_err();
+    assert!(matches!(error, DecisionError::Rejected(_)), "{error}");
+    assert!(error.to_string().ends_with("(primary.test rejected the API key)"), "{error}");
+}
