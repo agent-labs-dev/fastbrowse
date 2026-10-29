@@ -378,7 +378,18 @@ impl DecisionProfile {
         if bare.starts_with("jev-") {
             return DecisionProfile { thresholds: None, ..DecisionProfile::jev() };
         }
-        DecisionProfile::unknown()
+        match model {
+            // Telnyx documents 64 questions a request and 64 options a choice or levels a score, and no price.
+            "telnyx/decision-flash" | "telnyx/decision-pro" => DecisionProfile {
+                max_choice_options: 64,
+                max_score_levels: 64,
+                max_request_bytes: None,
+                ..DecisionProfile::unknown()
+            },
+            // Pydantic AI's Ollama profile: 26 options, 26 levels, 64 questions and 64 KiB.
+            "nimble" | "tev1" => DecisionProfile { max_score_levels: 26, ..DecisionProfile::unknown() },
+            _ => DecisionProfile::unknown(),
+        }
     }
 
     /// Whether the thresholds a run would start from were measured on this model.
@@ -446,6 +457,8 @@ mod tests {
             assert!(DecisionProfile::for_model(model).validated(), "{model}");
         }
         assert!(!DecisionProfile::for_model("nimble").validated());
+        assert_eq!(DecisionProfile::for_model("telnyx/decision-flash").max_choice_options, 64);
+        assert_eq!(DecisionProfile::for_model("nimble").max_score_levels, 26);
         let later = DecisionProfile::for_model("typesafe/jev-1.14");
         assert_eq!((later.validated(), later.max_choice_options), (false, MAX_CHOICE_OPTIONS));
     }

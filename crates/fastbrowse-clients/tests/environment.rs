@@ -92,7 +92,7 @@ fn test_a_chosen_source_without_its_key_is_a_configuration_error() {
 
 #[tokio::test(start_paused = true)]
 async fn test_failover_requires_both_keys_and_default_routing() {
-    for source in DecisionSource::ALL {
+    for source in DecisionSource::JEV {
         for restriction in ["one_key", "proxy", "model", "default_model"] {
             let mut env = vec![("FASTBROWSE_DECISION_SOURCE", source.as_str())];
             for (key, owner) in [
@@ -111,6 +111,7 @@ async fn test_failover_requires_both_keys_and_default_routing() {
                 DecisionSource::OpenRouter => "jev-1.13",
                 DecisionSource::TypeSafe => "jev-1.13.0",
                 DecisionSource::Gateway => "typesafe-ai/jev",
+                _ => unreachable!(),
             };
             match restriction {
                 "model" => env.push(("FASTBROWSE_DECISION_MODEL", "custom-jev")),
@@ -126,11 +127,90 @@ async fn test_failover_requires_both_keys_and_default_routing() {
                 (_, DecisionSource::OpenRouter) => "openrouter.ai/api",
                 (_, DecisionSource::TypeSafe) => "api.typesafe.ai",
                 (_, DecisionSource::Gateway) => "ai-gateway.vercel.sh",
+                _ => unreachable!(),
             };
             let path = if source == DecisionSource::Gateway { "/v4/ai/evaluation-model" } else { "/v1/systemone" };
             assert_eq!(*seen.lock().unwrap(), vec![format!("https://{host}{path}"); 6], "{source} {restriction}");
         }
     }
+}
+
+/// Every Jev key set, so a request that carried one to another host would show it.
+const JEV_KEYS: [(&str, &str); 3] =
+    [("TYPESAFE_API_KEY", "t"), ("OPENROUTER_API_KEY", "o"), ("AI_GATEWAY_API_KEY", "g")];
+
+#[tokio::test(start_paused = true)]
+async fn test_another_system_one_host_gets_its_own_key_its_model_and_no_backup() {
+    // Settings, then the URL, Authorization header and model every request carries.
+    type Case<'a> = (&'a [(&'a str, &'a str)], &'a str, Option<&'a str>, &'a str);
+    let cases: [Case; 4] = [
+        (
+            &[("FASTBROWSE_DECISION_SOURCE", "telnyx"), ("TELNYX_API_KEY", "x")],
+            "https://api.telnyx.com/v2/ai/typesafe/v1/systemone",
+            Some("Bearer x"),
+            "telnyx/decision-flash",
+        ),
+        (
+            &[("FASTBROWSE_DECISION_SOURCE", "ollama"), ("FASTBROWSE_DECISION_MODEL", "nimble")],
+            "http://localhost:11434/v1/systemone",
+            None,
+            "nimble",
+        ),
+        (
+            &[
+                ("FASTBROWSE_DECISION_SOURCE", "custom"),
+                ("FASTBROWSE_DECISION_BASE_URL", "https://clm.test/"),
+                ("FASTBROWSE_DECISION_MODEL", "clm-latest"),
+                ("FASTBROWSE_DECISION_API_KEY", "c"),
+            ],
+            "https://clm.test/v1/systemone",
+            Some("Bearer c"),
+            "clm-latest",
+        ),
+        (
+            &[
+                ("FASTBROWSE_DECISION_SOURCE", "telnyx"),
+                ("TELNYX_API_KEY", "x"),
+                ("FASTBROWSE_DECISION_MODEL", "telnyx/decision-pro"),
+            ],
+            "https://api.telnyx.com/v2/ai/typesafe/v1/systemone",
+            Some("Bearer x"),
+            "telnyx/decision-pro",
+        ),
+    ];
+    for (env, url, auth, model) in cases {
+        let env: Vec<(&str, &str)> = env.iter().copied().chain(JEV_KEYS).collect();
+        let script = Script::new((0..6).map(|_| common::text(503, "")));
+        let jev = settings(&env).decision(&script.http()).unwrap();
+        let error = jev.evaluate(&json!("page"), &question()).await.unwrap_err();
+        assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{env:?}: {error}");
+        let requests = script.requests();
+        assert!(requests.iter().all(|request| request.url == url), "{env:?}");
+        assert!(requests.iter().all(|request| request.header("authorization") == auth), "{env:?}");
+        assert_eq!(script.bodies()[0]["model"], model);
+    }
+}
+
+#[test]
+fn test_another_system_one_host_names_what_it_is_missing() {
+    let (http, _) = urls(400);
+    let cases = [
+        (vec![("FASTBROWSE_DECISION_SOURCE", "telnyx")], "TELNYX_API_KEY"),
+        (vec![("FASTBROWSE_DECISION_SOURCE", "ollama")], "FASTBROWSE_DECISION_MODEL"),
+        (
+            vec![("FASTBROWSE_DECISION_SOURCE", "custom"), ("FASTBROWSE_DECISION_MODEL", "m")],
+            "FASTBROWSE_DECISION_BASE_URL",
+        ),
+    ];
+    for (env, missing) in cases {
+        assert!(config_error(settings(&env).decision(&http)).contains(missing), "{env:?}");
+    }
+}
+
+#[test]
+fn test_the_decision_key_is_not_printed_with_the_settings() {
+    let shown = format!("{:?}", settings(&[("FASTBROWSE_DECISION_API_KEY", "hidden"), ("TELNYX_API_KEY", "also")]));
+    assert!(!shown.contains("hidden") && !shown.contains("also"));
 }
 
 #[tokio::test(start_paused = true)]

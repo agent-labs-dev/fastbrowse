@@ -115,6 +115,7 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
                     DecisionSource::OpenRouter => "openrouter-key",
                     DecisionSource::TypeSafe => "direct-key",
                     DecisionSource::Gateway => "gateway-key",
+                    other => unreachable!("{other} is not a Jev source"),
                 };
                 assert_eq!(request.header("authorization"), Some(format!("Bearer {expected}").as_str()));
                 ready(if provider == primary { Response::new(status, "") } else { answer(provider) })
@@ -140,7 +141,7 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
 
 #[tokio::test(start_paused = true)]
 async fn test_simultaneous_failures_stay_on_backup() {
-    for primary in DecisionSource::ALL {
+    for primary in DecisionSource::JEV {
         let seen = Seen::default();
         let (started, _) = tokio::sync::watch::channel(false);
         let started = Arc::new(started);
@@ -172,7 +173,7 @@ async fn test_simultaneous_failures_stay_on_backup() {
 
 #[tokio::test(start_paused = true)]
 async fn test_request_errors_and_malformed_responses_do_not_switch() {
-    for primary in DecisionSource::ALL {
+    for primary in DecisionSource::JEV {
         for status in [400, 401, 403, 404, 422, 200] {
             let seen = Seen::default();
             let http = recording(&seen, move |_, _, _| ready(Response::json(status, &json!({"error": "invalid"}))));
@@ -187,7 +188,7 @@ async fn test_request_errors_and_malformed_responses_do_not_switch() {
 
 #[tokio::test(start_paused = true)]
 async fn test_input_limits_and_transport_errors_do_not_switch() {
-    for primary in DecisionSource::ALL {
+    for primary in DecisionSource::JEV {
         let seen = Seen::default();
         let http = recording(&seen, |_, count, _| {
             Box::pin(async move {
@@ -210,7 +211,7 @@ async fn test_input_limits_and_transport_errors_do_not_switch() {
 
 #[tokio::test(start_paused = true)]
 async fn test_recovery_within_retry_budget_keeps_primary() {
-    for primary in DecisionSource::ALL {
+    for primary in DecisionSource::JEV {
         let seen = Seen::default();
         let http = recording(&seen, move |_, count, _| {
             ready(if count < ATTEMPTS { Response::new(503, "") } else { answer(primary) })
@@ -226,7 +227,7 @@ async fn test_recovery_within_retry_budget_keeps_primary() {
 async fn test_backup_exhaustion_does_not_switch_back() {
     // Python pins the clock to check `seconds` exactly (5 and 4); tokio's paused clock also counts the backoff, so
     // only the request counts and the last failure are compared here.
-    for primary in DecisionSource::ALL {
+    for primary in DecisionSource::JEV {
         let seen = Seen::default();
         let http = recording(&seen, move |provider, count, _| {
             Box::pin(async move {
@@ -262,7 +263,7 @@ impl Drop for Dropped {
 
 #[tokio::test(start_paused = true)]
 async fn test_cancellation_cleans_up_and_keeps_the_selected_provider() {
-    for primary in DecisionSource::ALL {
+    for primary in DecisionSource::JEV {
         for after_switch in [false, true] {
             let seen = Seen::default();
             let cancelled = Arc::new(AtomicBool::new(false));
@@ -304,7 +305,7 @@ async fn test_cancellation_cleans_up_and_keeps_the_selected_provider() {
 async fn test_failover_accounts_for_each_providers_unanswered_requests() {
     // Python ticks a fake clock once per request to check `seconds` (ATTEMPTS + 2 and 1); the paused tokio clock also
     // counts the backoff, so those two assertions are left out and every token and dollar count kept.
-    for primary in DecisionSource::ALL {
+    for primary in DecisionSource::JEV {
         let seen = Seen::default();
         let http = recording(&seen, move |provider, count, _| {
             Box::pin(async move {

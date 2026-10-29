@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use common::{Script, answering, reply, text};
 use fastbrowse_clients::failover::FailoverDecisionClient;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
-use fastbrowse_clients::typesafe::{OPENROUTER_MODEL, OPENROUTER_URL, TypeSafeJevClient};
+use fastbrowse_clients::system_one::{OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spend};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
@@ -55,8 +55,8 @@ fn host(request: &Request) -> String {
     url::Url::parse(&request.url).unwrap().host_str().unwrap().to_string()
 }
 
-fn direct(http: Http) -> TypeSafeJevClient {
-    TypeSafeJevClient::direct("key", http)
+fn direct(http: Http) -> SystemOneClient {
+    SystemOneClient::direct("key", http)
 }
 
 fn gateway(http: Http) -> VercelGatewayJevClient {
@@ -96,7 +96,7 @@ async fn test_openrouter_uses_systemone_and_records_cost() {
             );
             Box::pin(async move { Ok(response) })
         });
-        let client = TypeSafeJevClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL);
+        let client = SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL);
         let result = client.evaluate(&json!("blue"), &questions([("q", choice())])).await.unwrap();
         assert_eq!(result.model, "typesafe/jev-1.13-20260917");
         assert!(matches!(result.answers["q"], Answer::Choice(_)));
@@ -128,7 +128,7 @@ async fn test_jev_requests_carry_no_image_input() {
             );
             Box::pin(async move { Ok(response) })
         });
-        let client = TypeSafeJevClient::new(key, http, base_url, OPENROUTER_MODEL);
+        let client = SystemOneClient::new(key, http, base_url, OPENROUTER_MODEL);
         let result = client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
         assert!(matches!(result.answers["q"], Answer::Noul(_)));
     }
@@ -141,7 +141,7 @@ async fn test_systemone_rejects_invalid_cost() {
             200,
             json!({"answers": {"q": choice_answer(json!({}))}, "usage": {"input_tokens": 100, "cost": cost}}),
         );
-        let client = TypeSafeJevClient::new("key", http, OPENROUTER_URL, OPENROUTER_MODEL);
+        let client = SystemOneClient::new("key", http, OPENROUTER_URL, OPENROUTER_MODEL);
         let error = client.evaluate(&json!("blue"), &questions([("q", choice())])).await.unwrap_err();
         assert!(error.to_string().contains("Invalid Jev response"), "{cost}: {error}");
     }
@@ -194,7 +194,7 @@ async fn test_direct_encodes_all_question_types_and_estimates_usage() {
         );
         Box::pin(async move { Ok(response) })
     });
-    let client = TypeSafeJevClient::new("key", http, "https://direct.test/", "jev-1.13.1");
+    let client = SystemOneClient::new("key", http, "https://direct.test/", "jev-1.13.1");
     let result = client.evaluate(&json!({"text": "hello"}), &asked).await.unwrap();
     assert_eq!(result.cost.basis, CostBasis::Estimated);
     assert!((result.cost.dollars.unwrap() - 389.0 * 0.042 / 1_000_000.0).abs() < 1e-15);
@@ -214,7 +214,7 @@ async fn test_an_unmetered_answer_from_a_model_with_no_price_is_an_unknown_cost(
         );
         Box::pin(async move { Ok(response) })
     });
-    let client = TypeSafeJevClient::new("", http, "http://localhost:11434", "nimble");
+    let client = SystemOneClient::new("", http, "http://localhost:11434", "nimble");
     let asked = IndexMap::from([("q".to_string(), NoulQuestion::new("Green?", None, None).into())]);
     let result = client.evaluate(&json!("hello"), &asked).await.unwrap();
     assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Unknown, None));
@@ -266,9 +266,12 @@ async fn test_unused_speculative_head_is_validated_and_missing_head_rejected() {
 
 #[tokio::test(start_paused = true)]
 async fn test_http_failures_and_token_limits() {
-    for (status, body, too_large) in
-        [(400, "max_tokens_exceeded", true), (500, "max_tokens_exceeded", false), (401, "bad key", false)]
-    {
+    for (status, body, too_large) in [
+        (400, "max_tokens_exceeded", true),
+        (413, "", true),
+        (500, "max_tokens_exceeded", false),
+        (401, "bad key", false),
+    ] {
         let body = format!("{body}{}", "x".repeat(2000));
         let http = answering(move |_| {
             let response = Response::new(status, body.clone());
@@ -492,7 +495,7 @@ async fn test_an_echoed_key_never_reaches_the_error() {
     for (status, payload) in bodies {
         let http = always(status, payload);
         let clients: [Box<dyn DecisionClient>; 2] = [
-            Box::new(TypeSafeJevClient::direct(key.clone(), http.clone())),
+            Box::new(SystemOneClient::direct(key.clone(), http.clone())),
             Box::new(VercelGatewayJevClient::new(key.clone(), http.clone(), GATEWAY_URL)),
         ];
         for client in clients {
@@ -521,7 +524,7 @@ async fn test_a_choice_of_one_option_is_answered_without_asking() {
         let client: Box<dyn DecisionClient> = if gateway_route {
             Box::new(VercelGatewayJevClient::new("key", http, "https://gateway.test"))
         } else {
-            Box::new(TypeSafeJevClient::new("key", http, "https://direct.test", "jev-1.13.0"))
+            Box::new(SystemOneClient::new("key", http, "https://direct.test", "jev-1.13.0"))
         };
         let mixed =
             client.evaluate(&json!({}), &questions([("col", choice()), ("fill_target", only.clone())])).await.unwrap();
@@ -637,8 +640,8 @@ async fn test_failover_exhaustion_preserves_answered_singles_and_request_counts(
         Box::pin(async move { Ok(response) })
     });
     let client = FailoverDecisionClient::new(
-        Box::new(TypeSafeJevClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0")),
-        Box::new(TypeSafeJevClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0")),
+        Box::new(SystemOneClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0")),
+        Box::new(SystemOneClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0")),
         http,
     );
     let paid = Paid::default();
@@ -733,11 +736,11 @@ async fn test_split_batch_keeps_paid_singles_on_cancellation_and_failover() {
                 Ok(Response::json(200, &json!({"answers": answers, "usage": {"input_tokens": 100}})))
             })
         });
-        let primary = TypeSafeJevClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0");
+        let primary = SystemOneClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0");
         let client: Box<dyn DecisionClient> = if cancel {
             Box::new(primary)
         } else {
-            let backup = TypeSafeJevClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0");
+            let backup = SystemOneClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0");
             Box::new(FailoverDecisionClient::new(Box::new(primary), Box::new(backup), http.clone()))
         };
         let paid = Paid::default();

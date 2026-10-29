@@ -19,7 +19,7 @@ use fastbrowse_clients::http::{Http, Response, TransportError};
 use fastbrowse_clients::openai_compatible::{
     LLMOptions, OpenAICompatibleLLM, ReasoningEffort, gateway_provider_routing, openrouter_provider_routing,
 };
-use fastbrowse_clients::typesafe::TypeSafeJevClient;
+use fastbrowse_clients::system_one::SystemOneClient;
 use fastbrowse_clients::validation::{Lines, Paid, jev_spend};
 use fastbrowse_clients::vercel::VercelGatewayJevClient;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, Question};
@@ -100,7 +100,7 @@ fn build(spec: &Value, http: &Http) -> Client {
                 OpenAICompatibleLLM::new(text("api_key", "key"), http.clone(), &base_url, models, options).unwrap(),
             ))
         }
-        "typesafe" => Client::Jev(Box::new(TypeSafeJevClient::new(
+        "typesafe" => Client::Jev(Box::new(SystemOneClient::new(
             text("api_key", "key"),
             http.clone(),
             &text("base_url", ""),

@@ -515,7 +515,11 @@ pub(crate) async fn post(
     let check = || check_jev_spend(spend.as_ref(), estimate);
     check().map_err(DecisionError::Budget)?;
     let started = Instant::now();
-    let mut auth = vec![("Authorization".to_string(), format!("Bearer {api_key}"))];
+    // A local server such as Ollama takes no key, and an empty bearer token is not the same as none.
+    let mut auth: Vec<(String, String)> = Vec::new();
+    if !api_key.is_empty() {
+        auth.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+    }
     auth.extend(headers.iter().map(|(name, value)| (name.to_string(), value.to_string())));
     let attempts = Attempts {
         call: "jev".into(),
@@ -567,7 +571,9 @@ pub(crate) async fn post(
         .into());
     }
     let text = response.text();
-    if response.status == 400 && ["max_tokens_exceeded", "request body too large"].iter().any(|r| text.contains(r)) {
+    // Telnyx answers an oversized body with 413 where TypeSafe answers 400.
+    let too_large = ["max_tokens_exceeded", "request body too large"].iter().any(|r| text.contains(r));
+    if response.status == 413 || (response.status == 400 && too_large) {
         return Err(DecisionError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
     }
     if !response.is_success() {
