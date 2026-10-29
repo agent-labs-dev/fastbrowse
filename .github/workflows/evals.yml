@@ -118,11 +118,16 @@ jobs:
           missing=()
           test -n "$LANGFUSE_PUBLIC_KEY" || missing+=(LANGFUSE_PUBLIC_KEY)
           test -n "$LANGFUSE_SECRET_KEY" || missing+=(LANGFUSE_SECRET_KEY)
-          if [ "${#missing[@]}" -gt 0 ]; then
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_call" ]; then
+            # A tag release is handed this job by release.yml; a release whose evidence nobody can read is not
+            # the thing we ship, so the same missing pair that only warns on a schedule stops the release.
+            echo "the ${missing[*]} repository secret is not set, and a release publishes its run" >&2
+            exit 1
+          else
             echo "::warning title=Eval tracking is off::the ${missing[*]} repository secret is not set, so this run is not published to Langfuse"
             echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish the fixture run to Langfuse
         # One trace per attempt, named for the build and released under the campaign it came from, so a number
