@@ -133,9 +133,10 @@ jobs:
       # Restoring `target/` and the registry leaves only the crates a change actually touched.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          # The release addon built further down shares this dependency set; keeping every crate's artifacts
-          # means it restores too instead of rebuilding from source.
+          # `cache-all-crates` alone keeps only registry crates: the ten workspace crates, and the release addon
+          # built further down that shares their artifacts, are discarded on save unless asked for.
           cache-all-crates: true
+          cache-workspace-crates: true
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with: {python-version: "3.13"}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
