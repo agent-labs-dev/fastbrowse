@@ -6,7 +6,7 @@ publish = false
 description = "Bench binary on the browser crate: scripted observe, capture and act steps with their timings, and the binary whose size the browser layer is measured by."
 
 [dependencies]
-fastbrowse-browser = { path = "../fastbrowse-browser" }
-fastbrowse-core = { path = "../fastbrowse-core" }
+fastbrowse-browser = { workspace = true }
+fastbrowse-core = { workspace = true }
 serde_json = "1"
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "time"] }

@@ -1,4 +1,4 @@
-//! fastbrowse's browser layer in Rust: `src/fastbrowse/browser/` and `src/fastbrowse/adapters/`, ported.
+//! fastbrowse's browser layer in Rust: `crates/fastbrowse-browser/js/` and `src/fastbrowse/adapters/`, ported.
 //!
 //! CDP goes over a raw websocket ([ADR 0003](../../../docs/adr/0003-cdp-over-raw-websocket.md)): one reader task
 //! routes replies by id and events by method and session. `session` is `browser/session.py`'s `BrowserSession`,

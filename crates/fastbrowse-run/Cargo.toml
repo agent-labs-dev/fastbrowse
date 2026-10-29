@@ -3,15 +3,16 @@ name = "fastbrowse-run"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
-description = "Port of src/fastbrowse/run.py: one task end to end, from the browser and the model clients to the result."
+repository.workspace = true
+homepage.workspace = true
+description = "fastbrowse's run_task: one task end to end, from the browser and the model clients to the result."
 
 [dependencies]
-fastbrowse-agent = { path = "../fastbrowse-agent" }
+fastbrowse-agent = { workspace = true }
 # `record` films the tab through ffmpeg and `cursor` draws through the Cua Driver: child processes, no extra crates.
-fastbrowse-browser = { path = "../fastbrowse-browser", features = ["recording", "cursor"] }
-fastbrowse-clients = { path = "../fastbrowse-clients" }
-fastbrowse-core = { path = "../fastbrowse-core" }
+fastbrowse-browser = { workspace = true, features = ["recording", "cursor"] }
+fastbrowse-clients = { workspace = true }
+fastbrowse-core = { workspace = true }
 # gzip and deflate bodies, which httpx decodes for the Python reader; miniz_oxide is pure Rust.
 flate2 = "1.1"
 # The HTML5 character reference tables `html.unescape` decodes a fetched document with.

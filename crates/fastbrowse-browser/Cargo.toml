@@ -3,8 +3,9 @@ name = "fastbrowse-browser"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
-description = "The browser layer: Chrome over raw CDP, sessions, observation, capture and actions (src/fastbrowse/browser)."
+repository.workspace = true
+homepage.workspace = true
+description = "fastbrowse's browser layer: Chrome over raw CDP, sessions, observation, capture and actions."
 
 [features]
 default = ["cloud"]
@@ -20,7 +21,7 @@ recording = []
 ring = "0.17"
 # Base64 and base32, already linked by tungstenite.
 data-encoding = "2.11"
-fastbrowse-core = { path = "../fastbrowse-core" }
+fastbrowse-core = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 httparse = "1.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

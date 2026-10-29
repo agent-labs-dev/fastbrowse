@@ -13,7 +13,7 @@ The tracked bundle must match this SHA-256 exactly:
 
 Verify after any re-sync:
 
-  sha256sum src/fastbrowse/browser/autoconsent/autoconsent.standalone.js
+  sha256sum crates/fastbrowse-browser/js/autoconsent/autoconsent.standalone.js
 
 This file is injected into every page the agent opens to refuse cookie banners before
 they paint. Treat any change to it as a supply-chain change: update this checksum and

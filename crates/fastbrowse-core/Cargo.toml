@@ -3,7 +3,9 @@ name = "fastbrowse-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "fastbrowse's types: the models, the protocol, configuration, origins and citations."
 
 [dependencies]
 # WHATWG URL parsing, with UTS #46 host processing through its `idna` dependency: the parser Chrome uses.
