@@ -345,6 +345,7 @@ impl Agent {
             return Ok(());
         }
         let what = format!("{} {}", decision.operation, text::repr(label));
+        let mut requested = None;
         if !force {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
             // Only the address goes with the question: the page's own text is what would argue a harmful action is
@@ -364,7 +365,8 @@ impl Agent {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
                 _ => None,
             };
-            let (probability, requested) = (noul("irreversible"), noul("requested"));
+            let probability = noul("irreversible");
+            requested = noul("requested");
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
@@ -384,8 +386,12 @@ impl Agent {
         }
         // An unsure pick that may commit something is more likely the wrong pick than the step to confirm.
         let unsure = authorized || decision.confidence() < thresholds.recover_below;
+        let requested = requested.map_or_else(|| "not asked".to_string(), |p| format!("{p:.2}"));
         let reason = if unsure {
-            format!("unsure {what} is the irreversible action the task means ({:.2})", decision.confidence())
+            format!(
+                "unsure {what} is the irreversible action the task means (pick {:.2}, requested {requested})",
+                decision.confidence()
+            )
         } else {
             format!("{what} needs confirmation")
         };
