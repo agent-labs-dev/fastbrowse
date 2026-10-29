@@ -10,7 +10,9 @@ use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
 use fastbrowse_core::models::{CostLine, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
-use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
+use fastbrowse_core::py::json::dumps;
+use fastbrowse_core::py::text;
+use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty, json_schema};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -150,7 +152,9 @@ impl Schema for RecordMatches {
 
 const RECORD_READER: &str = "# Records\nEach record below is one record of a list, after its [source id]. Return the source ids of the records that pass every filter the requirement states, judging each record alone. Code counts or compares the records you return, and ignores an id not shown here.";
 
-/// The LLM's reading of the records Jev was unsure of, shown alone rather than with the page around them.
+/// The LLM's reading of the records Jev was unsure of, shown alone rather than with the page around them, in as few
+/// prompts as fit the LLM input budget. Each record is judged alone, so splitting them changes no answer; a record too
+/// long for any prompt goes in one of its own, which the provider reports as too large.
 async fn read_unsure<'a>(
     llm: &dyn LLMClient,
     page: &Page<'_>,
@@ -158,19 +162,37 @@ async fn read_unsure<'a>(
     unsure: &[&'a Block],
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
-) -> Result<(Vec<&'a Block>, CostLine)> {
-    let records: Vec<String> =
-        unsure.iter().map(|block| format!("[{}] {}", block.source_id, page.slice(block.start, block.end))).collect();
-    let messages = [
-        Message::system(format!("{RECORD_READER}\n\n# Trust\n{UNTRUSTED}")),
-        Message::user(format!("# Requirement\n{requirement}\n\n# Records\n{}", records.join("\n\n"))),
-    ];
-    let read = ask_reader::<RecordMatches>(llm, &messages, RecordMatches::ty(), tokens, ledger).await?;
-    if let Some(ledger) = ledger {
-        ledger.record([read.cost.clone()])?;
+) -> Result<(Vec<&'a Block>, Vec<CostLine>)> {
+    let system = format!("{RECORD_READER}\n\n# Trust\n{UNTRUSTED}");
+    let heading = format!("# Requirement\n{requirement}\n\n# Records\n");
+    let fixed = text::len(&format!("{system}{heading}{}", dumps(&json_schema(&RecordMatches::ty())))) as i64;
+    let room = tokens.input_chars::<&str>(&[], false) - fixed;
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut used = 0;
+    for block in unsure {
+        let record = format!("[{}] {}", block.source_id, page.slice(block.start, block.end));
+        let size = text::len(&record) as i64 + 2;
+        match groups.last_mut() {
+            Some(group) if used + size <= room => group.push(record),
+            _ => {
+                groups.push(vec![record]);
+                used = 0;
+            }
+        }
+        used += size;
     }
-    let matching: HashSet<&String> = read.data.matching.iter().collect();
-    Ok((unsure.iter().filter(|block| matching.contains(&block.source_id)).copied().collect(), read.cost))
+    let mut matching = HashSet::new();
+    let mut costs = Vec::new();
+    for records in groups {
+        let messages = [Message::system(system.clone()), Message::user(format!("{heading}{}", records.join("\n\n")))];
+        let read = ask_reader::<RecordMatches>(llm, &messages, RecordMatches::ty(), tokens, ledger).await?;
+        if let Some(ledger) = ledger {
+            ledger.record([read.cost.clone()])?;
+        }
+        matching.extend(read.data.matching);
+        costs.push(read.cost);
+    }
+    Ok((unsure.iter().filter(|block| matching.contains(&block.source_id)).copied().collect(), costs))
 }
 
 fn filter_event(trace: &Trace, reader: &str, requirement_id: &str, records: usize, matched: usize) {
@@ -204,7 +226,7 @@ async fn keep<'a>(
         let (read, cost) = read_unsure(llm, page, requirement, &unsure, tokens, ledger).await?;
         filter_event(trace, "llm", requirement_id, unsure.len(), read.len());
         kept.extend(read);
-        costs.push(cost);
+        costs.extend(cost);
     }
     kept.sort_by_key(|block| block.start);
     Ok((kept, costs))
@@ -517,6 +539,31 @@ mod tests {
             .map(|key| notes.facts_by_id()[key].evidence.as_ref().unwrap().quote.as_str())
             .collect();
         assert_eq!(quotes, ["Oak - available", "Elm - available"]);
+    }
+
+    #[test]
+    fn records_jev_is_unsure_of_are_read_in_prompts_that_fit_the_llm_budget() {
+        let captured = packages();
+        let page = Page::new(&captured);
+        let blocks: Vec<&Block> = captured.blocks.iter().take(2).collect();
+        let requirement = "Count every available package";
+        let llm = Llm { reply: Some(json!({"matching": ["s0", "s1"]})), shown: Mutex::new(Vec::new()) };
+        let prompt = format!("{RECORD_READER}\n\n# Trust\n{UNTRUSTED}# Requirement\n{requirement}\n\n# Records\n");
+        let fixed = text::len(&format!("{prompt}{}", dumps(&json_schema(&RecordMatches::ty())))) as i64;
+        // Room for one record a prompt, not two.
+        let tokens = TokenBudget {
+            state_plus_largest_question: fixed + 25,
+            state_plus_all_questions: fixed + 25,
+            chars_per_token: 1.0,
+            ..TokenBudget::default()
+        };
+        let (kept, costs) = block_on(read_unsure(&llm, &page, requirement, &blocks, &tokens, None)).unwrap();
+        let heading = format!("# Requirement\n{requirement}\n\n# Records\n");
+        assert_eq!(
+            *llm.shown.lock().unwrap(),
+            [format!("{heading}[s0] Oak - available"), format!("{heading}[s1] Elm - available")]
+        );
+        assert_eq!((kept, costs.len()), (blocks, 2));
     }
 
     #[test]
