@@ -5,6 +5,7 @@
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
 pub(crate) mod act;
+mod pointer;
 pub mod scripts;
 
 use std::collections::{HashMap, HashSet};
@@ -1388,6 +1389,10 @@ impl Page for CdpPage {
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move { seam(CdpPage::screenshot(self).await) })
+    }
+
+    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+        Box::pin(async move { seam(CdpPage::click_viewport(self, x, y).await) })
     }
 
     fn withhold_frames(&self, withheld: bool) {

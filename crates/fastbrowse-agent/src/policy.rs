@@ -1112,7 +1112,7 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
 
 /// Jev reads an image wherever its reference appears, even inside page text, so the reference is one no page could
 /// contain by chance: the image's own digest.
-fn screenshot_reference(png: &[u8]) -> String {
+pub(crate) fn screenshot_reference(png: &[u8]) -> String {
     format!("screenshot-{}", sha256_hex(png))
 }
 
@@ -1359,7 +1359,7 @@ mod tests {
                                 let yes = relevance && question.instructions.contains(&label);
                                 Answer::Noul(NoulAnswer { kind: NoulTag, probability: if yes { 0.9 } else { 0.1 } })
                             }
-                            Question::Score(_) => unreachable!("the policy asks no score"),
+                            Question::Score(_) | Question::Box(_) => unreachable!("the policy asks no score or box"),
                         };
                         (key.clone(), answer)
                     })

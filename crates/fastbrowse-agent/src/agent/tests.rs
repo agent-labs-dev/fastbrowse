@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
+use fastbrowse_core::decision::{
+    Answer, BoxAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images, NoulAnswer, Question,
+};
 use fastbrowse_core::effects::step_key;
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
@@ -1387,8 +1390,14 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
 
 // -- A stall is put to Jev first, and the LLM only hears of it when Jev stays unsure --------------------------------
 
-/// A page whose one use in recovery is the screenshot the LLM is shown.
-struct Screenshots;
+/// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it.
+#[derive(Default)]
+struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>);
+
+/// A PNG's signature and header, which is all of it the image limits read.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    [&b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR"[..], &width.to_be_bytes(), &height.to_be_bytes()].concat()
+}
 
 impl Page for Screenshots {
     fn artifacts(&self) -> Vec<Artifact> {
@@ -1420,7 +1429,19 @@ impl Page for Screenshots {
     }
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
-        Box::pin(async { Ok(b"png".to_vec()) })
+        Box::pin(async { Ok(png(1280, 900)) })
+    }
+
+    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+        self.0.lock().unwrap().push((x, y));
+        let clicked = ActResult {
+            outcome: StepOutcome::Executed,
+            page_changed: true,
+            detail: None,
+            form_unchanged: false,
+            moved: false,
+        };
+        Box::pin(async move { Ok(clicked) })
     }
 
     fn withhold_frames(&self, _: bool) {}
@@ -1499,7 +1520,7 @@ async fn stalled_on_apply(confidence: f64) -> (RunState, Arc<Unsure>, Arc<Recove
     let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
     let jev = Arc::new(Unsure(ScriptedJev::new(script), confidence, Default::default()));
     let llm = Arc::new(Recoverer::default());
-    let agent = Agent::new(Arc::new(Screenshots), jev.clone(), llm.clone());
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), llm.clone());
     let mut state = run_state().await;
     let apply = button("Apply");
     let page = observation(&[apply.clone(), button("Next")]);
@@ -1528,4 +1549,84 @@ async fn test_the_llm_recovers_only_when_jev_stays_unsure() {
     assert!(state.picked.is_none());
     assert_eq!(state.directed, Some((Operation::Scroll, None)));
     assert_eq!(state.steps.last().map(|step| step.decided_by), Some(Decider::Llm));
+}
+
+// -- A covered click is put to Jev's eyes: pressed where the screenshot shows the control, only when Jev is sure ----
+
+/// A Jev that is sent images when `images`, answers that the control is shown with `shown`, finds it in the box from
+/// 0.2 to 0.4 across and 0.5 to 0.7 down, and keeps what it was asked.
+struct Seeing {
+    images: bool,
+    shown: f64,
+    asked: std::sync::Mutex<Vec<Asked>>,
+}
+
+/// A state, its questions and the images it refers to.
+type Asked = (serde_json::Value, IndexMap<String, Question>, Images);
+
+impl DecisionClient for Seeing {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        unreachable!("a covered control is asked about with its screenshot")
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.asked.lock().unwrap().push((state.clone(), questions.clone(), images.clone()));
+        let answers = IndexMap::from([
+            ("shown".to_string(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.shown })),
+            (
+                "where".to_string(),
+                Answer::Box(BoxAnswer {
+                    kind: Default::default(),
+                    edges: Edges { top: 0.5, bottom: 0.7, left: 0.2, right: 0.4 },
+                    confidence: 0.9,
+                }),
+            ),
+        ]);
+        let cost = CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0));
+        Box::pin(async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 1, requests: 1, cost }) })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { images: self.images, ..DecisionProfile::jev() }
+    }
+}
+
+async fn click_where_seen(images: bool, shown: f64) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
+    let page = Arc::new(Screenshots::default());
+    let jev = Arc::new(Seeing { images, shown, asked: Default::default() });
+    let agent = Agent::new(page.clone(), jev.clone(), Arc::new(Recoverer::default()));
+    let mut state = run_state().await;
+    let clicked = agent.click_where_seen(&mut state, &button("Pick a date")).await.expect("asked");
+    (clicked, page, jev)
+}
+
+#[tokio::test]
+async fn test_a_covered_control_jev_sees_is_clicked_at_the_centre_of_its_box() {
+    let (clicked, page, jev) = click_where_seen(true, 0.9).await;
+    assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Executed));
+    let (x, y) = page.0.lock().unwrap()[0];
+    assert!((x - 0.3).abs() < 1e-9 && (y - 0.6).abs() < 1e-9, "{x}, {y}");
+    let asked = jev.asked.lock().unwrap();
+    let (state, questions, images) = &asked[0];
+    let reference = state["viewport_screenshot"].as_str().unwrap();
+    assert_eq!(images.get(reference), Some(&png(1280, 900)));
+    assert_eq!(state["control"]["label"], "Pick a date");
+    assert!(matches!(questions["shown"], Question::Noul(_)) && matches!(questions["where"], Question::Box(_)));
+}
+
+#[tokio::test]
+async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
+    let (clicked, page, _) = click_where_seen(true, 0.2).await;
+    assert!(clicked.is_none() && page.0.lock().unwrap().is_empty());
+    let (clicked, page, jev) = click_where_seen(false, 0.9).await;
+    assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && jev.asked.lock().unwrap().is_empty());
 }

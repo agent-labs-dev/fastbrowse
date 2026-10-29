@@ -13,7 +13,7 @@ use fastbrowse_clients::system_one::{IMAGES_HEADER, OPENROUTER_MODEL, OPENROUTER
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spend};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images,
+    Answer, BoxQuestion, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images,
     JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, NoulAnswer, NoulQuestion, Question, ScoreQuestion,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, Limits};
@@ -191,6 +191,38 @@ async fn test_a_request_without_images_carries_no_image_input() {
     });
     let client = SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe();
     client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
+}
+
+/// A box question goes out with its instructions and no criteria, and its answer comes back as four edges and a
+/// confidence; edges that cross are not a box.
+#[tokio::test]
+async fn test_a_box_is_asked_without_criteria_and_read_as_its_edges() {
+    let asked = questions([(
+        "where",
+        BoxQuestion { kind: Default::default(), instructions: "The mug in `photo`".into() }.into(),
+    )]);
+    for (edges, valid) in [
+        (json!({"top": 0.1, "bottom": 0.3, "left": 0.2, "right": 0.6}), true),
+        (json!({"top": 0.5, "bottom": 0.3, "left": 0.2, "right": 0.6}), false),
+    ] {
+        let http = answering(move |request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["questions"], json!({"where": {"type": "box", "instructions": "The mug in `photo`"}}));
+            let response = Response::json(
+                200,
+                &json!({"answers": {"where": {"type": "box", "box": edges, "confidence": 0.8}}, "usage": {"input_tokens": 1}}),
+            );
+            Box::pin(async move { Ok(response) })
+        });
+        let client = SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe();
+        let result = client.evaluate(&json!({"photo": "p"}), &asked).await;
+        if valid {
+            let Answer::Box(found) = &result.unwrap().answers["where"] else { panic!("a box") };
+            assert_eq!((found.edges.centre(), found.confidence), ((0.4, 0.2), 0.8));
+        } else {
+            assert!(result.unwrap_err().to_string().contains("box edges cross"));
+        }
+    }
 }
 
 #[tokio::test]

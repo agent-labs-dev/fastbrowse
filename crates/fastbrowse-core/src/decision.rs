@@ -54,6 +54,7 @@ pub fn without_images(state: &Value, images: &Images) -> Value {
 literal_tag!(ChoiceTag = "choice");
 literal_tag!(NoulTag = "noul");
 literal_tag!(ScoreTag = "score");
+literal_tag!(BoxTag = "box");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,13 +114,24 @@ fn score_criteria<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Err
     }
 }
 
-/// `ChoiceQuestion | NoulQuestion | ScoreQuestion`, discriminated by `type`.
+/// Where something is in an image the state refers to. It takes no criteria and always answers with a box, so it is
+/// asked beside a NOUL on whether the thing is there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxQuestion {
+    #[serde(default, rename = "type")]
+    pub kind: BoxTag,
+    pub instructions: String,
+}
+
+/// `ChoiceQuestion | NoulQuestion | ScoreQuestion | BoxQuestion`, discriminated by `type`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Question {
     Choice(ChoiceQuestion),
     Noul(NoulQuestion),
     Score(ScoreQuestion),
+    Box(BoxQuestion),
 }
 
 /// Reads the `type` member first, as a pydantic discriminated union does, so an error names the right model.
@@ -128,15 +140,17 @@ fn by_type<'de, D: Deserializer<'de>, T>(
     choice: impl FnOnce(Value) -> Result<T, serde_json::Error>,
     noul: impl FnOnce(Value) -> Result<T, serde_json::Error>,
     score: impl FnOnce(Value) -> Result<T, serde_json::Error>,
+    boxed: impl FnOnce(Value) -> Result<T, serde_json::Error>,
 ) -> Result<T, D::Error> {
     let value = Value::deserialize(d)?;
     let parsed = match value.get("type").and_then(Value::as_str) {
         Some("choice") => choice(value),
         Some("noul") => noul(value),
         Some("score") => score(value),
+        Some("box") => boxed(value),
         Some(_) => {
             return Err(serde::de::Error::custom(
-                "Input tag does not match any of the expected tags: 'choice', 'noul', 'score'",
+                "Input tag does not match any of the expected tags: 'choice', 'noul', 'score', 'box'",
             ));
         }
         None => return Err(serde::de::Error::custom("Unable to extract tag using discriminator 'type'")),
@@ -151,6 +165,7 @@ impl<'de> Deserialize<'de> for Question {
             |v| serde_json::from_value(v).map(Question::Choice),
             |v| serde_json::from_value(v).map(Question::Noul),
             |v| serde_json::from_value(v).map(Question::Score),
+            |v| serde_json::from_value(v).map(Question::Box),
         )
     }
 }
@@ -168,6 +183,11 @@ impl From<NoulQuestion> for Question {
 impl From<ScoreQuestion> for Question {
     fn from(q: ScoreQuestion) -> Self {
         Question::Score(q)
+    }
+}
+impl From<BoxQuestion> for Question {
+    fn from(q: BoxQuestion) -> Self {
+        Question::Box(q)
     }
 }
 
@@ -204,13 +224,42 @@ pub struct ScoreAnswer {
     pub confidence: f64,
 }
 
-/// `ChoiceAnswer | NoulAnswer | ScoreAnswer`, discriminated by `type`.
+/// The edges of a box, each a fraction of the image from its top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Edges {
+    pub top: f64,
+    pub bottom: f64,
+    pub left: f64,
+    pub right: f64,
+}
+
+impl Edges {
+    /// The centre, as fractions of the image's width and height.
+    pub fn centre(&self) -> (f64, f64) {
+        ((self.left + self.right) / 2.0, (self.top + self.bottom) / 2.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxAnswer {
+    #[serde(default, rename = "type")]
+    pub kind: BoxTag,
+    #[serde(rename = "box")]
+    pub edges: Edges,
+    #[serde(deserialize_with = "lax::float_unit")]
+    pub confidence: f64,
+}
+
+/// `ChoiceAnswer | NoulAnswer | ScoreAnswer | BoxAnswer`, discriminated by `type`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Answer {
     Choice(ChoiceAnswer),
     Noul(NoulAnswer),
     Score(ScoreAnswer),
+    Box(BoxAnswer),
 }
 
 impl<'de> Deserialize<'de> for Answer {
@@ -220,6 +269,7 @@ impl<'de> Deserialize<'de> for Answer {
             |v| serde_json::from_value(v).map(Answer::Choice),
             |v| serde_json::from_value(v).map(Answer::Noul),
             |v| serde_json::from_value(v).map(Answer::Score),
+            |v| serde_json::from_value(v).map(Answer::Box),
         )
     }
 }
