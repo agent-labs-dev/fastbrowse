@@ -430,6 +430,34 @@ fn block_containing<'a>(page: &Page<'a>, at: i64) -> Option<&'a Block> {
     page.capture.blocks.iter().find(|block| block.start <= at && at < block.end)
 }
 
+/// The one place in this chunk that literally holds `excerpt`, for a claim that quoted it without naming its
+/// blocks. A passage occurring more than once names no single record, and is refused as a cited excerpt that
+/// matched twice is: two records' values, or the same price under two products, cannot be told apart.
+fn locate_excerpt<'a>(page: &Page<'_>, part: &Chunk, raw: &str) -> Option<Evidence> {
+    let excerpt: &str = text::strip(raw);
+    if excerpt.is_empty() {
+        return None;
+    }
+    // Nested blocks repeat the same text at the same offsets, so a place is identified by its span, not the block.
+    let mut found: Vec<(i64, i64)> = Vec::new();
+    for block in offered(page, part) {
+        let start = block.start.max(part.start);
+        let end = block.end.min(part.end);
+        if start >= end {
+            continue;
+        }
+        for (offset, stop) in loose_matches(excerpt, page.slice(start, end)) {
+            let span = (start + offset as i64, start + stop as i64);
+            if !found.contains(&span) {
+                found.push(span);
+            }
+        }
+    }
+    let [only] = found.as_slice() else { return None };
+    let block = block_containing(page, only.0)?;
+    Some(evidence(page, block, only.0, only.1))
+}
+
 fn first_block<'a>(page: &Page<'a>, source_id: &str) -> Option<&'a Block> {
     page.capture.blocks.iter().find(|block| block.source_id == source_id)
 }
@@ -499,6 +527,17 @@ fn remember(
         }
     }
     let mut quote = claim.cite.as_ref().and_then(|cite| cited(page, part, cite));
+    // A reader can quote the passage it read without naming the blocks it came from. The excerpt is literal page
+    // text, so resolve it in this chunk by the same standard a cited excerpt must meet: exactly one place, or the
+    // claim is refused. DeepSeek quoted the order total ("Total: $43.18") and the confirmation ("Thank you for your
+    // order!") this way with no cite, and every such claim was dropped for a missing citation the reader never
+    // needed to send, so the review page never evidenced either one and the run went to the step limit.
+    if quote.is_none()
+        && claim.cite.is_none()
+        && let Some(raw) = &claim.excerpt
+    {
+        quote = locate_excerpt(page, part, raw);
+    }
     if let Some(raw) = &claim.excerpt {
         let Some(span) = quote.clone() else { return Ok(None) };
         if text::strip(raw).is_empty() {
@@ -532,8 +571,8 @@ fn remember(
         if block.kind == BlockKind::Table {
             start = span.start;
         }
-        let cite = claim.cite.as_ref().expect("an excerpt needs a cite");
-        if cite.first != cite.last && (start, end) != (span.start, span.end) {
+        let spans_blocks = claim.cite.as_ref().is_some_and(|cite| cite.first != cite.last);
+        if spans_blocks && (start, end) != (span.start, span.end) {
             // Narrowing a total to its value can discard the subjects in the reader's selected blocks.
             let context = quoted(span.clone());
             basis.push(fact_id(&context));
@@ -541,9 +580,7 @@ fn remember(
         }
         let narrowed = evidence(page, block, start, end);
         // Narrowing one record to its value can discard the subject named beside it in the same block.
-        if cite.first == cite.last
-            && let Some(context) = block_context(page, &narrowed, FactReader::Llm)
-        {
+        if !spans_blocks && let Some(context) = block_context(page, &narrowed, FactReader::Llm) {
             let key = fact_id(&context);
             notes.add(context);
             push_unique(&mut basis, key);
@@ -1268,6 +1305,9 @@ async fn read_inner(
             requirement_ids.contains(&r.id)
                 && r.kind == RequirementKind::Information
                 && !options.continuing.contains(&r.id)
+                // An earlier page can say a requirement needs content it does not hold; that is not a verdict on every
+                // later page. Dropping it from the reader's obligations there left it unevidenced forever once a first
+                // read could not answer it, since a read only re-asks what it is still asked for.
                 && !options.incomplete.contains(&r.id)
         })
         .cloned()
