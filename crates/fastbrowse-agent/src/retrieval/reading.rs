@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 
 use super::choices::read_choices;
 use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_message, source_marker};
-use super::records::{Counted, count_records};
 use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search, numbers};
 use super::{notes_room, route};
 use crate::comparison::{NumericComparison, QuotedField, digit};
@@ -1131,7 +1130,6 @@ async fn read_inner(
         })
         .cloned()
         .collect();
-    let mut narrowed = false;
     // A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
     if let Some(jev) = options.jev
         && !wanted.is_empty()
@@ -1149,31 +1147,8 @@ async fn read_inner(
         }
         let answered: HashSet<Option<String>> = facts.values().map(|fact| fact.requirement_id.clone()).collect();
         requirement_ids.retain(|key| !answered.contains(&Some(key.clone())) && !chosen.absent.contains(key));
-        narrowed = true;
-    }
-    // A count is code's over the records Jev matches, on this page as on every later one; the LLM reader's own record
-    // lists missed records on a first page, and nothing later recovered them.
-    let mut counted = Counted::default();
-    let counts: Vec<Requirement> =
-        wanted.iter().filter(|r| r.count_records && requirement_ids.contains(&r.id)).cloned().collect();
-    if let Some(jev) = options.jev
-        && !counts.is_empty()
-        && !options.records_only
-    {
-        // The caller's notice is its word that the page has a next-page control.
-        let next_page = !options.notice.is_empty();
-        counted = count_records(jev, llm, &page, &counts, next_page, notes, tokens, ledger, &options.trace).await?;
-        costs.extend(counted.cost_lines.iter().cloned());
-        for fact in &counted.facts {
-            facts.insert((fact_id(fact), fact.requirement_id.clone()), fact.clone());
-        }
-        requirement_ids.retain(|key| !counted.settled.contains(key));
-        narrowed |= !counted.settled.is_empty();
-    }
-    if narrowed {
         if requirement_ids.is_empty() {
-            let outcome = ReadOutcome::new(facts.into_values().collect(), Vec::new(), rejected, costs);
-            return Ok(counted.into_outcome(outcome));
+            return Ok(ReadOutcome::new(facts.into_values().collect(), Vec::new(), rejected, costs));
         }
         // Narrow the obligations without dropping the task's constraints or separating ids from their meaning.
         let remaining: Vec<String> = options
@@ -1906,7 +1881,6 @@ async fn read_inner(
         tally_readers: tally_readers.into_iter().filter(|reader| !lost.contains(&reader.requirement_id)).collect(),
         comparisons: comparisons.into_iter().filter(|(key, _)| !lost.contains(key)).collect(),
     };
-    outcome = counted.into_outcome(outcome);
     unconfirmed_orders.retain(|key| !ordered.contains(key));
     if !unconfirmed_orders.is_empty() {
         // A rejected sorting shortcut has uncollected records, not permanently missing records.

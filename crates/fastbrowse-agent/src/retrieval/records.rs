@@ -1,4 +1,4 @@
-//! Jev's record reader: the page's run of records matched one by one against a requirement, so code counts them or
+//! Jev's record reader: a later page's run of records matched one by one against a requirement, so code counts them or
 //! keeps them as a comparison's records, with only the records Jev is unsure of read by the LLM.
 //!
 //! Every counted record is a block code cut from the capture, so it is a quote.
@@ -21,8 +21,7 @@ use super::reading::{ReadOutcome, TallyReader, ask_reader, counted_kind, quoted}
 use super::text::Page;
 use crate::batches::evaluate_batches;
 use crate::error::Result;
-use crate::memory::{Fact, Notes, Tally, fact_id};
-use crate::planner::Requirement;
+use crate::memory::{Notes, Tally, fact_id};
 
 /// A record Jev matches at or above the first, or rejects at or below the second, is settled; one between goes to the
 /// LLM reader on its own. Jev's yes for a plain author or rating match sits at 0.78 to 0.84, and a wrongly dropped
@@ -36,11 +35,11 @@ fn shape(block: &Block) -> Shape {
     (block.heading_path.clone(), block.frame_id.clone(), block.kind)
 }
 
-/// The page's list: the largest unbroken run of record blocks sharing a heading, a frame and a kind, or the one run of
-/// `wanted`'s shape. A sidebar or a footer list sits under another heading and is not the list; a second run of the
-/// list's own shape, a featured strip repeating its records, would be counted again on every page that repeats it, so
-/// a page with one is not read here.
-fn record_run<'a>(capture: &'a Capture, wanted: Option<&Shape>) -> Option<Vec<&'a Block>> {
+/// The page's list: the one unbroken run of record blocks of `list`'s shape, the shape of the records the first page's
+/// reader cited. A sidebar or a footer list sits under another heading and is not the list; a second run of the list's
+/// own shape, a featured strip repeating its records, would be counted again on every page that repeats it, so a page
+/// with one is not read here.
+fn record_run<'a>(capture: &'a Capture, list: &Shape) -> Option<Vec<&'a Block>> {
     let mut runs: Vec<Vec<&Block>> = Vec::new();
     for block in capture.blocks.iter().filter(|block| counted_kind(block.kind)) {
         match runs.last_mut() {
@@ -48,14 +47,7 @@ fn record_run<'a>(capture: &'a Capture, wanted: Option<&Shape>) -> Option<Vec<&'
             _ => runs.push(vec![block]),
         }
     }
-    let list = match wanted {
-        Some(wanted) => wanted.clone(),
-        None => {
-            let longest = runs.iter().map(Vec::len).max()?;
-            shape(runs.iter().find(|run| run.len() == longest)?[0])
-        }
-    };
-    let mut of_shape = runs.into_iter().filter(|run| shape(run[0]) == list);
+    let mut of_shape = runs.into_iter().filter(|run| shape(run[0]) == *list);
     match (of_shape.next(), of_shape.next()) {
         (Some(run), None) => Some(run),
         _ => None,
@@ -69,33 +61,6 @@ fn record_question(requirement: &str, record: &str) -> Question {
         ),
         Some("Yes, this record matches the requirement."),
         Some("No, this record does not match."),
-    )
-    .into()
-}
-
-/// Whether the requirement's count is settled by this list as code reads it: every page of it when it goes on, or this
-/// page when it does not. A count bounded to pages the task names, or a list that goes on behind another control, stays
-/// with the LLM reader.
-fn scope_question(requirement: &str, next_page: bool) -> Question {
-    let (fact, asked, yes, no) = if next_page {
-        (
-            "This page shows one page of a list that goes on: code found a control to its next page, and pages through the list to its last page.",
-            "Does the requirement count the matching records on every page of this list, rather than only on pages the task names?",
-            "Yes, it counts every page of the list.",
-            "No, it counts only some pages, or not this list.",
-        )
-    } else {
-        (
-            "Code found no control to a next page of this list.",
-            "Does this page show every record the requirement counts, so that its count is complete on this page?",
-            "Yes, this page shows the whole list the requirement counts.",
-            "No, the list goes on elsewhere, such as behind a control that loads more, or it is not this list.",
-        )
-    };
-    NoulQuestion::new(
-        format!("{UNTRUSTED}\n\n# Requirement\n{requirement}\n\n# List\n{fact}\n\n{asked}"),
-        Some(yes),
-        Some(no),
     )
     .into()
 }
@@ -218,106 +183,6 @@ fn remember(page: &Page<'_>, kept: &[&Block], notes: &mut Notes) -> Vec<String> 
         .collect()
 }
 
-/// What Jev settled of a page's counts: the facts it added to the notes, the requirements it settled, those whose list
-/// goes on past the page with the reader each later page is matched by, and what the LLM cost.
-#[derive(Default)]
-pub(crate) struct Counted {
-    pub facts: Vec<Fact>,
-    pub settled: Vec<String>,
-    pub continues: Vec<String>,
-    pub readers: Vec<TallyReader>,
-    pub cost_lines: Vec<CostLine>,
-}
-
-impl Counted {
-    /// `outcome` with the lists Jev counted on this page going on to the next, every page of them needed.
-    pub fn into_outcome(self, mut outcome: ReadOutcome) -> ReadOutcome {
-        outcome.through_end.extend(self.continues.iter().cloned());
-        outcome.continues.extend(self.continues);
-        outcome.tally_readers.extend(self.readers);
-        outcome
-    }
-}
-
-/// `requirements`' counts read from the page's record run: Jev matches each record against the requirement's own text
-/// and says whether this list is the whole of what the requirement counts. A requirement Jev cannot settle so is left
-/// to the LLM reader with the whole page.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn count_records(
-    jev: &dyn DecisionClient,
-    llm: &dyn LLMClient,
-    page: &Page<'_>,
-    requirements: &[Requirement],
-    next_page: bool,
-    notes: &mut Notes,
-    tokens: &TokenBudget,
-    ledger: Option<&Ledger>,
-    trace: &Trace,
-) -> Result<Counted> {
-    let capture = page.capture;
-    let mut counted = Counted::default();
-    // An unopened frame could hold records of the list.
-    if requirements.is_empty() || capture.inaccessible_frames > 0 {
-        return Ok(counted);
-    }
-    let Some(records) = record_run(capture, None) else { return Ok(counted) };
-    let mut questions: IndexMap<String, Question> = IndexMap::new();
-    for requirement in requirements {
-        questions.insert(format!("{}::scope", requirement.id), scope_question(&requirement.text, next_page));
-        for (index, block) in records.iter().enumerate() {
-            questions.insert(
-                format!("{}::{index}", requirement.id),
-                record_question(&requirement.text, page.slice(block.start, block.end)),
-            );
-        }
-    }
-    let state = json!({"page": {"url": capture.url, "title": capture.title, "heading": records[0].heading_path}});
-    let Some(answered) = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await? else {
-        return Ok(counted);
-    };
-    let answers = &answered.answers;
-    for requirement in requirements {
-        if probability(answers, &format!("{}::scope", requirement.id)).is_none_or(|p| p < RECORD_MATCH_FROM) {
-            continue;
-        }
-        let (kept, costs) =
-            keep(llm, page, answers, &requirement.id, &requirement.text, &records, tokens, ledger, trace).await?;
-        counted.cost_lines.extend(costs);
-        // A count of none has no record to cite, so on a list that ends here the LLM reader states it from the page.
-        if kept.is_empty() && !next_page {
-            continue;
-        }
-        let mut keys = remember(page, &kept, notes);
-        if !kept.is_empty() {
-            let tally =
-                Tally { requirement_id: requirement.id.clone(), key: requirement.text.clone(), records: keys.clone() };
-            keys.push(fact_id(&notes.add_tally(tally)?));
-        }
-        if next_page {
-            counted.continues.push(requirement.id.clone());
-            counted.readers.push(TallyReader {
-                requirement_id: requirement.id.clone(),
-                count_label: Some(requirement.text.clone()),
-                title: capture.title.clone(),
-                heading_path: records[0].heading_path.clone(),
-                frame_id: records[0].frame_id.clone(),
-                prefix: String::new(),
-                suffix: String::new(),
-                filter: Some(requirement.text.clone()),
-                compares: false,
-                record_kind: Some(records[0].kind),
-                comparison: None,
-            });
-        } else {
-            notes.complete_tallies(&requirement.id);
-        }
-        let held = notes.facts_by_id();
-        counted.facts.extend(keys.iter().filter_map(|key| held.get(key)).map(|fact| (*fact).clone()));
-        counted.settled.push(requirement.id.clone());
-    }
-    Ok(counted)
-}
-
 /// `filter_tallies`: a later page of a filtered count or comparison, its records matched by Jev in one request.
 ///
 /// None when the page does not have the first page's shape, or a comparison's kept record has no value code can read:
@@ -350,7 +215,7 @@ pub async fn filter_tallies(
         return Ok(None);
     }
     let list = (reader.heading_path.clone(), reader.frame_id.clone(), kind);
-    let Some(records) = record_run(capture, Some(&list)) else { return Ok(None) };
+    let Some(records) = record_run(capture, &list) else { return Ok(None) };
     let page = Page::new(capture);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     for reader in readers {
@@ -423,12 +288,10 @@ mod tests {
 
     use super::*;
     use crate::comparison::{NumericComparison, Order, QuotedField, complete_comparison};
-    use crate::planner::RequirementKind;
-    use crate::retrieval::reading::{ReadOptions, read};
     use crate::retrieval::testing::capture;
     use crate::support::testing::block_on;
 
-    /// Answers each record question by whether its record holds `matches`, and each scope question yes.
+    /// Answers each record question by whether its record holds `matches`.
     struct Jev {
         matches: &'static str,
         unsure: Option<&'static str>,
@@ -449,9 +312,7 @@ mod tests {
                 .map(|(key, question)| {
                     let Question::Noul(question) = question else { panic!("a yes/no question") };
                     let record = question.instructions.split("# Record\n").nth(1).unwrap_or_default();
-                    let probability = if key.ends_with("::scope") {
-                        0.9
-                    } else if self.unsure.is_some_and(|unsure| record.contains(unsure)) {
+                    let probability = if self.unsure.is_some_and(|unsure| record.contains(unsure)) {
                         0.5
                     } else if record.contains(self.matches) {
                         0.9
@@ -519,36 +380,6 @@ mod tests {
             record_kind: Some(BlockKind::ListItem),
             comparison,
         }
-    }
-
-    #[test]
-    fn a_first_page_is_counted_by_jev_with_no_llm_call() {
-        let captured = packages();
-        let jev = Jev { matches: "available", unsure: None };
-        let llm = Llm { reply: None, shown: Mutex::new(Vec::new()) };
-        let text = "Count every available package";
-        let requirement =
-            Requirement { count_records: true, ..Requirement::new("r", text, RequirementKind::Information) };
-        let options = ReadOptions {
-            jev: Some(&jev),
-            requirements: vec![requirement],
-            notice: "Next page: a control to the next page of this list.".into(),
-            ..ReadOptions::default()
-        };
-        let mut notes = Notes::default();
-        let ids = vec!["r".to_string()];
-        let outcome = block_on(read(&llm, &captured, text, &ids, &mut notes, &options)).unwrap();
-        assert!(llm.shown.lock().unwrap().is_empty());
-        assert_eq!((outcome.continues.clone(), outcome.through_end.clone()), (ids.clone(), ids));
-        assert_eq!(outcome.tally_readers, vec![reader(&captured, text, None)]);
-        let tallies = notes.tallies();
-        assert_eq!(tallies.len(), 1);
-        let quotes: Vec<&str> = tallies[0]
-            .records
-            .iter()
-            .map(|key| notes.facts_by_id()[key].evidence.as_ref().unwrap().quote.as_str())
-            .collect();
-        assert_eq!(quotes, ["Oak - available", "Elm - available"]);
     }
 
     #[test]
