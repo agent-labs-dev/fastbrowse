@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-29
+
+- **The Rust core is the only core: the Python one is removed.** `FASTBROWSE_PYTHON_CORE=1` no longer selects anything, and the modules it ran (`fastbrowse.agent`, `fastbrowse.browser`, `fastbrowse.clients`, `fastbrowse.cli`, `fastbrowse.mcp_server`, `fastbrowse.serve` and the rest) are gone with their tests, the PyInstaller build and the `cdp-use`, `pydantic-settings` and `websockets` dependencies. `run_task`, `connect_cdp`, `resolve_cdp_port`, `traced` and the pydantic models keep their signatures. `ConfigurationError` and `RecordingError` are now in `fastbrowse.models`, and every browser error `connect_cdp` raises is in `fastbrowse.page`. The kept modules lose what only the Python core used: `fastbrowse.page.Page`, `fastbrowse.models.BrowserConnection` and `SecretValue`, `fastbrowse.jev.JEV_MODEL`, `fastbrowse.llm.recorded` and `fastbrowse.telemetry.trace_to`, and `fastbrowse.telemetry.Ledger` is now the protocol of the ledger the core hands a caller's `llm=` client, not one to construct. The Arch package builds fastbrowse alone. The `mcp` and `browser-use` extras are removed, since the commands need neither: `uvx --from fastbrowse fastbrowse-mcp` serves MCP.
+
+- **Direct TypeSafe is the recommended Jev route.** It puts one service between fastbrowse and the model and keeps the direct-API price. OpenRouter still serves Jev text when it is the only Jev key, but it is not recommended, and it never receives Jev image input. A gateway key on its own also serves Jev, as a last resort; otherwise the Vercel AI Gateway is a Jev fallback for an outage, not the recommended route. Jev's Images and Box surfaces are not used by the agent yet; when they are, a run with only an OpenRouter key keeps image input off, so page pixels never travel through the router. The LLM's screenshot path is separate and still follows the LLM route.
+
 - **A search typed mid-run is written for the next item the task still needs.** The field writer was given the search rule and the requirements still unmet only while it recovered a missing answer output. Mid-run it saw only the whole task, so on a six-part cart task it called the search box's query missing and the run ended. It now always has both, and types the next item still to add.
 
 - **`FASTBROWSE_LLM_REASONING=none` turns reasoning off.** The setting took `low`, `medium` or `high`. A model such as DeepSeek V4.1 Flash reasons at every effort and does not scale it to the output allowance, so a short call such as the completion verdict could spend all of it thinking and come back empty. `none` sends OpenRouter's `reasoning: {"effort": "none"}`.
@@ -21,11 +27,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - **A browserless read decodes a gzip or deflate response instead of refusing it.** `--fetch` asked for no compression and refused a body that arrived compressed anyway, and python.org's CDN gzips whatever it is asked, so every python.org page ended the run `blocked` as needing a browser. The Rust reader now asks for gzip and deflate and decodes them, as httpx does for the Python one, and the 5 MiB bound applies to what the body decodes to, so a small body that inflates past it is still refused. Brotli and zstd are still refused, being codings it never asks for.
 
+- **A browserless read names its client, so a site that requires a `User-Agent` stops refusing it.** `--fetch` sent no `User-Agent`, and a server that refuses a client that does not name itself answered 403, as Wikipedia does. The Rust reader now sends `user-agent: fastbrowse/<version>`.
+
 ## [0.8.3] - 2026-10-28
 
 - **A task with a non-ASCII character no longer crashes the Rust core.** Reading the paths a task names, the core looked one byte past each character, so a task with a long dash, an accented letter or an emoji panicked at `navigation.rs` before the run began. It now reads the next character itself.
-
-- **The Rust core is the only core: the Python one is removed.** `FASTBROWSE_PYTHON_CORE=1` no longer selects anything, and the modules it ran (`fastbrowse.agent`, `fastbrowse.browser`, `fastbrowse.clients`, `fastbrowse.cli`, `fastbrowse.mcp_server`, `fastbrowse.serve` and the rest) are gone with their tests, the PyInstaller build and the `cdp-use`, `pydantic-settings` and `websockets` dependencies. `run_task`, `connect_cdp`, `resolve_cdp_port`, `traced` and the pydantic models keep their signatures. `ConfigurationError` and `RecordingError` are now in `fastbrowse.models`, and every browser error `connect_cdp` raises is in `fastbrowse.page`. The kept modules lose what only the Python core used: `fastbrowse.page.Page`, `fastbrowse.models.BrowserConnection` and `SecretValue`, `fastbrowse.jev.JEV_MODEL`, `fastbrowse.llm.recorded` and `fastbrowse.telemetry.trace_to`, and `fastbrowse.telemetry.Ledger` is now the protocol of the ledger the core hands a caller's `llm=` client, not one to construct. The Arch package builds fastbrowse alone. The `mcp` and `browser-use` extras are removed, since the commands need neither: `uvx --from fastbrowse fastbrowse-mcp` serves MCP.
 
 ## [0.8.2] - 2026-10-28
 
@@ -36,8 +42,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - The eval harness drives fastbrowse only as an embedder does, through `run_task`, `serve --stdio` and the trace, so every suite measures whichever core the package runs. A fixture row's `providers` is now the route the run itself reported. `python -m fastbrowse.evals.latency` times real runs of a fixture task per candidate model instead of calling the planner and reader directly, and `python -m fastbrowse.evals.probe` is gone: the reader and claim check it ran in isolation are not reachable from outside the core.
 
 - The fixture runner's claim judge reads its key as a run does, from the environment or `.env`, on the direct API, OpenRouter or the AI Gateway, and asks again when the provider answers 429, a 5xx or drops the connection, rather than ending the campaign before the run it judged is recorded.
-
-- **Direct TypeSafe is the recommended Jev route.** It puts one service between fastbrowse and the model and keeps the direct-API price. OpenRouter still serves Jev text when it is the only Jev key, but it is not recommended, and it never receives Jev image input. A gateway key on its own also serves Jev, as a last resort; otherwise the Vercel AI Gateway is a Jev fallback for an outage, not the recommended route. Jev's Images and Box surfaces are not used by the agent yet; when they are, a run with only an OpenRouter key keeps image input off, so page pixels never travel through the router. The LLM's screenshot path is separate and still follows the LLM route.
 
 ## [0.8.1] - 2026-10-28
 
@@ -1616,7 +1620,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.8.3...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0
 [0.8.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.3
 [0.8.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.2
 [0.8.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.1
