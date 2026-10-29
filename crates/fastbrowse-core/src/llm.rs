@@ -16,9 +16,6 @@ use crate::models::{Bytes, CostLine, LLMPurpose, MaybeUnavailable};
 use crate::schema::{Schema, Ty, json_schema};
 use crate::telemetry::{BudgetExceeded, Ledger};
 
-/// Planning and field responses are short; readers and composers pass their larger configured caps.
-pub const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 2000;
-
 literal_enum! {
     pub enum Role {
         System = "system",

@@ -1627,112 +1627,7 @@
   "sleeps": []
  },
  {
-  "name": "llm truncated then larger cap",
-  "client": {
-   "kind": "llm",
-   "models": {
-    "plan": "model-plan",
-    "read": "model-read",
-    "field_text": "model-field_text",
-    "recover": "model-recover",
-    "verify": "model-verify",
-    "compose": "model-compose",
-    "shortcut": "model-shortcut"
-   },
-   "reasoning": "low"
-  },
-  "calls": [
-   {
-    "op": "generate",
-    "purpose": "read",
-    "messages": [
-     {
-      "role": "system",
-      "content": "You count things."
-     },
-     {
-      "role": "user",
-      "content": "Count the apples."
-     }
-    ],
-    "schema": "Result",
-    "max_output_tokens": 100
-   }
-  ],
-  "responses": [
-   {
-    "status": 200,
-    "headers": {},
-    "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":\\\"cut off mid-str\"}, \"finish_reason\": \"length\"}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
-   },
-   {
-    "status": 200,
-    "headers": {},
-    "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":5}\"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
-   }
-  ],
-  "requests": [
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-read\",\"max_tokens\":100,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":100,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"model-read\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-read\",\"max_tokens\":400,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":400,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"model-read\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   }
-  ],
-  "results": [
-   {
-    "ok": {
-     "data": {
-      "count": 5,
-      "tags": []
-     },
-     "cost": {
-      "component": "llm",
-      "basis": "metered",
-      "dollars": 0.002,
-      "purpose": "read",
-      "input_tokens": 40,
-      "output_tokens": 10,
-      "seconds": null
-     }
-    }
-   }
-  ],
-  "ledgers": [
-   {
-    "lines": [],
-    "llm_calls": 2,
-    "jev_calls": 0
-   }
-  ],
-  "spends": [
-   []
-  ],
-  "trace": [
-   {
-    "event": "call",
-    "call": "llm:read",
-    "outcome": "ok"
-   }
-  ],
-  "sleeps": []
- },
- {
-  "name": "llm truncated twice",
+  "name": "llm truncated at the cap",
   "client": {
    "kind": "llm",
    "models": {
@@ -1769,11 +1664,6 @@
     "status": 200,
     "headers": {},
     "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":\\\"\"}, \"finish_reason\": \"length\"}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
-   },
-   {
-    "status": 200,
-    "headers": {},
-    "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":\\\"\"}, \"finish_reason\": \"length\"}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
    }
   ],
   "requests": [
@@ -1786,23 +1676,13 @@
     },
     "body": "{\"model\":\"model-read\",\"max_tokens\":100,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"}}",
     "canonical": "{\"max_tokens\":100,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"model-read\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
-   },
-   {
-    "method": "POST",
-    "url": "https://openrouter.ai/api/v1/chat/completions",
-    "headers": {
-     "authorization": "Bearer ***",
-     "content-type": "application/json"
-    },
-    "body": "{\"model\":\"model-read\",\"max_tokens\":400,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"}}",
-    "canonical": "{\"max_tokens\":400,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"model-read\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
    }
   ],
   "results": [
    {
     "error": {
      "type": "LLMError",
-     "message": "LLM response truncated at the 400 token output cap (read)"
+     "message": "LLM response truncated at the 100 token output cap (read)"
     }
    }
   ],
@@ -1817,18 +1697,9 @@
       "input_tokens": 20,
       "output_tokens": 5,
       "seconds": null
-     },
-     {
-      "component": "llm",
-      "basis": "metered",
-      "dollars": 0.001,
-      "purpose": "read",
-      "input_tokens": 20,
-      "output_tokens": 5,
-      "seconds": null
      }
     ],
-    "llm_calls": 2,
+    "llm_calls": 1,
     "jev_calls": 0
    }
   ],
@@ -7688,8 +7559,8 @@
      "authorization": "Bearer ***",
      "content-type": "application/json"
     },
-    "body": "{\"model\":\"deepseek/deepseek-v4.1-flash-1017\",\"max_tokens\":2000,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"temperature\":0.0,\"reasoning\":{\"effort\":\"none\"}}",
-    "canonical": "{\"max_tokens\":2000,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"deepseek/deepseek-v4.1-flash-1017\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"none\"},\"response_format\":{\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"},\"temperature\":0.0}"
+    "body": "{\"model\":\"deepseek/deepseek-v4.1-flash-1017\",\"max_tokens\":2000,\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"temperature\":0.0}",
+    "canonical": "{\"max_tokens\":2000,\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"deepseek/deepseek-v4.1-flash-1017\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"response_format\":{\"json_schema\":{\"name\":\"Answer\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"answer\":{\"title\":\"Answer\",\"type\":\"string\"}},\"required\":[\"answer\"],\"title\":\"Answer\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"},\"temperature\":0.0}"
    }
   ],
   "results": [

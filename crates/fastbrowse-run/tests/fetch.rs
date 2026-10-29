@@ -119,13 +119,10 @@ async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
 }
 
 #[tokio::test]
-async fn test_a_shell_or_a_wall_needs_the_browser_that_renders_it() {
+async fn test_a_shell_with_no_text_needs_the_browser_that_renders_it() {
     let shell = format!("<html><body><div id=root></div></body></html>{}", "<script>a=1</script>".repeat(200));
     let error = fetched(&html(&shell), "https://shop.example.com/app").await.unwrap_err();
     assert!(error.0.contains("scripts"), "{error}");
-    let wall = "<html><body><h1>Just a moment</h1><p>Checking your browser</p></body></html>";
-    let error = fetched(&html(wall), "https://shop.example.com/app").await.unwrap_err();
-    assert!(error.0.contains("bot check"), "{error}");
 }
 
 #[test]

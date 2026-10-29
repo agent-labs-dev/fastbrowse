@@ -19,9 +19,6 @@ use crate::error::Result;
 use crate::memory::split_scheme;
 use crate::support::generate;
 
-/// A shortcut returns one URL or null; a prose-sized response would spend tokens on an invalid answer.
-const URL_OUTPUT_TOKENS: i64 = 200;
-
 const SHORTCUT_URL: &str = "An absolute URL on the start page's site that shows the page where this task's answer is or its work happens, built from the task alone. Null unless you are confident the site serves that exact address.";
 const START_URL: &str = "The absolute URL of the page this task should begin on, built from the task alone: the site it names, or a search engine's results for it when it names no site. Null only when the task names nothing that could be opened.";
 
@@ -60,7 +57,7 @@ const START_INSTRUCTIONS: &str = "# Start page\nA browser agent has been given a
 /// Where to open, for a caller that has a task but no page: an agent handed a goal and nothing else.
 pub async fn propose_start(llm: &dyn LLMClient, task: &str, ledger: Option<&Ledger>) -> Result<Generation<StartPage>> {
     let messages = [Message::system(START_INSTRUCTIONS), Message::user(format!("# Task\n{task}"))];
-    Ok(generate(llm, LLMPurpose::Shortcut, &messages, URL_OUTPUT_TOKENS, ledger).await?)
+    Ok(generate(llm, LLMPurpose::Shortcut, &messages, 0, ledger).await?)
 }
 
 /// Whether `urlsplit(url).scheme` is http or https.
@@ -82,7 +79,7 @@ pub async fn propose_shortcut(
     ledger: Option<&Ledger>,
 ) -> Result<Generation<Shortcut>> {
     let messages = [Message::system(INSTRUCTIONS), Message::user(format!("# Task\n{task}\n\n# Start page\n{start}"))];
-    Ok(generate(llm, LLMPurpose::Shortcut, &messages, URL_OUTPUT_TOKENS, ledger).await?)
+    Ok(generate(llm, LLMPurpose::Shortcut, &messages, 0, ledger).await?)
 }
 
 /// The proposal if it is a different page on the start page's own origin, which is the only scope the task and its
