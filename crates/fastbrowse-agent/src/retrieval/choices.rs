@@ -27,8 +27,6 @@ use crate::planner::Requirement;
 const READ_CONFIDENCE: f64 = 0.90;
 const ABSENT_CONFIDENCE: f64 = 0.90;
 const NO_NEW_EVIDENCE_CONFIDENCE: f64 = 0.80;
-// Long passages belong with the reader; bounded spans keep one batched choice cheaper than generation.
-const READ_SPAN_CHARS: usize = 320;
 // Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
 const FOCUS_WINDOW_CHARS: i64 = 1500;
 // Ours. Near even odds is Jev unable to tell, not relevance: on PyPI's release history the window holding the asked
@@ -47,7 +45,7 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
         let value = page.slice(block.start, block.end);
         let found = if block.kind == BlockKind::Table { cells(value) } else { spans(value, SpanKind::Str) };
         for (start, end, raw) in found {
-            if text::strip(&raw).is_empty() || text::len(&raw) > READ_SPAN_CHARS {
+            if text::strip(&raw).is_empty() {
                 continue;
             }
             let length = text::len(&raw);

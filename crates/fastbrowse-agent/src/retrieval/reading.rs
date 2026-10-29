@@ -11,7 +11,7 @@ use fastbrowse_core::models::{CostLine, Evidence, FactReader, LLMPurpose, UNTRUS
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
-use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
+use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty, json_schema};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use fastbrowse_core::validation::ModelSchema;
 use indexmap::{IndexMap, IndexSet};
@@ -29,13 +29,6 @@ use crate::memory::{Comparison, Fact, Notes, RenderOptions, Tally, fact_id, uniq
 use crate::planner::{FIELD_CATEGORIES, Requirement, RequirementKind};
 use crate::support::generate;
 
-// Twelve thousand characters leave room for source blocks, accumulated evidence and instructions per read.
-pub(crate) const READ_CHUNK_CHARS: i64 = 12_000;
-// Navigation before the details can fill a chunk and buy a read with no claims.
-const LLM_READ_CHUNK_CHARS: i64 = 24_000;
-// Ours. A quote card on quotes.toscrape.com runs to about 1,100 characters with its author and tags; a block much
-// longer than this is prose, where the sentence around a value is not what names its subject.
-const CONTEXT_BLOCK_CHARS: i64 = 2_000;
 pub(super) fn counted_kind(kind: BlockKind) -> bool {
     matches!(kind, BlockKind::Record | BlockKind::ListItem)
 }
@@ -81,7 +74,7 @@ impl Schema for ReadClaim {
             "_ReadClaim",
             vec![
                 Field::required("cite", Ty::optional(Cite::ty())).doc("The run of source blocks the claim reads, first to last. Null for a count, total or winner the page does not state, which rests on draws_on alone."),
-                Field::default("excerpt", Ty::optional(Ty::Str.constrained("minLength", 1).constrained("maxLength", 2000)), Value::Null).doc("An optional literal contiguous passage within cite, including record identity, field labels and qualifications. Use for a long block holding unrelated content; code must find it uniquely and copies the original source spelling. Null when the complete cited blocks are needed."),
+                Field::default("excerpt", Ty::optional(Ty::Str.constrained("minLength", 1)), Value::Null).doc("An optional literal contiguous passage within cite, including record identity, field labels and qualifications. Use for a long block holding unrelated content; code must find it uniquely and copies the original source spelling. Null when the complete cited blocks are needed."),
                 Field::default("draws_on", Ty::list(Ty::Str), json!([])).doc("Every record counted or compared: evidence ids from collected notes (without brackets), or claim:N for an earlier claim in this response's claims array, indexed from zero."),
                 Field::default("records", Ty::list(Cite::ty()), json!([])).doc("Every record from this chunk compared by this claim, as block ranges only. Code copies their quotes into the claim's basis; do not also write a prose claim for each record."),
                 Field::default("orders_list", Ty::optional(Cite::ty()), Value::Null).doc("For a superlative the page itself settles: the source blocks where the page states how the list is ordered or filtered, by the very quantity being compared (a sort control reading 'price, low to high', a heading naming the filter in force). Only when the page says it; never inferred from the order the records happen to appear in. Offered sorting links are not an active sorting state. With this, the leading record answers even though the list goes on, so it settles only a claim that cites that record and draws on nothing."),
@@ -487,11 +480,19 @@ fn remember(
     notes: &mut Notes,
     references: &IndexMap<String, String>,
     preserve_collections: bool,
+    trace: &Trace,
 ) -> Result<Option<Fact>> {
     let mut basis: Vec<String> = Vec::new();
     for reference in &claim.draws_on {
-        // Python logs the reference it dropped.
-        let Some(key) = references.get(reference) else { continue };
+        let Some(key) = references.get(reference) else {
+            trace.event("unknown_reference", || {
+                let mut fields = serde_json::Map::new();
+                fields.insert("reference".into(), reference.as_str().into());
+                fields.insert("claim".into(), claim.text.as_str().into());
+                fields
+            });
+            continue;
+        };
         let sources = if preserve_collections { source_basis(notes, key) } else { vec![key.clone()] };
         for source in sources {
             push_unique(&mut basis, source);
@@ -607,7 +608,6 @@ pub(crate) fn block_context(page: &Page<'_>, quote: &Evidence, reader: FactReade
     if matches!(block.kind, BlockKind::Observation | BlockKind::Table)
         || block.complete_source
         || block.source_url.is_some()
-        || block.end - block.start > CONTEXT_BLOCK_CHARS
         || !page.slice(block.start, block.end).contains('\n')
         || (text::strip(page.slice(block.start, quote.start)).is_empty()
             && text::strip(page.slice(quote.end, block.end)).is_empty())
@@ -719,9 +719,6 @@ fn field_groups(page: &Page<'_>, part: &Chunk, field: &TallyField) -> Option<Vec
             return None;
         }
         let key = delimiters.extract(page.slice(block.start, block.end))?;
-        if text::len(&key) > 200 {
-            return None;
-        }
         groups.entry(key).or_default().push(Cite::one(&block.source_id));
     }
     Some(groups.into_iter().map(|(key, records)| TallyGroup { key: Some(key), records, field: None }).collect())
@@ -904,7 +901,7 @@ pub fn read_tallies(
     requirement_ids: &[String],
 ) -> Result<Option<ReadOutcome>> {
     let page = Page::new(capture);
-    if capture.inaccessible_frames > 0 || page.len() > READ_CHUNK_CHARS {
+    if capture.inaccessible_frames > 0 {
         return Ok(None);
     }
     let records: Vec<&Block> = capture.blocks.iter().filter(|b| counted_kind(b.kind)).collect();
@@ -916,10 +913,7 @@ pub fn read_tallies(
     if readers.iter().any(|reader| reader.filter.is_some()) {
         return Ok(None);
     }
-    let parts = chunk_page(&page, READ_CHUNK_CHARS, 1);
-    if parts.len() != 1 {
-        return Ok(None);
-    }
+    let whole = whole_page(&page);
     let mut notes = Notes::default();
     for reader in readers {
         if capture.title != reader.title
@@ -932,11 +926,11 @@ pub fn read_tallies(
             prefix: reader.prefix.clone(),
             suffix: reader.suffix.clone(),
         };
-        let Some(groups) = field_groups(&page, &parts[0], &field) else { return Ok(None) };
+        let Some(groups) = field_groups(&page, &whole, &field) else { return Ok(None) };
         for group in groups {
             let mut keys = Vec::new();
             for cite in &group.records {
-                let span = cited(&page, &parts[0], cite).expect("a field group's records resolve");
+                let span = cited(&page, &whole, cite).expect("a field group's records resolve");
                 let fact = quoted(span);
                 keys.push(fact_id(&fact));
                 notes.add(fact);
@@ -987,7 +981,7 @@ pub struct ReadOptions<'a> {
 
 const READER_BASE: &str = "# Reader\nAnswer the question from this capture's source blocks and the collected evidence. Each claim states only what its cited blocks, and the claims it draws on, show.\n\n# Sources\nThe [source id], (block kind) and embedded-frame labels are code's annotations, not page text. Repeated table headers provide context, not literal text inside every row. Citations use the source id; literal field delimiters use only the record text after those annotations. Do not copy annotation prefixes into field delimiters.\n\n# Claims\n- Write the requested value itself in each claim's text (the price, count, name or date): code checks the text against its cited blocks, and a claim that only says where the value is answers nothing.\n- Keep each claim to one fact or one derived conclusion. Do not summarize the whole task in one claim. A prior claim's prose is a hypothesis, not additional evidence: check its original quoted basis before carrying a value or inference forward. Preserve conditions such as eligibility, location and configuration in every claim that uses the value. A component maximum is not an aggregate maximum, and independent maxima are not additive unless their quoted sources explicitly allow simultaneous addition. A product name or nominal rating alone cannot settle an explicitly requested configuration. Leave an unsupported requested value open instead of inferring it from a related value.\n- For a long block containing unrelated content, set excerpt to the smallest literal contiguous passage supporting the claim, including record identity, field labels and qualifications. A pronoun or relative reference does not identify an entity on its own: keep the quoted antecedent alongside its value, extending the excerpt or citing a context claim with that literal identifying passage. Split claims supported by separate passages. Code matches the excerpt uniquely inside the cited blocks and copies its original spelling; never paraphrase it. Leave excerpt null when the complete blocks are needed.\n- A claim cites one run of blocks. For a comparison, put every compared record from this chunk in the conclusion's records as block ranges only. Code copies their quotes into its basis; never write a prose claim for each compared record. Use draws_on for earlier evidence and context claims.\n- The answer is checked later without the page, so a comparison also needs claims for the query, filters, date and sort that make it valid, with a null requirement id.\n- A count, total or winner rests on every record it counts or compares and on those context claims. It cites blocks only when the page itself states it.\n- Give a claim a requirement id only when it answers that whole requirement with its constraints; otherwise null. Set answered only when the collected evidence and this capture fully answer the question.\n- An explicit empty-result message is a finding: quote it and state that no matching records are reported within that page's scope. Missing text, a loading view or an unread section cannot establish absence.\n- Values typed into fields, suggestions and previews are inputs, not results.\n\n";
 
-const READER_TALLIES: &str = "# Tallies\nFor a count of records or a ranking by record count, return tally groups: each key is the label stated in its records, and each record cites its own source blocks. Choose the entity level requested by the task. When counting items inside groups, group headings and subtotals are context: cite each matching item separately. When counting the groups themselves, cite each group instead of its children. Verify each counted entity's filters and required status. When the page explicitly states the requested total for the entire matching list, quote that statement as a claim instead of deriving it from partial tallies. A displayed subtotal, group count or number loaded so far does not state the requested whole-list total. Use continues.tallies while more pages remain and tallies with complete=true only on the last requested page. List only records from this chunk; never repeat earlier records, quote their text, calculate totals or write claims for counted records. Code deduplicates, counts and ranks them, preserving their quotes behind the tally references. Reuse a tally reference as a basis instead of listing every earlier record. Keep other claims concise, at most 60.\n\nA filtered count also uses tallies: select only matching records, grouped by their stated label (key=null for an ungrouped count). If matches are separated by excluded records, list their block ranges explicitly in the group's records. Never put counted records in continues.records. A page with no matches contributes an empty group.\n\nFor repeated record blocks with the grouping label between the same literal delimiters, prefer one tally group with key=null, records=[] and field: span covers the records, prefix and suffix are the exact text surrounding the label, each occurring once per record (include a newline in the prefix when it starts a line). Code extracts each record's label and counts it. Every block in the range must be a complete record matching the task; do not include headings, navigation or records excluded by a filter. When using tallies, leave the continuation's records empty.\n\nSet reuse_field=true for an unfiltered count of every record across this whole list, when all record blocks use this same grouping field. Code can then read later pages with the same structure. Any condition selecting records forbids reuse_field.\n\n";
+const READER_TALLIES: &str = "# Tallies\nFor a count of records or a ranking by record count, return tally groups: each key is the label stated in its records, and each record cites its own source blocks. Choose the entity level requested by the task. When counting items inside groups, group headings and subtotals are context: cite each matching item separately. When counting the groups themselves, cite each group instead of its children. Verify each counted entity's filters and required status. When the page explicitly states the requested total for the entire matching list, quote that statement as a claim instead of deriving it from partial tallies. A displayed subtotal, group count or number loaded so far does not state the requested whole-list total. Use continues.tallies while more pages remain and tallies with complete=true only on the last requested page. List only records from this chunk; never repeat earlier records, quote their text, calculate totals or write claims for counted records. Code deduplicates, counts and ranks them, preserving their quotes behind the tally references. Reuse a tally reference as a basis instead of listing every earlier record.\n\nA filtered count also uses tallies: select only matching records, grouped by their stated label (key=null for an ungrouped count). If matches are separated by excluded records, list their block ranges explicitly in the group's records. Never put counted records in continues.records. A page with no matches contributes an empty group.\n\nFor repeated record blocks with the grouping label between the same literal delimiters, prefer one tally group with key=null, records=[] and field: span covers the records, prefix and suffix are the exact text surrounding the label, each occurring once per record (include a newline in the prefix when it starts a line). Code extracts each record's label and counts it. Every block in the range must be a complete record matching the task; do not include headings, navigation or records excluded by a filter. When using tallies, leave the continuation's records empty.\n\nSet reuse_field=true for an unfiltered count of every record across this whole list, when all record blocks use this same grouping field. Code can then read later pages with the same structure. Any condition selecting records forbids reuse_field.\n\n";
 
 const READER_RANKINGS: &str = "# Numeric rankings\nFor a minimum, maximum or top-N by one numeric field, set continues.comparison when all requested outputs are the winners' labels and values. Give order=lowest/highest, limit=N, and exact prefix/suffix delimiters for label and value inside each matching record's quote. The value includes its currency symbol. An empty prefix or suffix means the beginning or end of the quote. Each field must match once per record. Code will extract, sort and draft the answer once every page is read. Still list every matching record, applying the task's filters; never select only page winners. Related requirements for the same winners use the same comparison and records. Leave comparison null for counts, calculations, extra output fields or ambiguous formats.\n\n";
 
@@ -1036,6 +1030,43 @@ pub(super) async fn ask_reader<T: serde::de::DeserializeOwned>(
     let generated = llm.generate_value(LLMPurpose::Read, messages, &schema, tokens.read_output_tokens, ledger).await?;
     let data = serde_json::from_value(generated.data).map_err(|error| AgentError::Invalid(error.to_string()))?;
     Ok(fastbrowse_core::llm::Generation { data, cost: generated.cost })
+}
+
+/// The whole capture as one chunk.
+fn whole_page(page: &Page<'_>) -> Chunk {
+    chunk_page(page, i64::MAX, 1).remove(0)
+}
+
+/// Characters of page each reader prompt shows: the whole page when it fits the LLM input budget beside the
+/// instructions, schema and the evidence the read must show, or else the fewest even chunks that do. Other collected
+/// evidence fills what each prompt leaves.
+pub(super) fn reader_chunk_chars(
+    page: &Page<'_>,
+    tokens: &TokenBudget,
+    system: &str,
+    question: &str,
+    requirement_ids: &[String],
+    required: &str,
+    schema: &Ty,
+) -> i64 {
+    let length = page.len();
+    if length == 0 {
+        return 1;
+    }
+    let message = read_message(page, &whole_page(page), question, requirement_ids, required);
+    let prompt = format!("{system}{}{}", message.content, dumps(&json_schema(schema)));
+    let overflow = text::len(&prompt) as i64 - tokens.input_chars::<&str>(&[], false);
+    if overflow <= 0 {
+        return i64::MAX;
+    }
+    // What the budget leaves for page text, or the page beside the instructions alone when the required evidence
+    // fills it, which the read then reports as too large.
+    let mut room = length - overflow;
+    if room <= 0 {
+        room = length - overflow + text::len(required) as i64;
+    }
+    let parts = (length + room.max(1) - 1) / room.max(1);
+    if parts <= 1 { i64::MAX } else { (length + parts - 1) / parts }
 }
 
 /// `read`: the remaining requirements read from `capture`, Jev's short-fact choice first where it can answer.
@@ -1092,12 +1123,6 @@ async fn read_inner(
         .filter(|r| r.kind == RequirementKind::Information && r.count_records)
         .map(|r| (r.id.clone(), r.text.clone()))
         .collect();
-    // Record extraction emits dense structured output; larger prose captures must not overflow that response.
-    let max_chars = options.max_chars.unwrap_or(if options.records_only || !counting.is_empty() {
-        READ_CHUNK_CHARS
-    } else {
-        LLM_READ_CHUNK_CHARS
-    });
     let wanted: Vec<Requirement> = options
         .requirements
         .iter()
@@ -1194,9 +1219,9 @@ async fn read_inner(
     let mut so_far = notes.clone();
     route(&options.trace, "llm", "remaining_requirements", None, vec![("requirements", json!(requirement_ids))]);
     let collection_schema = options.field_outputs && !options.records_only;
-    let parts = chunk_page(&page, max_chars, 1);
-    let mut last: Option<(Chunk, bool)> = None;
-    for part in parts {
+    let system = if options.records_only {
+        format!("{PAGE_RECORDS}{UNTRUSTED}")
+    } else {
         let mut system = reader_system(capture, &options.notice, &options.continuing, &counting);
         if options.preserve_collections {
             system.push_str(COLLECTION_EVIDENCE);
@@ -1205,23 +1230,36 @@ async fn read_inner(
             system.push_str(FIELD_COLLECTIONS);
             system.push_str(FIELD_CATEGORIES);
         }
-        if options.records_only {
-            system = format!("{PAGE_RECORDS}{UNTRUSTED}");
+        system
+    };
+    let schema = if options.records_only { RecordsResponse::ty() } else { read_response_ty(collection_schema) };
+    // Reading a new source does not require every earlier project's evidence in the same prompt. Comparisons that
+    // need all records and final verdicts still refuse incomplete evidence.
+    let render = |notes: &Notes| RenderOptions {
+        preserve_requirements: options.require_all_evidence,
+        preserve_collections: options.preserve_collections,
+        source_only: false,
+        json_encoded: false,
+        labels: Some(notes.facts().iter().enumerate().map(|(i, fact)| (fact_id(fact), format!("e{i}"))).collect()),
+    };
+    let chunk_chars = match options.max_chars {
+        Some(chars) => chars,
+        None => {
+            let required = if options.require_all_evidence {
+                so_far.render_with_ids(i64::MAX, &render(&so_far))?.text
+            } else {
+                String::new()
+            };
+            reader_chunk_chars(&page, tokens, &system, &question, &requirement_ids, &required, &schema)
         }
-        let mut messages = vec![Message::system(system), read_message(&page, &part, &question, &requirement_ids, "")];
-        let schema = if options.records_only { RecordsResponse::ty() } else { read_response_ty(collection_schema) };
+    };
+    let mut last: Option<(Chunk, bool)> = None;
+    for part in chunk_page(&page, chunk_chars, 1) {
+        let mut messages =
+            vec![Message::system(system.clone()), read_message(&page, &part, &question, &requirement_ids, "")];
         let room = notes_room(tokens, &messages, &schema);
-        let labels: IndexMap<String, String> =
-            so_far.facts().iter().enumerate().map(|(i, fact)| (fact_id(fact), format!("e{i}"))).collect();
-        // Reading a new source does not require every earlier project's evidence in the same prompt. Comparisons that
-        // need all records and final verdicts still refuse incomplete evidence.
-        let render = RenderOptions {
-            preserve_requirements: options.require_all_evidence,
-            preserve_collections: options.preserve_collections,
-            source_only: false,
-            json_encoded: false,
-            labels: Some(labels.clone()),
-        };
+        let render = render(&so_far);
+        let labels = render.labels.clone().unwrap_or_default();
         let offered_notes = match so_far.render_with_ids(room, &render) {
             Ok(rendered) => rendered,
             Err(AgentError::Invalid(_)) => {
@@ -1248,7 +1286,7 @@ async fn read_inner(
         messages[1] = read_message(&page, &part, &question, &requirement_ids, &offered_notes.text);
         let mut result: fastbrowse_core::llm::Generation<ReadResponse>;
         if options.records_only {
-            let collected = ask_reader::<RecordsResponse>(llm, &messages, schema, tokens, ledger).await?;
+            let collected = ask_reader::<RecordsResponse>(llm, &messages, schema.clone(), tokens, ledger).await?;
             ended = collected.data.ended.iter().filter(|key| requirement_ids.contains(key)).cloned().collect();
             requested_scope_complete = collected
                 .data
@@ -1331,7 +1369,7 @@ async fn read_inner(
                 costs.push(result.cost.clone());
                 let mut repaired = messages.clone();
                 repaired.push(Message::user(FIELD_REPAIR));
-                result = ask_reader::<ReadResponse>(llm, &repaired, schema, tokens, ledger).await?;
+                result = ask_reader::<ReadResponse>(llm, &repaired, schema.clone(), tokens, ledger).await?;
             }
         }
         if let Some(ledger) = ledger {
@@ -1628,8 +1666,15 @@ async fn read_inner(
             claim.draws_on.extend(records.keys().cloned());
             // Carried to the next chunk without its requirement id, which only the whole page can settle.
             let unassigned = ReadClaim { requirement_id: None, ..claim.clone() };
-            let Some(mut fact) =
-                remember(&page, &part, &unassigned, &mut so_far, &references, options.preserve_collections)?
+            let Some(mut fact) = remember(
+                &page,
+                &part,
+                &unassigned,
+                &mut so_far,
+                &references,
+                options.preserve_collections,
+                &options.trace,
+            )?
             else {
                 rejected_here += 1;
                 continue;
@@ -1872,7 +1917,7 @@ async fn read_inner(
         pending.sort();
         let targets = Some(options.targets.clone().unwrap_or_else(|| options.requirements.clone()));
         let collecting = ReadOptions {
-            max_chars: Some(max_chars.min(READ_CHUNK_CHARS)),
+            max_chars: options.max_chars,
             tokens: tokens.clone(),
             ledger,
             jev: None,
@@ -1894,7 +1939,7 @@ async fn read_inner(
             None
         } else {
             let scoping = ReadOptions {
-                max_chars: Some(max_chars.min(READ_CHUNK_CHARS)),
+                max_chars: options.max_chars,
                 tokens: tokens.clone(),
                 ledger,
                 jev: None,
@@ -1984,4 +2029,41 @@ fn unique_ints(values: impl Iterator<Item = i64>) -> Vec<i64> {
         seen.insert(value);
     }
     seen.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::retrieval::testing::capture;
+
+    /// The reader's chunks of a 200-row page under a budget of the whole prompt's length less `short` characters.
+    fn chunks(short: i64) -> Vec<Chunk> {
+        let rows: Vec<String> = (0..200).map(|i| format!("Row {i} {}", "x".repeat(90))).collect();
+        let captured = capture(&rows.iter().map(|row| (BlockKind::Paragraph, row.as_str())).collect::<Vec<_>>());
+        let page = Page::new(&captured);
+        let (system, question, ids, schema) =
+            ("# Reader", "Which rows?", vec!["r".to_string()], read_response_ty(false));
+        let message = read_message(&page, &whole_page(&page), question, &ids, "");
+        let whole = text::len(&format!("{system}{}{}", message.content, dumps(&json_schema(&schema)))) as i64;
+        let tokens = TokenBudget {
+            state_plus_largest_question: whole - short,
+            state_plus_all_questions: (whole - short) * 2,
+            chars_per_token: 1.0,
+            ..TokenBudget::default()
+        };
+        chunk_page(&page, reader_chunk_chars(&page, &tokens, system, question, &ids, "", &schema), 1)
+    }
+
+    #[test]
+    fn a_page_the_budget_holds_is_read_in_one_prompt() {
+        assert_eq!(chunks(0).len(), 1);
+    }
+
+    #[test]
+    fn a_page_past_the_budget_is_split_into_the_fewest_even_chunks() {
+        let parts = chunks(5_000);
+        assert_eq!(parts.len(), 2);
+        let sizes: Vec<usize> = parts.iter().map(|part| part.block_ids.len()).collect();
+        assert!(sizes[0].abs_diff(sizes[1]) <= 2, "{sizes:?}");
+    }
 }

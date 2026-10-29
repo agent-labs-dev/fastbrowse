@@ -56,9 +56,6 @@ pub(crate) fn route(
     });
 }
 
-/// `_READ_CHUNK_CHARS`, the default chunk for `propose_text_fields`.
-pub const READ_CHUNK_CHARS: i64 = reading::READ_CHUNK_CHARS;
-
 /// `_notes_room`: reserve room for the prompt and response schema so notes cannot exceed the input budget.
 pub(crate) fn notes_room(tokens: &TokenBudget, messages: &[Message], response: &Ty) -> i64 {
     let prompt: String = messages.iter().map(|message| message.content.as_str()).collect();

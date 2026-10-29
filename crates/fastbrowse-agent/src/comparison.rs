@@ -80,14 +80,13 @@ pub struct NumericComparison {
     pub value: QuotedField,
 }
 
-/// `int = Field(ge=1, le=60)`.
+/// `int = Field(ge=1)`.
 fn limit<'de, D: Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
     let value = fastbrowse_core::py::lax::int(d)?;
-    match value {
-        ..1 => Err(serde::de::Error::custom("Input should be greater than or equal to 1")),
-        61.. => Err(serde::de::Error::custom("Input should be less than or equal to 60")),
-        _ => Ok(value as usize),
+    if value < 1 {
+        return Err(serde::de::Error::custom("Input should be greater than or equal to 1"));
     }
+    Ok(value as usize)
 }
 
 /// The first code point of each run of ten Unicode decimal digits (category Nd) in Unicode 15.1, CPython 3.13's
@@ -248,7 +247,7 @@ impl Schema for NumericComparison {
             "NumericComparison",
             vec![
                 Field::required("order", Ty::literals(&["lowest", "highest"])),
-                Field::required("limit", Ty::Int.ge(1).le(60)),
+                Field::required("limit", Ty::Int.ge(1)),
                 Field::required("label", QuotedField::ty()),
                 Field::required("value", QuotedField::ty()),
             ],
@@ -275,13 +274,13 @@ mod tests {
     }
 
     #[test]
-    fn a_limit_outside_one_to_sixty_is_refused() {
+    fn a_limit_below_one_is_refused() {
         let ranking = |limit: i64| {
             serde_json::from_value::<NumericComparison>(serde_json::json!({
                 "order": "lowest", "limit": limit,
                 "label": {"prefix": "", "suffix": ": "}, "value": {"prefix": ": ", "suffix": ""},
             }))
         };
-        assert!(ranking(0).is_err() && ranking(61).is_err() && ranking(60).is_ok());
+        assert!(ranking(0).is_err() && ranking(1).is_ok() && ranking(61).is_ok());
     }
 }

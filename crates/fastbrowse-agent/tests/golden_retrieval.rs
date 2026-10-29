@@ -246,7 +246,7 @@ fn replay(case: &Value) -> Result<(), String> {
                 args["task"].as_str().unwrap(),
                 &capture(),
                 &fields(&args["fields"]),
-                args.get("max_chars").and_then(Value::as_i64).unwrap_or(retrieval::READ_CHUNK_CHARS),
+                args.get("max_chars").and_then(Value::as_i64),
                 &tokens,
                 ledger.as_ref(),
             ));

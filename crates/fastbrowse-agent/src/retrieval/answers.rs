@@ -7,12 +7,11 @@ use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED, background_section};
-use fastbrowse_core::page::cut_text;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
-use fastbrowse_core::telemetry::Ledger;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use fastbrowse_core::validation::ModelSchema;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
@@ -293,6 +292,7 @@ pub struct ComposeOptions<'a> {
     pub independent_fields: bool,
     /// The caller's background, shown after the task as context and never as an output to answer.
     pub background: Option<String>,
+    pub trace: Trace,
 }
 
 impl ComposeOptions<'_> {
@@ -397,9 +397,6 @@ pub async fn compose(
             dumps(&Value::Object(payload)),
         );
     }
-    if !repair.is_empty() && complete_collections.is_empty() {
-        repair = cut_text(&repair, 8000, false);
-    }
     let background = background_section(options.background.as_deref(), "#");
     let prefix = format!("# Task\n{task}{background}\n\n# Plan\n{}\n\n{transaction}", plan.dump_json());
     let mut system = format!("{COMPOSER}{UNTRUSTED}");
@@ -469,9 +466,14 @@ pub async fn compose(
     let mut claims: Vec<Claim> = Vec::new();
     let all_facts = notes.facts();
     for (check, claim) in &drafts {
-        let unknown = claim.evidence_ids.iter().any(|key| !references.contains_key(key));
-        if claim.evidence_ids.is_empty() || unknown {
-            // Python logs the claim it dropped for citing an id it was never offered.
+        let unknown: Vec<&String> = claim.evidence_ids.iter().filter(|key| !references.contains_key(*key)).collect();
+        if claim.evidence_ids.is_empty() || !unknown.is_empty() {
+            options.trace.event("dropped_claim", || {
+                let mut fields = Map::new();
+                fields.insert("claim".into(), claim.text.as_str().into());
+                fields.insert("unknown".into(), json!(unknown));
+                fields
+            });
             continue;
         }
         let mut keys: Vec<String> = claim.evidence_ids.iter().map(|key| references[key].clone()).collect();
@@ -639,8 +641,27 @@ pub fn transaction_check_question(
 
 /// `OUTPUT_MISSING`: the key prefix of the question asking whether the answer leaves an answer check unstated.
 pub const OUTPUT_MISSING: &str = "output_missing_";
-/// Room for the other quotes a contradiction question shows beside a claim's own evidence.
-const COUNTEREVIDENCE_CHARS: usize = 4000;
+
+const OTHER_QUOTES: &str = "\n\n# Other current quotes from the same pages\n";
+
+/// The other quotes from a claim's pages, each whole, as many as Jev's input budget holds beside `question` and the
+/// check's state.
+fn counterevidence(others: &[String], question: &NoulQuestion, state: &str, tokens: &TokenBudget) -> String {
+    if others.is_empty() {
+        return String::new();
+    }
+    let room = tokens.remaining_chars(state, &[question.dump_json()], true);
+    let mut listed: Vec<String> = Vec::new();
+    for quote in others {
+        let line = write(&Value::String(quote.clone()), Style::DUMPS.unicode());
+        listed.push(line);
+        if dumped_len(&listed.join("\n")) as i64 > room {
+            listed.pop();
+            break;
+        }
+    }
+    if listed.is_empty() { String::new() } else { format!("{OTHER_QUOTES}{}", listed.join("\n")) }
+}
 
 /// Jev's questions about a composed answer: whether each claim is unsupported or contradicted by its cited evidence,
 /// and whether the answer leaves a requested output out.
@@ -656,6 +677,7 @@ pub fn claim_check_questions(
     answer_checks: &[String],
 ) -> Result<IndexMap<String, NoulQuestion>> {
     let mut questions = IndexMap::new();
+    let state = dumps(&json!({"answer": composed.answer}));
     // A refused quote backs no claim: shown as a source, it let Jev pass a claim its quote could not carry.
     let known: IndexMap<String, _> = notes.evidence().into_iter().filter(|(key, _)| !notes.refused(key)).collect();
     // A counted record is shown as its tally's line: code checked each quote against the group when it was read and
@@ -720,34 +742,24 @@ pub fn claim_check_questions(
                 })
                 .map(|source| source.quote.clone()),
         );
-        let context = if others.is_empty() {
-            String::new()
-        } else {
-            let listed: Vec<String> =
-                others.iter().map(|quote| write(&Value::String(quote.clone()), Style::DUMPS.unicode())).collect();
-            let cut = cut_text(&listed.join("\n"), COUNTEREVIDENCE_CHARS, false);
-            format!("\n\n# Other current quotes from the same pages\n{cut}")
-        };
-        for issue in ["unsupported", "contradicted"] {
-            let contradicted = issue == "contradicted";
-            let ending = if contradicted && !others.is_empty() {
-                ", or by another current quote from the same pages? Another quote contradicts it only when it gives a different value for the same entity and field, or withdraws, replaces or qualifies the claimed fact; values for other entities do not."
-            } else {
+        let asked = |issue: &str, context: &str| {
+            let ending = if context.is_empty() {
                 "?"
+            } else {
+                ", or by another current quote from the same pages? Another quote contradicts it only when it gives a different value for the same entity and field, or withdraws, replaces or qualifies the claimed fact; values for other entities do not."
             };
-            questions.insert(
-                format!("{issue}_{index}"),
-                NoulQuestion::new(
-                    format!(
-                        "{UNTRUSTED}\n\n# Claim\n{}\n\n# Evidence\n{evidence}{}\n\nIs the claim {issue} by its cited evidence{ending}",
-                        claim.text,
-                        if contradicted { context.as_str() } else { "" },
-                    ),
-                    Some(&format!("Yes, the claim is {issue}.")),
-                    Some(&format!("No, the claim is not {issue}.")),
+            NoulQuestion::new(
+                format!(
+                    "{UNTRUSTED}\n\n# Claim\n{}\n\n# Evidence\n{evidence}{context}\n\nIs the claim {issue} by its cited evidence{ending}",
+                    claim.text,
                 ),
-            );
-        }
+                Some(&format!("Yes, the claim is {issue}.")),
+                Some(&format!("No, the claim is not {issue}.")),
+            )
+        };
+        let context = counterevidence(&others, &asked("contradicted", OTHER_QUOTES), &state, tokens);
+        questions.insert(format!("unsupported_{index}"), asked("unsupported", ""));
+        questions.insert(format!("contradicted_{index}"), asked("contradicted", &context));
     }
     // Actions are evidenced by the page, which the done check already judged; quotes only evidence information.
     let information: Vec<&Requirement> =
@@ -810,6 +822,19 @@ pub fn claim_check_questions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_quotes_are_shown_whole_while_jev_has_room_for_them() {
+        let others: Vec<String> = (0..3).map(|i| format!("Quote {i} {}", "y".repeat(200))).collect();
+        let question = NoulQuestion::new("Is the claim contradicted?", Some("Yes."), Some("No."));
+        let room = |chars: i64| TokenBudget { decision_chars: Some((chars, chars * 2)), ..TokenBudget::default() };
+        let asked = text::len(&question.dump_json()) as i64 + 20;
+        let all = counterevidence(&others, &question, "{}", &room(asked + 1_000));
+        assert!(others.iter().all(|quote| all.contains(quote.as_str())));
+        let one = counterevidence(&others, &question, "{}", &room(asked + 300));
+        assert!(one.contains(others[0].as_str()) && !one.contains("Quote 1"));
+        assert_eq!(counterevidence(&others, &question, "{}", &room(asked)), "");
+    }
 
     #[test]
     fn inline_citation_stripping_accepts_address_qualified_evidence_ids() {
