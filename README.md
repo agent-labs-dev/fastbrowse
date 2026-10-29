@@ -379,8 +379,9 @@ try {
 ```
 
 - One instance runs one task at a time; start more instances to run side by side. The process exits with yours.
-- `run` resolves with the result whatever the status. It rejects only when no run finished: `RpcError` for a
-  refused request, `AbortError` when `signal` stopped it, `ProcessExitedError` when the process is gone.
+- `run` resolves with the result whatever the status. It rejects when no run finished (`RpcError` for a refused
+  request, `AbortError` when `signal` stopped it, `ProcessExitedError` when the process is gone), and with
+  `OutputValidationError` when the data fails your schema.
 - The result is Python's `RunResult`, with Python field names. `output` is `data` validated by your Zod (4.2+),
   ArkType or Valibot schema, or a plain JSON Schema; data the schema refuses rejects with `OutputValidationError`.
   A run fills a flat object of required string, number, integer and boolean fields.

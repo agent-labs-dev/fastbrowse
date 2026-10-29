@@ -52,9 +52,10 @@ stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or
 a second `run` while one is active rejects with the busy error, so start more instances to run side by side.
 `close()` shuts the process down and waits for it, and the process also exits when yours does.
 
-`run` rejects only when no run took place or none finished: with `RpcError` when the server refuses the request
-before a browser opens (a bad option, a missing key, a busy server), with `AbortError` when `signal` stopped the
-run, and with `ProcessExitedError` when the process is gone. A run that fails after it starts, including one whose
+`run` rejects when no run took place or none finished: with `RpcError` when the server refuses the request before
+a browser opens (a bad option, a missing key, a busy server), with `AbortError` when `signal` stopped the run, and
+with `ProcessExitedError` when the process is gone. It also rejects with `OutputValidationError` when a run
+finished but its data fails the `output` schema. A run that fails after it starts, including one whose
 callback throws, resolves with status `error`.
 
 ## Options
