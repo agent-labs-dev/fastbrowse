@@ -210,3 +210,18 @@ def test_a_java_client_at_another_version_fails_and_write_moves_only_its_own(tmp
     assert "<version>1.2.3</version>" in pom.read_text()
     assert "<version>2.22.4</version>" in pom.read_text()
     assert _run(root).returncode == 0
+
+
+def test_a_dotnet_client_at_another_version_fails_and_write_moves_it(tmp_path: Path) -> None:
+    root = _checkout(tmp_path)
+    project = root / "dotnet" / "src" / "Fastbrowse" / "Fastbrowse.csproj"
+    project.parent.mkdir(parents=True)
+    project.write_text("<Project>\n  <PropertyGroup>\n    <Version>1.2.2</Version>\n  </PropertyGroup>\n</Project>\n")
+
+    done = _run(root)
+    assert done.returncode == 1
+    assert "the .NET client is 1.2.2" in done.stderr
+
+    assert _run(root, "--write").returncode == 0
+    assert "<Version>1.2.3</Version>" in project.read_text()
+    assert _run(root).returncode == 0
