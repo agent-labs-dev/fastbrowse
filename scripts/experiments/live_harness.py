@@ -1,8 +1,9 @@
 """Run Parallax's live tasks through the current fastbrowse build, keeping every run's full trace.
 
 Parallax itself imports the pre-Rust Python modules, so this loads only its task definitions and grades with
-their own truth and check functions. Each run gets a fresh headed Chrome (under Xvfb) on a profile kept per
-worker, attached from about:blank so the final tab survives the run and can be observed.
+their own truth and check functions. Each run gets a fresh headed Chrome (under Xvfb) on a fresh profile, so no
+cookie, sign-in or cart carries from one run to the next, attached from about:blank so the final tab survives the run
+and can be observed.
 """
 
 # Each blocking call is short and local: Chrome's DevTools on localhost, its launch, and one append per run.
@@ -12,8 +13,10 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -109,8 +112,7 @@ async def observe(port, final_url):
 
 async def one(task, suite, repeat, worker, args, http):
     port = 9400 + worker
-    profile = Path(args.profiles) / f"w{worker}"
-    profile.mkdir(parents=True, exist_ok=True)
+    profile = tempfile.mkdtemp(prefix=f"{task.id}-{repeat}-", dir=args.profiles)
     chrome = subprocess.Popen(
         [
             CHROME,
@@ -214,6 +216,8 @@ async def one(task, suite, repeat, worker, args, http):
             chrome.wait(10)
         except subprocess.TimeoutExpired:
             chrome.kill()
+            chrome.wait()
+        shutil.rmtree(profile, ignore_errors=True)
 
 
 async def main():
@@ -228,6 +232,7 @@ async def main():
     parser.add_argument("--profiles", required=True)
     parser.add_argument("--display", default=":99")
     args = parser.parse_args()
+    os.makedirs(args.profiles, exist_ok=True)
     jobs = [
         (t, s, r)
         for r in range(args.repeat)
