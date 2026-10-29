@@ -322,19 +322,13 @@ def test_a_lagging_eval_index_is_retried_rather_than_read_as_missing(monkeypatch
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
     seen: list[int] = []
 
-    class _Response(io.StringIO):
-        def __enter__(self) -> "_Response":
-            return self
-
-        def __exit__(self, *_exc: object) -> None:
-            return None
-
-    def _flaky(*_args: object, **_kwargs: object) -> _Response:
+    def _flaky(*_args: object, **_kwargs: object) -> io.StringIO:
         # The retries live inside the read, so a blip has to be simulated at the transport, not above it.
+        # StringIO is the response: it is a context manager and `.read()` returns the body.
         seen.append(1)
         if len(seen) < release_guard.LANGFUSE_ATTEMPTS:
             raise urllib.error.URLError("connection reset")
-        return _Response(json.dumps({"data": [{"id": "late"}]}))
+        return io.StringIO(json.dumps({"data": [{"id": "late"}]}))
 
     monkeypatch.setattr(release_guard.urllib.request, "urlopen", _flaky)
     monkeypatch.setattr(release_guard.time, "sleep", lambda *_: None)
