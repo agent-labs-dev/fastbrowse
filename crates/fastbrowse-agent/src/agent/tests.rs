@@ -1331,7 +1331,7 @@ impl DecisionClient for Seeing {
                 Answer::Box(BoxAnswer {
                     kind: Default::default(),
                     edges: Edges { top: 0.5, bottom: 0.7, left: 0.2, right: 0.4 },
-                    confidence: 0.9,
+                    confidence: Some(0.9),
                 }),
             ),
         ]);

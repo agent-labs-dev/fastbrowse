@@ -202,24 +202,27 @@ async fn test_a_box_is_asked_without_criteria_and_read_as_its_edges() {
         "where",
         BoxQuestion { kind: Default::default(), instructions: "The mug in `photo`".into() }.into(),
     )]);
-    for (edges, valid) in [
-        (json!({"top": 0.1, "bottom": 0.3, "left": 0.2, "right": 0.6}), true),
-        (json!({"top": 0.5, "bottom": 0.3, "left": 0.2, "right": 0.6}), false),
+    let edges = json!({"top": 0.1, "bottom": 0.3, "left": 0.2, "right": 0.6});
+    for (edges, confidence, valid) in [
+        (edges.clone(), json!(0.8), Some(Some(0.8))),
+        // TypeSafe's own example answer carries a null confidence.
+        (edges, Value::Null, Some(None)),
+        (json!({"top": 0.5, "bottom": 0.3, "left": 0.2, "right": 0.6}), json!(0.8), None),
     ] {
         let http = answering(move |request| {
             let body: Value = serde_json::from_slice(&request.body).unwrap();
             assert_eq!(body["questions"], json!({"where": {"type": "box", "instructions": "The mug in `photo`"}}));
             let response = Response::json(
                 200,
-                &json!({"answers": {"where": {"type": "box", "box": edges, "confidence": 0.8}}, "usage": {"input_tokens": 1}}),
+                &json!({"answers": {"where": {"type": "box", "box": edges, "confidence": confidence}}, "usage": {"input_tokens": 1}}),
             );
             Box::pin(async move { Ok(response) })
         });
         let client = SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe();
         let result = client.evaluate(&json!({"photo": "p"}), &asked).await;
-        if valid {
+        if let Some(expected) = valid {
             let Answer::Box(found) = &result.unwrap().answers["where"] else { panic!("a box") };
-            assert_eq!((found.edges.centre(), found.confidence), ((0.4, 0.2), 0.8));
+            assert_eq!((found.edges.centre(), found.confidence), ((0.4, 0.2), expected));
         } else {
             assert!(result.unwrap_err().to_string().contains("box edges cross"));
         }
