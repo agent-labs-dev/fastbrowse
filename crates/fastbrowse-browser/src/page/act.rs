@@ -232,7 +232,7 @@ impl CdpPage {
                 marked.as_ref().is_some_and(|m| self.session.pending_dialog_url().as_deref() == Some(&m.1));
             marked.filter(|_| opened_here).map(|m| m.0)
         } else {
-            self.input_mark().await
+            self.input_mark(&observation.url)
         };
         let window_opens = self.session.window_opens();
         let requests = self.session.requests_mark();
@@ -314,21 +314,13 @@ impl CdpPage {
         self.session.downloads_settled() > since || self.session.download_settled(since, DOWNLOAD_SETTLE_SECONDS).await
     }
 
-    /// How many moves the run's input had made before an action, as the input watch reports them.
-    async fn input_mark(&self) -> Option<u32> {
-        if self.session.pending_dialog().is_some() {
-            self.state.lock().unwrap().marked = None;
-            return None;
-        }
-        let begun = self.session.input_navigations();
-        if let Ok(session_id) = self.session.active_session_id()
-            && let Ok(Value::String(href)) = self.evaluate(&session_id, "location.href").await
-        {
-            self.state.lock().unwrap().marked = Some((begun, href));
-            return Some(begun);
-        }
-        self.state.lock().unwrap().marked = None;
-        None
+    /// How many moves the run's input had made before an action, as the input watch reports them, marked with the
+    /// address the action was checked against. That observation's address stands in for the page's own: asking the
+    /// page cost every action a round trip, over 100ms to a cloud browser.
+    fn input_mark(&self, address: &str) -> Option<u32> {
+        let mark = self.session.pending_dialog().is_none().then(|| self.session.input_navigations());
+        self.state.lock().unwrap().marked = mark.map(|begun| (begun, address.to_owned()));
+        mark
     }
 
     /// Whether the action just taken moved the page: its own input began a navigation, to another document or on the
