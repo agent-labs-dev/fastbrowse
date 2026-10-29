@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
+use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::{LLMClient, Message};
 use fastbrowse_core::models::{CostLine, Evidence, FactReader, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
@@ -16,16 +16,16 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use fastbrowse_core::validation::ModelSchema;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::choices::read_choices;
 use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_message, source_marker};
+use super::records::{Counted, count_records};
 use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search, numbers, states_empty};
 use super::{notes_room, route};
-use crate::batches::evaluate_batches;
 use crate::comparison::{NumericComparison, QuotedField, digit};
 use crate::error::{AgentError, Result};
-use crate::memory::{Comparison, Fact, Notes, RenderOptions, Tally, evidence_id, fact_id, unique};
+use crate::memory::{Comparison, Fact, Notes, RenderOptions, Tally, fact_id, unique};
 use crate::planner::{FIELD_CATEGORIES, Requirement, RequirementKind};
 use crate::support::generate;
 
@@ -36,12 +36,7 @@ const LLM_READ_CHUNK_CHARS: i64 = 24_000;
 // Ours. A quote card on quotes.toscrape.com runs to about 1,100 characters with its author and tags; a block much
 // longer than this is prose, where the sentence around a value is not what names its subject.
 const CONTEXT_BLOCK_CHARS: i64 = 2_000;
-// A page of a list costs two short block labels a record. The cap is what one capture can plausibly show, and bounds
-// what one page adds to the notes. It is applied in code, not the schema: a reply over it, or a pager-only chunk with
-// no records, would otherwise fail validation and end the run over a page that read fine.
-const MAX_CONTINUING_RECORDS: usize = 60;
-
-fn counted_kind(kind: BlockKind) -> bool {
+pub(super) fn counted_kind(kind: BlockKind) -> bool {
     matches!(kind, BlockKind::Record | BlockKind::ListItem)
 }
 
@@ -340,9 +335,6 @@ pub struct TallyReader {
     /// The block kind of the records the first page's reader cited, which a later page's records must share.
     #[serde(default)]
     pub record_kind: Option<BlockKind>,
-    /// Records the first page's reader matched, shown to Jev so it applies the filter the same way.
-    #[serde(default)]
-    pub examples: Vec<String>,
     /// For a comparison, the delimiters every kept record must yield a label and a value from.
     #[serde(default)]
     pub comparison: Option<NumericComparison>,
@@ -361,8 +353,8 @@ pub struct ReadOutcome {
     pub continues: Vec<String>,
     /// Requirements whose continuation lost a record, so later comparisons cannot settle them.
     pub incomplete: Vec<String>,
-    /// Records a continuation named that no run of offered blocks resolved, or that fell past the cap, so this page's
-    /// comparison is incomplete in the notes even though the reader believed it had listed them.
+    /// Records a continuation named that no run of offered blocks resolved, so this page's comparison is incomplete in
+    /// the notes even though the reader believed it had listed them.
     pub uncovered: i64,
     /// The label the reader gave for the control that shows the rest of the list, so the run can open it instead of
     /// being told only that the list goes on.
@@ -382,7 +374,12 @@ fn as_plain_facts<S: serde::Serializer>(facts: &[Fact], serializer: S) -> std::r
 }
 
 impl ReadOutcome {
-    fn new(facts: Vec<Fact>, coverage: Vec<i64>, rejected_claims: i64, cost_lines: Vec<CostLine>) -> ReadOutcome {
+    pub(super) fn new(
+        facts: Vec<Fact>,
+        coverage: Vec<i64>,
+        rejected_claims: i64,
+        cost_lines: Vec<CostLine>,
+    ) -> ReadOutcome {
         ReadOutcome {
             facts,
             collection_facts: Vec::new(),
@@ -711,7 +708,7 @@ fn field_groups(page: &Page<'_>, part: &Chunk, field: &TallyField) -> Option<Vec
     let span = cited(page, part, &field.span)?;
     let blocks: Vec<&Block> =
         offered(page, part).into_iter().filter(|b| b.start < span.end && b.end > span.start).collect();
-    if blocks.is_empty() || blocks.len() > MAX_CONTINUING_RECORDS {
+    if blocks.is_empty() {
         return None;
     }
     let mut groups: IndexMap<String, Vec<Cite>> = IndexMap::new();
@@ -968,159 +965,6 @@ pub fn read_tallies(
     Ok(Some(ReadOutcome::new(notes.facts().into_iter().cloned().collect(), vec![0], 0, Vec::new())))
 }
 
-/// A record Jev matches at or above the first, or rejects at or below the second, is settled; any record between sends
-/// the whole page back to the LLM reader. Jev's yes for a plain author or rating match sits at 0.78 to 0.84, and a
-/// wrongly dropped record leaves no trace, so a rejection needs more certainty than a match.
-const RECORD_MATCH_FROM: f64 = 0.70;
-const RECORD_REJECT_TO: f64 = 0.20;
-
-/// `filter_tallies`: a later page of a filtered count, counted by asking Jev whether each record matches, in one
-/// request.
-///
-/// None when the page does not have the first page's shape or Jev is unsure of any record: the LLM reader then reads
-/// the page as before. The records are code-cut blocks, so every counted one is still a quote.
-pub async fn filter_tallies(
-    jev: &dyn DecisionClient,
-    capture: &Capture,
-    readers: &[TallyReader],
-    requirement_ids: &[String],
-    tokens: &TokenBudget,
-    ledger: Option<&Ledger>,
-    trace: &Trace,
-) -> Result<Option<ReadOutcome>> {
-    let wanted: HashSet<&String> = requirement_ids.iter().collect();
-    let have: HashSet<&String> = readers.iter().map(|r| &r.requirement_id).collect();
-    if readers.is_empty()
-        || readers.iter().any(|reader| reader.filter.is_none())
-        || wanted != have
-        || capture.inaccessible_frames > 0
-    {
-        return Ok(None);
-    }
-    let shapes: HashSet<(&Vec<String>, &Option<String>, Option<BlockKind>)> =
-        readers.iter().map(|reader| (&reader.heading_path, &reader.frame_id, reader.record_kind)).collect();
-    if shapes.len() != 1 || readers.iter().any(|reader| capture.title != reader.title) {
-        return Ok(None);
-    }
-    let shaped = |b: &Block| counted_kind(b.kind) && shapes.contains(&(&b.heading_path, &b.frame_id, Some(b.kind)));
-    // The records are the blocks shaped like the ones the first page's reader cited; a sidebar or a footer list sits
-    // under another heading and is not asked about. They must also run unbroken: a featured strip of the same shape
-    // elsewhere on the page would be counted again on every page that repeats it.
-    let positions: Vec<usize> =
-        capture.blocks.iter().enumerate().filter(|(_, b)| shaped(b)).map(|(index, _)| index).collect();
-    if positions.is_empty() || positions.len() > MAX_CONTINUING_RECORDS {
-        return Ok(None);
-    }
-    let between = &capture.blocks[positions[0]..=positions[positions.len() - 1]];
-    if between.iter().any(|b| counted_kind(b.kind) && !shaped(b))
-        || between.iter().filter(|b| counted_kind(b.kind)).count() != positions.len()
-    {
-        return Ok(None);
-    }
-    let page = Page::new(capture);
-    let records: Vec<&Block> = positions.iter().map(|index| &capture.blocks[*index]).collect();
-    let mut questions: IndexMap<String, Question> = IndexMap::new();
-    for reader in readers {
-        let filter = reader.filter.as_deref().unwrap_or_default();
-        for (index, block) in records.iter().enumerate() {
-            let question = NoulQuestion::new(
-                format!(
-                    "{UNTRUSTED}\n\n# Requirement\n{filter}\n\n# Record\n{}\n\nDoes this record pass every filter the requirement states, so that it is one of the records the requirement counts or compares? Judge this record alone; do not judge whether it wins.",
-                    page.slice(block.start, block.end)
-                ),
-                Some("Yes, this record matches the requirement."),
-                Some("No, this record does not match."),
-            );
-            questions.insert(format!("{}::{index}", reader.requirement_id), question.into());
-        }
-    }
-    let reader = &readers[0];
-    // Two requirements can filter the same records differently, such as a count of Ada's records and a count of
-    // Ben's. Each requirement keeps the examples its own first-page reader matched, keyed by the filter the reader
-    // states, so its records are never judged by another requirement's reading.
-    let mut examples: IndexMap<&str, Vec<&str>> = IndexMap::new();
-    for one in readers {
-        let kept = examples.entry(one.filter.as_deref().unwrap_or_default()).or_default();
-        for quote in &one.examples {
-            if !kept.contains(&quote.as_str()) {
-                kept.push(quote);
-            }
-        }
-    }
-    let state = json!({
-        "page": {"url": capture.url, "title": capture.title, "heading": reader.heading_path},
-        // How each requirement's reader applied its filter on the first page, so a later record is judged by the
-        // same reading the requirement's own records were kept under.
-        "matching_examples_from_the_first_page": examples,
-    });
-    let Some(answered) = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await? else {
-        return Ok(None);
-    };
-    let mut notes = Notes::default();
-    let mut continuation_records: IndexMap<String, Vec<String>> = IndexMap::new();
-    for reader in readers {
-        let mut keys: Vec<String> = Vec::new();
-        for (index, block) in records.iter().enumerate() {
-            let Some(Answer::Noul(answer)) = answered.answers.get(&format!("{}::{index}", reader.requirement_id))
-            else {
-                return Ok(None);
-            };
-            let probability = answer.probability;
-            if RECORD_REJECT_TO < probability && probability < RECORD_MATCH_FROM {
-                trace.event("record_filter", || {
-                    let mut fields = Map::new();
-                    fields.insert("reader".into(), "llm".into());
-                    fields.insert("reason".into(), "uncertain_record".into());
-                    fields.insert("probability".into(), probability.into());
-                    fields
-                });
-                return Ok(None);
-            }
-            if probability >= RECORD_MATCH_FROM {
-                let text = page.slice(block.start, block.end);
-                // Code picks the winner from each kept record's label and value; one it cannot read them from sends
-                // the page to the LLM reader rather than leaving a record the comparison cannot rank.
-                if let Some(comparison) = &reader.comparison
-                    && (comparison.label.extract(text).is_none() || comparison.value.extract(text).is_none())
-                {
-                    trace.event("record_filter", || {
-                        let mut fields = Map::new();
-                        fields.insert("reader".into(), "llm".into());
-                        fields.insert("reason".into(), "unreadable_value".into());
-                        fields
-                    });
-                    return Ok(None);
-                }
-                let fact = quoted(evidence(&page, block, block.start, block.end));
-                keys.push(fact_id(&fact));
-                notes.add(fact);
-            }
-        }
-        let matched = keys.len();
-        if reader.compares {
-            continuation_records.insert(reader.requirement_id.clone(), keys);
-        } else if !keys.is_empty() {
-            notes.add_tally(Tally {
-                requirement_id: reader.requirement_id.clone(),
-                key: reader.count_label.clone().filter(|label| !label.is_empty()).unwrap_or_else(|| "records".into()),
-                records: keys,
-            })?;
-        }
-        trace.event("record_filter", || {
-            let mut fields = Map::new();
-            fields.insert("reader".into(), "jev".into());
-            fields.insert("requirement".into(), reader.requirement_id.clone().into());
-            fields.insert("records".into(), records.len().into());
-            fields.insert("matched".into(), matched.into());
-            fields
-        });
-    }
-    let mut outcome = ReadOutcome::new(notes.facts().into_iter().cloned().collect(), vec![0], 0, Vec::new());
-    outcome.continues = readers.iter().map(|r| r.requirement_id.clone()).collect();
-    outcome.continuation_records = continuation_records;
-    Ok(Some(outcome))
-}
-
 // --- read ---------------------------------------------------------------------------------------------------------
 
 /// `read`'s keyword arguments.
@@ -1190,7 +1034,7 @@ const PAGE_RECORDS: &str = "# Page records\nCollect the records on this page for
 
 const FIELD_REPAIR: &str = "Your tally field range could not be resolved into complete matching records. Read the same capture again. Use explicit record block ranges when the field's delimiters or range cannot be verified. The [source id] and (block kind) annotations are not literal record text. A field range must contain only complete record blocks, with key=null and records=[]. Retain every matching record and keep the requirement open unless the evidence covers the entire requested list.";
 
-async fn ask_reader<T: serde::de::DeserializeOwned>(
+pub(super) async fn ask_reader<T: serde::de::DeserializeOwned>(
     llm: &dyn LLMClient,
     messages: &[Message],
     ty: Ty,
@@ -1274,6 +1118,7 @@ async fn read_inner(
         })
         .cloned()
         .collect();
+    let mut narrowed = false;
     // A pager notice is a caveat on what this page can answer, and the choice model picks quotes without weighing one.
     if let Some(jev) = options.jev
         && !wanted.is_empty()
@@ -1291,8 +1136,31 @@ async fn read_inner(
         }
         let answered: HashSet<Option<String>> = facts.values().map(|fact| fact.requirement_id.clone()).collect();
         requirement_ids.retain(|key| !answered.contains(&Some(key.clone())) && !chosen.absent.contains(key));
+        narrowed = true;
+    }
+    // A count is code's over the records Jev matches, on this page as on every later one; the LLM reader's own record
+    // lists missed records on a first page, and nothing later recovered them.
+    let mut counted = Counted::default();
+    let counts: Vec<Requirement> =
+        wanted.iter().filter(|r| r.count_records && requirement_ids.contains(&r.id)).cloned().collect();
+    if let Some(jev) = options.jev
+        && !counts.is_empty()
+        && !options.records_only
+    {
+        // The caller's notice is its word that the page has a next-page control.
+        let next_page = !options.notice.is_empty();
+        counted = count_records(jev, llm, &page, &counts, next_page, notes, tokens, ledger, &options.trace).await?;
+        costs.extend(counted.cost_lines.iter().cloned());
+        for fact in &counted.facts {
+            facts.insert((fact_id(fact), fact.requirement_id.clone()), fact.clone());
+        }
+        requirement_ids.retain(|key| !counted.settled.contains(key));
+        narrowed |= !counted.settled.is_empty();
+    }
+    if narrowed {
         if requirement_ids.is_empty() {
-            return Ok(ReadOutcome::new(facts.into_values().collect(), Vec::new(), rejected, costs));
+            let outcome = ReadOutcome::new(facts.into_values().collect(), Vec::new(), rejected, costs);
+            return Ok(counted.into_outcome(outcome));
         }
         // Narrow the obligations without dropping the task's constraints or separating ids from their meaning.
         let remaining: Vec<String> = options
@@ -1398,14 +1266,14 @@ async fn read_inner(
                 .filter(|key| requirement_ids.contains(key))
                 .cloned()
                 .collect();
-            let mut context = Vec::new();
-            for cite in &collected.data.context {
-                match cited(&page, &part, cite) {
-                    None => {
-                        lost.extend(requirement_ids.iter().cloned());
-                        uncovered += 1;
-                    }
-                    Some(span) => context.push(ReadClaim {
+            // Context is no requirement's record, so a cite that does not resolve loses none of them.
+            let context: Vec<ReadClaim> = collected
+                .data
+                .context
+                .iter()
+                .filter_map(|cite| {
+                    let span = cited(&page, &part, cite)?;
+                    Some(ReadClaim {
                         cite: Some(cite.clone()),
                         excerpt: None,
                         draws_on: Vec::new(),
@@ -1413,9 +1281,9 @@ async fn read_inner(
                         orders_list: None,
                         text: span.quote,
                         requirement_id: None,
-                    }),
-                }
-            }
+                    })
+                })
+                .collect();
             // An omitted requirement could have lost a whole page. An explicit empty record set means none matched.
             let returned: HashSet<&String> = collected.data.continues.iter().map(|c| &c.requirement_id).collect();
             lost.extend(requirement_ids.iter().filter(|key| !returned.contains(key)).cloned());
@@ -1538,7 +1406,6 @@ async fn read_inner(
                     filter: None,
                     compares: false,
                     record_kind: None,
-                    examples: Vec::new(),
                     comparison: None,
                 };
                 if read_tallies(capture, std::slice::from_ref(&reader), std::slice::from_ref(&reader.requirement_id))?
@@ -1596,7 +1463,6 @@ async fn read_inner(
                 filter: Some(requirement_text.to_string()),
                 compares,
                 record_kind: Some(record_kind),
-                examples: quotes.iter().take(3).map(|evidence| evidence.quote.clone()).collect(),
                 comparison: if compares { continuation.comparison.clone() } else { None },
             });
         }
@@ -1644,8 +1510,8 @@ async fn read_inner(
                 // Capture makes each leaf list item one unit, so a counted range of them is that many records; a
                 // compared record may still span more than one item, so only counting splits them.
                 let cites = record_cites(&page, &part, &group.records, counted_kind);
-                let mut missing = cites.len().saturating_sub(MAX_CONTINUING_RECORDS) as i64;
-                for cite in cites.iter().take(MAX_CONTINUING_RECORDS) {
+                let mut missing = 0;
+                for cite in &cites {
                     let span = cited(&page, &part, cite);
                     let matches_key = |span: &Evidence| match &group.key {
                         None => true,
@@ -1726,8 +1592,8 @@ async fn read_inner(
                 claim.draws_on.extend(so_far.comparison_records(Some(requirement_id)));
             }
             let mut records: IndexMap<String, Fact> = IndexMap::new();
-            let mut missing = claim.records.len().saturating_sub(MAX_CONTINUING_RECORDS) as i64;
-            for cite in claim.records.iter().take(MAX_CONTINUING_RECORDS) {
+            let mut missing = 0;
+            for cite in &claim.records {
                 match cited(&page, &part, cite) {
                     None => missing += 1,
                     Some(span) => {
@@ -1737,12 +1603,11 @@ async fn read_inner(
                 }
             }
             if missing > 0 {
-                // A comparison missing an operand cannot close here or on a later page using these notes.
-                match &claim.requirement_id {
-                    Some(requirement_id) if requirement_ids.contains(requirement_id) => {
-                        lost.insert(requirement_id.clone());
-                    }
-                    _ => lost.extend(requirement_ids.iter().cloned()),
+                // A comparison missing an operand cannot close here or on a later page using these notes. A claim that
+                // names no requirement of this read is no requirement's operand: a context claim citing a record the
+                // changed page no longer resolves used to mark every open requirement lost for the rest of the run.
+                if let Some(requirement_id) = claim.requirement_id.as_ref().filter(|id| requirement_ids.contains(id)) {
+                    lost.insert(requirement_id.clone());
                 }
                 uncovered += missing;
                 rejected_here += 1;
@@ -1878,15 +1743,8 @@ async fn read_inner(
         // copies each quote from the blocks named, exactly as it does for a claim, so a record is the page's own text and
         // never the reader's retyping of it.
         for continuation in &carried {
-            // Records past the cap are not kept, but one an accepted claim already holds is not lost.
-            let held: HashSet<String> = found.iter().map(fact_id).chain(so_far.evidence().into_keys()).collect();
             let mut missing = 0;
-            for cite in continuation.records.iter().skip(MAX_CONTINUING_RECORDS) {
-                if cited(&page, &part, cite).is_none_or(|span| !held.contains(&evidence_id(&span))) {
-                    missing += 1;
-                }
-            }
-            for cite in continuation.records.iter().take(MAX_CONTINUING_RECORDS) {
+            for cite in &continuation.records {
                 let Some(span) = cited(&page, &part, cite) else {
                     missing += 1;
                     continue;
@@ -2015,6 +1873,7 @@ async fn read_inner(
         tally_readers: tally_readers.into_iter().filter(|reader| !lost.contains(&reader.requirement_id)).collect(),
         comparisons: comparisons.into_iter().filter(|(key, _)| !lost.contains(key)).collect(),
     };
+    outcome = counted.into_outcome(outcome);
     unconfirmed_orders.retain(|key| !ordered.contains(key));
     if !unconfirmed_orders.is_empty() {
         // A rejected sorting shortcut has uncollected records, not permanently missing records.
