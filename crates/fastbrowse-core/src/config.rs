@@ -148,8 +148,10 @@ impl Default for TokenBudget {
             state_plus_all_questions: 48_000,
             batch_tokens: 8000,
             chars_per_token: 3.0,
-            read_output_tokens: 8000,
-            compose_output_tokens: 8000,
+            // Zero means no ceiling: fastbrowse does not cap, truncate or crop an output token; the model's own
+            // maximum and the answer schema are the only bounds.
+            read_output_tokens: 0,
+            compose_output_tokens: 0,
         }
     }
 }
