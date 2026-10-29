@@ -108,9 +108,14 @@ fn short_of_cap(payload: &Map<String, Value>, cap: i64) -> Option<i64> {
 /// more room instead, and a second truncation is reported as what it is.
 fn grow_cap(body: &mut Map<String, Value>, attempt: usize, cap: i64, purpose: LLMPurpose) -> Result<(), LLMError> {
     if attempt == 1 {
+        let ceiling = body.get("max_tokens").map_or_else(|| "no cap".to_string(), |value| value.to_string());
+        return Err(LLMError::Failed(format!("LLM response truncated at the {ceiling} token output cap ({purpose})")));
+    }
+    // No cap was sent, so there is nothing to grow: the model stopped on its own, and asking again under a larger
+    // ceiling would only spend the one retry on the same reply. The caller's repair turn is the next move.
+    if body.get("max_tokens").is_none() {
         return Err(LLMError::Failed(format!(
-            "LLM response truncated at the {} token output cap ({purpose})",
-            body["max_tokens"]
+            "LLM response was cut off with no output cap set ({purpose}); it ended before the JSON did"
         )));
     }
     body.insert("max_tokens".into(), (cap * TRUNCATION_RETRY_FACTOR).into());
@@ -521,7 +526,13 @@ impl OpenAICompatibleLLM {
         };
         let mut body = self.extra_body.clone();
         body.insert("model".into(), model.clone().into());
-        body.insert("max_tokens".into(), max_output_tokens.into());
+        // Zero is the caller saying no ceiling: fastbrowse never caps, truncates or crops an output token, so the
+        // field is left off the request entirely rather than sent as a limit of zero.
+        if max_output_tokens > 0 {
+            body.insert("max_tokens".into(), max_output_tokens.into());
+        } else {
+            body.remove("max_tokens");
+        }
         body.insert("messages".into(), wire_messages.into());
         body.insert(
             "response_format".into(),
@@ -629,7 +640,14 @@ impl OpenAICompatibleLLM {
             // it read, so it is scrubbed too.
             let detail = self.scrubbed(&detail);
             if ends_mid_json {
-                let cap = body["max_tokens"].as_i64().unwrap_or(max_output_tokens);
+                // With no ceiling sent there is no cap to compare against: the reply ended mid-JSON on its own and
+                // is reported, not retried under a ceiling nobody asked for.
+                let cap = body.get("max_tokens").and_then(Value::as_i64).unwrap_or(max_output_tokens);
+                if cap <= 0 {
+                    return Err(LLMError::Failed(format!(
+                        "LLM response was cut off with no output cap set ({purpose}); it ended before the JSON did"
+                    )));
+                }
                 match short_of_cap(&payload, cap) {
                     None => grow_cap(body, attempt, max_output_tokens, purpose)?,
                     Some(written) if short_retried => {

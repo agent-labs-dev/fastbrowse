@@ -134,11 +134,13 @@ pub struct TokenBudget {
     /// Local estimate for prompt budgeting; Jev also has a separate dense JSON safety bound.
     #[serde(deserialize_with = "lax::float_gt0")]
     pub chars_per_token: f64,
-    /// A page of records needs room for each value and its verbatim quote in the reader's JSON.
-    #[serde(deserialize_with = "lax::int_gt0")]
+    /// A page of records needs room for each value and its verbatim quote in the reader's JSON. Zero sends no
+    /// ceiling at all.
+    #[serde(deserialize_with = "lax::int_ge0")]
     pub read_output_tokens: i64,
-    /// A long answer repeats citation ids for every claim, so it needs more room than a planning response.
-    #[serde(deserialize_with = "lax::int_gt0")]
+    /// A long answer repeats citation ids for every claim, so it needs more room than a planning response. Zero
+    /// sends no ceiling at all.
+    #[serde(deserialize_with = "lax::int_ge0")]
     pub compose_output_tokens: i64,
 }
 
@@ -149,8 +151,8 @@ impl Default for TokenBudget {
             state_plus_all_questions: 48_000,
             batch_tokens: 8000,
             chars_per_token: 3.0,
-            read_output_tokens: 8000,
-            compose_output_tokens: 8000,
+            read_output_tokens: 0,
+            compose_output_tokens: 0,
         }
     }
 }

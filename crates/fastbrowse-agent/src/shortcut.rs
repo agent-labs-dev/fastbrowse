@@ -20,7 +20,8 @@ use crate::memory::split_scheme;
 use crate::support::generate;
 
 /// A shortcut returns one URL or null; a prose-sized response would spend tokens on an invalid answer.
-const URL_OUTPUT_TOKENS: i64 = 200;
+/// Zero: a shortcut reply is uncapped, so no ceiling field is sent at all.
+const URL_OUTPUT_TOKENS: i64 = 0;
 
 const SHORTCUT_URL: &str = "An absolute URL on the start page's site that shows the page where this task's answer is or its work happens, built from the task alone. Null unless you are confident the site serves that exact address.";
 const START_URL: &str = "The absolute URL of the page this task should begin on, built from the task alone: the site it names, or a search engine's results for it when it names no site. Null only when the task names nothing that could be opened.";

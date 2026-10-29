@@ -640,7 +640,7 @@ impl Agent {
         let messages = vec![Message::system(form_writer()), Message::user(dumps(&Value::Object(context)))];
         let writing = async {
             let generation =
-                generate::<FormText>(&*self.llm, LLMPurpose::FieldText, &messages, 2000, Some(&ledger)).await?;
+                generate::<FormText>(&*self.llm, LLMPurpose::FieldText, &messages, 0, Some(&ledger)).await?;
             ledger.record([generation.cost.clone()])?;
             Ok(generation.data)
         };
@@ -772,7 +772,7 @@ impl Agent {
         refit: bool,
     ) -> Step<Option<String>> {
         let generation =
-            generate::<FieldText>(&*self.llm, LLMPurpose::FieldText, messages, 2000, Some(&state.ledger)).await?;
+            generate::<FieldText>(&*self.llm, LLMPurpose::FieldText, messages, 0, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
         let written = generation.data;
         if written.missing {

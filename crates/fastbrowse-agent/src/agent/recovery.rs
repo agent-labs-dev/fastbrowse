@@ -277,7 +277,10 @@ impl Agent {
         let images: Vec<Bytes> = self.screenshots().await?.into_iter().map(Bytes).collect();
         let messages = vec![Message::system(system), Message { images, ..Message::user(content) }];
         let generation =
-            generate::<Recovery>(&*self.llm, LLMPurpose::Recover, &messages, 2000, Some(&state.ledger)).await?;
+            // Uncapped on purpose: nothing in fastbrowse caps, truncates or crops an output token. What bounds this
+            // call is the schema it must answer in and the model's own maximum, not a ceiling that can cut a
+            // reply mid-JSON.
+            generate::<Recovery>(&*self.llm, LLMPurpose::Recover, &messages, 0, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
         let mut data = generation.data;
         if data.give_up
