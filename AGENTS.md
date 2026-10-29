@@ -258,7 +258,8 @@ on any failed attempt or incomplete repeat coverage. `scripts/release_guard.py` 
 instead. A release that publishes a head-to-head figure also needs the comparison re-run on that same build.
 
 One tag publishes one version to PyPI and npm (`.github/workflows/release.yml`). It first builds the wheel and the
-five binaries and smoke-tests each. The macOS two, and their Node addons, are signed ad hoc
+five binaries and smoke-tests each; pull requests and `main` build only the Linux and Windows three, leaving the macOS two
+to the release. The macOS two, and their Node addons, are signed ad hoc
 (`codesign --sign -` in `.github/workflows/binaries.yml`), which is enough for a binary installed through npm. Then, each step
 needing the one before: the GitHub release with **the changelog entry as its notes**, PyPI, the five platform
 packages, the SDK. PyPI and npm take the job's OIDC identity, so no token is stored. No registry takes a version
