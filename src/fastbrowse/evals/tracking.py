@@ -160,7 +160,12 @@ def _span(name: str, run: Mapping[str, Any], row: Mapping[str, Any], at: datetim
         ("tokens_per_second", row.get("tokens_per_second")),
     ):
         if value is not None:
+            # Both namespaces, because they are read separately: the v2 observation index answers with
+            # observation metadata, which Langfuse maps from `langfuse.observation.metadata.*`, while a trace
+            # read answers with trace metadata from `langfuse.trace.metadata.*`. Writing one and reading the
+            # other left every upload unverifiable, which is a silent failure of the whole evidence chain.
             attributes.append(_attribute(f"langfuse.trace.metadata.{key}", value))
+            attributes.append(_attribute(f"langfuse.observation.metadata.{key}", value))
     seconds = float(row.get("seconds") or 0)
     return {
         "traceId": trace_id(name, row),
@@ -215,9 +220,20 @@ def _matches(observation: Mapping[str, Any], spec: Mapping[str, Any]) -> bool:
             output = json.loads(output)
         except json.JSONDecodeError:
             return False
-    metadata = observation.get("metadata") or {}
-    recorded = metadata.get("run_id") if isinstance(metadata, Mapping) else None
-    return recorded == spec["run_id"] and output == spec["output"]
+    return _run_id(observation) == spec["run_id"] and output == spec["output"]
+
+
+def _run_id(observation: Mapping[str, Any]) -> Any:
+    """The run id this stored observation carries, from whichever metadata namespace the read path returned.
+
+    The index answers with observation metadata; a trace read answers with the trace's. Both are written by
+    the upload, so either one naming this run is the same evidence - and a row carrying neither is not ours.
+    """
+    for field in ("metadata", "traceMetadata"):
+        metadata = observation.get(field)
+        if isinstance(metadata, Mapping) and metadata.get("run_id") is not None:
+            return metadata["run_id"]
+    return None
 
 
 def _readable(client: httpx.Client, trace: str, spec: Mapping[str, Any], since: datetime) -> bool:

@@ -78,6 +78,9 @@ def test_every_span_names_the_build_and_the_attempt(tmp_path: Path) -> None:
         found = attributes(span)
         assert found["langfuse.trace.metadata.build"] == "a" * 40
         assert found["langfuse.trace.metadata.run_id"] == "abc123"
+        # The run id goes into the observation namespace too: the v2 index answers with observation metadata,
+        # and a trace-metadata-only upload read back through it as somebody else's.
+        assert found["langfuse.observation.metadata.run_id"] == "abc123"
         assert found["langfuse.release"] == "fastbrowse/0.7.1@aaaaaaa/nightly"
         assert found["langfuse.trace.name"].startswith("fastbrowse/0.7.1@aaaaaaa/nightly/mock/")
         assert len(span["traceId"]) == 32 and len(span["spanId"]) == 16
@@ -265,6 +268,19 @@ def test_an_unreadable_trace_fails_the_upload(tmp_path: Path) -> None:
 
     with pytest.raises(tracking.RowsError, match="not readable"):
         tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=2, delay=0)
+
+
+def test_read_back_accepts_the_observation_namespace_the_index_answers_with(tmp_path: Path) -> None:
+    # Langfuse maps `langfuse.observation.metadata.*` to observation metadata, which is what the v2 index
+    # returns, so the check must read it there rather than only from the trace's own metadata.
+    path = rows_file(tmp_path, [row("mock-basket")])
+    wanted = tracking.expected(path, tracking.read_rows(path))
+    spec = next(iter(wanted.values()))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [stored(spec)], "meta": {}})
+
+    tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
 
 
 def test_a_row_without_the_run_id_does_not_count_as_this_upload(tmp_path: Path) -> None:
