@@ -82,7 +82,7 @@ figure for the build this release is based on, and no figure below is claimed fo
 The `internal-backend` group runs fastbrowse on the 53 fastbrowse tasks three repeats each, once on its own
 hosted browser pool and once on a Browser Use Cloud browser, so the browser backend is the only difference. The
 only recorded run of it is the earlier 0.5.25 campaign, `docs/results/benchmark-candidate.json`, campaign
-`release-0.5.25-48c964d` — a different release, shown here as history and not as this release's result:
+`release-0.5.25-48c964d`, a different release, shown here as history and not as this release's result:
 
 | Metric | fastbrowse, Browser Use Cloud browser | fastbrowse, own pool | Delta |
 |:--|:--|:--|:--|
