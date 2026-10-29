@@ -1,0 +1,8 @@
+# `cargo nextest` is the test runner in CI and in the `just rust` gate. It compiles the same test binaries
+# as `cargo test`, then runs every one of them through a single scheduler as separate processes, instead of
+# the 43 binaries running one after another. Measured on four cores against one warm `target/`, over the same
+# 985 tests: `cargo test --workspace` 382 s, `cargo nextest run --workspace` 161 s.
+[profile.default]
+# A browser test that never settles should fail the job under its own name rather than hold a runner until
+# the job's outer timeout. The longest test in the suite runs about 5 s, so this only catches a hang.
+slow-timeout = { period = "180s", terminate-after = 2 }
