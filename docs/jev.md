@@ -1,6 +1,6 @@
 # Jev: what Typesafe documents, and what fastbrowse assumes
 
-The Jev contract used by fastbrowse, checked against Typesafe's documentation for Jev 1.13.
+The Jev contract used by fastbrowse, checked against Typesafe's documentation for Jev 1.13. Every route asks Jev 1.14, which keeps 1.13's limits and price.
 Anything the documentation does not state is marked **ours**: a fastbrowse choice, tuned on the
 evals rather than taken from Typesafe.
 
@@ -33,7 +33,7 @@ A model fastbrowse has no record of, such as one pinned with `FASTBROWSE_DECISIO
 documented System One host sets: 26 options a Choice, 64 questions and 64 KiB a request ([System
 One](https://pydantic.dev/docs/ai/models/system-one/)). It has no list price, so a call it does not meter is an
 unknown cost, which a dollar limit treats as unaffordable. Its thresholds are Jev's, which no eval has checked against
-it, and the run's trace says so with a `decision_unvalidated` event. A Jev release other than 1.13 keeps Jev's limits
+it, and the run's trace says so with a `decision_unvalidated` event. A Jev release other than 1.13 or 1.14 keeps Jev's limits
 and price but is unvalidated too.
 
 ### Other decision hosts
@@ -50,11 +50,11 @@ through `crates/fastbrowse-clients/src/openai_decisions.rs`.
 | `ollama` | `http://localhost:11434` ([Ollama](https://pydantic.dev/docs/ai/models/system-one/#ollama)) | none, or `FASTBROWSE_DECISION_API_KEY` | `FASTBROWSE_DECISION_MODEL`, such as `nimble` or `tev1` | 26 options, 26 levels, 64 questions and 64 KiB a request |
 | `openai` | `https://api.openai.com/v1/decisions` ([Decisions](https://developers.openai.com/api/docs/guides/decisions)) | `OPENAI_API_KEY` | `gpt-6-luna` | 400 questions a request, 2 to 10 levels a score, 255 options a choice; $0.10 per million input tokens, estimated since the response states no cost |
 | `perplexity` | `https://api.perplexity.ai/v1/decisions` ([Perplexity](https://docs.perplexity.ai/docs/decisions/quickstart)) | `PERPLEXITY_API_KEY` | `pplx-decider-v1.2`, or `pplx-decider-flash-v1.2` | 128 questions a request, 255 options, 10 levels; $0.02 per million input tokens, $0.01 on flash |
-| `aimlapi` | `https://api.aimlapi.com/v1/decisions` ([AIMLAPI](https://docs.aimlapi.com/api-references/decision-models.md)) | `AIMLAPI_API_KEY` | `typesafe/jev-1.13`, or `liquid/d1`, `openai/gpt-6-luna` and later Jev releases | The model's own; AIMLAPI's price is not reported, so every call is an unknown cost |
+| `aimlapi` | `https://api.aimlapi.com/v1/decisions` ([AIMLAPI](https://docs.aimlapi.com/api-references/decision-models.md)) | `AIMLAPI_API_KEY` | `typesafe/jev-1.14`, or `liquid/d1`, `openai/gpt-6-luna` and later Jev releases | The model's own; AIMLAPI's price is not reported, so every call is an unknown cost |
 | `custom` | `FASTBROWSE_DECISION_BASE_URL` | `FASTBROWSE_DECISION_API_KEY`, if it takes one | `FASTBROWSE_DECISION_MODEL` | The profile of a model fastbrowse knows, otherwise the unknown model's |
 
-`FASTBROWSE_DECISION_BASE_URL` also retargets every source above but `custom`, which needs it. Jev 1.13 through
-AIMLAPI keeps Jev's thresholds, since it is the model they were tuned on, but its calls are priced as unknown. The Decisions API names a yes/no
+`FASTBROWSE_DECISION_BASE_URL` also retargets every source above but `custom`, which needs it. Jev 1.14 through
+AIMLAPI keeps Jev's thresholds, but its calls are priced as unknown. The Decisions API names a yes/no
 question a predicate and has no true and false descriptions, so a Noul's are appended to its instructions; a choice
 criterion that is an object is sent as its JSON text, and a refused question fails the request. Telnyx answers an oversized body with HTTP
 413, which fastbrowse reads as input too large rather than as an outage. Telnyx says its scores are relative
@@ -96,7 +96,7 @@ Request and authentication errors, malformed answers, transport failures without
 status, and cancellation do not switch providers. Without a configured backup, exhausted retries raise an error.
 `FASTBROWSE_DECISION_BASE_URL` or an explicit `FASTBROWSE_DECISION_MODEL` disables automatic failover: a backup
 must not bypass a proxy or silently replace a pinned model. Default backups use their own public endpoint,
-key and model (`jev-1.13` on OpenRouter, `jev-1.13.0` on direct TypeSafe, `typesafe-ai/jev` through the gateway).
+key and model (`jev-1.14` on OpenRouter, `jev-1.14.0` on direct TypeSafe, `typesafe-ai/jev-1.14.0` through the gateway).
 
 OpenRouter's `usage.cost` and the gateway's reported cost are metered dollars. Missing cost, or $0 with
 input tokens, uses Jev's list-price estimate. Direct TypeSafe responses without cost keep that estimate.
