@@ -18,7 +18,7 @@ defaults:
     shell: bash
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -73,7 +73,7 @@ jobs:
   guard:
     needs: [build, evals]
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       actions: read
@@ -235,7 +235,7 @@ jobs:
   # and the required `check` could never report on it; with none set the release says so and leaves it to a human.
   aur-sync:
     needs: [build, pypi]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
       pull-requests: write

@@ -73,7 +73,7 @@ env:
 jobs:
   resolve:
     name: Resolve the pins and the credentials
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
       fastbrowse_sha: ${{ steps.pins.outputs.fastbrowse_sha }}
@@ -156,7 +156,7 @@ jobs:
   campaign:
     name: ${{ matrix.label }}
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     # A full campaign is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 350
@@ -234,7 +234,7 @@ jobs:
     name: Stage the candidate
     needs: [resolve, campaign]
     if: ${{ success() }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
       actions: read
