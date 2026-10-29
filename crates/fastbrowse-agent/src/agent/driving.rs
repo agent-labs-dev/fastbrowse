@@ -1076,29 +1076,6 @@ impl Agent {
             state.visited.shift_remove(&observation.url);
         } else {
             state.visited.insert(observation.url.clone(), ());
-            for control in &observation.controls {
-                // External display hrefs omit their scheme and query, so they cannot be replayed as destinations.
-                let Some(href) = &control.href else { continue };
-                if control.role == "link"
-                    && control.frame_id.is_none()
-                    && !href.is_empty()
-                    && (href.starts_with('/') || href.starts_with("http://") || href.starts_with("https://"))
-                    && control.operations.contains(&Operation::Click)
-                {
-                    let Some(url) = join(&observation.url, href) else { continue };
-                    if matches!(scheme_of(&url).as_str(), "http" | "https") {
-                        state.observed_links.insert(
-                            url.clone(),
-                            super::state::ObservedLink {
-                                source: observation.url.clone(),
-                                title: observation.title.clone(),
-                                label: control.label.clone(),
-                                url,
-                            },
-                        );
-                    }
-                }
-            }
         }
         let link = state.pending_link.take();
         if let Some(status) = observation.response_status {

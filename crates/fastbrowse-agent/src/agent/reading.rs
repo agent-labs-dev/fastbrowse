@@ -368,7 +368,6 @@ impl Agent {
                 ("uncovered".into(), outcome.uncovered.into()),
             ])
         });
-        state.read_urls.insert(capture.url.clone());
         if let Some(observation) = observation {
             let document = &observation.document_key;
             let read = state.read_coverage.entry(document.clone()).or_default();

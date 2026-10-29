@@ -376,10 +376,7 @@ impl Agent {
             if probability.is_some_and(|p| p <= thresholds.irreversible_above) {
                 return Ok(());
             }
-            // Jev's yes that the task names this action is read against the same line as its irreversible answer, and
-            // its pick against the confidence any pick is taken at: Finish on a checkout the task asks to finish
-            // scored 0.73 to 0.79 as a pick, under the bar a pick the task does not name is held to.
-            if requested.is_some_and(|p| p > thresholds.irreversible_above)
+            if requested.is_some_and(|p| p >= thresholds.sensitive_act_from)
                 && decision.confidence() >= thresholds.recover_below
             {
                 return Ok(());

@@ -1056,16 +1056,13 @@ pub(super) fn reader_chunk_chars(
     let message = read_message(page, &whole_page(page), question, requirement_ids, required);
     let prompt = format!("{system}{}{}", message.content, dumps(&json_schema(schema)));
     let overflow = text::len(&prompt) as i64 - tokens.input_chars::<&str>(&[], false);
-    if overflow <= 0 {
+    let room = length - overflow;
+    // The instructions or the evidence the read must show fill the budget without any page text: the page goes in
+    // one prompt, which the read or the provider reports as too large, rather than in one-character chunks.
+    if overflow <= 0 || room <= 0 {
         return i64::MAX;
     }
-    // What the budget leaves for page text, or the page beside the instructions alone when the required evidence
-    // fills it, which the read then reports as too large.
-    let mut room = length - overflow;
-    if room <= 0 {
-        room = length - overflow + text::len(required) as i64;
-    }
-    let parts = (length + room.max(1) - 1) / room.max(1);
+    let parts = (length + room - 1) / room;
     if parts <= 1 { i64::MAX } else { (length + parts - 1) / parts }
 }
 
@@ -2065,5 +2062,10 @@ mod tests {
         assert_eq!(parts.len(), 2);
         let sizes: Vec<usize> = parts.iter().map(|part| part.block_ids.len()).collect();
         assert!(sizes[0].abs_diff(sizes[1]) <= 2, "{sizes:?}");
+    }
+
+    #[test]
+    fn instructions_past_the_budget_go_in_one_prompt_rather_than_a_character_at_a_time() {
+        assert_eq!(chunks(100_000).len(), 1);
     }
 }

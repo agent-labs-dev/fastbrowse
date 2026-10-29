@@ -1,7 +1,7 @@
 //! A covered control found in the viewport screenshot rather than by the DOM hit test.
 
 use fastbrowse_core::decision::{Answer, BoxQuestion, DecisionError, Images, NoulQuestion, Question};
-use fastbrowse_core::models::CostComponent;
+use fastbrowse_core::models::{CostComponent, UNTRUSTED};
 use fastbrowse_core::page::{ActResult, Control};
 use indexmap::IndexMap;
 use serde_json::{Map, json};
@@ -23,8 +23,19 @@ impl Agent {
         let reference = screenshot_reference(&png);
         let seen = json!({"task": state.task, "control": element(target, false), "viewport_screenshot": reference});
         let questions: IndexMap<String, Question> = IndexMap::from([
-            ("shown".to_string(), NoulQuestion::new(SHOWN, None, None).into()),
-            ("where".to_string(), BoxQuestion { kind: Default::default(), instructions: WHERE.into() }.into()),
+            (
+                "shown".to_string(),
+                NoulQuestion::new(
+                    format!("{UNTRUSTED}\n{SHOWN}"),
+                    Some("The control is visible and nothing covers it."),
+                    Some("It is hidden, covered or absent."),
+                )
+                .into(),
+            ),
+            (
+                "where".to_string(),
+                BoxQuestion { kind: Default::default(), instructions: format!("{UNTRUSTED}\n{WHERE}") }.into(),
+            ),
         ]);
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let evaluation = match self.jev.evaluate_images(&seen, &questions, &Images::from([(reference, png)])).await {
