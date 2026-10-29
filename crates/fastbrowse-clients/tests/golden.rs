@@ -90,7 +90,6 @@ fn build(spec: &Value, http: &Http) -> Client {
             };
             let options = LLMOptions {
                 reasoning_effort: spec.get("reasoning").and_then(Value::as_str).and_then(ReasoningEffort::parse),
-                purpose_reasoning: HashMap::new(),
                 provider_routing,
                 strict: spec.get("strict").and_then(Value::as_bool).unwrap_or(true),
                 extra_body: spec.get("extra_body").and_then(Value::as_object).cloned().unwrap_or_default(),

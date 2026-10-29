@@ -7,7 +7,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{Script, answer_model, answering};
-use fastbrowse_clients::environment::{ConfigurationError, DecisionSource, LLMProvider, Settings, default_model};
+use fastbrowse_clients::environment::{ConfigurationError, DecisionSource, LLMProvider, Settings};
 use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::decision::{DecisionError, NoulQuestion, Question};
 use fastbrowse_core::llm::{Generation, Message};
@@ -313,7 +313,7 @@ async fn test_llm_uses_the_gateway_without_an_openrouter_key() {
     assert_eq!(seen[0].url, "https://ai-gateway.vercel.sh/v1/chat/completions");
     // The credential goes only to the host it belongs to.
     assert_eq!(seen[0].header("authorization"), Some("Bearer g"));
-    assert_eq!(body(&seen[0])["model"], default_model(LLMPurpose::Read));
+    assert_eq!(body(&seen[0])["model"], fastbrowse_clients::environment::DEFAULT_LLM);
     assert_eq!(body(&seen[0])["provider"], json!({"sort": "ttft"}));
     assert_eq!(result.cost.basis, CostBasis::Metered);
 }
@@ -409,24 +409,6 @@ fn test_the_local_key_is_not_printed_with_the_settings() {
 fn test_a_base_url_without_a_model_names_the_setting() {
     let loaded = settings(&[("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1")]);
     assert!(config_error(loaded.llm(&Script::default().http())).contains("FASTBROWSE_LLM_MODEL"));
-}
-
-const PINS: [&str; 7] = [
-    "FASTBROWSE_LLM_MODEL_PLAN",
-    "FASTBROWSE_LLM_MODEL_READ",
-    "FASTBROWSE_LLM_MODEL_FIELD_TEXT",
-    "FASTBROWSE_LLM_MODEL_RECOVER",
-    "FASTBROWSE_LLM_MODEL_COMPOSE",
-    "FASTBROWSE_LLM_MODEL_VERIFY",
-    "FASTBROWSE_LLM_MODEL_SHORTCUT",
-];
-
-#[tokio::test]
-async fn test_every_purpose_pinned_is_enough_without_one_model() {
-    let mut env: Vec<(&str, &str)> = PINS.iter().map(|pin| (*pin, "qwen")).collect();
-    env.push(("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1"));
-    let (seen, _) = llm_requests(&env, None).await;
-    assert_eq!(body(&seen[0])["model"], "qwen");
 }
 
 #[tokio::test]
@@ -544,23 +526,6 @@ async fn test_another_model_keeps_its_providers_reasoning_by_default() {
 }
 
 #[tokio::test]
-async fn test_one_purposes_reasoning_effort_overrides_the_others_only_for_it() {
-    // The requests are for the reader.
-    for (env, effort) in [
-        (&[("FASTBROWSE_LLM_REASONING_READ", "low")][..], json!({"effort": "low"})),
-        (&[("FASTBROWSE_LLM_REASONING", "high"), ("FASTBROWSE_LLM_REASONING_READ", "none")], json!({"effort": "none"})),
-        (&[("FASTBROWSE_LLM_REASONING_VERIFY", "high")], json!({"effort": "none"})),
-    ] {
-        let env: Vec<(&str, &str)> = [("OPENROUTER_API_KEY", "o")].into_iter().chain(env.iter().copied()).collect();
-        let (seen, _) = llm_requests(&env, Some(0.0001)).await;
-        assert_eq!(body(&seen[0])["reasoning"], effort, "{env:?}");
-    }
-    let (seen, _) = llm_requests(&local(&[("FASTBROWSE_LLM_REASONING_READ", "none")]), None).await;
-    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "none"}));
-    assert!(Settings::from_sources(&[("FASTBROWSE_LLM_REASONING_VERIFY", "off")], None).is_err());
-}
-
-#[tokio::test]
 async fn test_openrouter_gets_reasoning_turned_off_when_asked() {
     let (seen, _) =
         llm_requests(&[("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_REASONING", "none")], Some(0.0001)).await;
@@ -574,23 +539,6 @@ fn test_a_blank_model_on_a_local_endpoint_is_unset() {
             settings(&[("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1"), ("FASTBROWSE_LLM_MODEL", blank)]);
         assert!(config_error(loaded.llm(&Script::default().http())).contains("FASTBROWSE_LLM_MODEL"));
     }
-}
-
-#[tokio::test]
-async fn test_a_blank_purpose_pin_falls_back_to_the_global_model_not_a_default() {
-    for blank in ["", "   "] {
-        let pins: Vec<(&str, &str)> = PINS.iter().map(|pin| (*pin, blank)).collect();
-        let (seen, _) = llm_requests(&local(&pins), None).await;
-        assert_eq!(body(&seen[0])["model"], "qwen");
-    }
-}
-
-#[test]
-fn test_blank_pins_without_a_global_model_are_unset() {
-    let mut env: Vec<(&str, &str)> =
-        PINS.iter().map(|pin| (*pin, if *pin == "FASTBROWSE_LLM_MODEL_READ" { " " } else { "qwen" })).collect();
-    env.extend([("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1"), ("FASTBROWSE_LLM_MODEL", "")]);
-    assert!(config_error(settings(&env).llm(&Script::default().http())).contains("FASTBROWSE_LLM_MODEL"));
 }
 
 // What pydantic-settings does for Python before any of the above runs.
@@ -613,20 +561,6 @@ FASTBROWSE_LLM_EXTRA_BODY={\"top_k\": 20}
     // A `#` with no space before it is part of the value.
     assert_eq!(loaded.decision_model.as_deref(), Some("jev#1"));
     assert_eq!(loaded.llm_extra_body.as_deref(), Some("{\"top_k\": 20}"));
-}
-
-#[test]
-fn a_decision_setting_is_still_read_under_its_former_jev_name() {
-    let former = settings(&[
-        ("FASTBROWSE_JEV_SOURCE", "gateway"),
-        ("FASTBROWSE_JEV_BASE_URL", "http://proxy:8080"),
-        ("FASTBROWSE_JEV_MODEL", "nimble"),
-    ]);
-    assert_eq!(former.decision_source, Some(DecisionSource::Gateway));
-    assert_eq!(former.decision_base_url.as_deref(), Some("http://proxy:8080"));
-    assert_eq!(former.decision_model.as_deref(), Some("nimble"));
-    let both = settings(&[("FASTBROWSE_JEV_MODEL", "old"), ("FASTBROWSE_DECISION_MODEL", "new")]);
-    assert_eq!(both.decision_model.as_deref(), Some("new"));
 }
 
 #[test]

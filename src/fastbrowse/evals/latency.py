@@ -1,8 +1,8 @@
-"""Which model should each purpose use? Measure, because the answer moves every few weeks.
+"""Which model should the LLM use? Measure, because the answer moves every few weeks.
 
 The LLM is most of a run's wall clock: a measured cloud run spent 64% of 49 seconds inside
-`generate` and 7% inside Jev. So the model behind each `LLMPurpose` is the latency decision in this
-system, and `FASTBROWSE_LLM_MODEL_<PURPOSE>` exists to act on it.
+`generate` and 7% inside Jev. So the LLM's model is the latency decision in this system, and
+`FASTBROWSE_LLM_MODEL` exists to act on it.
 
 This runs one fixture task (`table-extract`) through `run_task` with every purpose on each candidate in turn,
 on whichever core the package runs, and reports the median seconds of the two calls that dominate a run: the
@@ -49,17 +49,15 @@ MEASURED = (LLMPurpose.PLAN, LLMPurpose.READ)
 @contextmanager
 def every_purpose_on(model: str) -> Generator[None]:
     """`model` for every purpose, through the variables the README documents, restored on exit."""
-    names = ["FASTBROWSE_LLM_MODEL", *(f"FASTBROWSE_LLM_MODEL_{purpose.name}" for purpose in LLMPurpose)]
-    saved = {name: os.environ.get(name) for name in names}
-    os.environ.update(dict.fromkeys(names, model))
+    saved = os.environ.get("FASTBROWSE_LLM_MODEL")
+    os.environ["FASTBROWSE_LLM_MODEL"] = model
     try:
         yield
     finally:
-        for name, value in saved.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+        if saved is None:
+            os.environ.pop("FASTBROWSE_LLM_MODEL", None)
+        else:
+            os.environ["FASTBROWSE_LLM_MODEL"] = saved
 
 
 def seconds(results: list[RunResult], purpose: LLMPurpose) -> list[float]:
