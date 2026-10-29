@@ -187,6 +187,8 @@ pub struct DoneOptions<'a> {
     pub history: &'a [HistoryEntry],
     /// Every address the run has been on, first the one it began on, which no action records.
     pub visited: &'a [String],
+    /// Reserves the one Jev call, made only when the check reaches Jev.
+    pub ledger: Option<&'a Ledger>,
     pub trace: Trace,
 }
 
@@ -278,6 +280,9 @@ pub async fn check_done(
             answer: None,
             cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
         });
+    }
+    if let Some(ledger) = options.ledger {
+        ledger.reserve(CostComponent::Jev, 0.0, 1)?;
     }
     let evaluation = jev.evaluate(&state, &questions).await?;
     let answers = &evaluation.answers;
@@ -458,7 +463,7 @@ mod tests {
     //! leaves a request unsent.
     use super::*;
     use crate::support::testing::block_on;
-    use fastbrowse_core::models::{Operation, StepOutcome};
+    use fastbrowse_core::models::{Limits, Operation, StepOutcome};
 
     fn entry(
         operation: Option<Operation>,
@@ -563,6 +568,36 @@ mod tests {
     #[test]
     fn an_unevidenced_answer_still_keeps_the_run_working() {
         assert_eq!(done(vec![("unmet_r1", 0.1)], &Notes::default()).verdict, DoneVerdict::Reject);
+    }
+
+    #[test]
+    fn a_check_that_never_reaches_jev_spends_no_jev_call() {
+        let ledger = Ledger::new(Limits { max_jev_calls: Some(0), ..Limits::default() });
+        let options = DoneOptions { ledger: Some(&ledger), ..DoneOptions::default() };
+        let jev = TableJev(vec![("unmet_r1", 0.1)]);
+        let notes = Notes::default();
+        let check = block_on(check_done(
+            &jev,
+            "Count them.",
+            &count_plan(),
+            &page(),
+            &notes,
+            &Thresholds::default(),
+            None,
+            &options,
+        ));
+        assert_eq!(check.expect("check").verdict, DoneVerdict::Reject);
+        let reached = block_on(check_done(
+            &jev,
+            "Count them.",
+            &count_plan(),
+            &page(),
+            &counted_notes(),
+            &Thresholds::default(),
+            None,
+            &options,
+        ));
+        assert!(matches!(reached, Err(AgentError::Budget(_))), "{reached:?}");
     }
 
     fn small_budget() -> TokenBudget {

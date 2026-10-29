@@ -106,8 +106,13 @@ fn replay(case: &Value) -> Result<(), String> {
         }
         "check_done" => {
             let draft: Option<ComposedAnswer> = opt(args, "draft");
-            let options =
-                DoneOptions { tokens: tokens.clone(), history: &history, visited: &visited, trace: trace.clone() };
+            let options = DoneOptions {
+                tokens: tokens.clone(),
+                history: &history,
+                visited: &visited,
+                ledger: None,
+                trace: trace.clone(),
+            };
             outcome(block_on(check_done(
                 &jev,
                 args["task"].as_str().unwrap(),

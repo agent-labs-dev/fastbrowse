@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashSet};
 use fastbrowse_core::decision::{Answer, Question};
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
-    Bytes, CostComponent, Decider, Evidence, FactReader, Operation, RunResult, Status, StepOutcome, UntilCheck,
+    Bytes, Decider, Evidence, FactReader, Operation, RunResult, Status, StepOutcome, UntilCheck,
 };
 use fastbrowse_core::page::Observation;
 use indexmap::IndexMap;
@@ -300,7 +300,6 @@ impl Agent {
         state.await_checks().await?;
         state.missing_answer_outputs.clear();
         state.answer_corrections.clear();
-        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let plan = state.plan().clone();
         let draft = if plan.page_answer_expected() { draft_answer(&plan, &state.notes) } else { None };
         let notes = state.notes.clone();
@@ -310,6 +309,7 @@ impl Agent {
             tokens: self.config.tokens.clone(),
             history: &history,
             visited: &shown,
+            ledger: Some(&state.ledger),
             trace: self.trace.clone(),
         };
         let task = state.task.clone();
