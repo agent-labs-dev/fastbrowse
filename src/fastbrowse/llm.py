@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from fastbrowse.models import CostLine, Frozen, LLMPurpose, Unavailable
 from fastbrowse.telemetry import Ledger
 
-# Planning and field responses are short; readers and composers pass their larger configured caps.
+# The cap when a caller names none. 0 sends no ceiling; readers, composers, field text and recovery pass 0.
 DEFAULT_MAX_OUTPUT_TOKENS = 2000
 
 

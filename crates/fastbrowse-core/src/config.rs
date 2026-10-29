@@ -133,11 +133,11 @@ pub struct TokenBudget {
     /// Local estimate for prompt budgeting; Jev also has a separate dense JSON safety bound.
     #[serde(deserialize_with = "lax::float_gt0")]
     pub chars_per_token: f64,
-    /// A page of records needs room for each value and its verbatim quote in the reader's JSON.
-    #[serde(deserialize_with = "lax::int_gt0")]
+    /// The reader's output ceiling; 0 sends none, so a page of records and its verbatim quotes is never cut short.
+    #[serde(deserialize_with = "lax::int_ge0")]
     pub read_output_tokens: i64,
-    /// A long answer repeats citation ids for every claim, so it needs more room than a planning response.
-    #[serde(deserialize_with = "lax::int_gt0")]
+    /// The composer's output ceiling; 0 sends none, so a long answer citing every claim is never cut short.
+    #[serde(deserialize_with = "lax::int_ge0")]
     pub compose_output_tokens: i64,
 }
 
@@ -262,5 +262,12 @@ mod tests {
         assert_eq!(config.stall.unchanged_actions, 3);
         assert_eq!(config.max_pages, 3);
         assert!(serde_json::from_str::<Config>(r#"{"observation": {"group_size": 1}}"#).is_err());
+    }
+
+    #[test]
+    fn a_default_config_reads_back_with_no_output_ceiling() {
+        let config: Config = serde_json::from_value(serde_json::to_value(Config::default()).unwrap()).unwrap();
+        assert_eq!((config.tokens.read_output_tokens, config.tokens.compose_output_tokens), (0, 0));
+        assert!(serde_json::from_str::<Config>(r#"{"tokens": {"read_output_tokens": -1}}"#).is_err());
     }
 }
