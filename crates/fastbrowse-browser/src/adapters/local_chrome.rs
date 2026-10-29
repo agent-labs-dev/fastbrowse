@@ -486,6 +486,7 @@ fn tail(log: &mut File) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     #[test]
     fn a_profile_whose_process_has_exited_is_removed_and_a_live_ones_kept() {
         let dir = std::env::temp_dir().join(format!("fastbrowse-sweep-test-{}", std::process::id()));

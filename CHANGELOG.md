@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- **A local run clears the Chrome profiles that killed runs left behind.** A run stopped by a signal or a Chrome crash never removed its throwaway profile, about 140MB each in the temporary directory, and 262 of them filled a 16GB `/tmp` until runs failed with a full disk. Each launch now removes the profiles whose owning process has exited. Profiles given with `--profile` are never touched.
+- **A local run clears the Chrome profiles that killed runs left behind.** A run stopped by a signal or a Chrome crash never removed its throwaway profile, about 140MB each in the temporary directory, and 262 of them filled a 16GB `/tmp` until runs failed with a full disk. On Linux and macOS each launch now removes the profiles whose owning process has exited. Profiles given with `--profile` are never touched.
 
 ## [0.9.0] - 2026-10-29
 
