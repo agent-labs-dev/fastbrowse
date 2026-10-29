@@ -11,6 +11,15 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- No output token ceiling is sent anywhere. Every call used to pass one: 2000 to planning and the field writers,
+  8000 to a read, a composition and a plan partition, 400 to a verifier's verdict and 512 to a field audit. A
+  response cut off at any of them lost a value the page had already shown, and the retry spent a paid call to ask
+  again for the same answer. All of them now pass 0, and 0 means no ceiling: `read_output_tokens`,
+  `compose_output_tokens` and `DEFAULT_MAX_OUTPUT_TOKENS` default to 0, and an explicit 0 is accepted where a
+  positive number was required before. The client leaves the cap field off the request rather than sending 0, so
+  the schema and the model's own maximum are the only bounds. A reply that ends mid-JSON with no cap set is now
+  reported with the tokens it wrote instead of being retried under a ceiling nobody asked for.
+
 ## [0.7.1] - 2026-10-24
 
 - A run ends `needs_login` only when the page itself shows a sign-in to act on: a credential field, or a control that names one. A model that called a page with no such control a sign-in wall, or a page with nothing left to read, no longer makes the run claim the caller is signed out; it ends `stuck` instead.

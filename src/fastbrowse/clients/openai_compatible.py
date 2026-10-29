@@ -141,9 +141,8 @@ def _grow_cap(body: dict[str, JsonValue], attempt: int, cap: int, purpose: LLMPu
     """
     ceiling = body.get("max_tokens")
     if attempt == 1:
-        raise LLMError(
-            f"LLM response truncated at the {ceiling if ceiling is not None else 'no'} token output cap ({purpose.value})"
-        )
+        shown = "no" if ceiling is None else ceiling
+        raise LLMError(f"LLM response truncated at the {shown} token output cap ({purpose.value})")
     # No cap was sent, so there is nothing to grow: the model stopped on its own, and asking again under a larger
     # ceiling would only spend the one retry on the same reply. The caller's repair turn is the next move.
     if ceiling is None:
@@ -519,9 +518,9 @@ class OpenAICompatibleLLM:
                             _grow_cap(body, attempt, max_output_tokens, purpose)
                         elif short_retried:
                             ceiling = body.get("max_tokens")
+                            shown = "no" if ceiling is None else ceiling
                             raise LLMRetriesExhausted(
-                                f"LLM response ended mid-JSON at {written} of {ceiling if ceiling is not None else 'no'}"
-                                " output tokens twice"
+                                f"LLM response ended mid-JSON at {written} of {shown} output tokens twice"
                             ) from None
                         else:
                             short_retried = True
