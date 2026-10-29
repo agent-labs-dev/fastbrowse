@@ -132,6 +132,42 @@ where
     }
 }
 
+/// The `http` event for one POST: every model request and reply in full, so a trace shows what a model was asked and
+/// what it said. Headers carry the API keys and are left out. A POST whose future is dropped in flight is written as
+/// `cancelled` rather than missing.
+struct HttpEvent<'a> {
+    trace: &'a Trace,
+    url: &'a str,
+    body: &'a Value,
+    began: f64,
+    written: bool,
+}
+
+impl HttpEvent<'_> {
+    fn write(&mut self, outcome: impl FnOnce(&mut Map<String, Value>)) {
+        self.written = true;
+        self.trace.event("http", || {
+            let mut fields = Map::new();
+            fields.insert("url".into(), self.url.into());
+            fields.insert("request".into(), self.body.clone());
+            fields.insert("began".into(), self.began.into());
+            fields.insert("ended".into(), monotonic().into());
+            outcome(&mut fields);
+            fields
+        });
+    }
+}
+
+impl Drop for HttpEvent<'_> {
+    fn drop(&mut self) {
+        if !self.written {
+            self.write(|fields| {
+                fields.insert("error".into(), "cancelled".into());
+            });
+        }
+    }
+}
+
 /// What a run's clients share: one connection pool, one trace.
 #[derive(Clone)]
 pub struct Http {
@@ -173,32 +209,19 @@ impl Http {
             body: write(body, Style::HTTPX).into(),
             max_bytes: None,
         };
-        let began = monotonic();
+        let mut event = HttpEvent { trace: &self.trace, url, body, began: monotonic(), written: false };
         let result = self.send(request, seconds).await;
-        // Every model request and reply in full, so a trace shows what a model was asked and what it said. Headers
-        // carry the API keys and are left out.
-        self.trace.event("http", || {
-            let mut fields = Map::new();
-            fields.insert("url".into(), url.into());
-            fields.insert("request".into(), body.clone());
-            fields.insert("began".into(), began.into());
-            fields.insert("ended".into(), monotonic().into());
-            match &result {
-                Ok(response) => {
-                    fields.insert("status".into(), response.status.into());
-                    let text = response.text();
-                    let text = if response.credential.is_empty() {
-                        text
-                    } else {
-                        text.replace(&response.credential, "[api key]")
-                    };
-                    fields.insert("response".into(), serde_json::from_str(&text).unwrap_or(Value::String(text)));
-                }
-                Err(error) => {
-                    fields.insert("error".into(), error.name().into());
-                }
+        event.write(|fields| match &result {
+            Ok(response) => {
+                fields.insert("status".into(), response.status.into());
+                let text = response.text();
+                let text =
+                    if response.credential.is_empty() { text } else { text.replace(&response.credential, "[api key]") };
+                fields.insert("response".into(), serde_json::from_str(&text).unwrap_or(Value::String(text)));
             }
-            fields
+            Err(error) => {
+                fields.insert("error".into(), error.name().into());
+            }
         });
         result
     }

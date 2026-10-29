@@ -44,6 +44,9 @@ async fn test_llm_calls_are_traced_when_they_fail_or_are_cancelled() {
         _ = hanging.cancel.notified() => {}
     }
     assert_eq!(spans(&trace), [("llm:read".into(), "error".into()), ("llm:read".into(), "cancelled".into())]);
+    let events = trace.events();
+    let last = events.iter().rfind(|e| e["event"] == "http").unwrap();
+    assert_eq!((&last["error"], &last["request"]["messages"][0]["content"]), (&json!("cancelled"), &json!("Answer.")));
 }
 
 #[tokio::test(start_paused = true)]
