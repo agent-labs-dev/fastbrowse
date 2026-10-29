@@ -386,6 +386,20 @@ impl DecisionProfile {
                 max_request_bytes: None,
                 ..DecisionProfile::unknown()
             },
+            // OpenAI documents 400 questions a request, 2 to 10 levels, $0.10 per million input tokens and image input;
+            // Pydantic AI's profile caps a choice at 255 options. No token limit is stated, so the configured budget
+            // stands.
+            "gpt-6-luna" | "openai/gpt-6-luna" => DecisionProfile {
+                max_choice_options: 255,
+                max_score_levels: 10,
+                max_questions: Some(400),
+                max_largest_tokens: 1_000_000,
+                max_total_tokens: 1_000_000,
+                max_request_bytes: None,
+                dollars_per_input_token: Some(0.10 / 1_000_000.0),
+                images: true,
+                thresholds: None,
+            },
             // Pydantic AI's Ollama profile: 26 options, 26 levels, 64 questions and 64 KiB.
             "nimble" | "tev1" => DecisionProfile { max_score_levels: 26, ..DecisionProfile::unknown() },
             _ => DecisionProfile::unknown(),
@@ -459,6 +473,7 @@ mod tests {
         assert!(!DecisionProfile::for_model("nimble").validated());
         assert_eq!(DecisionProfile::for_model("telnyx/decision-flash").max_choice_options, 64);
         assert_eq!(DecisionProfile::for_model("nimble").max_score_levels, 26);
+        assert_eq!(DecisionProfile::for_model("gpt-6-luna").fit(None), Config::default());
         let later = DecisionProfile::for_model("typesafe/jev-1.14");
         assert_eq!((later.validated(), later.max_choice_options), (false, MAX_CHOICE_OPTIONS));
     }

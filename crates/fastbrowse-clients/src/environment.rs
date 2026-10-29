@@ -37,6 +37,7 @@ use crate::openai_compatible::{
     LLMOptions, OpenAICompatibleLLM, ReasoningEffort, gateway_provider_routing, openrouter_provider_routing,
     reserved_clashes,
 };
+use crate::openai_decisions::{OPENAI_DECISIONS_MODEL, OPENAI_URL, OpenAIDecisionsClient};
 use crate::system_one::{
     OLLAMA_URL, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient, TELNYX_MODEL, TELNYX_URL, TYPESAFE_URL,
 };
@@ -76,16 +77,19 @@ pub enum DecisionSource {
     Ollama,
     /// Any other System One host, at FASTBROWSE_DECISION_BASE_URL.
     Custom,
+    /// OpenAI's Decisions API.
+    OpenAI,
 }
 
 impl DecisionSource {
-    pub const ALL: [DecisionSource; 6] = [
+    pub const ALL: [DecisionSource; 7] = [
         DecisionSource::OpenRouter,
         DecisionSource::TypeSafe,
         DecisionSource::Gateway,
         DecisionSource::Telnyx,
         DecisionSource::Ollama,
         DecisionSource::Custom,
+        DecisionSource::OpenAI,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -96,6 +100,7 @@ impl DecisionSource {
             DecisionSource::Telnyx => "telnyx",
             DecisionSource::Ollama => "ollama",
             DecisionSource::Custom => "custom",
+            DecisionSource::OpenAI => "openai",
         }
     }
 
@@ -198,6 +203,7 @@ pub struct Settings {
     /// Bearer token for the `ollama` and `custom` sources. Optional: a local server usually takes none.
     pub decision_api_key: Option<Secret>,
     pub telnyx_api_key: Option<Secret>,
+    pub openai_api_key: Option<Secret>,
     pub llm_model: Option<String>,
     pub llm_model_plan: Option<String>,
     pub llm_model_read: Option<String>,
@@ -246,6 +252,7 @@ impl Default for Settings {
             decision_model: None,
             decision_api_key: None,
             telnyx_api_key: None,
+            openai_api_key: None,
             llm_model: None,
             llm_model_plan: None,
             llm_model_read: None,
@@ -282,7 +289,7 @@ const FORMERLY: [(&str, &str); 3] = [
 ];
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 33] = [
+const FIELDS: [(&str, &str); 34] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -293,6 +300,7 @@ const FIELDS: [(&str, &str); 33] = [
     ("decision_model", "fastbrowse_decision_model"),
     ("decision_api_key", "fastbrowse_decision_api_key"),
     ("TELNYX_API_KEY", "telnyx_api_key"),
+    ("OPENAI_API_KEY", "openai_api_key"),
     ("llm_model", "fastbrowse_llm_model"),
     ("llm_model_plan", "fastbrowse_llm_model_plan"),
     ("llm_model_read", "fastbrowse_llm_model_read"),
@@ -413,6 +421,7 @@ impl Settings {
             "decision_model" => self.decision_model = text(),
             "decision_api_key" => self.decision_api_key = secret(),
             "TELNYX_API_KEY" => self.telnyx_api_key = secret(),
+            "OPENAI_API_KEY" => self.openai_api_key = secret(),
             "llm_model" => self.llm_model = text(),
             "llm_model_plan" => self.llm_model_plan = text(),
             "llm_model_read" => self.llm_model_read = text(),
@@ -519,7 +528,7 @@ impl Settings {
             }
             DecisionSource::Gateway if set(&self.typesafe_api_key) => Some(DecisionSource::TypeSafe),
             DecisionSource::Gateway => set(&self.openrouter_api_key).then_some(DecisionSource::OpenRouter),
-            DecisionSource::Telnyx | DecisionSource::Ollama | DecisionSource::Custom => None,
+            DecisionSource::Telnyx | DecisionSource::Ollama | DecisionSource::Custom | DecisionSource::OpenAI => None,
         };
         (source, backup)
     }
@@ -596,6 +605,12 @@ impl Settings {
                 http.clone(),
                 &base_url(TELNYX_URL),
                 &model(TELNYX_MODEL),
+            )),
+            DecisionSource::OpenAI => Box::new(OpenAIDecisionsClient::new(
+                key(&self.openai_api_key, "set OPENAI_API_KEY for decisions via OpenAI")?,
+                http.clone(),
+                &base_url(OPENAI_URL),
+                &model(OPENAI_DECISIONS_MODEL),
             )),
             // Only this source's own key: a TypeSafe, OpenRouter or gateway key must never reach another host.
             DecisionSource::Ollama | DecisionSource::Custom => {
