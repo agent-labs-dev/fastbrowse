@@ -14,9 +14,9 @@ fastbrowse-core = { workspace = true }
 # so the SDK's suite runs against the addon as it runs against the binary.
 fastbrowse-cli = { workspace = true }
 # tokio_rt: a run is a future on napi's runtime, and its promise settles when the future does.
-napi = { version = "3", default-features = false, features = ["napi4", "tokio_rt"] }
-napi-derive = "3"
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+napi = { version = "3.15.0", default-features = false, features = ["napi4", "tokio_rt"] }
+napi-derive = "3.6.13"
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 
 [build-dependencies]
-napi-build = "2"
+napi-build = "2.6.0"
