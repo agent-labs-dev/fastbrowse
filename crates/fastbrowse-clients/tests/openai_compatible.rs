@@ -12,7 +12,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::{Script, Step, answering, reply, result_model, text};
+use common::{Model, Script, Step, answering, reply, result_model, text};
 use fastbrowse_clients::http::{Http, Response, TransportError};
 use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM};
 use fastbrowse_core::BoxFuture;
@@ -605,4 +605,35 @@ async fn test_trickling_response_is_bounded_by_attempt_deadline() {
     let error = script.http().post_json("https://provider.test", &json!({}), &[], 0.05).await.unwrap_err();
     assert_eq!(error, TransportError::Timeout("TimeoutError"));
     assert_eq!(script.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whole() {
+    // On 12 of 21 DeepSeek endpoints the decoder answered null for every optional object, so no read claim was cited.
+    let cite = ModelTy::frozen("Cite", vec![Field::required("first", Ty::Str), Field::required("last", Ty::Str)]).ty();
+    let tally =
+        ModelTy::frozen("Tally", vec![Field::required("span", cite.clone()), Field::required("prefix", Ty::Str)]).ty();
+    let claim = ModelTy::frozen(
+        "Claim",
+        vec![
+            Field::required("cite", Ty::optional(cite)).doc("The blocks the claim reads."),
+            Field::required("field", Ty::optional(tally)),
+        ],
+    )
+    .ty();
+    let reply = json!({"cite__first": "main/:5", "cite__last": "main/:6", "field__span__first": null,
+        "field__span__last": null, "field__prefix": null});
+    let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
+    let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Read, "deepseek/deepseek-v4.1-flash-1017");
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let result = llm.generate_value(LLMPurpose::Read, &[message], &Model(claim), 0, None).await.unwrap();
+    assert_eq!(result.data, json!({"cite": {"first": "main/:5", "last": "main/:6"}, "field": null}));
+    let body = &script.bodies()[0];
+    let schema = &body["response_format"]["json_schema"]["schema"];
+    let names: Vec<&String> = schema["properties"].as_object().unwrap().keys().collect();
+    assert_eq!(names, ["cite__first", "cite__last", "field__span__first", "field__span__last", "field__prefix"]);
+    assert_eq!(schema["required"], json!(names));
+    assert_eq!(schema["properties"]["cite__first"]["anyOf"][1], json!({"type": "null"}));
+    assert_eq!(schema["properties"]["cite__first"]["description"], "The blocks the claim reads.");
+    assert_eq!(body["temperature"], 0.0);
 }

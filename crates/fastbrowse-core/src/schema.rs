@@ -506,6 +506,165 @@ fn sort(value: Value, parent: Option<&str>) -> Value {
     }
 }
 
+/// Joins a flattened optional object's name to its field's: `cite__first`.
+const FLAT: &str = "__";
+
+/// Every `anyOf [object, null]` property as one nullable scalar per leaf field, `cite` as `cite__first` and
+/// `cite__last`, which [`nest_flat_objects`] folds back into the object.
+///
+/// Some providers' constrained decoders answer `null` for every optional object while optional scalars decode fine. On
+/// OpenRouter, 12 of 21 DeepSeek V4.1 Flash endpoints left every read claim uncited, so code rejected each one; with
+/// the cite flattened, the 6 of them tried again cited every claim.
+pub fn flat_optional_objects(schema: &Value) -> Value {
+    let defs = schema.get("$defs").cloned().unwrap_or(Value::Null);
+    flatten(schema, &defs)
+}
+
+fn flatten(node: &Value, defs: &Value) -> Value {
+    match node {
+        Value::Array(items) => Value::Array(items.iter().map(|item| flatten(item, defs)).collect()),
+        Value::Object(map) => {
+            let mut result = Map::new();
+            let mut renamed: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (key, value) in map {
+                let value = match value {
+                    // These map names to schemas, so a property called "anyOf" is a name, not a keyword.
+                    Value::Object(names) if key == "properties" || key == "$defs" => {
+                        let mut flat = Map::new();
+                        for (name, item) in names {
+                            match optional_object(item, defs).filter(|_| key == "properties") {
+                                Some(object) => {
+                                    let before = flat.len();
+                                    leaves(
+                                        name,
+                                        object,
+                                        item.get("description").and_then(Value::as_str).map(str::to_string),
+                                        defs,
+                                        &mut flat,
+                                    );
+                                    renamed.insert(name.clone(), flat.keys().skip(before).cloned().collect());
+                                }
+                                None => {
+                                    flat.insert(name.clone(), flatten(item, defs));
+                                }
+                            }
+                        }
+                        Value::Object(flat)
+                    }
+                    other => flatten(other, defs),
+                };
+                result.insert(key.clone(), value);
+            }
+            if let Some(Value::Array(required)) = result.get_mut("required") {
+                *required = required
+                    .iter()
+                    .flat_map(|name| match name.as_str().and_then(|name| renamed.get(name)) {
+                        Some(leaves) => leaves.iter().cloned().map(Value::from).collect(),
+                        None => vec![name.clone()],
+                    })
+                    .collect();
+            }
+            Value::Object(result)
+        }
+        other => other.clone(),
+    }
+}
+
+/// The object schema a property holds, through a `$ref` into `$defs`.
+fn object_schema<'a>(node: &'a Value, defs: &'a Value) -> Option<&'a Map<String, Value>> {
+    let node = match node.get("$ref").and_then(Value::as_str) {
+        Some(path) => defs.get(path.strip_prefix("#/$defs/")?)?,
+        None => node,
+    };
+    node.get("properties").and(node.as_object())
+}
+
+/// The object an `anyOf [object, null]` property holds when present.
+fn optional_object<'a>(node: &'a Value, defs: &'a Value) -> Option<&'a Map<String, Value>> {
+    let [first, second] = node.get("anyOf")?.as_array()?.as_slice() else { return None };
+    let is_null = |branch: &Value| branch.get("type").and_then(Value::as_str) == Some("null");
+    let present = if is_null(second) {
+        first
+    } else if is_null(first) {
+        second
+    } else {
+        return None;
+    };
+    object_schema(present, defs)
+}
+
+fn leaves(
+    prefix: &str,
+    object: &Map<String, Value>,
+    mut description: Option<String>,
+    defs: &Value,
+    flat: &mut Map<String, Value>,
+) {
+    let Some(Value::Object(fields)) = object.get("properties") else { return };
+    for (field, schema) in fields {
+        let name = format!("{prefix}{FLAT}{field}");
+        if let Some(inner) = object_schema(schema, defs).or_else(|| optional_object(schema, defs)) {
+            leaves(&name, inner, description.take(), defs, flat);
+            continue;
+        }
+        let Value::Object(mut leaf) = flatten(schema, defs) else {
+            flat.insert(name, schema.clone());
+            continue;
+        };
+        let own = leaf.remove("description").and_then(|d| d.as_str().map(str::to_string));
+        let nullable = leaf.get("anyOf").and_then(Value::as_array).is_some_and(|branches| {
+            branches.iter().any(|branch| branch.get("type").and_then(Value::as_str) == Some("null"))
+        });
+        let mut wrapped =
+            if nullable { leaf } else { Map::from_iter([("anyOf".to_string(), json!([leaf, {"type": "null"}]))]) };
+        let text = [description.take(), own].into_iter().flatten().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            wrapped.insert("description".into(), text.into());
+        }
+        flat.insert(name, Value::Object(wrapped));
+    }
+}
+
+/// The reply to a [`flat_optional_objects`] schema with each object folded back, and `null` where every leaf is.
+pub fn nest_flat_objects(value: Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.into_iter().map(nest_flat_objects).collect()),
+        Value::Object(map) => {
+            let mut result = Map::new();
+            let mut grouped: Vec<String> = Vec::new();
+            for (key, value) in map {
+                let Some((head, rest)) = key.split_once(FLAT) else {
+                    result.insert(key, nest_flat_objects(value));
+                    continue;
+                };
+                if !grouped.iter().any(|name| name == head) {
+                    grouped.push(head.to_string());
+                    result.insert(head.to_string(), Value::Object(Map::new()));
+                }
+                if let Some(Value::Object(fields)) = result.get_mut(head) {
+                    fields.insert(rest.to_string(), value);
+                }
+            }
+            for head in grouped {
+                if let Some(slot) = result.get_mut(&head) {
+                    let nested = nest_flat_objects(slot.take());
+                    *slot = if all_null(&nested) { Value::Null } else { nested };
+                }
+            }
+            Value::Object(result)
+        }
+        other => other,
+    }
+}
+
+fn all_null(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Object(fields) => fields.values().all(all_null),
+        _ => false,
+    }
+}
+
 /// Why a schema cannot go out as a strict one.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("a strict schema cannot hold a map with free keys; use a list of keyed entries")]
