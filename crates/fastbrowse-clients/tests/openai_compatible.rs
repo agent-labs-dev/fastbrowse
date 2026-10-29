@@ -545,8 +545,9 @@ async fn test_a_response_without_cost_or_receipt_is_bounded() {
 
 #[tokio::test(start_paused = true)]
 async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
-    // The gateway's endpoints payload as it serves one: a dearer priority tier on one endpoint, a peak multiplier on
-    // the other. The dearest is 0.000004 at peak against 0.0000045 on the priority tier.
+    // The gateway's endpoints payload as it serves one: a dearer priority tier on one endpoint, a peak multiplier and
+    // a dearer zone on the other. The dearest is the zone's 0.0000025 at peak, 0.000005, against 0.0000045 on the
+    // priority tier.
     let looked_up = Arc::new(Mutex::new(Vec::new()));
     let record = looked_up.clone();
     let http = answering(move |request| {
@@ -558,7 +559,10 @@ async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
                     {"context_length": 1000, "pricing": {"prompt": "0.0000003", "completion": "0.0000025", "request": "0",
                         "discount": 0, "service_tiers": {"priority": {"prompt": "0.00000054", "completion": "0.0000045"}}}},
                     {"context_length": 2000, "pricing": {"prompt": "0.0000005", "completion": "0.000002", "web_search": "0",
-                        "peak_pricing": {"multiplier": 2, "windows": [{"start_minute_utc": 60, "end_minute_utc": 240}]}}},
+                        "peak_pricing": {"multiplier": 2, "windows": [{"start_minute_utc": 60, "end_minute_utc": 240}]}},
+                        "inference_regions": [{"scope": "zone", "geo_region": "us",
+                            "pricing": {"prompt": "0.00000075", "completion": "0.0000025"}}]},
+                    {"context_length": 1000, "pricing": {"prompt": "0.0000001"}, "inference_regions": null},
                 ]}}),
             ));
         }
@@ -573,7 +577,7 @@ async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
     ledger.record([result.cost.clone()]).unwrap();
     assert_eq!(*looked_up.lock().unwrap(), ["/v1/models/google/writer/endpoints"]);
     assert_eq!(result.cost.basis, CostBasis::Bounded);
-    assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.0000045 * 1.05));
+    assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.000005 * 1.05));
     ledger.check(0.0).unwrap();
 }
 

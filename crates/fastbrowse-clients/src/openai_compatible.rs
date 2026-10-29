@@ -198,7 +198,8 @@ struct Ceiling {
 /// negative, as OpenRouter lists a price set per request: no ceiling holds for those.
 ///
 /// OpenRouter and the Vercel AI Gateway serve the same endpoints payload. The gateway also lists dearer token prices
-/// per `service_tiers` entry and a `peak_pricing.multiplier` for busy hours; the bound takes the dearest of them.
+/// per `service_tiers` entry, per `inference_regions` zone and a `peak_pricing.multiplier` for busy hours; the bound
+/// takes the dearest of them.
 fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
     let endpoints = match object_value(payload.get("data"))?.get("endpoints").and_then(Value::as_array) {
         Some(endpoints) if !endpoints.is_empty() => endpoints,
@@ -223,6 +224,11 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
                 key if PER_REQUEST_PRICES.contains(&key) => request += dollars(Some(value))?,
                 "image" => image = dollars(Some(value))?,
                 _ => token = token.max(dollars(Some(value))?),
+            }
+        }
+        for region in endpoint.get("inference_regions").and_then(Value::as_array).into_iter().flatten() {
+            for price in object_value(object_value(Some(region))?.get("pricing"))?.values() {
+                token = token.max(dollars(Some(price))?);
             }
         }
         found.per_token = found.per_token.max(token * peak);
