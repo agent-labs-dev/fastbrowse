@@ -157,7 +157,8 @@ impl DecisionClient for FailoverDecisionClient {
         Box::pin(self.evaluate_paid(state, questions))
     }
 
-    /// The primary's. Every default backup serves Jev as well, so it accepts what the primary does.
+    /// The primary's. Every default backup serves Jev as well; one with less context than the primary answers an
+    /// oversized request as too large, which the step answers with a smaller state.
     fn profile(&self) -> DecisionProfile {
         self.primary.profile()
     }

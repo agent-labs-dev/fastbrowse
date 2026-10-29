@@ -222,6 +222,38 @@ async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
     }
 }
 
+/// TypeSafe grants long context to a request carrying its header; OpenRouter and AIMLAPI document it as Jev's context
+/// on their routes, and the gateway lists 32,000, so its requests keep Jev's default limits.
+#[tokio::test]
+async fn test_jev_is_fitted_to_the_context_its_route_documents() {
+    // Settings, then the tokens a request may carry and whether it asks for long context.
+    type Case<'a> = (&'a [(&'a str, &'a str)], i64, bool);
+    let cases: [Case; 5] = [
+        (&[("TYPESAFE_API_KEY", "t")], 262_144, true),
+        (&[("OPENROUTER_API_KEY", "o")], 262_144, false),
+        (&[("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")], 262_144, false),
+        (
+            &[
+                ("FASTBROWSE_DECISION_SOURCE", "aimlapi"),
+                ("AIMLAPI_API_KEY", "m"),
+                ("FASTBROWSE_DECISION_MODEL", "liquid/d1"),
+            ],
+            32_000,
+            false,
+        ),
+        (&[("AI_GATEWAY_API_KEY", "g")], 32_000, false),
+    ];
+    for (env, context, header) in cases {
+        let answered = json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}});
+        let script = Script::new([common::reply(200, answered)]);
+        let jev = settings(env).decision(&script.http()).unwrap();
+        assert_eq!(jev.profile().max_largest_tokens, context, "{env:?}");
+        let _ = jev.evaluate(&json!("page"), &question()).await;
+        let sent = script.requests()[0].header("typesafe-danger-zone-long-context").map(str::to_string);
+        assert_eq!(sent.as_deref(), header.then_some("true"), "{env:?}");
+    }
+}
+
 #[tokio::test]
 async fn test_a_resellers_unmetered_call_is_an_unknown_cost_not_the_models_list_price() {
     let answered = json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 100}});
