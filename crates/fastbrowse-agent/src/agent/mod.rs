@@ -22,6 +22,7 @@ pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -925,6 +926,15 @@ impl Agent {
             recovery_memory: recovery_memory(state, self.config.stall.max_recoveries, |value| self.redact(value)),
             background: state.context.clone(),
             omitted_actions: 0,
+            problem: None,
+            withheld: Vec::new(),
+            no_value_fields: state
+                .missing
+                .iter()
+                .map(|(label, _)| label.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
         })
     }
 

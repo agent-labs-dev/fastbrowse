@@ -185,7 +185,8 @@ These are the things a change must not quietly break.
   refuses actions classified as irreversible without authorization. Code-selected pagination and authorized,
   confident actions skip classification. The classifier is not a guarantee against missed changes.
 - **An action that changed nothing is not progress.** An idle action from the same state goes to recovery
-  before a retry; rewriting a field's current value cannot count as progress even if the page changes.
+  before a retry, and recovery asks Jev again without it; rewriting a field's current value cannot count as
+  progress even if the page changes.
 
 ## Prompts and models
 

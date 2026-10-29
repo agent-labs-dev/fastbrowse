@@ -109,6 +109,9 @@ cancellation and finish their cleanup. Returning while a paid request still runs
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a run
 whose page has not changed for `unchanged_actions` steps goes to recovery, and recovery resets the count.
+Recovery asks Jev first: its state names what failed, and the action that changed nothing is left out of
+its options, which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
+`recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover.
 The same action taken a third time from the same page state does not count as a change.
 
 ## Run events and images
