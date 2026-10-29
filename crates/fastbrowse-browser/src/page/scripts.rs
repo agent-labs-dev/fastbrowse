@@ -40,13 +40,17 @@ pub const HIT_TEST_JS: &str = concat!(
     "const w = e.ownerDocument.defaultView, v = e.getBoundingClientRect(); ",
     "if (scroll && (v.top < 0 || v.left < 0 || v.bottom > w.innerHeight || v.right > w.innerWidth)) ",
     "e.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'}); ",
-    // A control's centre can be covered while its edges remain clickable. Bound the search on wrapped
-    // controls, and check each point through its frames so a parent overlay still prevents dispatch.
-    "const rects = [...e.getClientRects()].map(r => ({left: Math.max(0, r.left), top: Math.max(0, r.top), ",
-    "right: Math.min(w.innerWidth, r.right), bottom: Math.min(w.innerHeight, r.bottom)})) ",
-    ".filter(r => r.right > r.left && r.bottom > r.top).slice(0, 4); ",
-    "if (!rects.length) return null; ",
     "const labels = e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(e.type) ? [...e.labels] : []; ",
+    // A control's centre can be covered while its edges remain clickable. Bound the search on wrapped
+    // controls, and check each point through its frames so a parent overlay still prevents dispatch. A checkbox
+    // or radio is also pressed through its own labels, as a person presses it: a swatch's input is often a
+    // visually hidden 1px box whose only point lies on its wrapper, while its label is the swatch drawn beside it.
+    "const box = r => ({left: Math.max(0, r.left), top: Math.max(0, r.top), ",
+    "right: Math.min(w.innerWidth, r.right), bottom: Math.min(w.innerHeight, r.bottom)}); ",
+    "const drawn = r => r.right > r.left && r.bottom > r.top; ",
+    "const rects = [...[...e.getClientRects()].map(box).filter(drawn).slice(0, 4), ",
+    "...labels.flatMap(l => [...l.getClientRects()].map(box).filter(drawn).slice(0, 4))]; ",
+    "if (!rects.length) return null; ",
     "const ACTIVE = 'a[href],button,input,select,textarea,summary,[contenteditable]:not([contenteditable=false]),",
     "[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=option],",
     "[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],[role=combobox],[role=textbox],",
