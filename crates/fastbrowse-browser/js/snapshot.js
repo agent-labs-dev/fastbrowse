@@ -3,7 +3,7 @@
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); the Python side merges frames.
 // biome-ignore format: Python appends mode arguments to this parenthesized expression.
-((mode, allowedOrigins = null, limits = null) => {
+((mode, allowedOrigins = null) => {
   const granted = doc => {
     if (allowedOrigins === null) return true;
     const frame = doc.defaultView.frameElement;
@@ -1053,21 +1053,5 @@
     retarget_keys,
     inaccessible_frames: inaccessible,
   };
-  if (!limits) return result;
-  // Python keeps at most `limits.onscreen` of the controls on screen and `limits.offscreen` of those off it, each
-  // the first in this order, and any pager past either cap. A control past the caps is sent with only what decides
-  // whether it is a pager; Python asks for the rest of one it keeps, by this snapshot's token, from what is kept here.
-  const token = (registry.snapshots = (registry.snapshots || 0) + 1);
-  registry.sent = { token, rows: new Map(semantics.map(c => [c.id, [c, guards[c.id], retarget_keys[c.id]]])) };
-  let onscreen = 0,
-    offscreen = 0;
-  result.controls = semantics.map(c => {
-    if (c.offscreen ? offscreen++ < limits.offscreen : onscreen++ < limits.onscreen) return c;
-    delete result.guards[c.id];
-    delete result.retarget_keys[c.id];
-    const { id, role, label, operations, href, next_page } = c;
-    return { id, role, label, operations, href, next_page, offscreen: c.offscreen, partial: true };
-  });
-  result.token = token;
   return result;
 })

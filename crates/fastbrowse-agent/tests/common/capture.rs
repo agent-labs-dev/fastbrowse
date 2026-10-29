@@ -190,6 +190,10 @@ impl<'a> KeyedJev<'a> {
 }
 
 impl DecisionClient for KeyedJev<'_> {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'b>(
         &'b self,
         state: &'b Value,

@@ -62,75 +62,37 @@ impl Default for Thresholds {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ObservationLimits {
-    /// The browser's hard pool bound; late controls beyond it are still cut in DOM order.
-    #[serde(deserialize_with = "lax::int_gt0")]
-    pub max_controls: i64,
-    /// Long footers must leave most of the control budget for what is on screen.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub max_offscreen_controls: i64,
-    /// Jev's step sees at most this many controls; on a denser page a relevance filter picks which. Jev 1.13 loses
-    /// accuracy on large state full of irrelevant detail, and a DOM-order cut dropped the control a task needed.
-    #[serde(deserialize_with = "lax::int_gt0")]
-    pub max_offered_controls: i64,
-    /// Keep navigation's page excerpt small; the reader captures the whole page when it needs more.
-    #[serde(deserialize_with = "lax::int_gt0")]
-    pub viewport_text_chars: i64,
-    /// Navigation, field writing and recovery share a short memory; verdicts use the token budget instead.
-    #[serde(deserialize_with = "lax::int_gt0")]
-    pub working_notes_chars: i64,
-    /// Keep effects for six recent actions; older effects describe page states that have already changed.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub history_entries: i64,
-    /// Actions before the recent ones, shown without their effects. With only the last six, a form filled in eight
-    /// steps lost its first field from view, and Jev typed the origin again instead of searching.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub earlier_history_entries: i64,
     /// Thirty controls keep the second choice small when selection goes group -> element.
     #[serde(deserialize_with = "lax::int_gt1")]
     pub group_size: i64,
-    /// Leave headroom under Jev's 255-option ceiling for policy choices.
-    #[serde(deserialize_with = "choice_options")]
-    pub max_choice_options: i64,
-}
-
-fn choice_options<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
-    let value = lax::int_gt1(d)?;
-    if value > 255 {
-        return Err(serde::de::Error::custom("Input should be less than or equal to 255"));
-    }
-    Ok(value)
 }
 
 impl Default for ObservationLimits {
     fn default() -> Self {
-        ObservationLimits {
-            max_controls: 320,
-            max_offscreen_controls: 120,
-            max_offered_controls: 160,
-            viewport_text_chars: 6000,
-            working_notes_chars: 6000,
-            history_entries: 6,
-            earlier_history_entries: 14,
-            group_size: 30,
-            max_choice_options: 240,
-        }
+        ObservationLimits { group_size: 30 }
     }
 }
+
+/// Characters of a decision request's dense JSON counted as one token. Typesafe publishes no tokenizer, so a request's
+/// tokens are estimated from its length, and that estimate is the one uncertain number in fitting a request: dense JSON
+/// measured 1.84 characters a token, and pages vary, so a request is fitted at 1.5.
+pub const JSON_CHARS_PER_TOKEN: f64 = 1.5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TokenBudget {
-    /// Conservative target under Jev's 32k limit, since tokens are estimated locally.
+    /// Tokens a decision request may spend on its state and largest question: Jev's documented 32k, brought within
+    /// another model's limit by `DecisionProfile::fit`.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub state_plus_largest_question: i64,
-    /// Conservative target under Jev's 64k limit.
+    /// Tokens a decision request may spend on its state and every question: Jev's documented 64k.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub state_plus_all_questions: i64,
     /// Target for one request among many independent questions. The gateway sheds large requests with 503s (a 26k
     /// token request failed five of eight times, 4k never), so a batch is split small and sent in parallel.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub batch_tokens: i64,
-    /// Local estimate for prompt budgeting; Jev also has a separate dense JSON safety bound.
+    /// Local estimate for prose prompts; a decision request's dense JSON is counted at `JSON_CHARS_PER_TOKEN`.
     #[serde(deserialize_with = "lax::float_gt0")]
     pub chars_per_token: f64,
     /// The reader's output ceiling; 0 sends none, so a page of records and its verbatim quotes is never cut short.
@@ -144,8 +106,8 @@ pub struct TokenBudget {
 impl Default for TokenBudget {
     fn default() -> Self {
         TokenBudget {
-            state_plus_largest_question: 24_000,
-            state_plus_all_questions: 48_000,
+            state_plus_largest_question: 32_000,
+            state_plus_all_questions: 64_000,
             batch_tokens: 8000,
             chars_per_token: 3.0,
             // Zero means no ceiling: fastbrowse does not cap, truncate or crop an output token; the model's own
@@ -160,13 +122,9 @@ impl TokenBudget {
     /// Characters of state that fit beside `questions`, measured as Python measures them, in code points.
     pub fn input_chars<S: AsRef<str>>(&self, questions: &[S], jev: bool) -> i64 {
         let sizes: Vec<f64> = questions.iter().map(|q| text::len(q.as_ref()) as f64).collect();
-        let mut largest = self.state_plus_largest_question as f64 * self.chars_per_token;
-        let mut total = self.state_plus_all_questions as f64 * self.chars_per_token;
-        if jev {
-            // Dense JSON measured 1.84 characters per token, so the prose estimate admitted oversized requests.
-            largest = largest.min(48_000.0);
-            total = total.min(96_000.0);
-        }
+        let ratio = if jev { JSON_CHARS_PER_TOKEN } else { self.chars_per_token };
+        let largest = self.state_plus_largest_question as f64 * ratio;
+        let total = self.state_plus_all_questions as f64 * ratio;
         let biggest = sizes.iter().copied().fold(0.0_f64, f64::max);
         let room = (largest - biggest).min(total - crate::py::sum(sizes.iter().copied()));
         // `int()` truncates toward zero before the floor at zero.
@@ -247,9 +205,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_jev_budget_is_capped_for_dense_json() {
+    fn a_decision_request_is_counted_as_dense_json() {
         let tokens = TokenBudget::default();
-        assert_eq!(tokens.input_chars::<&str>(&[], false), 72_000);
+        assert_eq!(tokens.input_chars::<&str>(&[], false), 96_000);
         assert_eq!(tokens.input_chars::<&str>(&[], true), 48_000);
         assert_eq!(tokens.input_chars(&["abc", "\u{6771}\u{4eac}"], true), 47_997);
         assert_eq!(tokens.remaining_chars("x".repeat(50_000).as_str(), &["a"], true), 0);

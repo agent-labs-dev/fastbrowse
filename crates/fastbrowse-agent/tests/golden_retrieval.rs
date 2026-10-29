@@ -171,7 +171,7 @@ fn replay(case: &Value) -> Result<(), String> {
             json!({"result": retain_fields(answer, &previous, notes.as_ref().unwrap()).dump()})
         }
         "partial_answer" => {
-            json!({"result": partial_answer(notes.as_ref().unwrap(), args["max_chars"].as_i64().unwrap()).dump()})
+            json!({"result": partial_answer(notes.as_ref().unwrap()).dump()})
         }
         "draft_answer" => {
             let plan: Plan = parse(&args["plan"]);

@@ -13,7 +13,9 @@ use std::task::{Context, Poll, Waker};
 
 use fastbrowse_agent::AgentError;
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question, RetriesExhausted};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Question, RetriesExhausted,
+};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostComponent, CostLine, LLMPurpose, Limits};
 use fastbrowse_core::py::dump::Dump;
@@ -81,11 +83,20 @@ impl Script {
     }
 }
 
-pub struct ReplayJev(Script);
+pub struct ReplayJev(Script, DecisionProfile);
+
+/// Jev's profile, with the fewer options per choice a case sets to reach group questions with few controls.
+pub fn case_profile(case: &Value) -> DecisionProfile {
+    let mut profile = DecisionProfile::jev();
+    if let Some(options) = case["max_choice_options"].as_u64() {
+        profile.max_choice_options = options as usize;
+    }
+    profile
+}
 
 impl ReplayJev {
     pub fn new(case: &Value) -> ReplayJev {
-        ReplayJev(Script::new(case, "jev"))
+        ReplayJev(Script::new(case, "jev"), case_profile(case))
     }
 
     pub fn finish(&self) {
@@ -94,6 +105,10 @@ impl ReplayJev {
 }
 
 impl DecisionClient for ReplayJev {
+    fn profile(&self) -> DecisionProfile {
+        self.1.clone()
+    }
+
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,

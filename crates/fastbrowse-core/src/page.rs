@@ -21,6 +21,11 @@ pub fn cut_marker(omitted_chars: usize) -> String {
 /// `text` within `max_chars`, ending with how much was cut so a model knows the page goes on. Lengths are Python's,
 /// in code points; with `json_encoded` they are of the text as `json.dumps` writes it, quotes excluded.
 pub fn cut_text(text: &str, max_chars: usize, json_encoded: bool) -> String {
+    cut_with(text, max_chars, json_encoded, cut_marker)
+}
+
+/// [`cut_text`] ending with `marker`, which is told how many characters were left out.
+pub fn cut_with(text: &str, max_chars: usize, json_encoded: bool, marker: impl Fn(usize) -> String) -> String {
     // A JSON state escapes quotes and newlines; its budget must count those extra characters.
     let size = |value: &str| if json_encoded { dumped_len(value) } else { text::len(value) };
     if size(text) <= max_chars {
@@ -28,7 +33,7 @@ pub fn cut_text(text: &str, max_chars: usize, json_encoded: bool) -> String {
     }
     let bounds: Vec<usize> = text.char_indices().map(|(at, _)| at).chain([text.len()]).collect();
     let total = bounds.len() - 1;
-    let cut = |keep: usize| format!("{}{}", &text[..bounds[keep]], cut_marker(total - keep));
+    let cut = |keep: usize| format!("{}{}", &text[..bounds[keep]], marker(total - keep));
     let fits = |keep: usize| size(&cut(keep)) <= max_chars;
     // The longest prefix that fits with its marker. Escaping makes one character cost up to six, so an excess
     // measured in encoded characters cannot be subtracted from a count of source characters.

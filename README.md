@@ -336,8 +336,8 @@ scrolls to the quote; it may not resolve on a page that changes or needs a sessi
 
 No frame or screenshot is sent while a resolved secret may show on the page.
 
-`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; see
-[Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
+`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; a `jev` client is asked at
+Jev's limits and thresholds. See [Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
 
 ## Use it from JavaScript
 

@@ -1487,6 +1487,10 @@ mod tests {
     struct TableJev(Vec<(&'static str, f64)>);
 
     impl DecisionClient for TableJev {
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
+        }
+
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,

@@ -23,7 +23,7 @@ use serde_json::{Map, Value, json};
 use super::driving::{StepOptions, Watched, require};
 use super::helpers::{
     caller_link, code_decision, describe, dialog_question, lookup, misfit, navigation_question, next_value,
-    only_typed_since_read, read_exhausted, record, seen, unread, unread_transaction,
+    only_typed_since_read, read_exhausted, seen, unread, unread_transaction,
 };
 use super::reading::covered;
 use super::sign_in::shows_sign_in;
@@ -605,13 +605,9 @@ impl Agent {
                 "next_days": next_days,
             }),
         );
-        let recent: Vec<Value> =
-            record(&state.history, &self.config.observation).iter().map(Dump::dump_exclude_none).collect();
+        let recent: Vec<Value> = state.history.iter().map(Dump::dump_exclude_none).collect();
         context.insert("recent_actions".into(), Value::Array(recent));
-        context.insert(
-            "notes".into(),
-            state.notes.render_for_navigation(self.config.observation.working_notes_chars, true)?.into(),
-        );
+        context.insert("notes".into(), state.notes.render_for_navigation(true).into());
         Ok(context)
     }
 
@@ -843,7 +839,8 @@ impl Agent {
             [] => return Err(Stop::new(Status::Stuck, format!("no options to answer: {question}")).into()),
             _ => {}
         }
-        let shown = self.config.observation.max_choice_options.max(0) as usize;
+        // One Choice offers at most the options the decision model documents.
+        let shown = self.jev.profile().max_choice_options;
         let keys: IndexMap<String, String> =
             options.iter().take(shown).enumerate().map(|(i, option)| (i.to_string(), option.clone())).collect();
         let criteria: IndexMap<String, Value> =

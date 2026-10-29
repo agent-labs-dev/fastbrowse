@@ -97,6 +97,11 @@ pub struct HostJev {
 }
 
 impl DecisionClient for HostJev {
+    /// The host protocol names no model, so a host client is asked as Jev, at Jev's limits and thresholds.
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,

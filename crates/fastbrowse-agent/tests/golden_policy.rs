@@ -47,8 +47,9 @@ fn requests_are_built_as_python_builds_them() {
         let observation: Observation = parse(&case["observation"]);
         let context: StepContext = parse(&case["context"]);
         let config: Config = parse(&case["config"]);
-        let request =
-            build_request(&observation, &observation.controls, &context, &config, case["compact"].as_bool().unwrap());
+        let options = case_profile(case).max_choice_options;
+        let compact = case["compact"].as_bool().unwrap();
+        let request = build_request(&observation, &observation.controls, &context, &config, options, compact);
         assert_eq!(write(&request.state, Style::HTTPX), case["state"].as_str().unwrap());
         let questions: Map<String, Value> = request.questions.iter().map(|(k, q)| (k.clone(), q.dump())).collect();
         assert_eq!(write(&Value::Object(questions), Style::HTTPX), case["questions"].as_str().unwrap());

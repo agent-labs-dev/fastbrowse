@@ -18,7 +18,7 @@ use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_browser::testing;
-use fastbrowse_core::config::{Config, ObservationLimits};
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BlockKind, Capture, Control, Observation};
 use serde_json::{Value, json};
@@ -842,37 +842,20 @@ async fn test_fill_fails_when_another_field_holds_the_text_we_could_not_insert()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_observation_limits_can_exceed_old_javascript_caps() {
+async fn test_an_observation_keeps_every_control_and_the_whole_viewport_text() {
     let _gate = gate().await;
     let Some(h) = loaded().await else { return };
     eval_active(
         &h,
         "document.body.replaceChildren(); const text = document.createElement('div'); text.textContent = \
-         'x'.repeat(8000); document.body.append(text); for (let i = 0; i < 60; i++) { const b = \
+         'x'.repeat(8000); document.body.append(text); for (let i = 0; i < 400; i++) { const b = \
          document.createElement('button'); b.textContent = 'Button ' + i; b.style.cssText = \
          'position:absolute;left:20px;top:' + (10000+i*40) + 'px'; document.body.append(b); }",
     )
     .await;
-    let default = h.observe().await;
-    assert!(default.controls.len() == 60 && default.omitted_controls == 0);
-    assert_eq!(
-        default.viewport_text,
-        format!("{}\n[Viewport text cut: 2000 characters omitted; read the page for the rest]", "x".repeat(6000))
-    );
-
-    let limits = ObservationLimits {
-        max_controls: 100,
-        max_offscreen_controls: 55,
-        viewport_text_chars: 7500,
-        ..Default::default()
-    };
-    let page = CdpPage::new(h.session.clone(), Config { observation: limits, ..Config::default() });
-    let expanded = page.observe().await.expect("observe");
-    assert!(expanded.controls.len() == 55 && expanded.omitted_controls == 5);
-    assert_eq!(
-        expanded.viewport_text,
-        format!("{}\n[Viewport text cut: 500 characters omitted; read the page for the rest]", "x".repeat(7500))
-    );
+    let observation = h.observe().await;
+    assert!(observation.controls.len() == 400 && observation.omitted_controls == 0);
+    assert_eq!(observation.viewport_text, "x".repeat(8000));
     h.close().await;
 }
 
