@@ -1711,3 +1711,27 @@ async fn test_a_run_that_stops_before_its_plan_arrives_keeps_the_plans_receipt_a
     assert!(!result.cost.has_unknown(), "{:?}", result.cost);
     assert_eq!(result.cost.known_dollars(), 0.01);
 }
+
+#[tokio::test]
+async fn a_task_cancelled_before_it_began_never_runs() {
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = ran.clone();
+    let task = Spawned::<()>::spawn(async move {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    });
+    assert!(task.cancel_unstarted());
+    assert!(task.wait().await.is_none());
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn a_task_already_begun_is_joined_not_cancelled() {
+    let task = Spawned::spawn(async {
+        tokio::task::yield_now().await;
+        Ok(7)
+    });
+    tokio::task::yield_now().await;
+    assert!(!task.cancel_unstarted());
+    assert_eq!(task.wait().await.and_then(Result::ok), Some(7));
+}
