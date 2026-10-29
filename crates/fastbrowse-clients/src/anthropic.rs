@@ -110,7 +110,12 @@ pub(crate) fn body(
     }
     let mut body = extra.clone();
     body.insert("model".into(), model.into());
-    body.insert("max_tokens".into(), max_output_tokens.into());
+    // Zero is the caller saying no ceiling; the provider's own default applies. fastbrowse never caps output tokens.
+    if max_output_tokens > 0 {
+        body.insert("max_tokens".into(), max_output_tokens.into());
+    } else {
+        body.remove("max_tokens");
+    }
     if !system.is_empty() {
         body.insert("system".into(), system.join("\n\n").into());
     }
