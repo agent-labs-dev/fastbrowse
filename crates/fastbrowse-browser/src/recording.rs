@@ -473,6 +473,7 @@ fn describe(step: &StepResult) -> String {
     let by = match step.decided_by {
         Decider::Jev => "picked by Jev",
         Decider::Llm => "picked by the LLM",
+        Decider::Code => "picked by code",
     };
     match step.operation {
         Operation::Read => format!("read the page \u{b7} {by}"),
@@ -568,5 +569,8 @@ mod tests {
             duration_ms: 10,
         };
         assert_eq!(describe(&step), "switch tab Docs \u{b7} picked by Jev");
+        let paged =
+            StepResult { operation: Operation::Click, decided_by: Decider::Code, target: Some("Next".into()), ..step };
+        assert_eq!(describe(&paged), "click Next \u{b7} picked by code");
     }
 }

@@ -450,7 +450,7 @@ impl Agent {
                         let step = StepResult {
                             index: state.steps.len() as i64,
                             operation: Operation::Read,
-                            decided_by: Decider::Llm,
+                            decided_by: Decider::Code,
                             outcome: StepOutcome::Failed,
                             url: page.capture.url.clone(),
                             target: None,
@@ -485,7 +485,7 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: Operation::Read,
-            decided_by: Decider::Llm,
+            decided_by: Decider::Code,
             outcome: StepOutcome::Executed,
             url: page.capture.url.clone(),
             target: None,
@@ -551,7 +551,7 @@ impl Agent {
                 state.paged_from = Some(state_key(&observation));
                 before_click = state.steps.len();
                 let options = StepOptions { gate: false, follow_pager: true, ..StepOptions::default() };
-                self.step(state, &observation, &code_decision(Operation::Click, Some(next)), Decider::Llm, options)
+                self.step(state, &observation, &code_decision(Operation::Click, Some(next)), Decider::Code, options)
                     .await?;
                 if state.steps.len() == before_click
                     || state
@@ -662,7 +662,7 @@ impl Agent {
                             label,
                             None,
                             None,
-                            Decider::Llm,
+                            Decider::Code,
                         )
                         .await?;
                     }
@@ -726,7 +726,7 @@ impl Agent {
                     state,
                     &observation,
                     &code_decision(Operation::Read, None),
-                    Decider::Llm,
+                    Decider::Code,
                     options,
                 ))
                 .await
@@ -754,7 +754,7 @@ impl Agent {
                             None,
                             None,
                             None,
-                            Decider::Llm,
+                            Decider::Code,
                         )
                         .await?;
                     }

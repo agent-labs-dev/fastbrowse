@@ -290,10 +290,11 @@
       "type": "object"
     },
     "Decider": {
-      "description": "The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\nreader's, because the reader asked for the rest of the list.",
+      "description": "Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the\nnext page of a list or DONE once a lookup is answered.",
       "enum": [
         "jev",
-        "llm"
+        "llm",
+        "code"
       ],
       "title": "Decider",
       "type": "string"

@@ -11,8 +11,8 @@ use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::effects::step_key;
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, Evidence, FactReader, Limits, Operation, Status,
-    StepOutcome,
+    Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Evidence, FactReader, Limits, Operation,
+    Status, StepOutcome,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
@@ -1448,7 +1448,8 @@ async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
             ..super::helpers::code_decision(Operation::Click, Some(finish.clone()))
         };
         let question = irreversible_question(&state.task, Operation::Click, &finish, None);
-        let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, false).await;
+        let gated =
+            agent.gate_question(&mut state, &observation, &decision, Decider::Jev, "Finish", question, false).await;
         assert_eq!(gated.is_ok(), acts, "requested {requested}");
     }
 }

@@ -86,7 +86,7 @@ impl Agent {
                 let directed = state.directed.take();
                 if let Some((Operation::Navigate, url)) = directed {
                     let decision = Decision { url, directed: true, ..code_decision(Operation::Navigate, None) };
-                    match Box::pin(self.step(state, &observation, &decision, Decider::Llm, StepOptions::default()))
+                    match Box::pin(self.step(state, &observation, &decision, Decider::Code, StepOptions::default()))
                         .await
                     {
                         Err(Flow::Unsure(unsure)) => {
@@ -100,7 +100,7 @@ impl Agent {
                 } else {
                     state.section_read = false;
                     let read = code_decision(Operation::Read, None);
-                    Box::pin(self.step(state, &observation, &read, Decider::Llm, StepOptions::default())).await?;
+                    Box::pin(self.step(state, &observation, &read, Decider::Code, StepOptions::default())).await?;
                     if !state.section_read && state.directed.is_none() && state.oversized_answer {
                         state.directed = Some((Operation::Done, None));
                     }
@@ -155,7 +155,7 @@ impl Agent {
             let usable = without_failed_links(state, &observation);
             if let Some(decision) = paging(state, &usable) {
                 let options = StepOptions { gate: false, ..StepOptions::default() };
-                if Box::pin(self.step(state, &observation, &decision, Decider::Llm, options)).await? {
+                if Box::pin(self.step(state, &observation, &decision, Decider::Code, options)).await? {
                     let reason = read_exhausted(state);
                     Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                 }
@@ -199,6 +199,7 @@ impl Agent {
             };
             // Only an answered decision has asked the page's sign-in and bot questions; a dropped one asked nothing.
             state.last_page = Some(page);
+            let mut decided_by = Decider::Jev;
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
             if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
@@ -237,17 +238,17 @@ impl Agent {
                     state.passed_wall = Some(raw.url.clone());
                     // A task inspecting an access boundary needs its observed wall read and verified, not passed.
                     decision = code_decision(Operation::Read, None);
+                    decided_by = Decider::Code;
                 }
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
-            let mut decided_by = Decider::Jev;
             if !state.open_answer_outputs.is_empty() || uncertain || !not_acting(decision.operation) {
                 let usable = without_failed_links(state, &observation);
                 if let Some(directed) = follow_recovery(state, &usable, &decision, uncertain) {
                     (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
                 }
             }
-            if Box::pin(self.read_before_interaction(state, &observation, &decision, decided_by)).await? {
+            if Box::pin(self.read_before_interaction(state, &observation, &decision)).await? {
                 let done = state.ready_plan.as_ref().is_some_and(|plan| {
                     lookup(plan) && state.open_answer_outputs.is_empty() && answered(plan, &state.notes)
                 });
@@ -256,7 +257,7 @@ impl Agent {
                 }
                 // The read answered a lookup, and deciding again on the same page only arrived at DONE: a shortlist and
                 // a decision, 1 to 2s, in 11 of 138 0.5.7 runs. `finish` still judges whether DONE holds.
-                (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Llm);
+                (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Code);
             }
             let pager = decision.operation == Operation::Click
                 && decision.target.as_ref().is_some_and(fastbrowse_core::page::pager_link);
@@ -274,12 +275,12 @@ impl Agent {
                 {
                     // Everything asked to be found is evidenced, so another page is wandering. DONE is judged again by
                     // `finish`, which carries on if it does not hold.
-                    (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Llm);
+                    (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Code);
                 } else if pager && !state.read_here && unread(plan, &state.notes) {
                     // Turning the page of a list nobody has read loses that page. Read here first, which also tells
                     // code whether the list goes on.
                     decision = Decision { operation: Operation::Read, target: None, ..decision };
-                    uncertain = false;
+                    (uncertain, decided_by) = (false, Decider::Code);
                 }
             }
             if uncertain && state.ready_plan.is_none() {
@@ -319,7 +320,9 @@ impl Agent {
                     let held = state.directed.take();
                     let recoveries = state.recoveries;
                     let options = StepOptions { capture, ..StepOptions::default() };
-                    if !Box::pin(self.step(state, &observation, &reading, decided_by, options)).await? {
+                    // A DONE that still owes a read is read by rule; a READ is its decider's.
+                    let by = if decision.operation == Operation::Read { decided_by } else { Decider::Code };
+                    if !Box::pin(self.step(state, &observation, &reading, by, options)).await? {
                         if !(lookup(&plan)
                             && state.open_answer_outputs.is_empty()
                             && answered(&plan, &state.notes)
@@ -691,7 +694,7 @@ impl Agent {
                 None => {
                     let redecided = state.redecided;
                     let target = decision.target.as_ref().map(|target| target.id.clone());
-                    let building = self.action(state, observation, decision, options.gate);
+                    let building = self.action(state, observation, decision, decided_by, options.gate);
                     match self.unless_redrawn(redecided, building, observation, target.as_deref()).await? {
                         Watched::Done(action) => action,
                         Watched::Redrawn => {
