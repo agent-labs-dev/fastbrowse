@@ -94,7 +94,9 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | go/*_test.go | test |
 | java/src/main except protocol/ | production |
 | java/src/test/ | test |
-| packages/sdk/src/protocol.ts, protocol/schema.json, go/protocol.go, java/src/main/java/dev/agentlabs/fastbrowse/protocol/ | generated |
+| dotnet/src/ except Protocol.g.cs | production |
+| dotnet/tests/ | test |
+| packages/sdk/src/protocol.ts, protocol/schema.json, go/protocol.go, java/src/main/java/dev/agentlabs/fastbrowse/protocol/, dotnet/src/Fastbrowse/Protocol.g.cs | generated |
 | scripts/ | script |
 | tests/ Python, benchmarks/ Python | test |
 | tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/ | fixture |

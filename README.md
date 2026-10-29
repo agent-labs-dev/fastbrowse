@@ -616,6 +616,24 @@ try (Fastbrowse fastbrowse = Fastbrowse.start()) {
 stops the run. `RunOptions` takes the same options as the SDK: `outputSchema`, `secrets`, `until`, `onEvent` and
 `onFrame`. One client runs one task at a time.
 
+## Use it from .NET
+
+The [.NET client](dotnet) is `Fastbrowse` on NuGet, carrying the binary for each platform. .NET 10 or newer:
+
+```sh
+dotnet add package Fastbrowse
+```
+
+```csharp
+await using var fastbrowse = await FastbrowseClient.StartAsync();
+RunResult result = await fastbrowse.RunAsync("What is the top story's title?",
+    new RunOptions { Start = "https://news.ycombinator.com/" });
+```
+
+Cancelling the `CancellationToken` stops a run, and `RunAsync` throws once its browser has closed. `RunOptions` takes
+the same options as the SDK: `OutputSchema`, `Secrets` with `ResolveSecret`, `Until`, `OnEvent` and `OnFrame`. One
+client runs one task at a time.
+
 ## Use fastbrowse with your agent
 
 Install the [fastbrowse skill](docs/skill.md) to delegate website tasks from an agent that supports Agent Skills. It uses the MCP

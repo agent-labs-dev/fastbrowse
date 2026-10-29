@@ -21,6 +21,9 @@ node_modules/
 # Cargo output and the locally built Node addon.
 /target/
 /java/target/
+/dotnet/runtimes/
+/dotnet/**/bin/
+/dotnet/**/obj/
 crates/fastbrowse-node/*.node
 
 # The Rust core an editable install builds into the package.
