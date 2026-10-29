@@ -9,7 +9,8 @@
 //! automatic failover. Each FASTBROWSE_DECISION_ variable is still read under its former FASTBROWSE_JEV_ name.
 //!
 //! LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
-//! Gateway's OpenAI-compatible chat completions. FASTBROWSE_LLM_BASE_URL points the LLM at any other OpenAI-compatible
+//! Gateway's OpenAI-compatible chat completions, and when both are set the gateway takes over a run whose OpenRouter
+//! key is refused. FASTBROWSE_LLM_BASE_URL points the LLM at any other OpenAI-compatible
 //! chat completions endpoint (for example a local vLLM server) instead, and FASTBROWSE_LLM_API_KEY supplies its bearer
 //! token when it has one; that endpoint never receives the OpenRouter or gateway key. FASTBROWSE_LLM_STRICT and
 //! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only. FASTBROWSE_LLM_MODEL overrides every purpose at
@@ -36,7 +37,7 @@ use fastbrowse_core::py::lax::bool_of;
 use serde_json::{Map, Value};
 
 use crate::anthropic::AnthropicLLM;
-use crate::failover::FailoverDecisionClient;
+use crate::failover::{FailoverDecisionClient, FailoverLLMClient};
 use crate::http::Http;
 use crate::openai_compatible::{
     LLMOptions, OpenAICompatibleLLM, ReasoningEffort, ReasoningField, Wire, gateway_provider_routing,
@@ -848,6 +849,26 @@ impl Settings {
             },
             provider => return self.preset_llm(provider.preset(), http),
         };
+        let primary = self.routed_llm(key, base_url, routing, http)?;
+        // Chosen only because its key is set, OpenRouter falls back to a gateway key set beside it.
+        let gateway = self.ai_gateway_api_key.as_ref().filter(|key| key.is_set());
+        match (source, self.llm_provider, gateway) {
+            (LLMProvider::OpenRouter, None, Some(gateway)) => Ok(Box::new(FailoverLLMClient::new(
+                primary,
+                self.routed_llm(gateway, LLM_GATEWAY_URL, gateway_provider_routing(), http)?,
+                http.clone(),
+            ))),
+            _ => Ok(primary),
+        }
+    }
+
+    fn routed_llm(
+        &self,
+        key: &Secret,
+        base_url: &str,
+        routing: Value,
+        http: &Http,
+    ) -> Result<Box<dyn LLMClient>, ConfigurationError> {
         let options = LLMOptions {
             reasoning_effort: Some(self.llm_reasoning),
             purpose_reasoning: self.purpose_reasoning(),

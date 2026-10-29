@@ -134,6 +134,22 @@ pub fn irreversible_question(
     )
 }
 
+/// Whether the task itself asks for this commit, asked beside [`irreversible_question`] when the run is authorized.
+///
+/// Told "Finish the order", Jev picked Finish at 0.86, under `sensitive_act_from`, and the refusal cost a 4.5s LLM
+/// recovery that only read the task back. Jev agreeing the task names the action is that second opinion.
+pub fn requested_question(task: &str, operation: Operation, control: &Control) -> NoulQuestion {
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\nThe agent is doing this task: {task}\nIt is about to {operation} the element labelled {}. Does \
+             the task itself tell the agent to take this exact action, not merely allow it or lead up to it?",
+            text::repr(&control.label)
+        ),
+        Some("The task names this action as one the user wants done now."),
+        Some("The task does not ask for it, asks for something else, or says not to."),
+    )
+}
+
 // File types a browser saves rather than shows. Chrome renders a page, an image or a PDF; an archive, an installer, a
 // disk image or a spreadsheet goes to the downloads folder whatever the link that leads to it says.
 const DOWNLOADED_SUFFIXES: &[&str] = &[

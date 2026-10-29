@@ -2885,8 +2885,8 @@
   "results": [
    {
     "error": {
-     "type": "LLMError",
-     "message": "LLM HTTP 401 auth: bad key [api key]"
+     "type": "LLMRejected",
+     "message": "LLM HTTP 401 auth: bad key [api key] (openrouter.ai rejected the API key)"
     }
    }
   ],

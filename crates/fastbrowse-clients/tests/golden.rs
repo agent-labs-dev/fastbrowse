@@ -145,6 +145,7 @@ fn llm_error(error: &LLMError) -> Value {
     let kind = match error {
         LLMError::Failed(_) => "LLMError",
         LLMError::RetriesExhausted(_) => "LLMRetriesExhausted",
+        LLMError::Rejected(_) => "LLMRejected",
         LLMError::Budget(_) => "BudgetExceeded",
     };
     json!({"error": {"type": kind, "message": normalized(&error.to_string())}})

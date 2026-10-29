@@ -13,7 +13,7 @@ use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_credentials, downloads_question, irreversible_question, may_be_irreversible,
-    resolve_secret, reversible_toggle, sets_new_password, starts_download,
+    requested_question, resolve_secret, reversible_toggle, sets_new_password, starts_download,
 };
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
@@ -348,24 +348,36 @@ impl Agent {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
             // Only the address goes with the question: the page's own text is what would argue a harmful action is
             // harmless, and the control's label and form are already in the question.
-            let questions = IndexMap::from([("irreversible".to_string(), Question::Noul(question))]);
+            let mut questions = IndexMap::from([("irreversible".to_string(), Question::Noul(question))]);
+            // Asked in the same call, so an authorized run whose task names the action pays no recovery for it.
+            if let Some(target) = decision.target.as_ref().filter(|_| authorized && !decision.directed) {
+                let requested = requested_question(&state.task, decision.operation, target);
+                questions.insert("requested".to_string(), Question::Noul(requested));
+            }
             let evaluation = self
                 .jev
                 .evaluate(&json!({"page": {"url": observation.url, "title": observation.title}}), &questions)
                 .await?;
             state.ledger.record([evaluation.cost.clone()])?;
-            let probability = match evaluation.answers.get("irreversible") {
+            let noul = |key: &str| match evaluation.answers.get(key) {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
                 _ => None,
             };
+            let (probability, requested) = (noul("irreversible"), noul("requested"));
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
                     ("context".into(), json!(decision.target.as_ref().and_then(|t| t.context.clone()))),
                     ("probability".into(), json!(probability)),
+                    ("requested".into(), json!(requested)),
                 ])
             });
             if probability.is_some_and(|p| p <= thresholds.irreversible_above) {
+                return Ok(());
+            }
+            if requested.is_some_and(|p| p >= thresholds.sensitive_act_from)
+                && decision.confidence() >= thresholds.recover_below
+            {
                 return Ok(());
             }
         }
@@ -546,14 +558,18 @@ impl Agent {
     ) -> Step<Map<String, Value>> {
         // Adapted from browser-use/jev-ultrafast (MIT), model.py:field_context. A popup's field can have a generic
         // label; the opening action and surrounding values explain its purpose.
-        let plan = state.await_plan().await?;
+        // The plan is taken once it has arrived, never waited for: a sign-in's first fill comes before it, and waiting
+        // left the browser idle for the whole plan call, 33s on a planner that timed out once.
+        let plan = if state.planning.done() { Some(state.await_plan().await?) } else { state.ready_plan.clone() };
         let mut context = Map::new();
         context.insert("task".into(), state.task.clone().into());
         // Given only the task, the writer typed "enter X, later correct it to Y" as Y on the first pass every time; in
         // order, it typed X first and Y after going back.
-        context.insert("requirements".into(), json!(plan.requirements.iter().map(|r| &r.text).collect::<Vec<_>>()));
-        let unresolved: Vec<String> = state.notes.unresolved(&plan).into_iter().map(|r| r.text).collect();
-        context.insert("unresolved_requirements".into(), json!(unresolved));
+        if let Some(plan) = &plan {
+            context.insert("requirements".into(), json!(plan.requirements.iter().map(|r| &r.text).collect::<Vec<_>>()));
+            let unresolved: Vec<String> = state.notes.unresolved(plan).into_iter().map(|r| r.text).collect();
+            context.insert("unresolved_requirements".into(), json!(unresolved));
+        }
         if !state.open_answer_outputs.is_empty() {
             context.insert("unverified_outputs".into(), json!(state.open_answer_outputs));
         }

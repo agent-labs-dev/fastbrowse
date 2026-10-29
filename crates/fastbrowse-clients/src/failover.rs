@@ -1,4 +1,5 @@
-//! Port of `clients/failover.py`: keep a run on its backup after the chosen Jev provider exhausts its retries.
+//! Port of `clients/failover.py`: keep a run on its backup after the chosen Jev provider exhausts its retries, or the
+//! LLM's provider refuses its key.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -6,6 +7,9 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     DecisionClient, DecisionError, DecisionProfile, Evaluation, Question, RetriesExhausted,
 };
+use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
+use fastbrowse_core::models::LLMPurpose;
+use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
@@ -147,5 +151,55 @@ impl DecisionClient for FailoverDecisionClient {
     /// The primary's. Every default backup serves Jev as well, so it accepts what the primary does.
     fn profile(&self) -> DecisionProfile {
         self.primary.profile()
+    }
+}
+
+/// The LLM on its backup provider for the rest of a run once the primary refuses its key.
+///
+/// A revoked OPENROUTER_API_KEY failed every run at its first call even with a working AI_GATEWAY_API_KEY beside it,
+/// which serves the same models. A refused key is the one failure a retry cannot fix, so only it switches.
+pub struct FailoverLLMClient {
+    primary: Box<dyn LLMClient>,
+    backup: Box<dyn LLMClient>,
+    on_backup: AtomicBool,
+    http: Http,
+}
+
+impl FailoverLLMClient {
+    /// `primary` is OpenRouter's and `backup` the gateway's, the one pair whose keys serve the same models.
+    pub fn new(primary: Box<dyn LLMClient>, backup: Box<dyn LLMClient>, http: Http) -> FailoverLLMClient {
+        FailoverLLMClient { primary, backup, on_backup: AtomicBool::new(false), http }
+    }
+}
+
+impl LLMClient for FailoverLLMClient {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        max_output_tokens: i64,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        Box::pin(async move {
+            if !self.on_backup.load(Ordering::SeqCst) {
+                match self.primary.generate_value(purpose, messages, schema, max_output_tokens, ledger).await {
+                    Err(LLMError::Rejected(reason)) => {
+                        // Calls already in flight may fail together; storing the same flag again cannot flap.
+                        self.on_backup.store(true, Ordering::SeqCst);
+                        log::warn!(
+                            "llm: OPENROUTER_API_KEY was refused ({reason}); moving this run to AI_GATEWAY_API_KEY"
+                        );
+                        self.http.trace.event("llm_failover", || {
+                            let mut fields = Map::new();
+                            fields.insert("reason".into(), reason.clone().into());
+                            fields
+                        });
+                    }
+                    other => return other,
+                }
+            }
+            self.backup.generate_value(purpose, messages, schema, max_output_tokens, ledger).await
+        })
     }
 }

@@ -413,3 +413,29 @@ async fn test_an_error_that_echoes_a_key_outside_the_authorization_header_is_scr
         .to_string();
     assert!(!error.contains("azure-secret") && error.contains("[api key]"), "{error}");
 }
+
+#[tokio::test]
+async fn a_refused_openrouter_key_moves_the_run_to_the_gateway_key_beside_it() {
+    let refused = || Step::Reply(Response::json(401, &json!({"error": {"message": "User not found."}})));
+    let env = [("OPENROUTER_API_KEY", "openrouter-secret"), ("AI_GATEWAY_API_KEY", "gateway-secret")];
+    let script = Script::new(vec![
+        refused(),
+        completion(r#"{"answer":"ok"}"#, "stop"),
+        completion(r#"{"answer":"ok"}"#, "stop"),
+    ]);
+    let llm = settings(&env).llm(&script.http()).unwrap();
+    for _ in 0..2 {
+        let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await;
+        assert_eq!(result.unwrap().data, json!({"answer": "ok"}));
+    }
+    let hosts: Vec<String> =
+        script.requests().iter().map(|r| url::Url::parse(&r.url).unwrap().host_str().unwrap().to_string()).collect();
+    // The switch holds for the rest of the run: the second call goes straight to the gateway.
+    assert_eq!(hosts, ["openrouter.ai", "ai-gateway.vercel.sh", "ai-gateway.vercel.sh"]);
+
+    // Without a gateway key the refusal names the host that refused it.
+    let script = Script::new(vec![refused()]);
+    let llm = settings(&env[..1]).llm(&script.http()).unwrap();
+    let error = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await;
+    assert_eq!(error.unwrap_err().to_string(), "LLM HTTP 401: User not found. (openrouter.ai rejected the API key)");
+}
