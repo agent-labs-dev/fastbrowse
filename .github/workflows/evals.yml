@@ -104,6 +104,26 @@ jobs:
           uv run python -m fastbrowse.evals.publication \
             --rows artifacts/evals/nightly.jsonl \
             --baseline docs/results
+      - name: Check the eval tracking credentials
+        # The upload is how a run stays reviewable after this job's artifact expires, and the two secrets are the
+        # whole configuration: the host and the project are constants, so a key issued for another project is
+        # refused rather than written to. Naming the missing secret fails the job on the line that fixes it.
+        if: always() && steps.fixtures.outcome != 'skipped'
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          test -n "$LANGFUSE_PUBLIC_KEY" || { echo "the LANGFUSE_PUBLIC_KEY repository secret is not set"; exit 1; }
+          test -n "$LANGFUSE_SECRET_KEY" || { echo "the LANGFUSE_SECRET_KEY repository secret is not set"; exit 1; }
+      - name: Publish the fixture run to Langfuse
+        # One trace per attempt, named for the build and released under the campaign it came from, so a number
+        # here traces back to the commit that produced it. The step reads every trace back before it passes;
+        # `publication` above still decides what, if anything, may be published as a figure.
+        if: always() && steps.fixtures.outcome != 'skipped'
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: uv run python -m fastbrowse.evals.tracking --rows artifacts/evals/nightly.jsonl
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
