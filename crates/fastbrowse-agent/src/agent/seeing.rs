@@ -2,7 +2,7 @@
 
 use fastbrowse_core::decision::{Answer, BoxQuestion, DecisionError, Images, NoulQuestion, Question};
 use fastbrowse_core::models::{CostComponent, UNTRUSTED};
-use fastbrowse_core::page::{ActResult, Control};
+use fastbrowse_core::page::{ActResult, Control, Observation};
 use indexmap::IndexMap;
 use serde_json::{Map, json};
 
@@ -17,8 +17,14 @@ const WHERE: &str = "The control described in `control`, in `viewport_screenshot
 impl Agent {
     /// The hit test refused the click: another element is topmost at every point it tried. Jev, shown the viewport,
     /// says whether the control is plainly there to press and where, and the click lands at the centre of its box when
-    /// both answers reach the bar an action's target is held to. None leaves the click refused.
-    pub(super) async fn click_where_seen(&self, state: &mut RunState, target: &Control) -> Step<Option<ActResult>> {
+    /// both answers reach the bar an action's target is held to, and the page is still the one `observation` and the
+    /// screenshot show. None leaves the click refused.
+    pub(super) async fn click_where_seen(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        target: &Control,
+    ) -> Step<Option<ActResult>> {
         let Some(png) = self.viewport().await? else { return Ok(None) };
         let reference = screenshot_reference(&png);
         let seen = json!({"task": state.task, "control": element(target, false), "viewport_screenshot": reference});
@@ -55,6 +61,13 @@ impl Agent {
         };
         let bar = self.config.thresholds.recover_below;
         if shown.probability < bar || found.confidence.is_some_and(|confidence| confidence < bar) {
+            return Ok(None);
+        }
+        // The box is a point in the screenshot's page: on another document, tab or redrawn control it presses whatever
+        // is there now, which the gate on this target never authorized.
+        if self.page.document_changed(observation).await?
+            || self.page.redrawn(observation, 0.0, Some(&target.id)).await?
+        {
             return Ok(None);
         }
         let (x, y) = found.edges.centre();
