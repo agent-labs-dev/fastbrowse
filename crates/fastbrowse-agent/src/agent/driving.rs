@@ -362,7 +362,7 @@ impl Agent {
                 || (uncertain && !not_acting(decision.operation) && !try_unsure(state, &observation, &decision))
             {
                 let reason = format!("uncertain next step ({:.2})", decision.confidence());
-                Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
+                Box::pin(self.consult(state, &observation, &reason)).await?;
                 continue;
             }
             if decision.operation == Operation::Done {

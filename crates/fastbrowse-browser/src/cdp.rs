@@ -10,8 +10,8 @@
 //! closes, every pending call and every later one fails with `CdpError::Closed`.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -34,7 +34,7 @@ pub const CDP_REPLY_SECONDS: f64 = 60.0;
 pub const CDP_COMMAND_SECONDS: f64 = 120.0;
 /// `Browser.getVersion` is answered at once by any browser that is there.
 pub const CDP_ALIVE_SECONDS: f64 = 10.0;
-/// Command deadlines one connection may meet before its tab's commands fail at once, as `PageUnresponsive`. A read
+/// Command deadlines one session may meet before its commands fail at once, as `PageUnresponsive`. A read
 /// that waits out the deadline is often one whose caller treats a failed read as an unreadable page and carries on,
 /// so the next read waited it out again: one login run met it thirteen times, 26 minutes on a page it could not
 /// use. Browser-level commands (closing the run's tabs) are still sent.
@@ -118,8 +118,11 @@ struct Inner {
     /// every command while its remote debugging approval prompt waits, which would otherwise read as a lost browser
     /// only after `CDP_REPLY_SECONDS`.
     answered: AtomicBool,
-    /// Commands on this connection that outlived `CDP_COMMAND_SECONDS`.
-    deadlines: AtomicU32,
+    /// Commands that outlived `CDP_COMMAND_SECONDS`, by the session they addressed. A cloud browser's connection
+    /// carries every target the run attached, third-party frames and workers included, and one of those hanging says
+    /// nothing about the tab the run drives: on The Pi Hut a frame's `Page.addScriptToEvaluateOnNewDocument` met its
+    /// deadline twice and every command to the answering main tab was refused.
+    deadlines: Mutex<HashMap<String, u32>>,
     pong: AtomicBool,
 }
 
@@ -206,7 +209,7 @@ impl Cdp {
             handlers: Mutex::default(),
             out,
             answered: AtomicBool::new(false),
-            deadlines: AtomicU32::new(0),
+            deadlines: Mutex::default(),
             pong: AtomicBool::new(true),
         });
         // Sending is a synchronous push onto this queue, so a dropped caller can never leave half a frame written.
@@ -299,8 +302,8 @@ impl Cdp {
     /// `_BrowserClient.send_raw`: a command under the reply, liveness and command deadlines, its failure mapped to
     /// the browser error a run reports.
     pub async fn send(&self, method: &str, params: Value, session: Option<&str>) -> Result<Value, BrowserError> {
-        let deadlines = self.0.deadlines.load(Ordering::Relaxed);
-        if session.is_some() && deadlines >= CDP_DEADLINES_BEFORE_STOP {
+        let deadlines = session.map_or(0, |id| self.deadlines().get(id).copied().unwrap_or(0));
+        if deadlines >= CDP_DEADLINES_BEFORE_STOP {
             return Err(BrowserError::PageUnresponsive(format!(
                 "{method} not sent: the page stopped answering, {deadlines} commands already exceeded their deadline \
                  while the browser answered"
@@ -352,7 +355,9 @@ impl Cdp {
                         "{method} got no reply, and the browser stopped answering"
                     )));
                 } else {
-                    self.0.deadlines.fetch_add(1, Ordering::Relaxed);
+                    if let Some(id) = session {
+                        *self.deadlines().entry(id.to_string()).or_default() += 1;
+                    }
                     return Err(BrowserError::PageUnresponsive(format!(
                         "{method} exceeded its command deadline; the page did not answer while the browser did"
                     )));
@@ -372,6 +377,10 @@ impl Cdp {
                 Err(browser_error(method, &error, true))
             }
         }
+    }
+
+    fn deadlines(&self) -> MutexGuard<'_, HashMap<String, u32>> {
+        self.0.deadlines.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn answered(&self) -> bool {
