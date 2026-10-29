@@ -14,7 +14,7 @@
 //! token when it has one; that endpoint never receives the OpenRouter or gateway key. FASTBROWSE_LLM_STRICT and
 //! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only. FASTBROWSE_LLM_MODEL overrides every purpose at
 //! once, and FASTBROWSE_LLM_MODEL_<PURPOSE> overrides one. FASTBROWSE_LLM_REASONING sets the reasoning effort: none,
-//! low (default), medium or high.
+//! low (default), medium or high, and FASTBROWSE_LLM_REASONING_<PURPOSE> sets one purpose's.
 //!
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.
@@ -191,6 +191,14 @@ pub struct Settings {
     pub llm_reasoning: ReasoningEffort,
     /// Whether FASTBROWSE_LLM_REASONING was given, as pydantic's `model_fields_set` records it.
     pub llm_reasoning_set: bool,
+    /// FASTBROWSE_LLM_REASONING_<PURPOSE>: one purpose's effort over FASTBROWSE_LLM_REASONING, as a purpose's model is.
+    pub llm_reasoning_plan: Option<ReasoningEffort>,
+    pub llm_reasoning_read: Option<ReasoningEffort>,
+    pub llm_reasoning_field_text: Option<ReasoningEffort>,
+    pub llm_reasoning_recover: Option<ReasoningEffort>,
+    pub llm_reasoning_compose: Option<ReasoningEffort>,
+    pub llm_reasoning_verify: Option<ReasoningEffort>,
+    pub llm_reasoning_shortcut: Option<ReasoningEffort>,
     pub chrome: Option<String>,
     pub headed: bool,
     pub profile: Option<PathBuf>,
@@ -221,6 +229,13 @@ impl Default for Settings {
             llm_extra_body: None,
             llm_reasoning: DEFAULT_REASONING,
             llm_reasoning_set: false,
+            llm_reasoning_plan: None,
+            llm_reasoning_read: None,
+            llm_reasoning_field_text: None,
+            llm_reasoning_recover: None,
+            llm_reasoning_compose: None,
+            llm_reasoning_verify: None,
+            llm_reasoning_shortcut: None,
             chrome: None,
             headed: false,
             profile: None,
@@ -229,7 +244,7 @@ impl Default for Settings {
 }
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 24] = [
+const FIELDS: [(&str, &str); 31] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -251,6 +266,13 @@ const FIELDS: [(&str, &str); 24] = [
     ("llm_strict", "fastbrowse_llm_strict"),
     ("llm_extra_body", "fastbrowse_llm_extra_body"),
     ("llm_reasoning", "fastbrowse_llm_reasoning"),
+    ("llm_reasoning_plan", "fastbrowse_llm_reasoning_plan"),
+    ("llm_reasoning_read", "fastbrowse_llm_reasoning_read"),
+    ("llm_reasoning_field_text", "fastbrowse_llm_reasoning_field_text"),
+    ("llm_reasoning_recover", "fastbrowse_llm_reasoning_recover"),
+    ("llm_reasoning_compose", "fastbrowse_llm_reasoning_compose"),
+    ("llm_reasoning_verify", "fastbrowse_llm_reasoning_verify"),
+    ("llm_reasoning_shortcut", "fastbrowse_llm_reasoning_shortcut"),
     ("chrome", "fastbrowse_chrome"),
     ("headed", "fastbrowse_headed"),
     ("profile", "fastbrowse_profile"),
@@ -363,6 +385,15 @@ impl Settings {
                 self.llm_reasoning = ReasoningEffort::parse(value).ok_or(())?;
                 self.llm_reasoning_set = true;
             }
+            "llm_reasoning_plan" => self.llm_reasoning_plan = Some(ReasoningEffort::parse(value).ok_or(())?),
+            "llm_reasoning_read" => self.llm_reasoning_read = Some(ReasoningEffort::parse(value).ok_or(())?),
+            "llm_reasoning_field_text" => {
+                self.llm_reasoning_field_text = Some(ReasoningEffort::parse(value).ok_or(())?)
+            }
+            "llm_reasoning_recover" => self.llm_reasoning_recover = Some(ReasoningEffort::parse(value).ok_or(())?),
+            "llm_reasoning_compose" => self.llm_reasoning_compose = Some(ReasoningEffort::parse(value).ok_or(())?),
+            "llm_reasoning_verify" => self.llm_reasoning_verify = Some(ReasoningEffort::parse(value).ok_or(())?),
+            "llm_reasoning_shortcut" => self.llm_reasoning_shortcut = Some(ReasoningEffort::parse(value).ok_or(())?),
             "chrome" => self.chrome = text(),
             "headed" => self.headed = bool_of(&Value::String(value.into())).map_err(|_| ())?,
             "profile" => self.profile = Some(PathBuf::from(value)),
@@ -397,6 +428,25 @@ impl Settings {
             LLMPurpose::Verify => self.llm_model_verify.as_ref(),
             LLMPurpose::Shortcut => self.llm_model_shortcut.as_ref(),
         }
+    }
+
+    /// The purposes whose reasoning effort is set for that purpose alone.
+    fn purpose_reasoning(&self) -> HashMap<LLMPurpose, ReasoningEffort> {
+        LLMPurpose::ALL
+            .iter()
+            .filter_map(|purpose| {
+                let effort = match purpose {
+                    LLMPurpose::Plan => self.llm_reasoning_plan,
+                    LLMPurpose::Read => self.llm_reasoning_read,
+                    LLMPurpose::FieldText => self.llm_reasoning_field_text,
+                    LLMPurpose::Recover => self.llm_reasoning_recover,
+                    LLMPurpose::Compose => self.llm_reasoning_compose,
+                    LLMPurpose::Verify => self.llm_reasoning_verify,
+                    LLMPurpose::Shortcut => self.llm_reasoning_shortcut,
+                };
+                effort.map(|effort| (*purpose, effort))
+            })
+            .collect()
     }
 
     pub fn local_chrome(&self) -> LocalChrome {
@@ -540,6 +590,7 @@ impl Settings {
                     // `reasoning` is OpenRouter's field, and a strict server answers HTTP 400 to a field it does not
                     // know, so the local route sends it only when FASTBROWSE_LLM_REASONING asks for it.
                     reasoning_effort: self.llm_reasoning_set.then_some(self.llm_reasoning),
+                    purpose_reasoning: self.purpose_reasoning(),
                     provider_routing: None,
                     strict: self.llm_strict,
                     extra_body: self.extra_body()?,
@@ -560,6 +611,7 @@ impl Settings {
         };
         let options = LLMOptions {
             reasoning_effort: Some(self.llm_reasoning),
+            purpose_reasoning: self.purpose_reasoning(),
             provider_routing: Some(routing),
             strict: true,
             extra_body: Map::new(),

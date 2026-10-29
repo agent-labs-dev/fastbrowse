@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <title>Swatches</title>
+  <style>
+    /* The theme's visually-hidden input, inside a wrapper, with its label drawn as the swatch beside it. */
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .swatch { position: relative; display: inline-block; padding: 8px; }
+    .swatch label { display: inline-block; width: 72px; height: 72px; margin-left: 8px; background: #36c; }
+  </style>
+</head>
+<body>
+  <fieldset>
+    <legend>Colour</legend>
+    <div class="swatch"><input class="visually-hidden" type="radio" name="colour" id="white" value="White" checked>
+      <label for="white"><span class="visually-hidden">White</span></label></div>
+    <div class="swatch"><input class="visually-hidden" type="radio" name="colour" id="blue" value="Blue">
+      <label for="blue"><span class="visually-hidden">Blue</span></label></div>
+  </fieldset>
+</body>
+</html>

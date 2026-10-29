@@ -570,9 +570,9 @@ impl Agent {
                     state.paging_failed = true;
                     break;
                 }
-                let stalled = self.settle(state, &landed, true, false);
+                self.settle(state, &landed);
                 state.paged_from = None;
-                if stalled.is_some() || seen.contains(&landed.url) || origin_of(&landed.url) != origin {
+                if seen.contains(&landed.url) || origin_of(&landed.url) != origin {
                     break;
                 }
                 seen.insert(landed.url.clone());

@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use fastbrowse_core::effects::{SETTING_ROLES, effect, r#move, reversal, state_key};
+use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
 use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult, WallKind};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
@@ -14,17 +14,15 @@ use fastbrowse_core::safety::{origin_of, starts_download};
 use serde_json::Map;
 
 use super::helpers::{
-    CYCLE_SHOWN, STALE_LINK_FAILURES, access_inspection, answer_evidence, answered, caller_link, code_decision,
-    decision_label, describe, described, dialog_question, drew_something, follow_recovery, idle_checked, join,
-    link_key, lookup, navigation_question, netloc_of, not_acting, page_operation, paging, path_of, read_exhausted,
-    redrawn_read, scheme_of, seen, signature, site_action, stale_link_key, try_unsure, unread, without_failed_links,
-    without_missing,
+    STALE_LINK_FAILURES, access_inspection, answer_evidence, answered, caller_link, code_decision, decision_label,
+    describe, dialog_question, drew_something, follow_recovery, join, link_key, lookup, navigation_question, netloc_of,
+    not_acting, paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, site_action, stale_link_key,
+    try_unsure, unread, without_failed_links, without_missing,
 };
 use super::reading::covered;
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
 use super::{
-    Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, REVERSAL_WINDOW, SHORTCUT_WAIT_SECONDS,
-    WALL_QUOTE_CHARS,
+    Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, SHORTCUT_WAIT_SECONDS, WALL_QUOTE_CHARS,
 };
 use crate::planner::RequirementKind;
 use crate::policy::{Decision, HistoryEntry, decide};
@@ -122,12 +120,7 @@ impl Agent {
                 }
                 continue;
             }
-            let (undone, renews, put_back) = self.reversal(state);
-            let stalled = self.settle(state, &observation, renews, put_back);
-            if let Some(stalled) = undone.or(stalled) {
-                Box::pin(self.recover(state, &observation, &stalled, Status::Stuck)).await?;
-                continue;
-            }
+            self.settle(state, &observation);
             // Walking a list is dispatched before Jev is asked, because not asking is the point: the reader asked for
             // the rest of the list and the link is already found, so a decision would buy nothing. It therefore passes
             // none of the gates below, which is safe only because of what it can be: a pager link to another address.
@@ -376,19 +369,6 @@ impl Agent {
                 if let Some(result) = Box::pin(self.finish(state, output_schema, until)).await? {
                     return Ok(result);
                 }
-                continue;
-            }
-            if let Some(attempted) = state.attempts.get_mut(&signature(&decision, &observation))
-                && attempted.idle
-            {
-                // The same click from the same page already did nothing; taking it again is a loop. Recovery is told
-                // so once: a click can also do nothing because the page had not wired it up yet.
-                attempted.idle = false;
-                let named = decision_label(&decision);
-                let reason = format!("{} {} already did nothing here", decision.operation, named.unwrap_or_default())
-                    .trim()
-                    .to_string();
-                Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
                 continue;
             }
             let acted = async {
@@ -873,7 +853,6 @@ impl Agent {
                 }
                 _ => None,
             };
-            let mut effective = changed;
             if result.outcome == StepOutcome::Executed
                 && let Some(target) = &decision.target
                 && SETTING_ROLES.contains(&target.role.as_str())
@@ -882,21 +861,13 @@ impl Agent {
                 // still changes the page, and Google Flights' "One way" was clicked to the step limit.
                 let landed = self.observe().await?;
                 let done = effect(observation, &landed, Some(target));
-                state.pending_move = r#move(observation, &landed);
                 state.acted_from = None;
                 setting = done.set_something;
-                effective = setting;
                 if !done.set_something {
                     progressed = false;
                     result.detail = Some(format!("no effect: {}", done.summary));
                 }
                 effect_now = Some(done.summary);
-            }
-            // A covered flight control never dispatched, so it escaped idle memory and was picked again.
-            if let Some(attempt) = state.attempts.get_mut(&key) {
-                attempt.idle = matches!(result.outcome, StepOutcome::Executed | StepOutcome::Covered)
-                    && !effective
-                    && idle_checked(decision.operation);
             }
             act = result;
         }
@@ -931,29 +902,17 @@ impl Agent {
             duration_ms: started.elapsed().as_millis() as i64,
         };
         self.record_step(state, step, false, frame).await?;
-        if progressed && changed {
-            // Whether a change moved the run forward depends on where it led, which the next observation shows.
-            state.left = Some(state_key(observation));
-        } else if progressed {
+        // The one stall rule: a run is stuck when its page has not changed for `unchanged_actions` steps.
+        if progressed {
             state.unchanged = 0;
             state.hint = None;
         } else {
             state.unchanged += 1;
         }
-        // Progress breaks the stagnation streak even when setup work has not evidenced a requirement yet.
-        if progressed {
-            state.plan_marks.clear();
-        } else {
-            let mark = self.plan_mark(state);
-            state.plan_marks.push(mark);
-        }
-        for tripped in self.tripwires(state) {
-            if self.armed(&tripped) {
-                Box::pin(self.recover(state, observation, &tripped.to_string(), Status::Stuck)).await?;
-                state.form_continues = false;
-                return Ok(false);
-            }
-            state.would_fire.push(tripped.tripwire);
+        if state.unchanged >= self.config.stall.unchanged_actions {
+            let reason = format!("no_progress ({})", state.unchanged);
+            Box::pin(self.recover(state, observation, &reason, Status::Stuck)).await?;
+            state.form_continues = false;
         }
         Ok(false)
     }
@@ -1026,18 +985,12 @@ impl Agent {
         Ok(Some(self.page.act(&retargeted, &raw).await?))
     }
 
-    /// Judge the last page-changing action by the state it led to; the reason to recover, if the run is stuck.
+    /// Note the page state reached, renewing the recovery budget when it is new.
     ///
     /// Recoveries are spent on being stuck, not on the whole run, so a page state never seen before restores the
-    /// budget. A change is not progress either when it leads back to a state the run was already in.
-    pub(super) fn settle(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        renews: bool,
-        put_back: bool,
-    ) -> Option<String> {
-        let renews = renews && !redrawn_read(state, observation);
+    /// budget.
+    pub(super) fn settle(&self, state: &mut RunState, observation: &Observation) {
+        let renews = !redrawn_read(state, observation);
         let key = state_key(observation);
         let first = state.reached.get(&key).copied();
         let evidence = if state
@@ -1059,7 +1012,7 @@ impl Agent {
             {
                 state.http_failure = None;
             }
-            state.reached.insert(key.clone(), state.history.len());
+            state.reached.insert(key, state.history.len());
         }
         // Returning to a form with a newly read prerequisite is progress once for that state and those sources.
         if (first.is_none() || new_context)
@@ -1070,85 +1023,6 @@ impl Agent {
             state.recoveries = 0;
             state.recovery_log.clear();
         }
-        let left = state.left.take()?;
-        let last = state.history.last().map(described).unwrap_or_default();
-        let crossing = (left.clone(), last, key.clone());
-        let retraced = state.crossed.contains(&crossing);
-        state.crossed.insert(crossing);
-        let cycle: Vec<HistoryEntry> = match first {
-            Some(first) => state.history[first.min(state.history.len())..].to_vec(),
-            None => Vec::new(),
-        };
-        // Going back to a list after reading one of its pages is how a comparison is done, not a wasted round. A first
-        // return by a new move is not a loop yet.
-        if first.is_none() || key == left || !retraced || cycle.iter().any(|entry| entry.read_progress) {
-            if put_back {
-                // A setting put back to a state its page already held is not progress, however the results redraw
-                // beneath it.
-                state.unchanged += 1;
-                return None;
-            }
-            state.unchanged = 0;
-            state.hint = None;
-            return None;
-        }
-        let shown: Vec<String> = cycle[cycle.len().saturating_sub(CYCLE_SHOWN)..].iter().map(described).collect();
-        let note = format!(
-            "back to a page state first reached {} actions ago; the actions since ({}) undid each other",
-            cycle.len(),
-            shown.join(", ")
-        );
-        if let Some(last) = state.history.last_mut() {
-            last.effect = Some(match &last.effect {
-                Some(effect) if !effect.is_empty() => format!("{effect}; {note}"),
-                _ => note.clone(),
-            });
-        }
-        // The first retraced move is already a loop.
-        Some(note)
-    }
-
-    /// The reason to recover when a setting went back to an earlier value, and whether the state reached may renew the
-    /// recovery budget, and whether a setting was put back to a value its page already held.
-    pub(super) fn reversal(&self, state: &mut RunState) -> (Option<String>, bool, bool) {
-        let made = state.pending_move.take();
-        let at = state.history.len();
-        state.moves.retain(|(index, _)| *index + REVERSAL_WINDOW >= at);
-        let Some(made) = made else { return (None, true, false) };
-        let last = state.history.last();
-        if made.values_after == made.values_before
-            || !(made.set_a_value() || last.is_some_and(|entry| entry.setting == Some(true)))
-            || last.is_none_or(|entry| entry.outcome != StepOutcome::Executed)
-            // Scrolling shows and hides controls without changing a setting.
-            || last.and_then(|entry| entry.operation).is_some_and(page_operation)
-        {
-            return (None, true, false);
-        }
-        let held = (made.document.clone(), made.values_after.clone().into_iter().collect::<BTreeSet<_>>());
-        let renews = !state.settings_held.contains(&held);
-        // Nothing committed means nothing was put anywhere, so there is no earlier state to have returned to.
-        let put_back = !made.values_after.is_empty() && !renews;
-        state.settings_held.insert(held);
-        state.settings_held.insert((made.document.clone(), made.values_before.clone().into_iter().collect()));
-        let mut note = None;
-        for (index, earlier) in state.moves.iter().rev() {
-            // Recovery spent earlier evidence; a useful read makes the return a comparison, as in `settle`.
-            if *index <= state.recovered_at
-                || state.history[(*index).min(state.history.len())..].iter().any(|entry| entry.read_progress)
-            {
-                break;
-            }
-            if let Some(returned) = reversal(&made, earlier) {
-                let from = index.saturating_sub(1).min(state.history.len());
-                let since = &state.history[from..];
-                let actions: Vec<String> =
-                    since[since.len().saturating_sub(CYCLE_SHOWN)..].iter().map(described).collect();
-                note = Some(format!("{returned}; intervening actions: {}", actions.join(", ")));
-                break;
-            }
-        }
-        state.moves.push((at, made));
-        (note, renews, put_back)
     }
 
     /// Set whether the run is on the guess from the history entry the page is.
@@ -1251,7 +1125,6 @@ impl Agent {
             return;
         }
         last.effect = Some(effect(&before, observation, None).summary);
-        state.pending_move = r#move(&before, observation);
     }
 
     /// Every observation models see has resolved secret values blanked, wherever the page echoes them.
