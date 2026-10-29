@@ -19,11 +19,12 @@ defaults:
   run:
     shell: bash
 jobs:
-  # The targets to build, each on a runner of its own kind, so no cross linker is needed. The Linux builds stay on
-  # GitHub's Ubuntu 22.04, the oldest glibc offered, since a build runs on the system it was built on and on newer
-  # ones. macOS on Apple silicon and Windows run on Blacksmith, whose GitHub-hosted counterparts queued for most of a
-  # run, and `macos-15-intel` is the last Intel image GitHub offers besides `macos-26-intel`. A matrix cannot drop an
-  # `include` entry, so the list is picked here and both build jobs read it.
+  # The targets to build, each on a runner of its own kind. Everything but Intel macOS runs on Blacksmith, whose
+  # GitHub-hosted counterparts queued for most of a run; Blacksmith has no Intel Mac, and `macos-15-intel` is the last
+  # Intel image GitHub offers besides `macos-26-intel`. A Linux build runs on the glibc it links and newer ones, and
+  # Blacksmith's Ubuntu is 24.04 (glibc 2.39), so the Linux builds link glibc 2.34's symbols through zig instead
+  # (`glibc`, and the wheel's `manylinux` tag): they run on RHEL 9, Amazon Linux 2023, Ubuntu 22.04 and Debian 12 as
+  # well. A matrix cannot drop an `include` entry, so the list is picked here and both build jobs read it.
   targets:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
@@ -35,8 +36,8 @@ jobs:
           all='[
             {"target": "darwin-arm64", "triple": "aarch64-apple-darwin", "runner": "blacksmith-6vcpu-macos-26", "addon": "libfastbrowse_node.dylib"},
             {"target": "darwin-x64", "triple": "x86_64-apple-darwin", "runner": "macos-15-intel", "addon": "libfastbrowse_node.dylib"},
-            {"target": "linux-x64", "triple": "x86_64-unknown-linux-gnu", "runner": "ubuntu-22.04", "addon": "libfastbrowse_node.so"},
-            {"target": "linux-arm64", "triple": "aarch64-unknown-linux-gnu", "runner": "ubuntu-22.04-arm", "addon": "libfastbrowse_node.so"},
+            {"target": "linux-x64", "triple": "x86_64-unknown-linux-gnu", "runner": "blacksmith-8vcpu-ubuntu-2404", "addon": "libfastbrowse_node.so", "glibc": "2.34", "manylinux": "manylinux_2_34"},
+            {"target": "linux-arm64", "triple": "aarch64-unknown-linux-gnu", "runner": "blacksmith-8vcpu-ubuntu-2404-arm", "addon": "libfastbrowse_node.so", "glibc": "2.34", "manylinux": "manylinux_2_34"},
             {"target": "win32-x64", "triple": "x86_64-pc-windows-msvc", "runner": "blacksmith-8vcpu-windows-2025", "addon": "fastbrowse_node.dll"}
           ]'
           if [ "$MACOS" = false ]; then filter='map(select(.target | startswith("darwin-") | not))'; else filter='.'; fi
@@ -61,14 +62,26 @@ jobs:
       TARGET: ${{ matrix.target }}
       TRIPLE: ${{ matrix.triple }}
       ADDON: ${{ matrix.addon }}
+      GLIBC: ${{ matrix.glibc }}
       EXE: ${{ startsWith(matrix.target, 'win32-') && '.exe' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use.
-      - run: cargo build --locked --profile release-small -p fastbrowse-cli --target "$TRIPLE"
-      # The addon in `release`: `release-small` aborts on a panic, which in an addon takes the host process with it.
-      - run: cargo build --locked --release -p fastbrowse-node --target "$TRIPLE"
+      # The smoke scripts are standard library only, so the interpreter uv installs is all they need; uv also runs
+      # cargo-zigbuild for the Linux builds.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with: {python-version: "3.13"}
+      # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use. The addon is built in
+      # `release`: `release-small` aborts on a panic, which in an addon takes the host process with it.
+      - name: Build
+        run: |
+          if [ -n "$GLIBC" ]; then
+            build=(uvx --from cargo-zigbuild==0.24.0 --with ziglang==0.17.0 cargo-zigbuild build --target "$TRIPLE.$GLIBC")
+          else
+            build=(cargo build --target "$TRIPLE")
+          fi
+          "${build[@]}" --locked --profile release-small -p fastbrowse-cli
+          "${build[@]}" --locked --release -p fastbrowse-node
       - name: Stage the build
         run: |
           mkdir -p stage/fastbrowse
@@ -76,6 +89,13 @@ jobs:
           cp "target/$TRIPLE/release/$ADDON" fastbrowse.node
       # The linker signs an arm64 executable ad hoc already. Signing here gives the Intel build and the addon the
       # same signature, and the check holds for all of them.
+      # What the build links is what a user's system must have, whatever the runner's own glibc is.
+      - name: Check the glibc floor
+        if: matrix.glibc
+        run: |
+          newest="$(objdump -T stage/fastbrowse/fastbrowse fastbrowse.node | grep -o 'GLIBC_[0-9.]*' | cut -c7- | sort -uV | tail -n 1)"
+          echo "newest glibc symbol: $newest, floor: $GLIBC"
+          test "$(printf '%s\n' "$newest" "$GLIBC" | sort -V | tail -n 1)" = "$GLIBC"
       - name: Sign ad hoc
         if: startsWith(matrix.target, 'darwin-')
         run: |
@@ -88,9 +108,6 @@ jobs:
           chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
           test -x "$chrome"
           echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
-      # The smoke scripts are standard library only, so the interpreter uv installs is all they need.
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with: {python-version: "3.13"}
       - run: uv run --no-project python scripts/smoke_binary.py "stage/fastbrowse/fastbrowse$EXE"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22", package-manager-cache: false}
@@ -132,10 +149,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The binaries' runners, so the Linux wheels link the glibc of Ubuntu 22.04 as the binaries do.
+        # The binaries' runners, and the Linux wheels link glibc 2.34 through zig as the binaries do. maturin checks
+        # the wheel's symbols against the manylinux tag it is given and refuses one that needs more.
         include: ${{ fromJSON(needs.targets.outputs.include) }}
     env:
       TARGET: ${{ matrix.target }}
+      MANYLINUX: ${{ matrix.manylinux }}
       UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -143,7 +162,16 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with: {python-version: "3.13"}
       # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use.
-      - run: uvx maturin==1.15.0 build --release --locked --out wheels
+      # zig only for the Linux wheels: it is what links them to the older glibc, and it has no build for Windows.
+      - name: Build the wheel
+        run: |
+          zig=()
+          linux=()
+          if [ -n "$MANYLINUX" ]; then
+            zig=(--with ziglang==0.17.0)
+            linux=(--zig --compatibility "$MANYLINUX")
+          fi
+          uvx "${zig[@]}" maturin==1.15.0 build --release --locked --out wheels "${linux[@]}"
       - name: Install the wheel alone
         run: |
           uv venv --no-project "$RUNNER_TEMP/wheel"
