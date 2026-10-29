@@ -1164,8 +1164,10 @@ async fn test_a_receipt_is_read_only_for_a_step_jev_says_committed() {
     }
 }
 
-/// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered.
-struct FieldReader(&'static str);
+/// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
+/// field, it says the page holds nothing for the requirement. It says yes to the actions' context question with the given
+/// probability.
+struct FieldReader(Option<&'static str>, f64);
 
 impl fastbrowse_core::decision::DecisionClient for FieldReader {
     fn evaluate<'a>(
@@ -1173,16 +1175,27 @@ impl fastbrowse_core::decision::DecisionClient for FieldReader {
         _: &'a serde_json::Value,
         questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
     ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
-        use fastbrowse_core::decision::{Answer, ChoiceAnswer, Question};
+        use fastbrowse_core::decision::{Answer, ChoiceAnswer, NoulAnswer, Question};
         let answers = questions
             .iter()
             .map(|(key, question)| {
-                let Question::Choice(question) = question else { panic!("{key} is not a read choice") };
+                let question = match question {
+                    Question::Choice(question) => question,
+                    Question::Noul(_) => {
+                        let answer = NoulAnswer { kind: Default::default(), probability: self.1 };
+                        return (key.clone(), Answer::Noul(answer));
+                    }
+                    _ => panic!("{key} is neither a read choice nor the context question"),
+                };
+                let wanted = |offered: &serde_json::Value| match self.0 {
+                    Some(field) => offered.get("value").and_then(serde_json::Value::as_str) == Some(field),
+                    None => offered.as_str().is_some_and(|text| text.starts_with("This page contains no evidence")),
+                };
                 let (choice, _) = question
                     .criteria
                     .iter()
-                    .find(|(_, offered)| offered.get("value").and_then(serde_json::Value::as_str) == Some(self.0))
-                    .unwrap_or_else(|| panic!("{} is not offered: {:?}", self.0, question.criteria));
+                    .find(|(_, offered)| wanted(offered))
+                    .unwrap_or_else(|| panic!("{:?} is not offered: {:?}", self.0, question.criteria));
                 let probabilities =
                     question.criteria.keys().map(|c| (c.clone(), f64::from(u8::from(c == choice)))).collect();
                 let answer =
@@ -1210,7 +1223,7 @@ impl fastbrowse_core::decision::DecisionClient for FieldReader {
 async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
     let field = "Date Picker 2: 27/12/2026";
     // The scripted LLM has no reader reply, so a read that reached it would fail.
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(field)), Arc::new(ScriptedLLM));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
     let mut state = run_state().await;
     state.ready_plan = Some(Plan::new(
         vec![
@@ -1530,4 +1543,51 @@ async fn test_jev_sees_the_page_only_when_its_text_pick_is_unsure() {
         assert!((decision.confidence() - confidence).abs() < 1e-9, "{}", decision.confidence());
         assert_eq!(decision.cost.len(), images.len());
     }
+}
+
+/// The LLM reader's one reply: the code a sign-in needs, quoted as context from the second block.
+struct ContextReader;
+
+impl fastbrowse_core::llm::LLMClient for ContextReader {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: fastbrowse_core::models::LLMPurpose,
+        messages: &'a [fastbrowse_core::llm::Message],
+        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        _: i64,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Read);
+            assert!(format!("{messages:?}").contains("Read only the context claims"), "{messages:?}");
+            let reply = json!({
+                "claims": [{"cite": {"first": "s1", "last": "s1"}, "text": "ada@example.com: 587373", "requirement_id": null}],
+                "answered": false,
+            });
+            let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_a_code_jev_finds_no_requirement_in_is_still_kept_for_the_sign_in() {
+    // Jev found nothing on the Phone page for the orders the read was asked about, and the code never reached the notes.
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(None, 0.98)), Arc::new(ContextReader));
+    let mut state = run_state().await;
+    state.ready_plan = Some(Plan::new(
+        vec![
+            Requirement::new(
+                "in",
+                "Sign in as ada@example.com with the code from the Phone page",
+                RequirementKind::Action,
+            ),
+            Requirement::new("orders", "Report the most expensive order", INFO),
+        ],
+        true,
+    ));
+    let page = capture(&[(BlockKind::Heading, "Authenticator"), (BlockKind::Paragraph, "ada@example.com: 587373")]);
+    agent.read(&mut state, Some(page), None, false).await.expect("a read");
+    let fact = state.notes.facts().into_iter().find(|f| f.text.contains("587373")).expect("the code");
+    assert_eq!(fact.requirement_id, None);
 }

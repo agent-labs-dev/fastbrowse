@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::decision::DecisionClient;
+use fastbrowse_core::decision::{Answer, DecisionClient, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
 use fastbrowse_core::models::{CostLine, Evidence, FactReader, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
@@ -23,6 +23,7 @@ use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_mess
 use super::records::through_end as scope;
 use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search};
 use super::{notes_room, route};
+use crate::batches::evaluate_batches;
 use crate::comparison::{NumericComparison, QuotedField, digit};
 use crate::error::{AgentError, Result};
 use crate::memory::{Comparison, Fact, Notes, RenderOptions, Tally, fact_id, unique};
@@ -889,6 +890,31 @@ pub fn read_tallies(
 
 // --- read ---------------------------------------------------------------------------------------------------------
 
+/// A yes from here reads the page for the actions' context. The labelled pages `context_question` was measured on split
+/// at 0.92 and 0.21, so even odds is the bar.
+const CONTEXT_FROM: f64 = 0.5;
+
+/// Whether Jev says the page shows a value the task's actions need, and what asking cost. A page too large to ask about,
+/// or a question that went unanswered, counts as a yes: a value the reader never quoted cannot be typed later.
+async fn carries_context(
+    jev: &dyn DecisionClient,
+    capture: &Capture,
+    asked: &Question,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<(bool, Vec<CostLine>)> {
+    let state = json!({"page": {"url": capture.url, "title": capture.title, "text": capture.text}});
+    let questions = IndexMap::from([("context".to_string(), asked.clone())]);
+    let Some(answered) = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await? else {
+        return Ok((true, Vec::new()));
+    };
+    let carried = match answered.answers.get("context") {
+        Some(Answer::Noul(answer)) => answer.probability >= CONTEXT_FROM,
+        _ => true,
+    };
+    Ok((carried, answered.cost))
+}
+
 /// `read`'s keyword arguments.
 #[derive(Default, Clone)]
 pub struct ReadOptions<'a> {
@@ -896,6 +922,9 @@ pub struct ReadOptions<'a> {
     pub tokens: TokenBudget,
     pub ledger: Option<&'a Ledger>,
     pub jev: Option<&'a dyn DecisionClient>,
+    /// Asked of Jev about the page once it has settled every requirement: a yes still sends the page to the LLM reader,
+    /// for the context quotes the task's actions need.
+    pub context_question: Option<Question>,
     pub requirements: Vec<Requirement>,
     /// The requirements an earlier page already said run past it.
     pub continuing: Vec<String>,
@@ -1076,16 +1105,29 @@ async fn read_inner(
         let answered: HashSet<Option<String>> = facts.values().map(|fact| fact.requirement_id.clone()).collect();
         requirement_ids.retain(|key| !answered.contains(&Some(key.clone())) && !chosen.absent.contains(key));
         if requirement_ids.is_empty() {
-            return Ok(ReadOutcome::new(facts.into_values().collect(), Vec::new(), rejected, costs));
+            let carried = match &options.context_question {
+                Some(asked) => {
+                    let (carried, spent) = carries_context(jev, capture, asked, tokens, ledger).await?;
+                    costs.extend(spent);
+                    carried
+                }
+                None => false,
+            };
+            if !carried {
+                return Ok(ReadOutcome::new(facts.into_values().collect(), Vec::new(), rejected, costs));
+            }
+            question
+                .push_str("\n\nEvery requirement is answered. Read only the context claims the task's actions need.");
+        } else {
+            // Narrow the obligations without dropping the task's constraints or separating ids from their meaning.
+            let remaining: Vec<String> = options
+                .requirements
+                .iter()
+                .filter(|r| requirement_ids.contains(&r.id))
+                .map(|r| format!("- {}: {}", r.id, r.text))
+                .collect();
+            question.push_str(&format!("\n\nRead only these remaining requirements:\n{}", remaining.join("\n")));
         }
-        // Narrow the obligations without dropping the task's constraints or separating ids from their meaning.
-        let remaining: Vec<String> = options
-            .requirements
-            .iter()
-            .filter(|r| requirement_ids.contains(&r.id))
-            .map(|r| format!("- {}: {}", r.id, r.text))
-            .collect();
-        question.push_str(&format!("\n\nRead only these remaining requirements:\n{}", remaining.join("\n")));
     }
     if options.require_all_evidence {
         question.push_str("\n\nCode attaches every earlier comparison record to each requirement's conclusion. You need not repeat those references in draws_on; use it for any extra context the claim needs. Still include every compared record from this capture in records, and state the requested values in the answer.");

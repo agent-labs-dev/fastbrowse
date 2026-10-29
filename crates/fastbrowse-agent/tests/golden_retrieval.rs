@@ -286,6 +286,7 @@ fn replay(case: &Value) -> Result<(), String> {
                     .get("jev")
                     .filter(|j| !j.is_null())
                     .map(|_| &jev as &dyn fastbrowse_core::decision::DecisionClient),
+                context_question: None,
                 requirements: opt(args, "requirements").unwrap_or_default(),
                 continuing: strings(args.get("continuing").unwrap_or(&Value::Null)),
                 incomplete: strings(args.get("incomplete").unwrap_or(&Value::Null)),
