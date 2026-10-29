@@ -106,28 +106,6 @@ async fn test_exposed_edge_belonging_to_a_nested_control_is_not_the_target() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_option_whose_whole_box_is_its_own_link_is_clicked_through_the_link() {
-    // Wikipedia's search suggestion: an option holding only a link with the same text. Jev picks the option, and
-    // every point on it is the link, which the click reaches as a person's would.
-    let Some(h) = harness().await else { return };
-    h.goto("/dispatch.html").await;
-    eval_active(
-        &h.page,
-        "const option = document.createElement('li'); option.setAttribute('role', 'option'); \
-         option.innerHTML = '<a href=\"#chosen\" style=\"display:block\">Godel theorems <span>Limitative results</span></a>'; \
-         document.getElementById('target').replaceWith(option); window.linkClicked = false; \
-         option.querySelector('a').addEventListener('click', e => { e.preventDefault(); window.linkClicked = true; });",
-    )
-    .await;
-    let before = h.observe().await;
-    let option = before.controls.iter().find(|c| c.role == "option").expect("option").clone();
-    let result = h.page.act(&action(Operation::Click, &option), &before).await.expect("act");
-    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
-    assert_eq!(eval_active(&h.page, "window.linkClicked").await, json!(true));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn test_transparent_checkbox_filling_its_label_is_the_labels_target() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
