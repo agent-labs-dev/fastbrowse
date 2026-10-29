@@ -111,6 +111,10 @@
     "fingerprint": "65b30d9b47fe8787",
     "version": 5
   },
+  "mock-disguised-delete": {
+    "version": 1,
+    "fingerprint": "a8b310d4c27776a2"
+  },
   "mock-drag-card": {
     "version": 5,
     "fingerprint": "473e5c76eaa1bb94"
