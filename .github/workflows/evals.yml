@@ -105,21 +105,35 @@ jobs:
             --rows artifacts/evals/nightly.jsonl \
             --baseline docs/results
       - name: Check the eval tracking credentials
-        # The upload is how a run stays reviewable after this job's artifact expires, and the two secrets are the
-        # whole configuration: the host and the project are constants, so a key issued for another project is
-        # refused rather than written to. Naming the missing secret fails the job on the line that fixes it.
+        id: langfuse
+        # The upload is how a run stays reviewable after this job's artifact expires. The two secrets are the whole
+        # configuration: the host and the project are constants, so a key issued for another project is refused
+        # rather than written to. A missing pair is named here and the upload is skipped, because a run that
+        # measured fine should not fail the schedule over a bookkeeping credential nobody has added yet.
         if: always() && steps.fixtures.outcome != 'skipped'
         env:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
-          test -n "$LANGFUSE_PUBLIC_KEY" || { echo "the LANGFUSE_PUBLIC_KEY repository secret is not set"; exit 1; }
-          test -n "$LANGFUSE_SECRET_KEY" || { echo "the LANGFUSE_SECRET_KEY repository secret is not set"; exit 1; }
+          missing=()
+          test -n "$LANGFUSE_PUBLIC_KEY" || missing+=(LANGFUSE_PUBLIC_KEY)
+          test -n "$LANGFUSE_SECRET_KEY" || missing+=(LANGFUSE_SECRET_KEY)
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_call" ]; then
+            # A tag release is handed this job by release.yml; a release whose evidence nobody can read is not
+            # the thing we ship, so the same missing pair that only warns on a schedule stops the release.
+            echo "the ${missing[*]} repository secret is not set, and a release publishes its run" >&2
+            exit 1
+          else
+            echo "::warning title=Eval tracking is off::the ${missing[*]} repository secret is not set, so this run is not published to Langfuse"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish the fixture run to Langfuse
         # One trace per attempt, named for the build and released under the campaign it came from, so a number
         # here traces back to the commit that produced it. The step reads every trace back before it passes;
         # `publication` above still decides what, if anything, may be published as a figure.
-        if: always() && steps.fixtures.outcome != 'skipped'
+        if: always() && steps.fixtures.outcome != 'skipped' && steps.langfuse.outputs.ready == 'true'
         env:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
