@@ -192,6 +192,8 @@ class CostBasis(StrEnum):
     BOUNDED = "bounded"
     """No charge was reported, and `dollars` is the most the call could have cost: its model's whole context
     window at the highest token price any of its routes lists. Never less than the charge."""
+    UNSETTLED = "unsettled"
+    """The provider's figure so far, read before it finished metering: the final charge can be higher."""
     UNKNOWN = "unknown"
     """No charge information; never counted as zero."""
 

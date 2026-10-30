@@ -27,6 +27,9 @@ pub const API_V4: &str = "https://api.browser-use.com/api/v4";
 const API_ORIGIN: &str = "https://api.browser-use.com";
 /// https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
 pub const MAX_EXTENSIONS: usize = 3;
+/// The screen a browser starts on when the caller names none. Left to the service a browser may come up 1920 wide, past
+/// Jev's 1568 pixel side (`jev_takes_png`), and Jev would get no screenshot of any page.
+const DEFAULT_SCREEN: (u32, u32) = (1120, 780);
 /// A browser whose stop request failed bills until its own timeout, up to four hours, so a stop the service could
 /// not take (a 5xx, a 429, a dropped connection) is sent again rather than abandoned after one try.
 const STOP_ATTEMPTS: u32 = 4;
@@ -175,10 +178,9 @@ impl BrowserUseCloudBrowser {
         }
         // Headless defaults are small enough that a responsive site collapses its header into a toggle and the
         // control the run needs is not in the page at all, which is why local Chrome sets a size too.
-        if let Some((width, height)) = options.viewport {
-            body.push(("browserScreenWidth", json!(width)));
-            body.push(("browserScreenHeight", json!(height)));
-        }
+        let (width, height) = options.viewport.unwrap_or(DEFAULT_SCREEN);
+        body.push(("browserScreenWidth", json!(width)));
+        body.push(("browserScreenHeight", json!(height)));
         let api = Api {
             root: API_V4.replacen(API_ORIGIN, origin, 1),
             api_key: api_key.to_owned(),
@@ -201,7 +203,9 @@ impl BrowserUseCloudBrowser {
         self.connection.as_ref().ok_or_else(|| BrowserUseCloudError::Error("the cloud browser is not running".into()))
     }
 
-    /// The browser and proxy lines the service metered, from its latest answer; empty before one.
+    /// The browser and proxy lines the service metered, from its latest answer; empty before one. The proxy line is
+    /// unsettled: the service meters a browser's proxy data about 30 seconds after it stops, and a run does not hold
+    /// its result for that. A later `GET /browsers/{id}` reads the settled figure.
     pub fn cost(&self) -> Vec<CostLine> {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).cost.clone()
     }
@@ -385,12 +389,13 @@ fn lock(state: &Shared) -> std::sync::MutexGuard<'_, State> {
 
 fn record_cost(state: &Shared, browser: &View) {
     // A cost the service left out is unknown, not a metered zero.
-    let line = |component, dollars: Option<f64>| {
-        let basis = if dollars.is_some() { CostBasis::Metered } else { CostBasis::Unknown };
-        CostLine::new(component, basis, dollars)
+    let line = |component, basis, dollars: Option<f64>| {
+        CostLine::new(component, if dollars.is_some() { basis } else { CostBasis::Unknown }, dollars)
     };
-    lock(state).cost =
-        vec![line(CostComponent::Browser, browser.browser_cost), line(CostComponent::Proxy, browser.proxy_cost)];
+    lock(state).cost = vec![
+        line(CostComponent::Browser, CostBasis::Metered, browser.browser_cost),
+        line(CostComponent::Proxy, CostBasis::Unsettled, browser.proxy_cost),
+    ];
 }
 
 async fn call(api: &Api, method: &str, path: &str, body: &str) -> Result<Response, BrowserUseCloudError> {
@@ -778,6 +783,11 @@ mod tests {
         assert!(keyed(&requests[0]) && !keyed(&requests[1]) && keyed(&requests[2]));
         assert_eq!(requests[2].body, br#"{"action":"stop"}"#);
         assert_eq!(dollars(&cloud), [Some(0.50), Some(0.10)]);
+        // The proxy reading at the stop is labelled as what it is, and is not an unknown a dollar cap would stop on.
+        assert_eq!(
+            cloud.cost().iter().map(|line| line.basis).collect::<Vec<_>>(),
+            [CostBasis::Metered, CostBasis::Unsettled]
+        );
     }
 
     #[tokio::test]
@@ -996,14 +1006,23 @@ mod tests {
     #[tokio::test]
     async fn the_create_body_keeps_pythons_key_order() {
         let cases = [
-            (BrowserUseCloudOptions::default(), r#"{"timeout":15,"proxyCountryCode":"us","solveCaptchas":true}"#),
+            (
+                BrowserUseCloudOptions::default(),
+                concat!(
+                    r#"{"timeout":15,"proxyCountryCode":"us","solveCaptchas":true,"#,
+                    r#""browserScreenWidth":1120,"browserScreenHeight":780}"#,
+                ),
+            ),
             (
                 BrowserUseCloudOptions {
                     timeout_minutes: 240,
                     profile: Some("profile-42".into()),
                     ..Default::default()
                 },
-                r#"{"timeout":240,"proxyCountryCode":"us","solveCaptchas":true,"profileId":"profile-42"}"#,
+                concat!(
+                    r#"{"timeout":240,"proxyCountryCode":"us","solveCaptchas":true,"profileId":"profile-42","#,
+                    r#""browserScreenWidth":1120,"browserScreenHeight":780}"#,
+                ),
             ),
             (
                 BrowserUseCloudOptions {

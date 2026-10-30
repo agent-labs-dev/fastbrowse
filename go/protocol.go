@@ -68,6 +68,7 @@ const (
 	CostBasisMetered   CostBasis = "metered"
 	CostBasisEstimated CostBasis = "estimated"
 	CostBasisBounded   CostBasis = "bounded"
+	CostBasisUnsettled CostBasis = "unsettled"
 	CostBasisUnknown   CostBasis = "unknown"
 )
 

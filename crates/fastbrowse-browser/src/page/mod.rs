@@ -18,6 +18,7 @@ use data_encoding::{BASE64, HEXLOWER};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
+use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, Operation, SourceControl};
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult,
@@ -963,7 +964,8 @@ impl CdpPage {
         }
         let client = self.session.client()?;
         let session_id = self.session.active_session_id()?;
-        let capture = client.send("Page.captureScreenshot", json!({"format": "png"}), Some(&session_id));
+        let metrics = client.send("Page.getLayoutMetrics", json!({}), Some(&session_id)).await?;
+        let capture = client.send("Page.captureScreenshot", screenshot_params(&metrics), Some(&session_id));
         tokio::pin!(capture);
         let shot = match timeout(secs(SCREENSHOT_WAIT_SECONDS), &mut capture).await {
             Ok(shot) => shot?,
@@ -1355,6 +1357,25 @@ impl CdpPage {
 }
 
 /// Lift a browser failure to the variant the decision loop reads; the loop holds the page as `Arc<dyn Page>`.
+/// The capture of the viewport `metrics` describe, shrunk only when its device pixels pass Jev's side, which a capture
+/// does on a high density screen: Browser Use has started browsers at densities of 1.25 and 2, so 1120 wide can be 2240.
+fn screenshot_params(metrics: &Value) -> Value {
+    let size = |key: &str| {
+        let viewport = &metrics[key];
+        Some((viewport["clientWidth"].as_f64()?, viewport["clientHeight"].as_f64()?))
+    };
+    let side = f64::from(JEV_IMAGE_SIDE);
+    match (size("visualViewport"), size("cssVisualViewport")) {
+        (Some((pixels_wide, pixels_high)), Some((width, height))) if pixels_wide.max(pixels_high) > side => {
+            // One short of the side, because the capture rounds its size up.
+            let scale = (side - 1.0) / pixels_wide.max(pixels_high);
+            let (x, y) = (&metrics["cssVisualViewport"]["pageX"], &metrics["cssVisualViewport"]["pageY"]);
+            json!({"format": "png", "clip": {"x": x, "y": y, "width": width, "height": height, "scale": scale}})
+        }
+        _ => json!({"format": "png"}),
+    }
+}
+
 fn seam<T>(result: Result<T, BrowserError>) -> PageResult<T> {
     result.map_err(Into::into)
 }
@@ -1468,6 +1489,23 @@ mod tests {
         assert!(!same_http_origin("http://a.test/", "https://a.test/"));
         assert!(!same_http_origin("http://a.test:8080/", "http://a.test/"));
         assert!(same_http_origin("http://A.test/", "http://a.TEST/z"));
+    }
+
+    #[test]
+    fn a_capture_past_jevs_side_is_shrunk_to_fit_and_any_other_is_left_alone() {
+        let metrics = |pixels: (u32, u32)| {
+            json!({
+                "visualViewport": {"clientWidth": pixels.0, "clientHeight": pixels.1},
+                "cssVisualViewport": {"pageX": 0, "pageY": 40, "clientWidth": 1120, "clientHeight": 534},
+            })
+        };
+        assert_eq!(screenshot_params(&metrics((1400, 668))), json!({"format": "png"}));
+        assert_eq!(screenshot_params(&json!({})), json!({"format": "png"}));
+        let shrunk = screenshot_params(&metrics((2240, 1068)));
+        let scale = shrunk["clip"]["scale"].as_f64().unwrap();
+        assert!(2240.0 * scale <= f64::from(JEV_IMAGE_SIDE));
+        assert_eq!(shrunk["clip"]["width"], 1120.0);
+        assert_eq!(shrunk["clip"]["y"], 40);
     }
 
     #[test]

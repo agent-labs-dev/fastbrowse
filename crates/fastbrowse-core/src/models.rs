@@ -420,6 +420,8 @@ str_enum! {
         Estimated = "estimated",
         /// No charge was reported, and `dollars` is the most the call could have cost. Never less than the charge.
         Bounded = "bounded",
+        /// The provider's figure so far, read before it finished metering: the final charge can be higher.
+        Unsettled = "unsettled",
         /// No charge information; never counted as zero.
         Unknown = "unknown",
     }
@@ -440,7 +442,7 @@ str_enum! {
 /// estimate may be under its charge.
 pub fn combined_basis<'a>(lines: impl IntoIterator<Item = &'a CostLine>) -> CostBasis {
     let bases: Vec<CostBasis> = lines.into_iter().map(|line| line.basis).collect();
-    [CostBasis::Unknown, CostBasis::Estimated, CostBasis::Bounded, CostBasis::Metered]
+    [CostBasis::Unknown, CostBasis::Unsettled, CostBasis::Estimated, CostBasis::Bounded, CostBasis::Metered]
         .into_iter()
         .find(|basis| bases.contains(basis))
         .unwrap_or(CostBasis::Metered)

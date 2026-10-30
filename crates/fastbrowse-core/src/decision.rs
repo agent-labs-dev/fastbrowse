@@ -25,6 +25,9 @@ pub type Images = IndexMap<String, Vec<u8>>;
 /// A request with no images.
 pub static NO_IMAGES: std::sync::LazyLock<Images> = std::sync::LazyLock::new(Images::new);
 
+/// The longest side of a Jev image, in pixels.
+pub const JEV_IMAGE_SIDE: u32 = 1568;
+
 /// Whether TypeSafe takes `png` as a Jev image: a PNG 280 to 1568 pixels a side and 78,400 to 2,458,624 in all, of at
 /// most 16 MiB. An image outside these is refused with the whole request, never resized.
 pub fn jev_takes_png(png: &[u8]) -> bool {
@@ -33,7 +36,9 @@ pub fn jev_takes_png(png: &[u8]) -> bool {
     }
     let side = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as u64;
     let (width, height) = (side(16), side(20));
-    (280..=1568).contains(&width) && (280..=1568).contains(&height) && (78_400..=2_458_624).contains(&(width * height))
+    (280..=JEV_IMAGE_SIDE as u64).contains(&width)
+        && (280..=JEV_IMAGE_SIDE as u64).contains(&height)
+        && (78_400..=2_458_624).contains(&(width * height))
 }
 
 /// `state` with every value that is an image reference left out, for a route that takes no image.

@@ -112,6 +112,8 @@ public enum CostBasis
     Estimated,
     [JsonStringEnumMemberName("bounded")]
     Bounded,
+    [JsonStringEnumMemberName("unsettled")]
+    Unsettled,
     [JsonStringEnumMemberName("unknown")]
     Unknown,
 }

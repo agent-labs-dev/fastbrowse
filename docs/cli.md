@@ -160,6 +160,10 @@ cannot be bounded is unknown, and a run with a dollar cap then stops with `budge
 unanswered for 120 seconds returns `unavailable`. Step and dollar limits do not bound elapsed time:
 `Limits(max_seconds=...)` does.
 
+A run's `proxy` cost line on a Browser Use Cloud browser has the basis `unsettled`: the service meters proxy data
+about 30 seconds after a browser stops, and a run returns without waiting, so the figure can read low. The
+`browser_id` in the run's browser event reads the settled figure from `GET /browsers/{id}` once that time has passed.
+
 ## Troubleshooting
 
 [Troubleshooting](troubleshooting.md) covers each status: what it means, common causes and the next step.
