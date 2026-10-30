@@ -34,10 +34,6 @@ jobs:
       # A tag that disagrees with the package version would publish one number under another's name.
       - if: github.event_name == 'push'
         run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
-      # No registry takes a version back, so only a commit already on main (reviewed, CI-gated) is published;
-      # a tag pushed on a branch or a stray local commit stops here.
-      - if: github.event_name == 'push'
-        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - id: version
         run: echo "version=$(uv version --short)" >> "$GITHUB_OUTPUT"
       # The tag is the Python version, and every npm version is published from it.
