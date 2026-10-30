@@ -13,10 +13,12 @@ fastbrowse-agent = { workspace = true }
 fastbrowse-browser = { workspace = true, features = ["recording", "cursor"] }
 fastbrowse-clients = { workspace = true }
 fastbrowse-core = { workspace = true }
-# gzip and deflate bodies, which httpx decodes for the Python reader; miniz_oxide is pure Rust.
+# The WHATWG Encoding Standard's decoders, by the labels a response or a document names.
+encoding_rs = "0.8.42"
+# gzip and deflate bodies; miniz_oxide is pure Rust.
 flate2 = "1.1.10"
-# The HTML5 character reference tables `html.unescape` decodes a fetched document with.
-htmlize = { version = "1.1.0", features = ["unescape"] }
+# The WHATWG HTML tokenizer, which reads a fetched document's tags, raw text and character references as a browser does.
+html5ever = "0.40.1"
 indexmap = "2.14.2"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "fs"] }

@@ -17,6 +17,7 @@ use std::io::Read;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use encoding_rs::{Encoding, UTF_8};
 use flate2::read::{DeflateDecoder, MultiGzDecoder, ZlibDecoder};
 
 use fastbrowse_browser::session::{CheckAccess, check_browser_access};
@@ -35,7 +36,8 @@ use html::{Found, blocks, clean, join};
 
 /// A page that never finishes arriving would hold a run for its whole deadline, so the read is bounded.
 const TIMEOUT_SECONDS: f64 = 15.0;
-/// Markup beyond this is not a document anyone reads as text; the browser can still be pointed at it.
+/// A body past this is left to the browser rather than held in memory, before or after its content coding is removed.
+/// It is the one point where a browserless read hands over by size.
 const MAX_BYTES: usize = 5 * 1024 * 1024;
 /// A redirect chain longer than this is a loop or a tracker maze, and the browser is the reader for both.
 const MAX_REDIRECTS: usize = 10;
@@ -122,43 +124,13 @@ fn outside(url: &str, allowed_origins: Option<&[String]>, lead: &str) -> Result<
     }
 }
 
-/// The body decoded by the charset its response names, UTF-8 when it names none, as httpx decodes `response.text`
-/// with `errors="replace"`. UTF-8, Latin-1, cp1252 and ASCII are decoded as Python's codecs decode them; another
-/// charset is refused, as Python refuses one it has no codec for.
-fn decode(content_type: &str, body: &[u8]) -> Result<String, NotFetched> {
-    let charset = content_type.split(';').skip(1).find_map(|parameter| {
-        let (name, value) = parameter.split_once('=')?;
-        name.trim()
-            .eq_ignore_ascii_case("charset")
-            .then(|| value.trim().trim_matches(['"', '\'']).to_ascii_lowercase().replace(['-', ' '], "_"))
-    });
-    let decoded = match charset.as_deref() {
-        None | Some("utf_8" | "utf8" | "u8" | "utf") => String::from_utf8_lossy(body).into_owned(),
-        Some("latin_1" | "latin1" | "iso8859_1" | "iso_8859_1" | "l1" | "latin" | "8859" | "cp819") => {
-            body.iter().map(|&byte| char::from(byte)).collect()
-        }
-        Some("cp1252" | "windows_1252" | "1252") => body.iter().map(|&byte| cp1252(byte)).collect(),
-        Some("ascii" | "us_ascii" | "646") => body
-            .iter()
-            .map(|&byte| if byte.is_ascii() { char::from(byte) } else { char::REPLACEMENT_CHARACTER })
-            .collect(),
-        Some(_) => return Err(refused("the document's character set is not one this can decode")),
-    };
-    Ok(decoded)
-}
-
-/// Python's cp1252, whose five undefined bytes decode to U+FFFD under `errors="replace"`.
-fn cp1252(byte: u8) -> char {
-    const HIGH: [char; 32] = [
-        '\u{20ac}', '\u{fffd}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}', '\u{2c6}',
-        '\u{2030}', '\u{160}', '\u{2039}', '\u{152}', '\u{fffd}', '\u{17d}', '\u{fffd}', '\u{fffd}', '\u{2018}',
-        '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}', '\u{2dc}', '\u{2122}', '\u{161}',
-        '\u{203a}', '\u{153}', '\u{fffd}', '\u{17e}', '\u{178}',
-    ];
-    match byte {
-        0x80..=0x9f => HIGH[usize::from(byte - 0x80)],
-        _ => char::from(byte),
-    }
+/// The body as text, by the WHATWG Encoding Standard: a byte order mark first, then the charset the response names, then
+/// for HTML the one a `<meta>` names, and UTF-8 when nothing names one. A label the standard does not know is ignored,
+/// as a browser ignores it, and bytes the encoding cannot map read as U+FFFD.
+fn decode(content_type: &str, body: &[u8], html_document: bool) -> String {
+    let named = html::charset_parameter(content_type).and_then(|label| Encoding::for_label(label.as_bytes()));
+    let encoding = named.or_else(|| html_document.then(|| html::meta_charset(body)).flatten()).unwrap_or(UTF_8);
+    encoding.decode(body).0.into_owned()
 }
 
 /// The body with its content coding removed, bounded by what it decodes to: a small body can inflate to far more than
@@ -178,7 +150,9 @@ fn decoded<'a>(coding: Option<&str>, body: &'a [u8]) -> Result<Cow<'a, [u8]>, No
     }
     .map_err(|_| refused("the compressed response is corrupt"))?;
     if out.len() > MAX_BYTES {
-        return Err(refused(format!("the document is past {MAX_BYTES} bytes, more than a text read takes")));
+        return Err(refused(format!(
+            "the document is past {MAX_BYTES} bytes, which a browserless read leaves to the browser"
+        )));
     }
     Ok(Cow::Owned(out))
 }
@@ -228,14 +202,16 @@ pub async fn fetch_capture(
         return Err(refused(format!("the fetch got HTTP {}", response.status)));
     }
     if response.body.len() > MAX_BYTES {
-        return Err(refused(format!("the document is past {MAX_BYTES} bytes, more than a text read takes")));
+        return Err(refused(format!(
+            "the document is past {MAX_BYTES} bytes, which a browserless read leaves to the browser"
+        )));
     }
     let body = decoded(response.header("content-encoding"), &response.body)?;
     let content_type = response.header("content-type").unwrap_or_default();
     let mime = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
-    let body = decode(content_type, &body)?;
+    let body = decode(content_type, &body, HTML_TYPES.contains(&mime.as_str()));
     if mime == "text/plain" {
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
