@@ -9,7 +9,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use common::{binary, result, runner};
-use fastbrowse_cli::cli::{self, Context, Streams};
+use fastbrowse_cli::cli::{self, Build, Context, Streams};
 use fastbrowse_cli::runner::{RunArgs, Runner};
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
@@ -51,6 +51,16 @@ impl Ran {
 
 /// Pinned to config-file-free settings, so a checkout's `.env` cannot add a profile the guards would read.
 async fn cli_with(argv: &[&str], settings: Settings, environ: &[(&str, &str)], answer: RunResult) -> Ran {
+    cli_built(argv, settings, environ, answer, Build::default()).await
+}
+
+async fn cli_built(
+    argv: &[&str],
+    settings: Settings,
+    environ: &[(&str, &str)],
+    answer: RunResult,
+    build: Build,
+) -> Ran {
     let calls: Arc<Mutex<Vec<RunArgs>>> = Arc::default();
     let seen = calls.clone();
     let fake: Arc<dyn Runner> = runner(move |args: RunArgs| {
@@ -64,6 +74,7 @@ async fn cli_with(argv: &[&str], settings: Settings, environ: &[(&str, &str)], a
         settings: Arc::new(move || Ok(settings.clone())),
         environ: environ.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
         streams: Streams { out: Arc::new(Mutex::new(out.clone())), err: Arc::new(Mutex::new(err.clone())) },
+        build,
     };
     let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
     let code = cli::main(&argv, &context).await;
@@ -73,6 +84,24 @@ async fn cli_with(argv: &[&str], settings: Settings, environ: &[(&str, &str)], a
 
 async fn cli(argv: &[&str]) -> Ran {
     cli_with(argv, Settings::default(), &[], RunResult { answer: Some("ok".into()), ..result(Status::Complete) }).await
+}
+
+#[tokio::test]
+async fn test_the_version_and_the_json_result_name_the_commit_that_ran() {
+    let sha = "e1d478b".to_string() + &"0".repeat(33);
+    let built = Build { git_sha: Some(sha.clone()), git_dirty: Some(true) };
+    let answer = || RunResult { answer: Some("ok".into()), ..result(Status::Complete) };
+    let version = cli_built(&["--version"], Settings::default(), &[], answer(), built.clone()).await;
+    assert_eq!(version.out, format!("fastbrowse {} (e1d478b, dirty)\n", env!("CARGO_PKG_VERSION")));
+    let ran = cli_built(&["t", "--json"], Settings::default(), &[], answer(), built).await;
+    assert_eq!(
+        ran.json()["build"],
+        serde_json::json!({"fastbrowse_version": env!("CARGO_PKG_VERSION"), "git_sha": sha, "git_dirty": true})
+    );
+    // A release knows only its version, and says so rather than naming a commit.
+    let release = cli(&["--version"]).await;
+    assert_eq!(release.out, format!("fastbrowse {}\n", env!("CARGO_PKG_VERSION")));
+    assert_eq!(cli(&["t", "--json"]).await.json()["build"]["git_sha"], Value::Null);
 }
 
 #[tokio::test]
@@ -364,4 +393,24 @@ async fn test_help_matches_argparse() {
     let ran = cli(&["--help"]).await;
     assert_eq!(ran.code, 0);
     assert_eq!(ran.out, include_str!("../generated/cli.txt"));
+}
+
+#[test]
+fn test_the_trace_names_the_build_before_the_run() {
+    let dir = std::env::temp_dir().join(format!("fastbrowse-trace-build-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("trace.jsonl");
+    let output = Command::new(binary())
+        .args(["t", "--cdp-url", "ws://b.test/x", "--trace"])
+        .arg(&trace)
+        .env_remove("FASTBROWSE_PROFILE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(&trace).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let first: Value = serde_json::from_str(text.lines().next().expect("a trace line")).unwrap();
+    assert_eq!(first["event"], "build");
+    assert_eq!(first["fastbrowse_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(first["git_sha"], Value::Null);
 }

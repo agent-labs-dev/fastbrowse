@@ -18,7 +18,7 @@ use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretV
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
-use fastbrowse_core::telemetry::{TRACE_ENV, trace_to};
+use fastbrowse_core::telemetry::{TRACE_ENV, Trace, trace_to};
 use indexmap::IndexMap;
 
 use crate::argparse::{Exit, Opt, Parsed, Parser, py_float, py_int};
@@ -72,13 +72,43 @@ pub struct Context {
     pub settings: SettingsSource,
     pub environ: HashMap<String, String>,
     pub streams: Streams,
+    pub build: Build,
 }
 
-pub fn parser() -> Parser {
+/// Which commit is running, as `fastbrowse.build.identity()` works it out: the Python command passes it in, and the
+/// binary on its own knows only its version, so both are None there.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Build {
+    pub git_sha: Option<String>,
+    pub git_dirty: Option<bool>,
+}
+
+impl Build {
+    /// `fastbrowse 0.9.0 (e1d478b, dirty)` from a checkout, and `fastbrowse 0.9.0` from a release.
+    pub fn version_line(&self) -> String {
+        let mut line = format!("fastbrowse {}", env!("CARGO_PKG_VERSION"));
+        if let Some(sha) = &self.git_sha {
+            let short: String = sha.chars().take(7).collect();
+            let dirty = if self.git_dirty == Some(true) { ", dirty" } else { "" };
+            line.push_str(&format!(" ({short}{dirty})"));
+        }
+        line
+    }
+
+    fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::from_iter([
+            ("fastbrowse_version".into(), env!("CARGO_PKG_VERSION").into()),
+            ("git_sha".into(), self.git_sha.clone().into()),
+            ("git_dirty".into(), self.git_dirty.into()),
+        ])
+    }
+}
+
+pub fn parser(build: &Build) -> Parser {
     Parser {
         prog: "fastbrowse",
         help: include_str!("../generated/cli.txt"),
-        version: Some(format!("fastbrowse {}", env!("CARGO_PKG_VERSION"))),
+        version: Some(build.version_line()),
         options: vec![
             Opt::version(),
             Opt::value("--start"),
@@ -151,8 +181,8 @@ fn float_value(value: &str) -> Result<(), String> {
     py_float(value).map(drop).ok_or_else(|| format!("invalid float value: {}", fastbrowse_core::py::text::repr(value)))
 }
 
-pub fn parse(argv: &[String]) -> Result<Args, Exit> {
-    let parsed: Parsed = parser().parse(argv, |flag, value| match flag {
+pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
+    let parsed: Parsed = parser(build).parse(argv, |flag, value| match flag {
         "--cdp-port" | "--max-steps" => int_value(value),
         "--max-dollars" => float_value(value),
         "--proxy-country" => options::country_code(value).map(drop),
@@ -402,7 +432,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     }
     let streams = &context.streams;
     if args.json {
-        streams.print(&json::write(&result.dump(), Style::PYDANTIC.indented(2)));
+        streams.print(&json::write(&with_build(result.dump(), &context.build), Style::PYDANTIC.indented(2)));
     } else {
         // A local LLM endpoint reports no price, and printing only the priced calls would read as the whole bill.
         let mut spend = format!("${:.4}", result.cost.known_dollars());
@@ -438,7 +468,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
 /// `cli.main()` after the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
-    let args = match parse(argv) {
+    let args = match parse(argv, &context.build) {
         Ok(args) => args,
         Err(Exit::Print(text)) => {
             let mut out = context.streams.out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -458,18 +488,28 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
         context.streams.eprint(&format!("fastbrowse: cannot write the trace to {destination}: {error}"));
         return 1;
     }
+    Trace::disabled().event("build", || context.build.fields());
     match run(&args, context).await {
         Ok(code) => code,
         Err(error) => {
             if args.json {
-                context
-                    .streams
-                    .print(&json::write(&options::error_result(&error.0).dump(), Style::PYDANTIC.indented(2)));
+                context.streams.print(&json::write(
+                    &with_build(options::error_result(&error.0).dump(), &context.build),
+                    Style::PYDANTIC.indented(2),
+                ));
             }
             context.streams.eprint(&format!("fastbrowse: {}", error.0));
             1
         }
     }
+}
+
+/// The result `--json` prints, with the build that produced it, so a result file names its commit.
+fn with_build(mut result: serde_json::Value, build: &Build) -> serde_json::Value {
+    if let serde_json::Value::Object(fields) = &mut result {
+        fields.insert("build".into(), build.fields().into());
+    }
+    result
 }
 
 /// A path as `Path.resolve()` would leave it, for messages that name one.

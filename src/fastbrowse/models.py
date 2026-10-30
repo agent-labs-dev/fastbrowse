@@ -292,6 +292,22 @@ class RunResult(Frozen):
         return self.status is Status.COMPLETE
 
 
+class Build(Frozen):
+    """The build that produced a result."""
+
+    fastbrowse_version: str | None
+    git_sha: str | None
+    """The full commit, or None when no commit is known (the standalone binary or a released wheel)."""
+    git_dirty: bool | None
+    """Whether the tree had uncommitted changes; None outside a checkout."""
+
+
+class CliResult(RunResult):
+    """What `fastbrowse --json` prints: the run's result and the build that produced it."""
+
+    build: Build
+
+
 class LocalChrome(Frozen):
     binary: str | None = None
     """A name or path that replaces discovery of the Chrome binary."""
