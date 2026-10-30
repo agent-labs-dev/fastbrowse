@@ -340,7 +340,53 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -492,7 +538,12 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": []
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -711,7 +762,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -930,7 +995,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -1122,7 +1201,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -1339,7 +1432,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -1911,7 +2018,109 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b10",
+         "label": "Button 10",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b11",
+         "label": "Button 11",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -2483,7 +2692,109 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b10",
+         "label": "Button 10",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b11",
+         "label": "Button 11",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -2798,6 +3109,19 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
       }
      ]
     }
@@ -4271,6 +4595,91 @@
        "offered": 40,
        "retry_with": 10,
        "reason": "HTTP 503"
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -6097,7 +6506,29 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b39",
+         "label": "Button 39",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -10124,6 +10555,235 @@
        "requests": 5,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "l0",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l1",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l2",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l3",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l4",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l5",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l6",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l7",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "l8",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l9",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l10",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 10",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l11",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 11",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l12",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 12",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l13",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 13",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l14",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 14",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l15",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 15",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l16",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 16",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l17",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 17",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l18",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 18",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l19",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 19",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l20",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 20",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l21",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 21",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l22",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 22",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l23",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 23",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l24",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 24",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l25",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 25",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l26",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 26",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "l27",
+         "label": "Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, Zebra Pen Z Grip Black Ballpoint Pens with Pocket Clip 8pk, Retractable Black Ink Ballpoint Pens, listing 27",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -11309,7 +11969,29 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Add to cart",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Add to cart",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": {
@@ -11552,7 +12234,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -11782,7 +12478,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -12007,7 +12717,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -12224,7 +12948,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -12445,7 +13183,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -13965,6 +14717,123 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b10",
+         "label": "Button 10",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b11",
+         "label": "Button 11",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b12",
+         "label": "Button 12",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b30",
+         "label": "Button 30",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
       }
      ]
     }
@@ -15465,6 +16334,83 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b35",
+         "label": "Destination",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b36",
+         "label": "Button 36",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "next",
+         "label": "Next ›",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b37",
+         "label": "Show 20 more",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b38",
+         "label": "Button 38",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -17018,6 +17964,115 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b10",
+         "label": "Button 10",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b11",
+         "label": "Button 11",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b40",
+         "label": "Apply filters",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
       }
      ]
     }
@@ -18347,7 +19402,125 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b10",
+         "label": "Button 10",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b11",
+         "label": "Button 11",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b12",
+         "label": "Button 12",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b13",
+         "label": "Button 13",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -21533,7 +22706,173 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b10",
+         "label": "Button 10",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b11",
+         "label": "Button 11",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b12",
+         "label": "Button 12",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b13",
+         "label": "Button 13",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b14",
+         "label": "Button 14",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b15",
+         "label": "Button 15",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b16",
+         "label": "Button 16",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b17",
+         "label": "Button 17",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b18",
+         "label": "Button 18",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b19",
+         "label": "Button 19",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -21855,7 +23194,38 @@
        }
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "drag1",
+         "label": "Card A",
+         "operations": [
+          "click",
+          "drag"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -22442,7 +23812,102 @@
        }
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "drag1",
+         "label": "Card A",
+         "operations": [
+          "click",
+          "drag"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 7",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b8",
+         "label": "Button 8",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -22961,6 +24426,75 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 9
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b7",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -23918,6 +25452,75 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
       }
      ]
     },
@@ -23988,6 +25591,75 @@
        "requests": 0,
        "reused": 10,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b5",
+         "label": "Button 5",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b6",
+         "label": "Button 6",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b9",
+         "label": "Button 9",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
       }
      ]
     }
@@ -24683,6 +26355,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     },
@@ -24762,6 +26455,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -25457,6 +27171,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     },
@@ -25536,6 +27271,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -26231,6 +27987,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     },
@@ -26310,6 +28087,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -27011,6 +28809,35 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     },
@@ -27090,6 +28917,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -27785,6 +29633,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     },
@@ -27864,6 +29733,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -28559,6 +30449,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     },
@@ -28638,6 +30549,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -29317,6 +31249,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b4",
+         "label": "Button 4",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     },
@@ -29396,6 +31349,27 @@
        "requests": 1,
        "reused": 4,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b0",
+         "label": "Button 0",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        },
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -29614,7 +31588,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "fill"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -29775,7 +31763,12 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": []
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -29992,7 +31985,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -30144,7 +32151,12 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": []
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -30361,7 +32373,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": true
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -30569,7 +32595,12 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": []
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -30901,7 +32932,40 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "f1",
+         "label": "Resume 東京 \"cv\"",
+         "operations": [
+          "click",
+          "enter",
+          "fill",
+          "upload"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
@@ -31555,6 +33619,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -31900,6 +33985,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -32245,6 +34351,27 @@
        "requests": 1,
        "reused": 0,
        "duplicates": 0
+      },
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b2",
+         "label": "Button 2",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        },
+        {
+         "id": "b3",
+         "label": "Button 3",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
       }
      ]
     }
@@ -32417,7 +34544,21 @@
        "destination": null
       }
      },
-     "trace": []
+     "trace": [
+      {
+       "event": "decide_choices",
+       "controls": [
+        {
+         "id": "b1",
+         "label": "Button 1",
+         "operations": [
+          "click"
+         ],
+         "chosen": false
+        }
+       ]
+      }
+     ]
     }
    ],
    "ledger_after": null
