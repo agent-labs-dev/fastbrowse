@@ -211,6 +211,10 @@
     "version": 6,
     "fingerprint": "dbd3ea8be43a8c3b"
   },
+  "mock-transient-error": {
+    "version": 1,
+    "fingerprint": "2c14e9a4c54216ef"
+  },
   "mock-upload-document": {
     "version": 2,
     "fingerprint": "57167eb6dd0ad2a2"

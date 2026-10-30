@@ -13,7 +13,7 @@ use super::helpers::{
     EvidenceKey, answer_evidence, lookup, partition_proof, path_of, unread, unread_transaction, visited,
 };
 use super::recovery::DONE;
-use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate};
+use super::state::{Flow, RunState, SiteFailure, Step, Stop, TransactionCandidate};
 use super::{Agent, Outcome};
 use crate::batches::evaluate_batches;
 use crate::error::AgentError;
@@ -274,6 +274,7 @@ impl Agent {
             history: &history,
             visited: &shown,
             changed_since_read: state.read_documents.get(&fresh.document_key).copied().unwrap_or(false),
+            site_failure: state.site_failure.as_ref().filter(|failure| failure.transient()).map(|f| f.message()),
             ledger: Some(&state.ledger),
             trace: self.trace.clone(),
         };
@@ -445,7 +446,7 @@ impl Agent {
     ///
     /// The page a run finishes on is not the page its submission produced: a message form whose server answered 503
     /// with a page still saying "your message has been sent" was reloaded with a GET, which answered 200.
-    async fn failed_submission(&self, state: &mut RunState) -> Step<Option<HttpFailure>> {
+    async fn failed_submission(&self, state: &mut RunState) -> Step<Option<SiteFailure>> {
         let landed: Vec<usize> = state
             .transaction_candidates
             .iter()
@@ -474,7 +475,7 @@ impl Agent {
             return Ok(None);
         };
         match (&last.landed_url, last.landed_status) {
-            (Some(url), Some(status)) if status >= 400 => Ok(Some(HttpFailure { url: url.clone(), status })),
+            (Some(url), Some(status)) if status >= 400 => Ok(Some(SiteFailure::http(url, status, state.steps.len()))),
             _ => Ok(None),
         }
     }

@@ -185,6 +185,8 @@ pub struct DoneOptions<'a> {
     pub visited: &'a [String],
     /// Whether an action changed the page after its notes were last read: what the notes quote may no longer show.
     pub changed_since_read: bool,
+    /// The site failure standing where the run is, stated so an answer drawn from it is not taken as the task's.
+    pub site_failure: Option<String>,
     /// Reserves the one Jev call.
     pub ledger: Option<&'a Ledger>,
     pub trace: Trace,
@@ -257,6 +259,9 @@ pub async fn check_done(
     }
     if options.changed_since_read {
         context.insert("page_changed_since_read".into(), true.into());
+    }
+    if let Some(failure) = &options.site_failure {
+        context.insert("site_failure".into(), failure.clone().into());
     }
     let steps: Vec<String> = options.history.iter().map(step).collect();
     if !steps.is_empty() {

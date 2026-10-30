@@ -114,6 +114,7 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
                 history: &history,
                 visited: &visited,
                 changed_since_read: false,
+                site_failure: None,
                 ledger: None,
                 trace: trace.clone(),
             };

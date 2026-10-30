@@ -113,28 +113,73 @@ impl Flow {
 
 pub(crate) type Step<T = ()> = Result<T, Flow>;
 
+/// What says the site failed on a page: its HTTP status, the browser's navigation error, or Jev reading the page.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct HttpFailure {
-    pub url: String,
-    pub status: i64,
+pub(crate) enum FailureCause {
+    Http(i64),
+    /// The browser could not open the address, after its own retries: the error it gave.
+    Navigation(String),
+    /// Jev judged that the page reports the site failed to deliver what was asked, such as an error shown in place
+    /// of search results, a maintenance notice or a load that never finished.
+    Reported,
 }
 
-impl HttpFailure {
-    pub fn message(&self) -> String {
-        format!("HTTP {} at {} in this browser session; the cause is unknown.", self.status, self.url)
+/// A site failure on one address, stated to Jev and the done check while the run is on it, and the status a run
+/// ends with when recovery runs out there.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SiteFailure {
+    pub url: String,
+    pub cause: FailureCause,
+    /// The run's step count when the failure was first seen, so how long it has stood is stated in steps.
+    pub since: usize,
+}
+
+impl SiteFailure {
+    pub fn http(url: &str, status: i64, since: usize) -> SiteFailure {
+        SiteFailure { url: url.to_string(), cause: FailureCause::Http(status), since }
     }
 
-    pub fn stop(&self) -> Stop {
-        let mut status = match self.status {
-            401 => Status::NeedsLogin,
-            403 => Status::Blocked,
-            _ => Status::Stuck,
-        };
-        if matches!(self.status, 408 | 419 | 429) || self.status >= 500 {
-            status = Status::Unavailable;
+    pub fn message(&self) -> String {
+        match &self.cause {
+            FailureCause::Http(status) => {
+                format!("HTTP {status} at {} in this browser session; the cause is unknown.", self.url)
+            }
+            FailureCause::Navigation(error) => {
+                format!("opening {} failed in this browser session: {error}.", self.url)
+            }
+            FailureCause::Reported => {
+                format!("the page at {} reported that the site failed to deliver what was asked.", self.url)
+            }
         }
+    }
+
+    /// Whether the failure can clear by itself, so trying the address again is worth offering.
+    pub fn transient(&self) -> bool {
+        self.stop().status == Status::Unavailable
+    }
+
+    /// A status that can clear with time, a navigation the browser could not complete and a failure the page reports
+    /// all leave the site unavailable for now; the same run later may pass.
+    pub fn stop(&self) -> Stop {
+        let status = match self.cause {
+            FailureCause::Http(401) => Status::NeedsLogin,
+            FailureCause::Http(403) => Status::Blocked,
+            FailureCause::Http(status) if matches!(status, 408 | 419 | 429) || status >= 500 => Status::Unavailable,
+            FailureCause::Http(_) => Status::Stuck,
+            FailureCause::Navigation(_) | FailureCause::Reported => Status::Unavailable,
+        };
         Stop::new(status, format!("Could not complete the task after {}", self.message()))
     }
+}
+
+/// The recovery a run is following: the page state it was asked on, the problem it was asked about and the action
+/// that problem withheld, all stated again in the next decision there so the refused action does not undo the
+/// recovery's subgoal.
+#[derive(Debug, Clone)]
+pub(crate) struct Recovering {
+    pub key: String,
+    pub problem: String,
+    pub withheld: Withheld,
 }
 
 #[derive(Debug, Clone)]
@@ -258,7 +303,7 @@ pub(crate) struct RunState {
     pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
     pub history: Vec<HistoryEntry>,
-    pub http_failure: Option<HttpFailure>,
+    pub site_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
     /// The operation and control id recovery named, taken when Jev is still unsure of the next step.
@@ -266,6 +311,8 @@ pub(crate) struct RunState {
     /// Jev's pick when asked again after a stall or an unsure pick, by the page state it was asked on, taken as the
     /// next decision there.
     pub picked: Option<(String, Decision)>,
+    /// The LLM recovery last asked, until the next decision on its page state.
+    pub recovering: Option<Recovering>,
     pub unchanged: i64,
     /// Controls a fill or select has written, by document, so only a field's first new value counts as progress by
     /// itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes.
@@ -337,6 +384,11 @@ pub(crate) struct FieldText {
 }
 
 impl RunState {
+    /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
+    pub fn reload_target(&self, url: &str) -> Option<String> {
+        self.site_failure.as_ref().filter(|failure| failure.url == url && failure.transient()).map(|f| f.url.clone())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         task: String,
@@ -371,11 +423,12 @@ impl RunState {
             relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
             history: Vec::new(),
-            http_failure: None,
+            site_failure: None,
             http_seen: HashSet::new(),
             hint: None,
             directed: None,
             picked: None,
+            recovering: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
