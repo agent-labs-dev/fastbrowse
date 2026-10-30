@@ -69,25 +69,25 @@ def _status_repo(tmp_path: Path) -> Path:
 def test_the_status_table_and_the_exit_codes_agree(tmp_path: Path) -> None:
     root = _status_repo(tmp_path)
     copy = {
-        "README.md": "| Status | Exit |\n| `complete` | 0 |\n| `stuck` | 9 |\n",
+        "docs/cli.md": "| Status | Exit |\n| `complete` | 0 |\n| `stuck` | 9 |\n",
         "docs/troubleshooting.md": "## stuck (exit 9)\n",
     }
     assert check_statuses(root, copy) == []
 
 
-def test_a_status_missing_from_the_readme_table_is_reported(tmp_path: Path) -> None:
+def test_a_status_missing_from_the_reference_table_is_reported(tmp_path: Path) -> None:
     root = _status_repo(tmp_path)
-    copy = {"README.md": "| `complete` | 0 |\n", "docs/troubleshooting.md": "## stuck (exit 9)\n"}
-    assert check_statuses(root, copy) == ["README.md: the status table has no row for `stuck`"]
+    copy = {"docs/cli.md": "| `complete` | 0 |\n", "docs/troubleshooting.md": "## stuck (exit 9)\n"}
+    assert check_statuses(root, copy) == ["docs/cli.md: the status table has no row for `stuck`"]
 
 
 def test_an_exit_code_that_drifted_from_the_cli_is_reported(tmp_path: Path) -> None:
     root = _status_repo(tmp_path)
     copy = {
-        "README.md": "| `complete` | 0 |\n| `stuck` | 8 |\n",
+        "docs/cli.md": "| `complete` | 0 |\n| `stuck` | 8 |\n",
         "docs/troubleshooting.md": "## stuck (exit 9)\n",
     }
-    assert check_statuses(root, copy) == ["README.md: `stuck` exits 8, but the CLI exits 9"]
+    assert check_statuses(root, copy) == ["docs/cli.md: `stuck` exits 8, but the CLI exits 9"]
 
 
 def test_a_status_with_no_exit_code_is_reported(tmp_path: Path) -> None:
@@ -98,7 +98,7 @@ def test_a_status_with_no_exit_code_is_reported(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     copy = {
-        "README.md": "| `complete` | 0 |\n| `stuck` | 9 |\n",
+        "docs/cli.md": "| `complete` | 0 |\n| `stuck` | 9 |\n",
         "docs/troubleshooting.md": "## stuck (exit 9)\n",
     }
     assert check_statuses(root, copy) == ["crates/fastbrowse-cli/src/cli.rs: `stuck` has no exit code in `exit_code`"]
@@ -107,7 +107,7 @@ def test_a_status_with_no_exit_code_is_reported(tmp_path: Path) -> None:
 def test_a_troubleshooting_section_that_drifted_is_reported(tmp_path: Path) -> None:
     root = _status_repo(tmp_path)
     copy = {
-        "README.md": "| `complete` | 0 |\n| `stuck` | 9 |\n",
+        "docs/cli.md": "| `complete` | 0 |\n| `stuck` | 9 |\n",
         "docs/troubleshooting.md": "## stuck (exit 7)\n",
     }
     assert check_statuses(root, copy) == ["docs/troubleshooting.md: `stuck` says exit 7, but the CLI exits 9"]
