@@ -8,21 +8,11 @@
 //!
 //! Offsets are code points into a `&[char]`, as Python indexes a `str`.
 
-use fastbrowse_core::py::text;
+use fastbrowse_core::py::text::is_word;
 
 /// `\d` in a `str` pattern: a Unicode decimal digit (category Nd).
 pub(crate) fn is_digit(c: char) -> bool {
     crate::comparison::digit(c).is_some()
-}
-
-/// `\w` in a `str` pattern.
-pub(crate) fn is_word(c: char) -> bool {
-    text::is_word(c)
-}
-
-/// `\s` in a `str` pattern.
-pub(crate) fn is_space(c: char) -> bool {
-    text::is_space(c)
 }
 
 /// One ASCII letter of a pattern compiled with `re.IGNORECASE`. sre folds the dotted and dotless i, the long s and

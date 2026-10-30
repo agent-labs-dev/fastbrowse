@@ -4,9 +4,9 @@
 //! does: a quote cut one character apart from Python's is another citation id.
 
 use fastbrowse_core::page::Capture;
-use fastbrowse_core::py::text;
+use fastbrowse_core::py::text::{self, is_space, is_word};
 
-use crate::pyre::{Pat, byte_offsets, is_digit, is_space, is_word};
+use crate::pyre::{Pat, byte_offsets, is_digit};
 
 /// A capture with its text indexed by code point.
 pub(crate) struct Page<'a> {

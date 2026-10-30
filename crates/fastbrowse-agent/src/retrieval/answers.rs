@@ -20,7 +20,7 @@ use super::reading::source_basis;
 use crate::error::{AgentError, Result};
 use crate::memory::{Notes, RenderOptions, fact_id, unique};
 use crate::planner::{FIELD_CATEGORIES, Plan, Requirement, RequirementKind};
-use crate::pyre::{Pat, is_digit, is_word};
+use crate::pyre::{Pat, is_digit};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,7 +193,7 @@ fn citation_label(label: &[char]) -> bool {
     // r"[\w-]+:\d+:\d+(?::[0-9a-f]{16})?|(?:derived|tally):[0-9a-f]+|e\d+"
     Pat::alt(vec![
         Pat::Seq(vec![
-            Pat::plus(Pat::class(|c| is_word(c) || c == '-')),
+            Pat::plus(Pat::class(|c| text::is_word(c) || c == '-')),
             Pat::lit(":"),
             digits(),
             Pat::lit(":"),
