@@ -27,6 +27,7 @@ name: Benchmark campaign
 #   secrets, optional: BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID (the head-to-head group's browserbase arm)
 #            FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
+#   vars, optional:    BROWSERBASE_PLAN, developer or startup: the account's plan, whose listed rates price its sessions
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
 # `budget` is each group's approved total. It only gates whether the next run may start: a run holds its agent,
@@ -140,6 +141,7 @@ jobs:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          BROWSERBASE_PLAN: ${{ vars.BROWSERBASE_PLAN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
@@ -164,10 +166,10 @@ jobs:
             exit 1
           fi
           browserbase=false
-          if test -n "$BROWSERBASE_API_KEY" && test -n "$BROWSERBASE_PROJECT_ID"; then
+          if test -n "$BROWSERBASE_API_KEY" && test -n "$BROWSERBASE_PROJECT_ID" && test -n "$BROWSERBASE_PLAN"; then
             browserbase=true
           elif test "$GROUP_SET" != fastbrowse; then
-            echo "::warning::no Browserbase credentials: the head-to-head runs without browserbase"
+            echo "::warning::no Browserbase credentials or BROWSERBASE_PLAN: the head-to-head runs without browserbase"
           fi
           echo "browserbase=$browserbase" >> "$GITHUB_OUTPUT"
       - name: Build the group matrix
@@ -234,6 +236,7 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
+          BROWSERBASE_PLAN: ${{ vars.BROWSERBASE_PLAN }}
           ARMS: ${{ matrix.arms }}
           OUT: ${{ github.workspace }}/ledgers/${{ matrix.out }}
         run: |
@@ -249,12 +252,15 @@ jobs:
             # Only a group with no hosted browser holds nothing for one; the vendor arms' browsers are billed.
             if test "${#arms[@]}" -eq 1; then browser+=(--browser-reserve-dollars 0); fi
           fi
+          plan=()
+          if [[ " ${arms[*]} " == *" browserbase "* ]]; then plan=(--browserbase-plan "$BROWSERBASE_PLAN"); fi
           uv run --no-sync parallax browser internal \
             --arms "${arms[@]}" \
             --suite "${suites[@]}" \
             --repeat "$REPEAT" \
             --budget "$BUDGET" \
             "${browser[@]}" \
+            "${plan[@]}" \
             --out "$OUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
