@@ -49,7 +49,7 @@ async fn generate(
 ) -> (Vec<Request>, Result<Generation<Value>, LLMError>) {
     let script = Script::new(replies);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result = llm.generate_value(LLMPurpose::Read, messages, &answer_model(), 2000, None).await;
+    let result = llm.generate_value(LLMPurpose::Read, messages, &answer_model(), None).await;
     (script.requests(), result)
 }
 
@@ -72,7 +72,7 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
     assert_eq!(request.header("authorization"), None);
     let sent = body(request);
     assert_eq!(sent["model"], "claude-sonnet-5-5");
-    assert_eq!(sent["max_tokens"], 2000);
+    assert_eq!(sent["max_tokens"], 128_000, "the documented output maximum the API requires");
     assert_eq!(sent["system"], "Plan.");
     assert_eq!(
         sent["messages"],
@@ -88,14 +88,6 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
         assert!(sent.get(absent).is_none(), "sent {absent}");
     }
     assert!(sent["output_config"].get("effort").is_none(), "an unset effort leaves the model's own default");
-}
-
-#[tokio::test]
-async fn test_an_uncapped_request_sends_the_documented_output_maximum() {
-    let script = Script::new(vec![answer(r#"{"answer":"ok"}"#)]);
-    let llm = settings(&ENV).llm(&script.http()).unwrap();
-    llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 0, None).await.unwrap();
-    assert_eq!(body(&script.requests()[0])["max_tokens"], 128_000);
 }
 
 #[tokio::test]
@@ -136,11 +128,11 @@ async fn test_cost_counts_cached_input_and_stays_unknown_without_a_price() {
 }
 
 #[tokio::test]
-async fn test_a_reply_cut_at_max_tokens_is_reported_at_the_callers_cap() {
+async fn test_a_reply_cut_at_max_tokens_is_reported_as_cut_off() {
     let cut = reply(json!([{"type": "text", "text": "{\"ans"}]), "max_tokens");
     let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut, answer(r#"{"answer":"ok"}"#)]).await;
     let error = result.unwrap_err().to_string();
-    assert!(error.contains("truncated at the 2000 token output cap"), "{error}");
+    assert!(error.contains("cut off before its JSON ended"), "{error}");
     assert_eq!(seen.len(), 1);
 }
 

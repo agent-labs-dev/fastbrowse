@@ -109,7 +109,7 @@ fn no_argument(py: Python<'_>, (): ()) -> PyResult<Bound<'_, PyTuple>> {
 
 fn llm_argument(py: Python<'_>, call: LlmCall) -> PyResult<Bound<'_, PyTuple>> {
     let context = Bound::new(py, call.context)?;
-    (call.purpose, call.messages, call.name, call.schema, call.max_output_tokens, context).into_pyobject(py)
+    (call.purpose, call.messages, call.name, call.schema, context).into_pyobject(py)
 }
 
 fn request_argument(py: Python<'_>, request: Request) -> PyResult<Bound<'_, PyTuple>> {

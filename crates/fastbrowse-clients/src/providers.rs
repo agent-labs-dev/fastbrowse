@@ -65,7 +65,6 @@ pub struct Preset {
     pub strict: bool,
     /// Where the effort goes, or None for an endpoint that ignores or refuses one.
     pub reasoning: Option<ReasoningField>,
-    pub output_cap_field: &'static str,
     /// Per-purpose models when the provider has ids worth defaulting to; otherwise FASTBROWSE_LLM_MODEL is required.
     pub models: Option<fn(LLMPurpose) -> &'static str>,
 }
@@ -79,7 +78,6 @@ const BASE: Preset = Preset {
     output_format: OutputFormat::JsonSchema,
     strict: true,
     reasoning: Some(ReasoningField::OpenRouter),
-    output_cap_field: "max_tokens",
     models: None,
 };
 
@@ -176,11 +174,7 @@ impl LLMProvider {
         };
         match self {
             LLMProvider::OpenRouter | LLMProvider::Gateway | LLMProvider::Custom => Preset { provider: self, ..BASE },
-            // Chat completions deprecates max_tokens in favour of max_completion_tokens, and reasoning models refuse it.
-            LLMProvider::OpenAI => Preset {
-                output_cap_field: "max_completion_tokens",
-                ..hosted("https://api.openai.com/v1", "OPENAI_API_KEY")
-            },
+            LLMProvider::OpenAI => hosted("https://api.openai.com/v1", "OPENAI_API_KEY"),
             // Anthropic's compatibility layer ignores response_format and reasoning_effort, so Claude is reached
             // through the Messages API, whose structured outputs decode against the schema and which takes an effort.
             LLMProvider::Anthropic => Preset {
@@ -214,7 +208,6 @@ impl LLMProvider {
             LLMProvider::Azure => Preset {
                 endpoint: Endpoint::Resource(&[".openai.azure.com", ".services.ai.azure.com"]),
                 auth_header: Some("api-key"),
-                output_cap_field: "max_completion_tokens",
                 ..hosted("", "AZURE_OPENAI_API_KEY")
             },
             LLMProvider::Ollama => Preset {

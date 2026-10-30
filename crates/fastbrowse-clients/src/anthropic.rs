@@ -89,8 +89,8 @@ fn content(message: &Message) -> Result<Value, LLMError> {
     Ok(Value::Array(blocks))
 }
 
-/// The Messages API requires `max_tokens`, so an uncapped request sends the documented output maximum of the current
-/// Claude models.
+/// The Messages API requires `max_tokens`, so every request sends the documented output maximum of the current Claude
+/// models.
 const MAX_OUTPUT_TOKENS: i64 = 128_000;
 
 /// The Messages request for one generation. System messages become the top-level `system`, as the API takes them.
@@ -99,7 +99,6 @@ pub(crate) fn body(
     model: &str,
     messages: &[Message],
     schema: &Value,
-    max_output_tokens: i64,
     effort: Option<ReasoningEffort>,
 ) -> Result<Map<String, Value>, LLMError> {
     let system: Vec<&str> =
@@ -114,8 +113,7 @@ pub(crate) fn body(
     }
     let mut body = extra.clone();
     body.insert("model".into(), model.into());
-    let cap = if max_output_tokens > 0 { max_output_tokens } else { MAX_OUTPUT_TOKENS };
-    body.insert("max_tokens".into(), cap.into());
+    body.insert("max_tokens".into(), MAX_OUTPUT_TOKENS.into());
     if !system.is_empty() {
         body.insert("system".into(), system.join("\n\n").into());
     }
@@ -197,9 +195,12 @@ impl LLMClient for AnthropicLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
-        self.0.generate_value(purpose, messages, schema, max_output_tokens, ledger)
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+
+    fn context_tokens(&self, purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+        self.0.context_tokens(purpose)
     }
 }

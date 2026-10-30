@@ -148,7 +148,6 @@ pub struct LlmCall {
     pub messages: String,
     pub name: String,
     pub schema: String,
-    pub max_output_tokens: i64,
     pub context: Context,
 }
 
@@ -297,7 +296,6 @@ impl LLMClient for HostLlm {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
@@ -311,7 +309,6 @@ impl LLMClient for HostLlm {
                 messages: messages_json(messages),
                 name: schema.name(),
                 schema: schema.json_schema().to_string(),
-                max_output_tokens,
                 context: Context { asks: slot, ledger: ledger.is_some() },
             });
             tokio::pin!(call);

@@ -166,7 +166,7 @@ async fn read_unsure<'a>(
     let system = format!("{RECORD_READER}\n\n# Trust\n{UNTRUSTED}");
     let heading = format!("# Requirement\n{requirement}\n\n# Records\n");
     let fixed = text::len(&format!("{system}{heading}{}", dumps(&json_schema(&RecordMatches::ty())))) as i64;
-    let room = tokens.input_chars::<&str>(&[], false) - fixed;
+    let room = tokens.llm_chars() - fixed;
     let mut groups: Vec<Vec<String>> = Vec::new();
     let mut used = 0;
     for block in unsure {
@@ -185,7 +185,7 @@ async fn read_unsure<'a>(
     let mut costs = Vec::new();
     for records in groups {
         let messages = [Message::system(system.clone()), Message::user(format!("{heading}{}", records.join("\n\n")))];
-        let read = ask_reader::<RecordMatches>(llm, &messages, RecordMatches::ty(), tokens, ledger).await?;
+        let read = ask_reader::<RecordMatches>(llm, &messages, RecordMatches::ty(), ledger).await?;
         if let Some(ledger) = ledger {
             ledger.record([read.cost.clone()])?;
         }
@@ -411,7 +411,6 @@ mod tests {
             _: LLMPurpose,
             messages: &'a [Message],
             schema: &'a dyn ResponseSchema,
-            _: i64,
             _: Option<&'a Ledger>,
         ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
             self.shown.lock().unwrap().push(messages[1].content.clone());
@@ -551,12 +550,8 @@ mod tests {
         let prompt = format!("{RECORD_READER}\n\n# Trust\n{UNTRUSTED}# Requirement\n{requirement}\n\n# Records\n");
         let fixed = text::len(&format!("{prompt}{}", dumps(&json_schema(&RecordMatches::ty())))) as i64;
         // Room for one record a prompt, not two.
-        let tokens = TokenBudget {
-            state_plus_largest_question: fixed + 25,
-            state_plus_all_questions: fixed + 25,
-            chars_per_token: 1.0,
-            ..TokenBudget::default()
-        };
+        let tokens =
+            TokenBudget { llm_context_tokens: Some(fixed + 25), chars_per_token: 1.0, ..TokenBudget::default() };
         let (kept, costs) = block_on(read_unsure(&llm, &page, requirement, &blocks, &tokens, None)).unwrap();
         let heading = format!("# Requirement\n{requirement}\n\n# Records\n");
         assert_eq!(

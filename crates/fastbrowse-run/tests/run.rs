@@ -38,7 +38,6 @@ impl LLMClient for Silent {
         _: LLMPurpose,
         _: &'a [Message],
         _: &'a dyn ResponseSchema,
-        _: i64,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async { Err(LLMError::Failed("not scripted".into())) })

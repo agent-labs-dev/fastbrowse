@@ -683,7 +683,6 @@ impl Settings {
             provider_routing: None,
             strict: if self.llm_strict_set { self.llm_strict } else { preset.strict },
             output_format: preset.output_format,
-            output_cap_field: preset.output_cap_field,
             auth_header: preset.auth_header,
             extra_body: self.extra_body()?,
         };

@@ -92,7 +92,7 @@ pub fn page_state(
     // though the requested filters were never applied.
     state.insert("controls".into(), Value::Array(controls(&observation.controls)));
     state.insert("notes".into(), "".into());
-    let budget = tokens.input_chars(questions, true);
+    let budget = tokens.input_chars(questions);
     let size = |state: &Map<String, Value>| text::len(&dumps(&Value::Object(state.clone()))) as i64;
     let room = |state: &Map<String, Value>| (budget - size(state)).max(0);
     let mut cut_page = false;
@@ -685,7 +685,7 @@ mod tests {
         assert!(actions.contains("earlier actions omitted to fit the request]\n"), "{actions}");
         assert!(actions.ends_with("- click Result 199 -> executed"), "{actions}");
         assert_eq!(state["page"]["text"], page().viewport_text);
-        assert!(text::len(&dumps(&state)) as i64 <= tokens.input_chars(&questions, true));
+        assert!(text::len(&dumps(&state)) as i64 <= tokens.input_chars(&questions));
     }
 
     #[test]

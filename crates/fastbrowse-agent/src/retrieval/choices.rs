@@ -159,7 +159,7 @@ fn read_request(
 
 fn read_fits(state: &Value, questions: &IndexMap<String, Question>, tokens: &TokenBudget) -> bool {
     let written: Vec<String> = questions.values().map(|q| q.dump_json()).collect();
-    text::len(&dumps(state)) as i64 <= tokens.input_chars(&written, true)
+    text::len(&dumps(state)) as i64 <= tokens.input_chars(&written)
 }
 
 /// `_focus`: the blocks Jev should choose from, or none when the page cannot be narrowed without risking the answer.

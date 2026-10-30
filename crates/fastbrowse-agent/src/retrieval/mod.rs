@@ -55,10 +55,11 @@ pub(crate) fn route(
     });
 }
 
-/// `_notes_room`: reserve room for the prompt and response schema so notes cannot exceed the input budget.
+/// `_notes_room`: what the LLM's context leaves for notes beside the prompt and response schema.
 pub(crate) fn notes_room(tokens: &TokenBudget, messages: &[Message], response: &Ty) -> i64 {
     let prompt: String = messages.iter().map(|message| message.content.as_str()).collect();
-    tokens.remaining_chars::<&str>(&format!("{prompt}{}", dumps(&json_schema(response))), &[], false)
+    (tokens.llm_chars() - fastbrowse_core::py::text::len(&format!("{prompt}{}", dumps(&json_schema(response)))) as i64)
+        .max(0)
 }
 
 /// The response models the readers and the composer ask for, by their Python names, for tests that hold them to

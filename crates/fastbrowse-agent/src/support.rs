@@ -17,14 +17,13 @@ pub(crate) async fn generate<T>(
     llm: &dyn LLMClient,
     purpose: LLMPurpose,
     messages: &[Message],
-    max_output_tokens: i64,
     ledger: Option<&Ledger>,
 ) -> Result<Generation<T>, LLMError>
 where
     T: Schema + DeserializeOwned + Serialize,
 {
     let schema = Typed::<T>::default();
-    let generated = llm.generate_value(purpose, messages, &schema, max_output_tokens, ledger).await?;
+    let generated = llm.generate_value(purpose, messages, &schema, ledger).await?;
     let data = serde_json::from_value(generated.data).map_err(|error| LLMError::Failed(error.to_string()))?;
     Ok(Generation { data, cost: generated.cost })
 }

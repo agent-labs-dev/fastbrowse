@@ -234,8 +234,6 @@ _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirt
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:
     """What a published row keeps: its grade and provenance, not the traces that make a raw row 9 KB."""
     kept = {key: row.get(key) for key in _KEPT}
-    if isinstance(kept["failure"], str):
-        kept["failure"] = kept["failure"][:300]
     run = row.get("run") or {}
     kept["run"] = {key: run.get(key) for key in _RUN_KEPT}
     # The browser record is what the gate reads to tell a real browser from a throwaway one, so it is kept; a local

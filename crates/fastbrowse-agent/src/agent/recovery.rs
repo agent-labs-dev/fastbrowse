@@ -199,7 +199,7 @@ impl Agent {
             // Uncapped on purpose: fastbrowse never caps, truncates or crops an output token. What bounds this call
             // is the reasoning it may spend, and that is off for this purpose on the branch above, and the schema it
             // must answer in, not a ceiling that could cut a reply mid-JSON.
-            generate::<Recovery>(&*self.llm, LLMPurpose::Recover, &messages, 0, Some(&state.ledger)).await?;
+            generate::<Recovery>(&*self.llm, LLMPurpose::Recover, &messages, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
         let data = generation.data;
         // Giving up is the LLM's diagnosis of why the run cannot go on, kept as the status it ends with, but it is

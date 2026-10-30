@@ -266,7 +266,7 @@ pub async fn partition_plan(
             system.push_str(FIELD_CATEGORIES);
         }
         let messages = [Message::system(system), Message::user(dumps(&json!({"task": task, "plan": plan.dump()})))];
-        let generated = generate::<FinishOutputs>(llm, LLMPurpose::Plan, &messages, 0, Some(ledger)).await?;
+        let generated = generate::<FinishOutputs>(llm, LLMPurpose::Plan, &messages, Some(ledger)).await?;
         ledger.record([generated.cost.clone()])?;
         let known: HashSet<&str> = plan.requirements.iter().map(|r| r.id.as_str()).collect();
         let mut covered: BTreeSet<i64> = BTreeSet::new();
@@ -353,7 +353,7 @@ pub async fn make_plan(
     // Requirements come from the task alone: the background is what the caller knows, not what it asked for.
     let background = background_section(context, "#");
     let messages = [instructions(), Message::user(format!("# Task\n{task}{site}{background}"))];
-    let generated = generate::<Plan>(llm, LLMPurpose::Plan, &messages, 0, ledger).await?;
+    let generated = generate::<Plan>(llm, LLMPurpose::Plan, &messages, ledger).await?;
     let mut plan = generated.data;
     if plan.requirements.is_empty() && plan.run_reports.is_empty() {
         // An empty plan lets a verifier accept unrelated page facts because no requested outcome remains to prove.
@@ -435,7 +435,6 @@ mod tests {
             purpose: LLMPurpose,
             messages: &'a [Message],
             schema: &'a dyn ResponseSchema,
-            _: i64,
             ledger: Option<&'a Ledger>,
         ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
             Box::pin(async move {

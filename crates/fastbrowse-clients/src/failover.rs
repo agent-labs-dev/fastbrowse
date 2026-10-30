@@ -200,12 +200,11 @@ impl LLMClient for FailoverLLMClient {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
             if !self.on_backup.load(Ordering::SeqCst) {
-                match self.primary.generate_value(purpose, messages, schema, max_output_tokens, ledger).await {
+                match self.primary.generate_value(purpose, messages, schema, ledger).await {
                     Err(LLMError::Rejected(reason)) => {
                         // Calls already in flight may fail together; storing the same flag again cannot flap.
                         self.on_backup.store(true, Ordering::SeqCst);
@@ -221,7 +220,16 @@ impl LLMClient for FailoverLLMClient {
                     other => return other,
                 }
             }
-            self.backup.generate_value(purpose, messages, schema, max_output_tokens, ledger).await
+            self.backup.generate_value(purpose, messages, schema, ledger).await
+        })
+    }
+
+    /// The smaller of the two windows a run may move between, so a prompt fitted to one still fits the other.
+    fn context_tokens(&self, purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+        Box::pin(async move {
+            let (primary, backup) =
+                (self.primary.context_tokens(purpose).await, self.backup.context_tokens(purpose).await);
+            primary.into_iter().chain(backup).min()
         })
     }
 }

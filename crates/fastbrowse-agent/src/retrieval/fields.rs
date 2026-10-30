@@ -658,8 +658,7 @@ pub async fn propose_text_fields(
             break;
         }
         let messages = [Message::system(system.clone()), read_message(&page, &part, &question, &[], "")];
-        let result =
-            generate::<TextProposals>(llm, LLMPurpose::Read, &messages, tokens.read_output_tokens, ledger).await?;
+        let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, ledger).await?;
         if let Some(ledger) = ledger {
             ledger.record([result.cost.clone()])?;
         }
@@ -705,7 +704,7 @@ pub async fn propose_text_fields_from_notes(
     let room = notes_room(tokens, &messages, &TextProposals::ty());
     let rendered = notes.render(room, true, false)?;
     messages[1].content.push_str(&rendered);
-    let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, tokens.read_output_tokens, ledger).await?;
+    let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, ledger).await?;
     if let Some(ledger) = ledger {
         ledger.record([result.cost.clone()])?;
     }

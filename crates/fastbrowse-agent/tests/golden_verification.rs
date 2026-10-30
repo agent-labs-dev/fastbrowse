@@ -88,7 +88,9 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
     let jev = KeyedJev::new(case, ledgers.clone(), log.clone());
     let llm = KeyedLLM::new(case, ledgers, log.clone());
     let trace = Trace::collecting();
-    let tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
+    let mut tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
+    // These cases were recorded with LLM prompts fitted to the decision budget's tokens: a model with that window.
+    tokens.llm_context_tokens = Some(tokens.state_plus_largest_question.min(tokens.state_plus_all_questions));
     let notes: Option<Notes> = args.get("notes").filter(|n| n.get("$notes").is_some()).map(notes_arg);
     let notes_ref = || notes.as_ref().expect("a notes argument");
     let history: Vec<HistoryEntry> = opt(args, "history").unwrap_or_default();

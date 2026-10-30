@@ -34,8 +34,7 @@ fn completion(content: &str, finish_reason: &str) -> Step {
 async fn generate(env: &[(&str, &str)], replies: Vec<Step>) -> (Vec<Request>, Generation<Value>) {
     let script = Script::new(replies);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result =
-        llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await.unwrap();
+    let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await.unwrap();
     (script.requests(), result)
 }
 
@@ -71,7 +70,6 @@ struct Hosted {
     key: &'static str,
     format: &'static str,
     strict: bool,
-    cap: &'static str,
 }
 
 const HOSTED: [Hosted; 9] = [
@@ -81,7 +79,6 @@ const HOSTED: [Hosted; 9] = [
         key: "openai-secret",
         format: "json_schema",
         strict: true,
-        cap: "max_completion_tokens",
     },
     Hosted {
         provider: "gemini",
@@ -89,7 +86,6 @@ const HOSTED: [Hosted; 9] = [
         key: "gemini-secret",
         format: "json_schema",
         strict: true,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "groq",
@@ -97,7 +93,6 @@ const HOSTED: [Hosted; 9] = [
         key: "groq-secret",
         format: "json_schema",
         strict: true,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "together",
@@ -105,7 +100,6 @@ const HOSTED: [Hosted; 9] = [
         key: "together-secret",
         format: "json_schema",
         strict: false,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "mistral",
@@ -113,7 +107,6 @@ const HOSTED: [Hosted; 9] = [
         key: "mistral-secret",
         format: "json_schema",
         strict: false,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "deepseek",
@@ -121,7 +114,6 @@ const HOSTED: [Hosted; 9] = [
         key: "deepseek-secret",
         format: "json_object",
         strict: false,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "xai",
@@ -129,7 +121,6 @@ const HOSTED: [Hosted; 9] = [
         key: "xai-secret",
         format: "json_schema",
         strict: true,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "fireworks",
@@ -137,7 +128,6 @@ const HOSTED: [Hosted; 9] = [
         key: "fireworks-secret",
         format: "json_schema",
         strict: false,
-        cap: "max_tokens",
     },
     Hosted {
         provider: "azure",
@@ -145,7 +135,6 @@ const HOSTED: [Hosted; 9] = [
         key: "azure-secret",
         format: "json_schema",
         strict: true,
-        cap: "max_completion_tokens",
     },
 ];
 
@@ -174,7 +163,9 @@ async fn test_each_hosted_preset_sends_its_own_key_to_its_own_host_only() {
         if case.format == "json_schema" {
             assert_eq!(sent["response_format"]["json_schema"]["strict"], case.strict, "{}", case.provider);
         }
-        assert_eq!(sent[case.cap], 2000, "{}", case.provider);
+        for cap in ["max_tokens", "max_completion_tokens"] {
+            assert!(sent.get(cap).is_none(), "{} sent {cap}", case.provider);
+        }
         // OpenRouter's fields and the reasoning effort go nowhere they were not asked for.
         for absent in ["provider", "reasoning", "reasoning_effort"] {
             assert!(sent.get(absent).is_none(), "{} sent {absent}", case.provider);
@@ -291,10 +282,19 @@ fn test_an_extra_body_cannot_replace_the_presets_own_fields() {
         ("FASTBROWSE_LLM_PROVIDER", "openai"),
         ("OPENAI_API_KEY", "k"),
         ("FASTBROWSE_LLM_MODEL", "m"),
-        ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"max_completion_tokens": 1, "reasoning_effort": "high"}"#),
+        ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"reasoning_effort": "high"}"#),
     ]);
     let error = config_error(loaded.llm(&Script::default().http()));
-    assert!(error.contains("max_completion_tokens") && error.contains("reasoning_effort"), "{error}");
+    assert!(error.contains("reasoning_effort"), "{error}");
+    // Nor can it set an output cap, which fastbrowse never sends.
+    let loaded = settings(&[
+        ("FASTBROWSE_LLM_PROVIDER", "openai"),
+        ("OPENAI_API_KEY", "k"),
+        ("FASTBROWSE_LLM_MODEL", "m"),
+        ("FASTBROWSE_LLM_EXTRA_BODY", r#"{"max_completion_tokens": 1}"#),
+    ]);
+    let error = config_error(loaded.llm(&Script::default().http()));
+    assert!(error.contains("max_completion_tokens"), "{error}");
 }
 
 #[tokio::test]
@@ -388,7 +388,7 @@ async fn test_an_error_that_echoes_a_key_outside_the_authorization_header_is_scr
         Script::new([Step::Reply(Response::json(401, &json!({"error": {"message": "bad key azure-secret"}})))]);
     let llm = settings(&env).llm(&script.http()).unwrap();
     let error = llm
-        .generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None)
+        .generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None)
         .await
         .unwrap_err()
         .to_string();
@@ -412,7 +412,7 @@ async fn a_refused_openrouter_key_moves_the_run_to_the_gateway_key_beside_it() {
     let script = Script::new(vec![refused(), costed(), costed()]);
     let llm = settings(&env).llm(&script.http()).unwrap();
     for _ in 0..2 {
-        let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await;
+        let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await;
         assert_eq!(result.unwrap().data, json!({"answer": "ok"}));
     }
     let hosts: Vec<String> =
@@ -423,6 +423,6 @@ async fn a_refused_openrouter_key_moves_the_run_to_the_gateway_key_beside_it() {
     // Without a gateway key the refusal names the host that refused it.
     let script = Script::new(vec![refused()]);
     let llm = settings(&env[..1]).llm(&script.http()).unwrap();
-    let error = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await;
+    let error = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await;
     assert_eq!(error.unwrap_err().to_string(), "LLM HTTP 401: User not found. (openrouter.ai rejected the API key)");
 }

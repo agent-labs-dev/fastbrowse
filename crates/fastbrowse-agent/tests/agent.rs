@@ -348,8 +348,8 @@ impl DecisionClient for ReplayJev {
     }
 }
 
-fn llm_key(purpose: &str, messages: &str, schema_name: &str, schema: &str, cap: i64) -> String {
-    format!("{purpose}\n{schema_name}\n{cap}\n{schema}\n{messages}")
+fn llm_key(purpose: &str, messages: &str, schema_name: &str, schema: &str) -> String {
+    format!("{purpose}\n{schema_name}\n{schema}\n{messages}")
 }
 
 struct ReplayLLM(Replies, Value);
@@ -360,7 +360,6 @@ impl LLMClient for ReplayLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
@@ -369,13 +368,12 @@ impl LLMClient for ReplayLLM {
             }
             let written = write(&Value::Array(messages.iter().map(Dump::dump).collect()), Style::HTTPX);
             let (schema_name, schema_text) = (schema.name(), dumps(&schema.json_schema()));
-            let key = llm_key(purpose.as_str(), &written, &schema_name, &schema_text, max_output_tokens);
+            let key = llm_key(purpose.as_str(), &written, &schema_name, &schema_text);
             let request = serde_json::json!({
                 "purpose": purpose.as_str(),
                 "messages": written,
                 "schema_name": schema_name,
                 "schema": schema_text,
-                "max_output_tokens": max_output_tokens,
             });
             let response = self.0.take(&key, request, |log| scripted_llm(&self.1, purpose.as_str(), &schema_name, log));
             if let Some(failure) = response["raise"].as_str() {
@@ -417,7 +415,6 @@ async fn replay(mut case: Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> Value {
             r["messages"].as_str().unwrap(),
             r["schema_name"].as_str().unwrap(),
             r["schema"].as_str().unwrap(),
-            r["max_output_tokens"].as_i64().unwrap(),
         )
     });
     let llm = Arc::new(ReplayLLM(llm, case.clone()));

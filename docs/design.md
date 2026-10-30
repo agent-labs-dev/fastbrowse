@@ -61,7 +61,7 @@ Missing or ambiguous excerpts are rejected. Complete record citations remain unc
 
 When quotes from the same address are already in notes, the short-fact batch can also ask whether the full
 page adds relevant evidence. Literal diffs against matching source blocks help distinguish changed values
-from cosmetic changes. A negative answer with at least 80% probability skips the read without marking any
+from cosmetic changes. A negative answer with at least 90% probability skips the read without marking any
 requirement evidenced.
 Missing or uncertain answers use the normal readers. This check is omitted when the full comparison does
 not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.

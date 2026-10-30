@@ -183,7 +183,6 @@ impl LLMClient for ScriptedLLM {
         purpose: LLMPurpose,
         _: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        _: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
@@ -285,8 +284,8 @@ mod tests {
 
     #[test]
     fn test_the_plan_and_the_shortcut_are_told_apart_by_purpose_not_by_order() {
-        let shortcut = block_on(generate::<Shortcut>(&ScriptedLLM, LLMPurpose::Shortcut, &[], 2000, None)).unwrap();
-        let plan = block_on(generate::<Plan>(&ScriptedLLM, LLMPurpose::Plan, &[], 2000, None)).unwrap();
+        let shortcut = block_on(generate::<Shortcut>(&ScriptedLLM, LLMPurpose::Shortcut, &[], None)).unwrap();
+        let plan = block_on(generate::<Plan>(&ScriptedLLM, LLMPurpose::Plan, &[], None)).unwrap();
         assert_eq!(shortcut.data.url, None);
         assert!(plan.data.requirements.is_empty() && !plan.data.answer_expected);
     }

@@ -83,17 +83,15 @@ pub struct TokenBudget {
     /// Local estimate for prose prompts; a decision request's dense JSON is counted at `JSON_CHARS_PER_TOKEN`.
     #[serde(deserialize_with = "lax::float_gt0")]
     pub chars_per_token: f64,
-    /// The reader's output ceiling; 0 sends none, so a page of records and its verbatim quotes is never cut short.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub read_output_tokens: i64,
-    /// The composer's output ceiling; 0 sends none, so a long answer citing every claim is never cut short.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub compose_output_tokens: i64,
     /// Characters a decision request may spend on its state plus largest question and on its state plus every
     /// question, set by `DecisionProfile::fit` from the budget above and the route's limits. Jev with long context
     /// takes a state far past what the budget allows an LLM prompt.
     #[serde(skip)]
     pub decision_chars: Option<(i64, i64)>,
+    /// The context window, in tokens, of the LLM that reads and composes, as its provider lists it. A reader or
+    /// composer prompt is fitted to it at `chars_per_token`; with none known, the page and notes go whole.
+    #[serde(skip)]
+    pub llm_context_tokens: Option<i64>,
 }
 
 impl Default for TokenBudget {
@@ -103,35 +101,36 @@ impl Default for TokenBudget {
             state_plus_all_questions: 64_000,
             batch_tokens: 8000,
             chars_per_token: 3.0,
-            // Zero means no ceiling: fastbrowse does not cap, truncate or crop an output token; the model's own
-            // maximum and the answer schema are the only bounds.
-            read_output_tokens: 0,
-            compose_output_tokens: 0,
             decision_chars: None,
+            llm_context_tokens: None,
         }
     }
 }
 
 impl TokenBudget {
-    /// Characters of state that fit beside `questions`, measured as Python measures them, in code points.
-    pub fn input_chars<S: AsRef<str>>(&self, questions: &[S], jev: bool) -> i64 {
+    /// Characters of decision state that fit beside `questions` within Jev's limits, measured as Python measures them,
+    /// in code points.
+    pub fn input_chars<S: AsRef<str>>(&self, questions: &[S]) -> i64 {
         let sizes: Vec<f64> = questions.iter().map(|q| text::len(q.as_ref()) as f64).collect();
-        let (largest, total) = match (jev, self.decision_chars) {
-            (true, Some((most, all))) => (most as f64, all as f64),
-            _ => {
-                let ratio = if jev { JSON_CHARS_PER_TOKEN } else { self.chars_per_token };
-                (self.state_plus_largest_question as f64 * ratio, self.state_plus_all_questions as f64 * ratio)
-            }
-        };
+        let (largest, total) = self.decision_chars.map_or_else(
+            || {
+                (
+                    self.state_plus_largest_question as f64 * JSON_CHARS_PER_TOKEN,
+                    self.state_plus_all_questions as f64 * JSON_CHARS_PER_TOKEN,
+                )
+            },
+            |(most, all)| (most as f64, all as f64),
+        );
         let biggest = sizes.iter().copied().fold(0.0_f64, f64::max);
         let room = (largest - biggest).min(total - crate::py::sum(sizes.iter().copied()));
         // `int()` truncates toward zero before the floor at zero.
         (room.trunc() as i64).max(0)
     }
 
-    /// Room for notes after other content, using the same conservative input targets for LLM prompts.
-    pub fn remaining_chars<S: AsRef<str>>(&self, context: &str, questions: &[S], jev: bool) -> i64 {
-        (self.input_chars(questions, jev) - text::len(context) as i64).max(0)
+    /// Characters an LLM prompt may hold: its model's context window where the provider lists one, and no bound
+    /// where it does not.
+    pub fn llm_chars(&self) -> i64 {
+        self.llm_context_tokens.map_or(i64::MAX, |tokens| (tokens as f64 * self.chars_per_token) as i64)
     }
 }
 
@@ -201,10 +200,15 @@ mod tests {
     #[test]
     fn a_decision_request_is_counted_as_dense_json() {
         let tokens = TokenBudget::default();
-        assert_eq!(tokens.input_chars::<&str>(&[], false), 96_000);
-        assert_eq!(tokens.input_chars::<&str>(&[], true), 48_000);
-        assert_eq!(tokens.input_chars(&["abc", "\u{6771}\u{4eac}"], true), 47_997);
-        assert_eq!(tokens.remaining_chars("x".repeat(50_000).as_str(), &["a"], true), 0);
+        assert_eq!(tokens.input_chars::<&str>(&[]), 48_000);
+        assert_eq!(tokens.input_chars(&["abc", "\u{6771}\u{4eac}"]), 47_997);
+    }
+
+    #[test]
+    fn an_llm_prompt_is_bounded_only_by_its_models_listed_context() {
+        let tokens = TokenBudget::default();
+        assert_eq!(tokens.llm_chars(), i64::MAX);
+        assert_eq!(TokenBudget { llm_context_tokens: Some(1000), ..tokens }.llm_chars(), 3000);
     }
 
     #[test]
@@ -214,12 +218,5 @@ mod tests {
         assert_eq!(config.stall.unchanged_actions, 3);
         assert_eq!(config.max_pages, 3);
         assert!(serde_json::from_str::<Config>(r#"{"observation": {"group_size": 1}}"#).is_err());
-    }
-
-    #[test]
-    fn a_default_config_reads_back_with_no_output_ceiling() {
-        let config: Config = serde_json::from_value(serde_json::to_value(Config::default()).unwrap()).unwrap();
-        assert_eq!((config.tokens.read_output_tokens, config.tokens.compose_output_tokens), (0, 0));
-        assert!(serde_json::from_str::<Config>(r#"{"tokens": {"read_output_tokens": -1}}"#).is_err());
     }
 }

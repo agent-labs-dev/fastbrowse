@@ -86,13 +86,13 @@ pub async fn evaluate_batches(
     for (key, question) in questions {
         let json = question.dump_json();
         let size = text::len(&json) as f64 / ratio;
-        if state_chars > tokens.input_chars(&[&json], true) {
+        if state_chars > tokens.input_chars(&[&json]) {
             continue;
         }
         if !batch.is_empty()
             && (batch.len() >= most || state_size + batch_size + size > limit || {
                 let with: Vec<&str> = written.iter().map(String::as_str).chain([json.as_str()]).collect();
-                state_chars > tokens.input_chars(&with, true)
+                state_chars > tokens.input_chars(&with)
             })
         {
             batches.push(std::mem::take(&mut batch));

@@ -613,7 +613,7 @@ impl Agent {
         context.insert("fields".into(), Value::Array(fields.values().map(Dump::dump_exclude_none).collect()));
         let messages = vec![Message::system(form_writer()), Message::user(dumps(&Value::Object(context)))];
         let written =
-            match generate::<FormText>(&*self.llm, LLMPurpose::FieldText, &messages, 0, Some(&state.ledger)).await {
+            match generate::<FormText>(&*self.llm, LLMPurpose::FieldText, &messages, Some(&state.ledger)).await {
                 Ok(generation) => {
                     state.ledger.record([generation.cost.clone()])?;
                     generation.data
@@ -665,7 +665,7 @@ impl Agent {
     /// The text for one field, or None when the writer says the value was never given.
     async fn write_field(&self, state: &mut RunState, messages: &[Message], target: &Control) -> Step<Option<String>> {
         let generation =
-            generate::<FieldText>(&*self.llm, LLMPurpose::FieldText, messages, 0, Some(&state.ledger)).await?;
+            generate::<FieldText>(&*self.llm, LLMPurpose::FieldText, messages, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
         let written = generation.data;
         Ok((!written.missing).then(|| due(&written, &state.history, &target.label)))

@@ -52,8 +52,9 @@ Rules that hold across the table:
   provider whose OpenAI-compatible API takes no effort stops the run with a configuration error, rather than drop a
   setting you asked for.
 - **`FASTBROWSE_LLM_STRICT` overrides the preset's strictness, and `FASTBROWSE_LLM_EXTRA_BODY` applies to every
-  preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, including
-  `max_completion_tokens` and `reasoning_effort` where the preset sends them.
+  preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, such as
+  `reasoning_effort` where the preset sends it, or an output cap: `max_tokens` and `max_completion_tokens` are never
+  sent, so no reply is cut short of the model's own maximum.
 - **Where the schema is in the prompt, it is not enforced.** fastbrowse validates every reply against the schema
   and asks once for a correction, as it does everywhere, so a reply that drifts costs a second call.
 - **The gateway does not hold every provider to the schema.** It has no counterpart to OpenRouter's
@@ -63,6 +64,9 @@ Rules that hold across the table:
   reports none is charged its model's context window at the dearest listed price, a true upper bound. The others
   report tokens, so their calls are recorded with tokens and an unknown cost, never zero, and `--max-dollars` stops the
   run after the first such call.
+- **A prompt is fitted to the context window the provider lists.** OpenRouter and the gateway list each model's
+  window, and a page the reader cannot take whole is read in even chunks that fit it. The other providers list none,
+  so a page and its notes go whole, and a prompt past the model's window is the provider's to refuse.
 
 ## Claude through the Messages API
 
@@ -76,9 +80,11 @@ the same retries, schema repair, truncation retry and ledger as every other LLM 
   and the rest of [the list](https://platform.claude.com/docs/en/build-with-claude/structured-outputs). They are
   left out of the schema sent, and the reply is still validated against the full schema, so a value outside a
   dropped bound is repaired as any other schema miss is.
-- Claude 5 models think by default, and thinking counts against the output cap, so the effort is always sent: `low`
+- The Messages API requires `max_tokens`, so every request sends 128,000, the documented output maximum of the
+  current Claude models.
+- Claude 5 models think by default, and thinking counts against that maximum, so the effort is always sent: `low`
   unless `FASTBROWSE_LLM_REASONING` says otherwise. `none` is refused, since not every Claude model can have its
-  thinking turned off. A reply cut at the cap is asked for again with four times the room, as on every route.
+  thinking turned off.
 - A refusal (`stop_reason: refusal`) is asked once more and then reported as an LLM failure.
 - The response reports tokens, cached input included, but no dollars, so the cost is unknown as on the other direct
   providers.

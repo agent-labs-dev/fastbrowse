@@ -166,7 +166,6 @@ impl LLMClient for ReplayLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
@@ -186,7 +185,6 @@ impl LLMClient for ReplayLLM {
             );
             assert_eq!(schema.name(), request["schema_name"].as_str().unwrap(), "{name}: schema name #{index}");
             assert_eq!(dumps(&schema.json_schema()), request["schema"].as_str().unwrap(), "{name}: schema #{index}");
-            assert_eq!(max_output_tokens, request["max_output_tokens"].as_i64().unwrap(), "{name}: cap #{index}");
             let data = schema.validate_json(&dumps(&call["response"]["data"])).map_err(LLMError::Failed)?;
             let cost: CostLine = parse(&call["response"]["cost"]);
             Ok(Generation { data, cost })

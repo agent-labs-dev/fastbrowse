@@ -209,9 +209,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -406,9 +404,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -594,9 +590,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -818,9 +812,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -1042,9 +1034,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -1237,9 +1227,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -1758,9 +1746,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -2335,9 +2321,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -2631,9 +2615,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -2962,9 +2944,7 @@
        "state_plus_largest_question": 2,
        "state_plus_all_questions": 2,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -4167,9 +4147,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 200,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -4670,9 +4648,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 200,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -4825,9 +4801,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -6044,9 +6018,7 @@
        "state_plus_largest_question": 4000,
        "state_plus_all_questions": 4000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -9368,9 +9340,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -10608,9 +10578,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -11109,9 +11077,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -11271,9 +11237,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -11520,9 +11484,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -11754,9 +11716,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -11977,9 +11937,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -12207,9 +12165,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -12429,9 +12385,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -13747,9 +13701,7 @@
        "state_plus_largest_question": 2585,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -15273,9 +15225,7 @@
        "state_plus_largest_question": 2385,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -16802,9 +16752,7 @@
        "state_plus_largest_question": 2715,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -18332,9 +18280,7 @@
        "state_plus_largest_question": 2585,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -19671,9 +19617,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 1200,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -20886,9 +20830,7 @@
        "state_plus_largest_question": 2770,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -21535,9 +21477,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -21833,9 +21773,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -22385,9 +22323,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -22947,9 +22883,7 @@
        "state_plus_largest_question": 2325,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -23472,9 +23406,7 @@
        "state_plus_largest_question": 2325,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -23819,9 +23751,7 @@
        "state_plus_largest_question": 2325,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -24369,9 +24299,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -24576,9 +24504,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -25153,9 +25079,7 @@
        "state_plus_largest_question": 2170,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -25360,9 +25284,7 @@
        "state_plus_largest_question": 2170,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -25937,9 +25859,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -26144,9 +26064,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -26721,9 +26639,7 @@
        "state_plus_largest_question": 2175,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -26930,9 +26846,7 @@
        "state_plus_largest_question": 2175,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -27507,9 +27421,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -27714,9 +27626,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -28281,9 +28191,7 @@
        "state_plus_largest_question": 2175,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -28488,9 +28396,7 @@
        "state_plus_largest_question": 2175,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -29065,9 +28971,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -29272,9 +29176,7 @@
        "state_plus_largest_question": 2165,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -29721,9 +29623,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -29914,9 +29814,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -30109,9 +30007,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -30302,9 +30198,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -30459,9 +30353,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -30645,9 +30537,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -30839,9 +30729,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -31175,9 +31063,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -31490,9 +31376,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -31816,9 +31700,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -32176,9 +32058,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -32536,9 +32416,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -32823,9 +32701,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -32995,9 +32871,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -33165,9 +33039,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -33302,9 +33174,7 @@
        "state_plus_largest_question": 32000,
        "state_plus_all_questions": 64000,
        "batch_tokens": 8000,
-       "chars_per_token": 3.0,
-       "read_output_tokens": 8000,
-       "compose_output_tokens": 8000
+       "chars_per_token": 3.0
       },
       "stall": {
        "unchanged_actions": 3,
@@ -33416,9 +33286,7 @@
      "state_plus_largest_question": 32000,
      "state_plus_all_questions": 64000,
      "batch_tokens": 8000,
-     "chars_per_token": 3.0,
-     "read_output_tokens": 8000,
-     "compose_output_tokens": 8000
+     "chars_per_token": 3.0
     },
     "stall": {
      "unchanged_actions": 3,
@@ -33515,9 +33383,7 @@
      "state_plus_largest_question": 32000,
      "state_plus_all_questions": 64000,
      "batch_tokens": 8000,
-     "chars_per_token": 3.0,
-     "read_output_tokens": 8000,
-     "compose_output_tokens": 8000
+     "chars_per_token": 3.0
     },
     "stall": {
      "unchanged_actions": 3,

@@ -127,7 +127,7 @@ impl Agent {
             // Reader-selected excerpts cannot decide whether the full sources fit together in one prompt.
             state.read_source_sizes.insert(capture.url.clone(), text::len(&capture.text) as i64);
             let total: i64 = state.read_source_sizes.values().sum();
-            state.oversized_answer |= total > self.config.tokens.input_chars::<&str>(&[], false);
+            state.oversized_answer |= total > self.config.tokens.llm_chars();
         }
         let information = |r: &&Requirement| r.kind == RequirementKind::Information;
         let mut wanted: Vec<Requirement> =

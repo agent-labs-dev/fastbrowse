@@ -124,9 +124,14 @@ pub trait LLMClient: Send + Sync {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>>;
+
+    /// The context window, in tokens, of the model that answers `purpose`, where its provider lists one. A prompt is
+    /// fitted to it; with none known, a prompt goes whole and the provider is the one to refuse it.
+    fn context_tokens(&self, _purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+        Box::pin(async { None })
+    }
 }
 
 /// `generate` with the response type named, as Python's generic method has it.
@@ -135,7 +140,6 @@ pub trait LLMClientExt: LLMClient {
         &'a self,
         purpose: LLMPurpose,
         messages: &'a [Message],
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> impl Future<Output = Result<Generation<T>, LLMError>> + Send + 'a
     where
@@ -144,7 +148,7 @@ pub trait LLMClientExt: LLMClient {
     {
         async move {
             let schema = Typed::<T>::default();
-            let generated = self.generate_value(purpose, messages, &schema, max_output_tokens, ledger).await?;
+            let generated = self.generate_value(purpose, messages, &schema, ledger).await?;
             let data = serde_json::from_value(generated.data).map_err(|e| LLMError::Failed(e.to_string()))?;
             Ok(Generation { data, cost: generated.cost })
         }

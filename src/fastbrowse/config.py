@@ -38,10 +38,6 @@ class TokenBudget(Frozen):
     token request failed five of eight times, 4k never), so a batch of questions is split small and sent in parallel."""
     chars_per_token: float = Field(default=3.0, gt=0)
     """Local estimate for prose prompts; a decision request's dense JSON is counted at 1.5 characters a token."""
-    read_output_tokens: int = Field(default=0, ge=0)
-    """The reader's output ceiling; 0 sends none, so a page of records and its verbatim quotes is never cut short."""
-    compose_output_tokens: int = Field(default=0, ge=0)
-    """The composer's output ceiling; 0 sends none, so a long answer citing every claim is never cut short."""
 
 
 class StallRules(Frozen):

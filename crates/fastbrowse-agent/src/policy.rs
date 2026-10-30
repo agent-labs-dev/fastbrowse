@@ -444,7 +444,7 @@ impl Fitting<'_> {
     fn excess(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> i64 {
         let request = build_request(observation, controls, context, self.config, self.options, true);
         let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-        text::len(&dumps(&request.state)) as i64 - self.config.tokens.input_chars(&written, true)
+        text::len(&dumps(&request.state)) as i64 - self.config.tokens.input_chars(&written)
     }
 
     fn fits(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> bool {
@@ -915,7 +915,7 @@ pub fn build_request(
 
 pub fn fits(request: &Request, config: &Config) -> bool {
     let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
-    text::len(&dumps(&request.state)) as i64 <= config.tokens.input_chars(&written, true)
+    text::len(&dumps(&request.state)) as i64 <= config.tokens.input_chars(&written)
 }
 
 async fn evaluate(

@@ -29,8 +29,8 @@ use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     ArtifactSink, Attachment, Authorization, BrowserConnection, BrowserEvent, BudgetResource, BudgetStop,
-    CostBreakdown, CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status,
-    UntilCheck, WallKind,
+    CostBreakdown, CostLine, Event, EventHandler, FrameHandler, LLMPurpose, Limits, LocalChrome, RunResult,
+    SecretResolver, Status, UntilCheck, WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::page::Page;
@@ -531,11 +531,14 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         // No thresholds were measured on this model, so the run starts from Jev's: an eval reads its result with that.
         http.trace.event("decision_unvalidated", Map::new);
     }
-    let config = profile.fit(options.config.clone());
+    let mut config = profile.fit(options.config.clone());
     let llm: Arc<dyn LLMClient> = match options.llm.take() {
         Some(llm) => llm,
         None => Arc::from(settings.llm(&http)?),
     };
+    // The reader and the composer are the prompts fitted to a window, and the smaller of theirs bounds both.
+    let (read, compose) = (llm.context_tokens(LLMPurpose::Read).await, llm.context_tokens(LLMPurpose::Compose).await);
+    config.tokens.llm_context_tokens = read.into_iter().chain(compose).min();
     let mut fetch_spent: Vec<CostLine> = Vec::new();
     if options.fetch || options.fetch_first {
         let began = std::time::Instant::now();

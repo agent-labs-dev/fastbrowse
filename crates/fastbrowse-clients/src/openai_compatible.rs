@@ -45,10 +45,10 @@ pub fn gateway_provider_routing() -> Value {
     json!({"sort": "ttft"})
 }
 
-/// Request fields fastbrowse sets itself. An extra body that named one would replace the schema, the messages or the
-/// output cap, so the run would fail far from the setting that caused it.
-pub const RESERVED_BODY_KEYS: [&str; 6] =
-    ["max_tokens", "messages", "model", "provider", "reasoning", "response_format"];
+/// Request fields fastbrowse sets itself, and the output caps it never sends. An extra body that named one would replace
+/// the schema or the messages, or cut a reply short, so the run would fail far from the setting that caused it.
+pub const RESERVED_BODY_KEYS: [&str; 7] =
+    ["max_completion_tokens", "max_tokens", "messages", "model", "provider", "reasoning", "response_format"];
 
 /// The reserved keys `extra` names, sorted.
 pub fn reserved_clashes(extra: &Map<String, Value>) -> Vec<&'static str> {
@@ -116,27 +116,12 @@ fn truncated(payload: &Map<String, Value>) -> Result<bool, String> {
         .is_some_and(|choice| choice.get("finish_reason").and_then(Value::as_str) == Some("length")))
 }
 
-/// Output tokens of JSON that ended mid-value short of the cap, or None where the cap may have cut it.
+/// A response the model or provider cut off, named as truncation so it is never read as a bad answer.
 ///
-/// Some providers report a response that hit the cap as an ordinary stop, so JSON ending mid-value is read as
-/// truncation unless usage shows the model stopped short: then the provider dropped the tail, and more room would not
-/// help.
-fn short_of_cap(payload: &Map<String, Value>, cap: i64) -> Option<i64> {
-    let empty = Value::Object(Map::new());
-    let usage = object_value(Some(payload.get("usage").unwrap_or(&empty))).ok()?;
-    let written = token_count(usage.get("completion_tokens")).ok()?;
-    (0 < written && written < cap).then_some(written)
-}
-
-/// A response that ran into its output cap, named as truncation so it is never read as a bad answer.
-///
-/// The cap is the caller's own setting, so it is not raised for a second attempt: the same prompt under the same cap
-/// would be cut off again.
-fn truncation(body: &Map<String, Value>, field: &str, purpose: LLMPurpose) -> LLMError {
-    LLMError::Failed(match body.get(field) {
-        Some(cap) => format!("LLM response truncated at the {cap} token output cap ({purpose})"),
-        None => format!("LLM response was cut off with no output cap set ({purpose}); it ended before the JSON did"),
-    })
+/// fastbrowse sends no output cap, so this is the model's own output maximum or a provider that dropped the tail, and
+/// the same prompt asked again would end the same way.
+fn truncation(purpose: LLMPurpose) -> LLMError {
+    LLMError::Failed(format!("LLM response was cut off before its JSON ended ({purpose})"))
 }
 
 /// Never fails: usage we cannot read is an unknown cost, which a dollar cap treats as unaffordable.
@@ -338,7 +323,6 @@ pub struct OpenAICompatibleLLM {
     auth_header: Option<&'static str>,
     strict: bool,
     output_format: OutputFormat,
-    output_cap_field: &'static str,
     reasoning_field: ReasoningField,
     extra_body: Map<String, Value>,
     http: Http,
@@ -357,8 +341,6 @@ pub struct LLMOptions {
     pub provider_routing: Option<Value>,
     pub strict: bool,
     pub output_format: OutputFormat,
-    /// `max_tokens`, or `max_completion_tokens` where an API has deprecated the other for its reasoning models.
-    pub output_cap_field: &'static str,
     /// The header that carries the key in place of `Authorization: Bearer`, such as Azure's `api-key`.
     pub auth_header: Option<&'static str>,
     pub extra_body: Map<String, Value>,
@@ -372,7 +354,6 @@ impl Default for LLMOptions {
             provider_routing: Some(openrouter_provider_routing()),
             strict: true,
             output_format: OutputFormat::JsonSchema,
-            output_cap_field: "max_tokens",
             auth_header: None,
             extra_body: Map::new(),
         }
@@ -446,10 +427,9 @@ impl OpenAICompatibleLLM {
         options: LLMOptions,
     ) -> Result<OpenAICompatibleLLM, String> {
         let mut clashes = reserved_clashes(&options.extra_body);
-        for key in [options.output_cap_field, options.reasoning_field.key()] {
-            if options.extra_body.contains_key(key) && !clashes.contains(&key) {
-                clashes.push(key);
-            }
+        let key = options.reasoning_field.key();
+        if options.extra_body.contains_key(key) && !clashes.contains(&key) {
+            clashes.push(key);
         }
         if !clashes.is_empty() {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
@@ -474,7 +454,6 @@ impl OpenAICompatibleLLM {
             auth_header: options.auth_header,
             strict: options.strict,
             output_format: options.output_format,
-            output_cap_field: options.output_cap_field,
             reasoning_field: options.reasoning_field,
             extra_body,
             http,
@@ -608,17 +587,25 @@ impl OpenAICompatibleLLM {
     ///
     /// A request that timed out, or a response without usage whose receipt never came, stopped every run with a dollar
     /// cap although it had spent a fraction of a cent. No call can bill more tokens than its context window holds,
-    /// prompt and output together, so that window at the highest price is a true ceiling where the output cap would
-    /// not be: some routes do not count reasoning against it. OpenRouter and the Vercel AI Gateway both list each
+    /// prompt and output together, so that window at the highest price is a true ceiling. OpenRouter and the Vercel AI Gateway both list each
     /// model's endpoints with their windows and prices.
     async fn bounded(&self, cost: CostLine, body: &Map<String, Value>) -> CostLine {
         let Some(model) = body.get("model").and_then(Value::as_str) else { return cost };
-        if !matches!(self.host().as_deref(), Some("openrouter.ai" | "ai-gateway.vercel.sh")) {
-            return cost;
+        match self.listed_ceiling(model).await {
+            Some(ceiling) => bound(cost, ceiling, body),
+            None => cost,
         }
-        let mut found = self.cached_ceiling(model);
-        let tries = if found.is_some() { 0 } else { 3 };
-        for attempt in 0..tries {
+    }
+
+    /// The window and prices OpenRouter or the Vercel AI Gateway list for `model`, read once and kept.
+    async fn listed_ceiling(&self, model: &str) -> Option<Ceiling> {
+        if !matches!(self.host().as_deref(), Some("openrouter.ai" | "ai-gateway.vercel.sh")) {
+            return None;
+        }
+        if let Some(found) = self.cached_ceiling(model) {
+            return Some(found);
+        }
+        for attempt in 0..3 {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -627,22 +614,18 @@ impl OpenAICompatibleLLM {
             if !response.is_success() {
                 continue;
             }
-            match json_object(&response).and_then(|payload| ceiling(&payload)) {
+            return match json_object(&response).and_then(|payload| ceiling(&payload)) {
                 Ok(Some(read)) => {
                     self.ceilings
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .insert(model.to_string(), read);
-                    found = Some(read);
-                    break;
+                    Some(read)
                 }
-                Ok(None) | Err(_) => return cost,
-            }
+                Ok(None) | Err(_) => None,
+            };
         }
-        match found {
-            Some(ceiling) => bound(cost, ceiling, body),
-            None => cost,
-        }
+        None
     }
 
     async fn generate(
@@ -650,7 +633,6 @@ impl OpenAICompatibleLLM {
         purpose: LLMPurpose,
         messages: &[Message],
         schema: &dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&Ledger>,
     ) -> Result<Generation<Value>, LLMError> {
         let Some(model) = self.models.get(&purpose) else {
@@ -665,14 +647,7 @@ impl OpenAICompatibleLLM {
             schema.json_schema()
         };
         if self.wire == Wire::AnthropicMessages {
-            let body = anthropic::body(
-                &self.extra_body,
-                model,
-                messages,
-                &json_schema,
-                max_output_tokens,
-                self.reasoning_effort,
-            )?;
+            let body = anthropic::body(&self.extra_body, model, messages, &json_schema, self.reasoning_effort)?;
             return self.billed(body, purpose, schema, ledger, model).await;
         }
         let json_schema = if deepseek(model) { flat_optional_objects(&json_schema) } else { json_schema };
@@ -688,13 +663,6 @@ impl OpenAICompatibleLLM {
         };
         let mut body = self.extra_body.clone();
         body.insert("model".into(), model.clone().into());
-        // Zero is the caller saying no ceiling: fastbrowse never caps, truncates or crops an output token, so the
-        // field is left off the request entirely rather than sent as a limit of zero.
-        if max_output_tokens > 0 {
-            body.insert(self.output_cap_field.into(), max_output_tokens.into());
-        } else {
-            body.remove(self.output_cap_field);
-        }
         body.insert("messages".into(), wire_messages.into());
         body.insert("response_format".into(), response_format);
         if let Some(routing) = &self.provider_routing {
@@ -751,10 +719,7 @@ impl OpenAICompatibleLLM {
         billing: &mut Billing<'_>,
     ) -> Result<(Value, CostLine), LLMError> {
         let started = Instant::now();
-        let mut short_retried = false;
-        for turn in 0..3 {
-            // A reply the provider cut short is asked for again without spending the one retry the rest share.
-            let attempt = turn - usize::from(short_retried);
+        for attempt in 0..2 {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
@@ -779,7 +744,7 @@ impl OpenAICompatibleLLM {
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
             if truncated(&payload).map_err(LLMError::Failed)? {
-                return Err(truncation(body, self.output_cap_field, purpose));
+                return Err(truncation(purpose));
             }
             let content = match content(&payload) {
                 Ok(content) if self.output_format == OutputFormat::JsonObject => unfenced(&content).to_string(),
@@ -826,28 +791,8 @@ impl OpenAICompatibleLLM {
             // it read, so it is scrubbed too.
             let detail = self.scrubbed(&detail);
             if ends_mid_json {
-                // With no ceiling sent the reply ended mid-JSON on its own, and it is reported rather than retried.
-                let cap = body.get(self.output_cap_field).and_then(Value::as_i64).unwrap_or_default();
-                if cap <= 0 {
-                    return Err(LLMError::Failed(format!(
-                        "LLM response ended mid-JSON with no output cap set ({purpose}); it wrote {written} tokens",
-                        written = payload
-                            .get("usage")
-                            .and_then(|usage| usage.get("completion_tokens"))
-                            .and_then(Value::as_i64)
-                            .unwrap_or_default()
-                    )));
-                }
-                match short_of_cap(&payload, cap) {
-                    None => return Err(truncation(body, self.output_cap_field, purpose)),
-                    Some(written) if short_retried => {
-                        return Err(LLMError::RetriesExhausted(format!(
-                            "LLM response ended mid-JSON at {written} of {cap} output tokens twice"
-                        )));
-                    }
-                    Some(_) => short_retried = true,
-                }
-                continue;
+                // fastbrowse sets no output cap, so a reply ending mid-JSON was cut off by the model or provider.
+                return Err(truncation(purpose));
             }
             if attempt == 1 {
                 return Err(LLMError::Failed(format!("LLM schema validation failed after one retry: {detail}")));
@@ -922,17 +867,20 @@ impl fastbrowse_core::llm::LLMClient for OpenAICompatibleLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
             let mut fields = Map::new();
             fields.insert("schema".into(), schema.name().into());
             let call = format!("llm:{purpose}");
-            self.http
-                .trace
-                .call_span(&call, fields, self.generate(purpose, messages, schema, max_output_tokens, ledger))
-                .await
+            self.http.trace.call_span(&call, fields, self.generate(purpose, messages, schema, ledger)).await
+        })
+    }
+
+    fn context_tokens(&self, purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+        Box::pin(async move {
+            let model = self.models.get(&purpose)?;
+            self.listed_ceiling(model).await.map(|ceiling| ceiling.context)
         })
     }
 }

@@ -436,9 +436,7 @@ pub async fn compose(
     };
     messages[1].content.push_str(&offered.text);
     let response = ModelSchema { ty: schema };
-    let result = llm
-        .generate_value(LLMPurpose::Compose, &messages, &response, options.tokens.compose_output_tokens, options.ledger)
-        .await?;
+    let result = llm.generate_value(LLMPurpose::Compose, &messages, &response, options.ledger).await?;
     if let Some(ledger) = options.ledger {
         ledger.record([result.cost.clone()])?;
     }

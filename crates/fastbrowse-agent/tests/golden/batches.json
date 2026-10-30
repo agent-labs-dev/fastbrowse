@@ -254,9 +254,7 @@
    "state_plus_largest_question": 32000,
    "state_plus_all_questions": 64000,
    "batch_tokens": 1000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": null,
   "allow_failed_batches": true,
@@ -1056,9 +1054,7 @@
    "state_plus_largest_question": 32000,
    "state_plus_all_questions": 64000,
    "batch_tokens": 1000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": {
    "max_steps": null,
@@ -1914,9 +1910,7 @@
    "state_plus_largest_question": 32000,
    "state_plus_all_questions": 64000,
    "batch_tokens": 1000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": {
    "max_steps": null,
@@ -1954,9 +1948,7 @@
    "state_plus_largest_question": 80,
    "state_plus_all_questions": 80,
    "batch_tokens": 8000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": null,
   "allow_failed_batches": true,
@@ -1988,9 +1980,7 @@
    "state_plus_largest_question": 80,
    "state_plus_all_questions": 80,
    "batch_tokens": 8000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": null,
   "allow_failed_batches": true,
@@ -2115,9 +2105,7 @@
    "state_plus_largest_question": 80,
    "state_plus_all_questions": 80,
    "batch_tokens": 8000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": {
    "max_steps": null,
@@ -2230,9 +2218,7 @@
    "state_plus_largest_question": 80,
    "state_plus_all_questions": 80,
    "batch_tokens": 8000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": null,
   "allow_failed_batches": false,
@@ -2303,9 +2289,7 @@
    "state_plus_largest_question": 80,
    "state_plus_all_questions": 80,
    "batch_tokens": 8000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": null,
   "allow_failed_batches": true,
@@ -2386,9 +2370,7 @@
    "state_plus_largest_question": 32000,
    "state_plus_all_questions": 64000,
    "batch_tokens": 8000,
-   "chars_per_token": 3.0,
-   "read_output_tokens": 8000,
-   "compose_output_tokens": 8000
+   "chars_per_token": 3.0
   },
   "ledger": null,
   "allow_failed_batches": true,

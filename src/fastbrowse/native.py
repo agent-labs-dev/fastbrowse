@@ -296,15 +296,11 @@ def _messages(payload: str) -> list[Message]:
 
 
 def _llm(client: LLMClient) -> Callable[..., Awaitable[str]]:
-    async def generate(
-        purpose: str, messages: str, name: str, schema: str, max_output_tokens: int, context: Any
-    ) -> str:
+    async def generate(purpose: str, messages: str, name: str, schema: str, context: Any) -> str:
         ledger: Any = _Ledger(context) if context.ledger else None
         model = _response_model(name, json.loads(schema), context)
         try:
-            generation = await client.generate(
-                LLMPurpose(purpose), _messages(messages), model, max_output_tokens=max_output_tokens, ledger=ledger
-            )
+            generation = await client.generate(LLMPurpose(purpose), _messages(messages), model, ledger=ledger)
         except BudgetExceeded as exc:
             return _budget(exc)
         except LLMRetriesExhausted as exc:

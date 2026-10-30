@@ -36,12 +36,9 @@ class LLMClient(Protocol):
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = 0,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         """Return `schema`-validated data. `purpose` lets callers route models and attribute cost.
-
-        `max_output_tokens` above 0 is an output ceiling; 0 sends none.
 
         The client reserves against `ledger` once per HTTP request it makes, because only it knows
         how many a repair or a re-ask costs; a caller that reserved instead would undercount them.

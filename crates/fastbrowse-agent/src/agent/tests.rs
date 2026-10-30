@@ -606,7 +606,6 @@ impl fastbrowse_core::llm::LLMClient for Composer {
         purpose: fastbrowse_core::models::LLMPurpose,
         _: &'a [fastbrowse_core::llm::Message],
         schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: i64,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
         Box::pin(async move {
@@ -667,7 +666,6 @@ impl fastbrowse_core::llm::LLMClient for MeteredPlan {
         purpose: fastbrowse_core::models::LLMPurpose,
         _: &'a [fastbrowse_core::llm::Message],
         schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
         Box::pin(async move {
@@ -1294,7 +1292,6 @@ impl fastbrowse_core::llm::LLMClient for Recoverer {
         purpose: fastbrowse_core::models::LLMPurpose,
         _: &'a [fastbrowse_core::llm::Message],
         schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: i64,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
         Box::pin(async move {
@@ -1497,7 +1494,6 @@ impl fastbrowse_core::llm::LLMClient for ContextReader {
         purpose: fastbrowse_core::models::LLMPurpose,
         messages: &'a [fastbrowse_core::llm::Message],
         schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: i64,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
         Box::pin(async move {
@@ -1558,14 +1554,13 @@ impl fastbrowse_core::llm::LLMClient for SlowPlan {
         purpose: fastbrowse_core::models::LLMPurpose,
         messages: &'a [fastbrowse_core::llm::Message],
         schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        cap: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
         Box::pin(async move {
             let mut charged = ChargedIfDropped { ledger, armed: true };
             tokio::time::sleep(Duration::from_millis(200)).await;
             charged.armed = false;
-            MeteredPlan.generate_value(purpose, messages, schema, cap, ledger).await
+            MeteredPlan.generate_value(purpose, messages, schema, ledger).await
         })
     }
 }

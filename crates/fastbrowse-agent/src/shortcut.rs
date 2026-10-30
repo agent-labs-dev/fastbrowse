@@ -57,7 +57,7 @@ const START_INSTRUCTIONS: &str = "# Start page\nA browser agent has been given a
 /// Where to open, for a caller that has a task but no page: an agent handed a goal and nothing else.
 pub async fn propose_start(llm: &dyn LLMClient, task: &str, ledger: Option<&Ledger>) -> Result<Generation<StartPage>> {
     let messages = [Message::system(START_INSTRUCTIONS), Message::user(format!("# Task\n{task}"))];
-    Ok(generate(llm, LLMPurpose::Shortcut, &messages, 0, ledger).await?)
+    Ok(generate(llm, LLMPurpose::Shortcut, &messages, ledger).await?)
 }
 
 /// Whether `urlsplit(url).scheme` is http or https.
@@ -79,7 +79,7 @@ pub async fn propose_shortcut(
     ledger: Option<&Ledger>,
 ) -> Result<Generation<Shortcut>> {
     let messages = [Message::system(INSTRUCTIONS), Message::user(format!("# Task\n{task}\n\n# Start page\n{start}"))];
-    Ok(generate(llm, LLMPurpose::Shortcut, &messages, 0, ledger).await?)
+    Ok(generate(llm, LLMPurpose::Shortcut, &messages, ledger).await?)
 }
 
 /// The proposal if it is a different page on the start page's own origin, which is the only scope the task and its

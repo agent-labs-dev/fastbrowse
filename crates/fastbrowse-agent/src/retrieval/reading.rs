@@ -1010,11 +1010,10 @@ pub(super) async fn ask_reader<T: serde::de::DeserializeOwned>(
     llm: &dyn LLMClient,
     messages: &[Message],
     ty: Ty,
-    tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<fastbrowse_core::llm::Generation<T>> {
     let schema = ModelSchema { ty };
-    let generated = llm.generate_value(LLMPurpose::Read, messages, &schema, tokens.read_output_tokens, ledger).await?;
+    let generated = llm.generate_value(LLMPurpose::Read, messages, &schema, ledger).await?;
     let data = serde_json::from_value(generated.data).map_err(|error| AgentError::Invalid(error.to_string()))?;
     Ok(fastbrowse_core::llm::Generation { data, cost: generated.cost })
 }
@@ -1042,7 +1041,7 @@ pub(super) fn reader_chunk_chars(
     }
     let message = read_message(page, &whole_page(page), question, requirement_ids, required);
     let prompt = format!("{system}{}{}", message.content, dumps(&json_schema(schema)));
-    let overflow = text::len(&prompt) as i64 - tokens.input_chars::<&str>(&[], false);
+    let overflow = text::len(&prompt) as i64 - tokens.llm_chars();
     let room = length - overflow;
     // The instructions or the evidence the read must show fill the budget without any page text: the page goes in
     // one prompt, which the read or the provider reports as too large, rather than in one-character chunks.
@@ -1237,7 +1236,7 @@ async fn read_inner(
         messages[1] = read_message(&page, &part, &question, &requirement_ids, &offered_notes.text);
         let mut result: fastbrowse_core::llm::Generation<ReadResponse>;
         if options.records_only {
-            let collected = ask_reader::<RecordsResponse>(llm, &messages, schema.clone(), tokens, ledger).await?;
+            let collected = ask_reader::<RecordsResponse>(llm, &messages, schema.clone(), ledger).await?;
             ended = collected.data.ended.iter().filter(|key| requirement_ids.contains(key)).cloned().collect();
             // Context is no requirement's record, so a cite that does not resolve loses none of them.
             let context: Vec<ReadClaim> = collected
@@ -1283,7 +1282,7 @@ async fn read_inner(
                 cost: collected.cost,
             };
         } else {
-            result = ask_reader::<ReadResponse>(llm, &messages, schema.clone(), tokens, ledger).await?;
+            result = ask_reader::<ReadResponse>(llm, &messages, schema.clone(), ledger).await?;
             let groups: Vec<&TallyGroup> = result
                 .data
                 .tallies
@@ -1312,7 +1311,7 @@ async fn read_inner(
                 costs.push(result.cost.clone());
                 let mut repaired = messages.clone();
                 repaired.push(Message::user(FIELD_REPAIR));
-                result = ask_reader::<ReadResponse>(llm, &repaired, schema.clone(), tokens, ledger).await?;
+                result = ask_reader::<ReadResponse>(llm, &repaired, schema.clone(), ledger).await?;
             }
         }
         if let Some(ledger) = ledger {
@@ -1818,12 +1817,8 @@ mod tests {
             ("# Reader", "Which rows?", vec!["r".to_string()], read_response_ty(false));
         let message = read_message(&page, &whole_page(&page), question, &ids, "");
         let whole = text::len(&format!("{system}{}{}", message.content, dumps(&json_schema(&schema)))) as i64;
-        let tokens = TokenBudget {
-            state_plus_largest_question: whole - short,
-            state_plus_all_questions: (whole - short) * 2,
-            chars_per_token: 1.0,
-            ..TokenBudget::default()
-        };
+        let tokens =
+            TokenBudget { llm_context_tokens: Some(whole - short), chars_per_token: 1.0, ..TokenBudget::default() };
         chunk_page(&page, reader_chunk_chars(&page, &tokens, system, question, &ids, "", &schema), 1)
     }
 

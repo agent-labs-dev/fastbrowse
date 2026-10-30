@@ -111,7 +111,6 @@ class ScriptedLLM:
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = 0,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         if ledger is not None:

@@ -435,8 +435,8 @@ fn jev_response(response: &Value) -> Result<Evaluation, DecisionError> {
     })
 }
 
-fn llm_body(purpose: &str, messages: &str, name: &str, schema: &str, cap: i64) -> String {
-    format!("{purpose}\n{messages}\n{name}\n{schema}\n{cap}")
+fn llm_body(purpose: &str, messages: &str, name: &str, schema: &str) -> String {
+    format!("{purpose}\n{messages}\n{name}\n{schema}")
 }
 
 pub struct KeyedLLM<'a> {
@@ -452,7 +452,6 @@ impl<'a> KeyedLLM<'a> {
                 request["messages"].as_str().unwrap_or_default(),
                 request["schema_name"].as_str().unwrap_or_default(),
                 request["schema"].as_str().unwrap_or_default(),
-                request["max_output_tokens"].as_i64().unwrap_or_default(),
             )
         });
         KeyedLLM { answers, ledgers }
@@ -469,14 +468,13 @@ impl LLMClient for KeyedLLM<'_> {
         purpose: LLMPurpose,
         messages: &'b [Message],
         schema: &'b dyn ResponseSchema,
-        max_output_tokens: i64,
         _ledger: Option<&'b Ledger>,
     ) -> BoxFuture<'b, Result<Generation<Value>, LLMError>> {
         let written = write(&Value::Array(messages.iter().map(Dump::dump).collect()), Style::HTTPX);
         let schema_json = dumps(&schema.json_schema());
-        let key = llm_body(purpose.as_str(), &written, &schema.name(), &schema_json, max_output_tokens);
+        let key = llm_body(purpose.as_str(), &written, &schema.name(), &schema_json);
         let request = json!({"purpose": purpose.as_str(), "messages": written, "schema_name": schema.name(),
-                             "schema": schema_json, "max_output_tokens": max_output_tokens});
+                             "schema": schema_json});
         let call = self.answers.take(&key, request, |_| Some(fresh_llm(purpose, &schema.json_schema())));
         apply_effect(&call, &self.ledgers);
         Box::pin(async move {
