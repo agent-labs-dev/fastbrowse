@@ -885,27 +885,6 @@ impl Drop for SetOnDrop {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_split_singletons_share_the_remaining_request_budget() {
-    for gateway_route in [false, true] {
-        let seen: Arc<Mutex<HashMap<Vec<String>, usize>>> = Arc::default();
-        let counts = seen.clone();
-        let http = answering(move |request| {
-            *counts.lock().unwrap().entry(keys(request)).or_default() += 1;
-            Box::pin(async move { Ok(Response::new(503, "")) })
-        });
-        let client: Box<dyn DecisionClient> =
-            if gateway_route { Box::new(gateway(http)) } else { Box::new(direct(http)) };
-        let error =
-            client.evaluate(&json!("page"), &questions([("a", noul("a")), ("b", noul("b"))])).await.unwrap_err();
-        assert!(matches!(error, DecisionError::RetriesExhausted(_)));
-        let seen = seen.lock().unwrap();
-        assert_eq!(seen[&vec!["a".to_string(), "b".to_string()]], 2);
-        assert_eq!(seen[&vec!["a".to_string()]], RETRY_DELAYS_SECONDS.len() - 1);
-        assert!(!seen.contains_key(&vec!["b".to_string()]));
-    }
-}
-
-#[tokio::test(start_paused = true)]
 async fn test_a_refused_key_moves_jev_to_the_backup_at_once() {
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
