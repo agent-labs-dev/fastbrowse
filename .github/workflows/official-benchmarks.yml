@@ -1,0 +1,355 @@
+name: Official benchmarks
+
+# Runs the upstream browser benchmarks, BU Bench and Online-Mind2Web, on one fastbrowse build with Parallax's
+# official runner (`parallax browser official`). Each suite is graded by its own upstream judge at a pinned
+# commit, run from that checkout's own virtualenv; Parallax only meters the judge's provider calls. Dispatch only:
+# every task drives a real browser and real model calls, so it spends money and is never triggered by a push or a
+# pull request.
+#
+# No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
+# approved `budget` only decides whether the next task may start (`start-gate-v1`).
+#
+# A run directory holds the decrypted BU Bench goals, upstream judge records, screenshots and provider receipts,
+# which Parallax keeps private. This repository is public, so each run directory is encrypted with age to
+# PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT before it is uploaded; only the holder of the matching identity can read it.
+#
+# Repository configuration this file needs (checked before any paid call):
+#   secrets: AGENT_LABS_PR_BOT_APP_ID, AGENT_LABS_PR_BOT_PRIVATE_KEY (read agent-labs-dev/parallax)
+#            OPENROUTER_API_KEY (the agent's LLM and Jev), OPENAI_API_KEY (both upstream judges call OpenAI)
+#            BROWSER_USE_API_KEY (only with `browser: cloud`)
+#            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
+#   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
+#   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
+#            PARALLAX_BU_BENCH_JUDGE, PARALLAX_MIND2WEB_JUDGE (the judge of each suite run, as JSON; see below)
+#
+# Each judge variable is one JSON object with every price checked against the provider's pages:
+#   {"model": "...", "reasoning": "...", "pricing_checked": "YYYY-MM-DD",
+#    "input_usd_per_mtok": 0, "output_usd_per_mtok": 0, "image_tokens": 0,
+#    "max_requests": 0, "max_input_tokens": 0, "max_output_tokens": 0, "budget_usd": 0}
+# plus, for a model with a long-context price tier, all three of
+#   "context_threshold_tokens", "context_input_usd_per_mtok", "context_output_usd_per_mtok".
+# The ceilings bound the judge meter's reservations, not the agent: set them to the provider's documented limits.
+# BU Bench's upstream default judge is gpt-5.6-luna at xhigh reasoning. Online-Mind2Web's published WebJudge
+# backbone, o4-mini, is retired upstream, and results from another backbone are labelled by that model.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fastbrowse_ref:
+        description: The fastbrowse commit the agent runs (a release tag or full sha)
+        required: true
+        type: string
+      parallax_sha:
+        description: Full 40 character commit SHA of agent-labs-dev/parallax to run
+        required: true
+        type: string
+      suites:
+        description: Which upstream suites to run
+        required: true
+        type: choice
+        options: [all, bu-bench, online-mind2web]
+        default: all
+      browser:
+        description: Browser Use Cloud browsers, or headless local Chrome on the runner
+        required: true
+        type: choice
+        options: [cloud, local]
+        default: cloud
+      repeat:
+        description: Runs per task (at least 3)
+        required: true
+        default: "3"
+      budget:
+        description: Approved total dollars for each suite, agent and judge together, with no per-run ceilings
+        required: true
+        default: "100"
+      concurrency:
+        description: Task workers per suite, sharing one start-gate ledger
+        required: true
+        default: "8"
+
+permissions: {}
+
+# One run at a time: the suites share the approved spend and the cloud browser quota.
+concurrency:
+  group: official-benchmarks
+  cancel-in-progress: false
+
+env:
+  UV_PYTHON: "3.13"
+  REPEAT: ${{ inputs.repeat }}
+  BUDGET: ${{ inputs.budget }}
+  WORKERS: ${{ inputs.concurrency }}
+  BROWSER: ${{ inputs.browser }}
+  # The upstream pins. BU Bench's task file ships inside its repository, encrypted, so its digest is the file at
+  # the pinned commit. Online-Mind2Web's tasks are the gated Hugging Face file fastbrowse pins
+  # (src/fastbrowse/evals/sources.py); its digest stays empty until someone with access verifies the file.
+  BU_BENCH_UPSTREAM: browser-use/benchmark
+  BU_BENCH_UPSTREAM_COMMIT: 77b4df339fe8fc293fb48896cfa1c73dd743af42
+  BU_BENCH_DATASET_SHA256: 0c014b056192e261b06f04ed6da6dcf37f2135150cf58c87ea839bd4e150e5c3
+  MIND2WEB_UPSTREAM: OSU-NLP-Group/Online-Mind2Web
+  MIND2WEB_UPSTREAM_COMMIT: b422075b059f0bba670ddda168444eb1d326aa45
+  MIND2WEB_DATASET_SHA256: ""
+
+jobs:
+  resolve:
+    name: Resolve the pins and the credentials
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {contents: read}
+    outputs:
+      fastbrowse_sha: ${{ steps.pins.outputs.fastbrowse_sha }}
+      parallax_sha: ${{ steps.pins.outputs.parallax_sha }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Require the full comparison protocol
+        run: |
+          for pair in "repeat:$REPEAT" "concurrency:$WORKERS"; do
+            case "${pair#*:}" in
+              ''|*[!0-9]*) echo "::error::${pair%%:*} must be an integer, got '${pair#*:}'"; exit 1 ;;
+            esac
+          done
+          test "$REPEAT" -ge 3 || { echo "::error::repeat must be at least 3, got $REPEAT"; exit 1; }
+          test "$WORKERS" -ge 1 || { echo "::error::concurrency must be at least 1"; exit 1; }
+          case "$BUDGET" in
+            ''|*[!0-9.]*) echo "::error::budget must be a number, got '$BUDGET'"; exit 1 ;;
+          esac
+      - name: Resolve the pins
+        id: pins
+        env:
+          FASTBROWSE_REF: ${{ inputs.fastbrowse_ref }}
+          PARALLAX_SHA: ${{ inputs.parallax_sha }}
+        run: |
+          fastbrowse_sha="$(git rev-parse "${FASTBROWSE_REF}^{commit}")"
+          printf '%s' "$fastbrowse_sha" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "::error::fastbrowse_ref did not resolve to a commit"; exit 1; }
+          printf '%s' "$PARALLAX_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "::error::parallax_sha must be a full 40 character lowercase commit SHA"; exit 1; }
+          {
+            echo "fastbrowse_sha=$fastbrowse_sha"
+            echo "parallax_sha=$PARALLAX_SHA"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build the suite matrix
+        id: matrix
+        env:
+          SUITE_SET: ${{ inputs.suites }}
+          BU_BENCH_JUDGE: ${{ vars.PARALLAX_BU_BENCH_JUDGE }}
+          MIND2WEB_JUDGE: ${{ vars.PARALLAX_MIND2WEB_JUDGE }}
+        # Each entry carries its upstream pins and the judge flags built from its variable. A missing pin, digest
+        # or judge field is named here, before any paid call.
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+
+          PRICES = ("input_usd_per_mtok", "output_usd_per_mtok", "max_requests", "max_input_tokens",
+                    "max_output_tokens", "image_tokens", "budget_usd")
+          CONTEXT = ("context_threshold_tokens", "context_input_usd_per_mtok", "context_output_usd_per_mtok")
+          suites = {
+              "bu-bench": ("BU_BENCH", "PARALLAX_BU_BENCH_JUDGE"),
+              "online-mind2web": ("MIND2WEB", "PARALLAX_MIND2WEB_JUDGE"),
+          }
+          chosen = list(suites) if os.environ["SUITE_SET"] == "all" else [os.environ["SUITE_SET"]]
+          missing, include = [], []
+          for suite in chosen:
+              prefix, variable = suites[suite]
+              commit = os.environ[f"{prefix}_UPSTREAM_COMMIT"]
+              digest = os.environ[f"{prefix}_DATASET_SHA256"]
+              if not re.fullmatch(r"[0-9a-f]{40}", commit):
+                  missing.append(f"{prefix}_UPSTREAM_COMMIT (pin in this workflow)")
+              if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                  missing.append(f"{prefix}_DATASET_SHA256 (pin in this workflow once the file is verified)")
+              try:
+                  judge = json.loads(os.environ[f"{prefix}_JUDGE"] or "null")
+              except ValueError:
+                  judge = None
+              if not isinstance(judge, dict):
+                  missing.append(f"{variable} (repository variable, a JSON object)")
+                  continue
+              absent = [k for k in ("model", "reasoning", "pricing_checked", *PRICES) if judge.get(k) in (None, "")]
+              tier = [k for k in CONTEXT if k in judge]
+              if tier and len(tier) != len(CONTEXT):
+                  absent += [k for k in CONTEXT if k not in judge]
+              if absent:
+                  missing.append(f"{variable} fields {', '.join(absent)}")
+                  continue
+              flags = ["--judge-model", judge["model"], "--judge-reasoning", judge["reasoning"],
+                       "--judge-pricing-checked", judge["pricing_checked"]]
+              for key in (*PRICES, *tier):
+                  flags += ["--judge-" + key.removesuffix("_usd").replace("_", "-"), str(judge[key])]
+              include.append({"suite": suite, "prefix": prefix, "judge": json.dumps(flags)})
+          if missing:
+              for item in missing:
+                  print(f"::error::missing {item}")
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"matrix={json.dumps(include)}\n")
+          PY
+      - name: Check the credentials
+        env:
+          AGENT_LABS_PR_BOT_APP_ID: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
+          AGENT_LABS_PR_BOT_PRIVATE_KEY: ${{ secrets.AGENT_LABS_PR_BOT_PRIVATE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+          SUITE_SET: ${{ inputs.suites }}
+        run: |
+          missing=""
+          need() { test -n "$2" || missing="$missing $1"; }
+          need AGENT_LABS_PR_BOT_APP_ID "$AGENT_LABS_PR_BOT_APP_ID"
+          need AGENT_LABS_PR_BOT_PRIVATE_KEY "$AGENT_LABS_PR_BOT_PRIVATE_KEY"
+          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          need OPENAI_API_KEY "$OPENAI_API_KEY"
+          need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
+          if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
+          if test "$SUITE_SET" != bu-bench; then need HF_TOKEN "$HF_TOKEN"; fi
+          if test -n "$missing"; then
+            echo "::error::missing repository configuration:$missing"
+            exit 1
+          fi
+
+  official:
+    name: ${{ matrix.suite }}
+    needs: resolve
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {contents: read}
+    # A full suite is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    env:
+      SUITE: ${{ matrix.suite }}
+      OUT: ${{ github.workspace }}/runs/${{ matrix.suite }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.fastbrowse_sha }}
+          path: fastbrowse
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with: {python-version: "3.13"}
+      - name: Mint the pr-bot token
+        id: app
+        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v2
+        with:
+          app-id: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
+          private-key: ${{ secrets.AGENT_LABS_PR_BOT_PRIVATE_KEY }}
+          owner: agent-labs-dev
+          repositories: parallax
+          permission-contents: read
+      - name: Check out the pinned parallax
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: agent-labs-dev/parallax
+          ref: ${{ needs.resolve.outputs.parallax_sha }}
+          path: parallax
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+      - name: Install parallax and fastbrowse
+        # Every later parallax command runs with --no-sync: a syncing `uv run` would put back the fastbrowse
+        # parallax pins and measure that build instead of this one.
+        run: |
+          cd parallax
+          uv sync --locked --extra browser --extra track
+          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+          uv run --no-sync python -c "import fastbrowse, parallax"
+      - name: Check out the pinned upstream
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env[format('{0}_UPSTREAM', matrix.prefix)] }}
+          ref: ${{ env[format('{0}_UPSTREAM_COMMIT', matrix.prefix)] }}
+          path: upstream
+          persist-credentials: false
+      - name: Prepare the upstream judge
+        # The runner requires a clean checkout at the exact commit and a judge Python inside it, so the virtualenv
+        # is excluded locally rather than through a tracked file.
+        run: |
+          cd upstream
+          echo ".venv/" >> .git/info/exclude
+          if test "$SUITE" = bu-bench; then
+            uv sync --frozen --python 3.12
+          else
+            uv venv --python 3.11 .venv
+            uv pip install --python .venv/bin/python -r requirements.txt
+          fi
+          test -z "$(git status --porcelain)" || { echo "::error::preparing the judge changed the upstream checkout"; exit 1; }
+      - name: Fetch the Online-Mind2Web tasks
+        if: matrix.suite == 'online-mind2web'
+        # Parallax's loader checks the bytes against the digest and the pinned upstream Git blob before keeping them.
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd parallax
+          uv run --no-sync python - "$MIND2WEB_DATASET_SHA256" "$RUNNER_TEMP/Online_Mind2Web.json" <<'PY'
+          import asyncio, os, sys
+          from pathlib import Path
+
+          import httpx
+          from parallax.browser_use.datasets import SOURCES, fetch
+
+          source = SOURCES["online-mind2web"].model_copy(update={"sha256": sys.argv[1]})
+
+          async def main() -> bytes:
+              async with httpx.AsyncClient(timeout=120) as http:
+                  return await fetch(source, http, cache=Path(os.environ["RUNNER_TEMP"]), token=os.environ["HF_TOKEN"])
+
+          Path(sys.argv[2]).write_bytes(asyncio.run(main()))
+          PY
+      - name: Run the suite
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Ignored with a local browser: the runner then drives the local Chrome alone.
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          JUDGE: ${{ matrix.judge }}
+          DIGEST: ${{ env[format('{0}_DATASET_SHA256', matrix.prefix)] }}
+          COMMIT: ${{ env[format('{0}_UPSTREAM_COMMIT', matrix.prefix)] }}
+        run: |
+          cd parallax
+          mapfile -t judge < <(jq -r '.[]' <<< "$JUDGE")
+          browser=()
+          if test "$BROWSER" = local; then
+            chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
+            test -n "$chrome" || { echo "::error::browser local needs Chrome on the runner, and none was found"; exit 1; }
+            browser=(--local-browser "$chrome" --browser-reserve-dollars 0)
+          fi
+          if test "$SUITE" = bu-bench; then
+            dataset="$GITHUB_WORKSPACE/upstream/BU_Bench_V2.enc"
+          else
+            dataset="$RUNNER_TEMP/Online_Mind2Web.json"
+          fi
+          mkdir -p "$(dirname "$OUT")"
+          uv run --no-sync parallax browser official "$SUITE" \
+            --upstream-root "$GITHUB_WORKSPACE/upstream" \
+            --upstream-commit "$COMMIT" \
+            --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
+            --dataset "$dataset" \
+            --dataset-sha256 "$DIGEST" \
+            "${judge[@]}" \
+            "${browser[@]}" \
+            --repeat "$REPEAT" \
+            --concurrency "$WORKERS" \
+            --budget "$BUDGET" \
+            --out "$OUT" \
+            --execute
+      - name: Encrypt the run directory
+        if: always()
+        env:
+          RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+        run: |
+          test -d "$OUT" || { echo "::warning::no run directory was written"; exit 0; }
+          sudo apt-get install -y -qq age
+          tar -C "$(dirname "$OUT")" -czf - "$SUITE" | age -r "$RECIPIENT" -o "$RUNNER_TEMP/$SUITE.tar.gz.age"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: official-${{ matrix.suite }}
+          path: ${{ runner.temp }}/${{ matrix.suite }}.tar.gz.age
+          if-no-files-found: warn
+          retention-days: 30

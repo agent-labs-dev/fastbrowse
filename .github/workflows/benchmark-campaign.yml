@@ -194,13 +194,14 @@ jobs:
         run: |
           cd parallax
           uv sync --locked --extra browser --extra track
-          # Measure this fastbrowse build, not the one parallax pins.
+          # Measure this fastbrowse build, not the one parallax pins. Every later command runs with --no-sync:
+          # a syncing `uv run` would reinstall the pinned build over this one.
           uv pip install "$GITHUB_WORKSPACE/fastbrowse"
-          uv run python -c "import fastbrowse, parallax"
+          uv run --no-sync python -c "import fastbrowse, parallax"
       - name: Export the catalog
         run: |
           cd parallax
-          uv run --extra browser parallax browser catalog "$GITHUB_WORKSPACE/catalog.json"
+          uv run --no-sync parallax browser catalog "$GITHUB_WORKSPACE/catalog.json"
       - name: Run the comparison
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
@@ -216,7 +217,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/ledgers"
           read -ra arms <<< "${{ matrix.arms }}"
           read -ra suites <<< "$SUITES"
-          uv run --extra browser parallax browser internal \
+          uv run --no-sync parallax browser internal \
             --arms "${arms[@]}" \
             --suite "${suites[@]}" \
             --repeat "$REPEAT" \
@@ -272,7 +273,7 @@ jobs:
       - name: Export the catalog
         run: |
           cd parallax
-          uv run --extra browser parallax browser catalog "$GITHUB_WORKSPACE/catalog.json"
+          uv run --no-sync parallax browser catalog "$GITHUB_WORKSPACE/catalog.json"
       - name: Publish the candidate
         # The publication gate refuses a ledger whose recorded arms differ from its group's, so a
         # group with no ledger is simply not selected. --fixture-run binds the candidate to the
@@ -301,7 +302,7 @@ jobs:
             --commit "$FIXTURE_SHA" --event workflow_dispatch --status success --limit 1 \
             --json databaseId --jq '.[0].databaseId')"
           test -n "$fixture_run" || { echo "::error::no passing Evals run on the measured build"; exit 1; }
-          uv run --extra browser parallax browser publish-candidate \
+          uv run --no-sync parallax browser publish-candidate \
             --campaign-id "$CAMPAIGN_ID" \
             --out "$GITHUB_WORKSPACE/fastbrowse/docs/results/benchmark-candidate.json" \
             --catalog "$GITHUB_WORKSPACE/catalog.json" \
