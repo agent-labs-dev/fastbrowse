@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 from fastbrowse.build import identity
 from fastbrowse.evals import baseline
+from fastbrowse.evals.status import Ending
 
 LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
@@ -316,7 +317,7 @@ def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
     every retry, or by a first navigation that timed out or could not reach the site, so it says nothing about the
     arm."""
-    return [r for r in rows if r.get("normalized_status") != "unavailable"]
+    return [r for r in rows if r.get("normalized_status") != Ending.UNAVAILABLE]
 
 
 def _arm_rank(arm: str) -> int:
