@@ -1,4 +1,5 @@
 //! Retrieval against every call the Python implementation's tests made, as `tests/golden/retrieval*.json` hold them.
+//! `FASTBROWSE_UPDATE_GOLDEN=1` re-records them (see `common::capture`).
 
 mod common;
 
@@ -85,16 +86,17 @@ fn proposed(found: &Proposed) -> Value {
     )
 }
 
-/// Runs one case and returns every way Rust differed from Python.
-fn replay(case: &Value) -> Result<(), String> {
+/// Runs one case and returns every way Rust differed from the recording, or with `update` the case re-recorded.
+fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
     let args = &case["args"];
     let name = case["function"].as_str().unwrap_or_default();
     let ledger_param =
         args.as_object().and_then(|a| a.iter().find(|(_, v)| v.get("$ledger").is_some()).map(|(k, _)| k.clone()));
     let ledger: Option<Ledger> = ledger_param.as_ref().map(|key| ledger_arg(&args[key]));
     let ledgers: Vec<&Ledger> = ledger.iter().collect();
-    let jev = KeyedJev::new(case, ledgers.clone());
-    let llm = KeyedLLM::new(case, ledgers);
+    let log: Option<CallLog> = update.then(CallLog::default);
+    let jev = KeyedJev::new(case, ledgers.clone(), log.clone());
+    let llm = KeyedLLM::new(case, ledgers, log.clone());
     let trace = Trace::collecting();
     let tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
     let mut notes: Option<Notes> = args.get("notes").filter(|n| n.get("$notes").is_some()).map(notes_arg);
@@ -316,6 +318,16 @@ fn replay(case: &Value) -> Result<(), String> {
         }
         other => return Err(format!("no replay for {other}")),
     };
+    if let Some(log) = log {
+        return Ok(Some(rerecorded(
+            case,
+            result,
+            notes.as_ref(),
+            ledger_param.as_deref().zip(ledger.as_ref()),
+            &trace,
+            log,
+        )));
+    }
     let mut problems = Vec::new();
     if result != case["outcome"] {
         problems.push(format!("outcome\n  rust:   {}\n  python: {}", clip(&result), clip(&case["outcome"])));
@@ -353,7 +365,7 @@ fn replay(case: &Value) -> Result<(), String> {
     if let Err(panic) = finished {
         problems.push(panic_text(&panic));
     }
-    if problems.is_empty() { Ok(()) } else { Err(problems.join("\n")) }
+    if problems.is_empty() { Ok(None) } else { Err(problems.join("\n")) }
 }
 
 fn sorted(mut state: Value) -> Value {
@@ -372,14 +384,6 @@ fn clip(value: &Value) -> String {
     }
 }
 
-fn panic_text(panic: &Box<dyn std::any::Any + Send>) -> String {
-    panic
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_else(|| "panic".into())
-}
-
 /// Cases whose Python outcome changes from one process to the next, so no fixed answer can match it.
 fn python_only(name: &str) -> Option<String> {
     // read() builds `inherited` as a set of fact ids and appends it to a claim's basis in set order, which follows
@@ -390,38 +394,10 @@ fn python_only(name: &str) -> Option<String> {
 
 #[test]
 fn every_recorded_call_makes_the_same_requests_and_decisions() {
-    let mut cases = capture_cases("retrieval.json");
-    cases.extend(capture_cases("retrieval_large.json"));
-    let only = std::env::var("CASE").ok();
-    let mut failures = Vec::new();
-    let mut skipped = Vec::new();
-    let mut passed = 0;
-    for case in &cases {
-        let name = case["name"].as_str().unwrap_or("?");
-        if only.as_deref().is_some_and(|only| !name.contains(only)) {
-            continue;
-        }
-        if let Some(reason) = skip_reason(case).or_else(|| python_only(name)) {
-            skipped.push(format!("{name}: {reason}"));
-            continue;
-        }
-        let replayed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay(case)));
-        match replayed {
-            Ok(Ok(())) => passed += 1,
-            Ok(Err(problem)) => failures.push(format!("{name}\n{problem}")),
-            Err(panic) => failures.push(format!("{name}\npanicked: {}", panic_text(&panic))),
-        }
-    }
-    eprintln!("retrieval goldens: {passed} passed, {} failed, {} skipped", failures.len(), skipped.len());
-    for skip in &skipped {
-        eprintln!("skipped {skip}");
-    }
-    let shown: Vec<&String> = failures.iter().take(8).collect();
-    assert!(
-        failures.is_empty(),
-        "{} of {} cases differ; first:\n\n{}",
-        failures.len(),
-        cases.len(),
-        shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n\n")
+    replay_files(
+        "retrieval",
+        &["retrieval.json", "retrieval_large.json"],
+        |case| python_only(case["name"].as_str().unwrap_or("?")),
+        replay,
     );
 }
