@@ -551,14 +551,15 @@ async fn test_a_local_endpoint_gets_the_reasoning_effort_that_was_asked_for() {
 }
 
 #[tokio::test]
-async fn test_openrouter_keeps_each_models_own_reasoning_by_default() {
-    for env in [
-        vec![("OPENROUTER_API_KEY", "o")],
-        vec![("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_MODEL", "google/gemini-3.8-flash")],
-    ] {
-        let (seen, _) = llm_requests(&env, Some(0.0001)).await;
-        assert!(body(&seen[0]).get("reasoning").is_none(), "{env:?}");
-    }
+async fn test_openrouter_turns_deepseek_reasoning_off_and_leaves_other_models_their_own() {
+    let (seen, _) = llm_requests(&[("OPENROUTER_API_KEY", "o")], Some(0.0001)).await;
+    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "none"}));
+    let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_MODEL", "google/gemini-3.8-flash")];
+    let (seen, _) = llm_requests(&env, Some(0.0001)).await;
+    assert!(body(&seen[0]).get("reasoning").is_none());
+    let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_REASONING", "high")];
+    let (seen, _) = llm_requests(&env, Some(0.0001)).await;
+    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "high"}));
 }
 
 #[tokio::test]

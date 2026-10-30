@@ -57,6 +57,13 @@ use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 /// every purpose (docs/evals.md has the measurements).
 pub const DEFAULT_LLM: &str = "deepseek/deepseek-v4.1-flash-1017";
 
+/// DeepSeek through OpenRouter or the gateway answers with reasoning off unless FASTBROWSE_LLM_REASONING says
+/// otherwise. With it on, a greedy reasoning trace can repeat the same lines until the model's own output maximum: one
+/// read spent 131,072 reasoning tokens, 312 seconds and $0.16 restating one paragraph, and returned no answer.
+fn default_reasoning(model: &str) -> Option<ReasoningEffort> {
+    model.starts_with("deepseek/").then_some(ReasoningEffort::None)
+}
+
 pub const LLM_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 pub const LLM_GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v1";
 
@@ -734,7 +741,7 @@ impl Settings {
         http: &Http,
     ) -> Result<Box<dyn LLMClient>, ConfigurationError> {
         let options = LLMOptions {
-            reasoning_effort: self.llm_reasoning,
+            reasoning_effort: self.llm_reasoning.or_else(|| default_reasoning(&self.model())),
             provider_routing: Some(routing),
             ..LLMOptions::default()
         };
