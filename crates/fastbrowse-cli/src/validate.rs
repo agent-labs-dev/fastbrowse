@@ -306,7 +306,7 @@ pub fn run_params() -> Ty {
             ("until", Ty::Bool, false),
             ("downloads", optional(Ty::Path), false),
             ("record", optional(Ty::Path), false),
-            ("cursor", Ty::Bool, false),
+            ("cursor", optional(Ty::Bool), false),
             ("local", Ty::Bool, false),
             ("chrome", optional(chrome), false),
             ("cloud_profile", optional(Ty::Str), false),

@@ -328,7 +328,7 @@ public final class Fastbrowse implements AutoCloseable {
                 .until(options.until() != null ? true : null)
                 .downloads(options.downloads())
                 .record(options.record())
-                .cursor(options.cursor() ? true : null)
+                .cursor(options.cursor())
                 .local(browser.local() ? true : null)
                 .chrome(browser.chrome())
                 .cloudProfile(browser.cloudProfile())

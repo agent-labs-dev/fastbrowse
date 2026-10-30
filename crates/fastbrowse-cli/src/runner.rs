@@ -46,7 +46,7 @@ pub struct RunArgs {
     pub on_frame: Option<FrameHandler>,
     pub until: Option<UntilCheck>,
     pub record: Option<PathBuf>,
-    pub cursor: bool,
+    pub cursor: Option<bool>,
     pub fetch: bool,
     pub fetch_first: bool,
     /// Tripped when the caller stops the run. Python cancels the task; a Rust run watches this instead, closes its
@@ -82,7 +82,7 @@ impl RunArgs {
             on_frame: None,
             until: None,
             record: None,
-            cursor: false,
+            cursor: None,
             fetch: false,
             fetch_first: false,
             cancel: Cancel::default(),

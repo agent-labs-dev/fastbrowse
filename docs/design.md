@@ -119,8 +119,11 @@ a recording holds its last clean frame meanwhile.
 
 ## Cursor feedback
 
-`--cursor` (`run_task(cursor=True)`) shows where the agent is about to act, through the Cua Driver's synthetic
-cursor. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
+The run shows where the agent is about to act, through the Cua Driver's synthetic cursor, whenever its tab is on
+screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
+window to the front so it always can be, and `--no-cursor` (`cursor=False`) turns it off. A plain `--headed` run
+works in a background tab behind `about:blank`, so the default draws nothing there; nothing of the run is on
+screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
 retried. The page hook is in `CdpPage.act`, where the hit-tested point is known; a secret's field is never
 marked. `browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
 when the run ends, including on cancellation. The driver's `move_cursor` is sent in `window` scope only, so the

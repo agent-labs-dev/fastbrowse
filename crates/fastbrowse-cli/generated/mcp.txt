@@ -5,7 +5,7 @@ usage: fastbrowse-mcp [-h] [--transport {stdio,http}] [--host HOST]
                       [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
                       [--max-seconds MAX_SECONDS]
                       [--max-concurrent MAX_CONCURRENT]
-                      [--downloads DOWNLOADS] [--cursor]
+                      [--downloads DOWNLOADS] [--cursor | --no-cursor]
 
 Serve fastbrowse as an MCP tool.
 
@@ -36,5 +36,8 @@ options:
                         runs at once; more wait
   --downloads DOWNLOADS
                         directory to keep downloaded files in
-  --cursor              draw the agent's cursor over a headed Chrome with the
-                        Cua Driver (Linux X11)
+  --cursor              bring the window to the front so the agent's cursor
+                        is always drawn
+  --no-cursor           do not draw the agent's cursor (by default it is
+                        drawn over a headed Chrome with the Cua Driver on
+                        Linux X11, and skipped where unsupported)

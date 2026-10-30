@@ -49,7 +49,7 @@ pub struct Options {
     pub secrets: Option<Vec<SecretRef>>,
     pub downloads: Option<PathBuf>,
     pub record: Option<PathBuf>,
-    pub cursor: bool,
+    pub cursor: Option<bool>,
     pub fetch: bool,
     pub fetch_first: bool,
     pub config: Option<Config>,

@@ -112,8 +112,8 @@ public sealed record RunOptions
     /// <summary>Where to write a video of the run. The server needs ffmpeg for it.</summary>
     public string? Record { get; init; }
 
-    /// <summary>Draw visual cursor feedback for visible local Chrome on Linux X11 with the Cua Driver.</summary>
-    public bool Cursor { get; init; }
+    /// <summary>The agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off.</summary>
+    public bool? Cursor { get; init; }
 
     /// <summary>The secrets the run may type, by name and origin. The values stay with <see cref="ResolveSecret"/>.</summary>
     public IReadOnlyList<SecretRef>? Secrets { get; init; }
