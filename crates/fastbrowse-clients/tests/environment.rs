@@ -6,18 +6,13 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use common::{Script, answer_model, answering, body, config_error, settings};
+use common::{Script, answer_model, answering, body, config_error, one, settings};
 use fastbrowse_clients::environment::{DEFAULT_LLM, DecisionSource, LLMProvider, Settings};
 use fastbrowse_clients::http::{Http, Request, Response};
-use fastbrowse_core::decision::{DecisionError, NoulQuestion, Question};
+use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::{Generation, Message};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, LLMPurpose};
-use indexmap::IndexMap;
 use serde_json::{Value, json};
-
-fn question() -> IndexMap<String, Question> {
-    IndexMap::from([("q".to_string(), NoulQuestion::new("Is it?", None, None).into())])
-}
 
 /// Every request's URL, each answered with `status`.
 fn urls(status: u16) -> (Http, Arc<Mutex<Vec<String>>>) {
@@ -63,7 +58,7 @@ async fn test_jev_requests_go_to_the_chosen_source() {
     for (env, expected) in cases {
         let (http, seen) = urls(400);
         let jev = settings(env).decision(&http).unwrap();
-        assert!(jev.evaluate(&json!("page"), &question()).await.is_err());
+        assert!(jev.evaluate(&json!("page"), &one()).await.is_err());
         assert_eq!(*seen.lock().unwrap(), [expected], "{env:?}");
     }
 }
@@ -108,8 +103,7 @@ async fn test_failover_requires_both_keys_and_default_routing() {
                 _ => {}
             }
             let (http, seen) = urls(503);
-            let error =
-                settings(&env).decision(&http).unwrap().evaluate(&json!("page"), &question()).await.unwrap_err();
+            let error = settings(&env).decision(&http).unwrap().evaluate(&json!("page"), &one()).await.unwrap_err();
             assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{source} {restriction}: {error}");
             let host = match (restriction, source) {
                 ("proxy", _) => "proxy.test",
@@ -199,7 +193,7 @@ async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
         let env: Vec<(&str, &str)> = env.iter().copied().chain(JEV_KEYS).collect();
         let script = Script::new((0..6).map(|_| common::text(503, "")));
         let jev = settings(&env).decision(&script.http()).unwrap();
-        let error = jev.evaluate(&json!("page"), &question()).await.unwrap_err();
+        let error = jev.evaluate(&json!("page"), &one()).await.unwrap_err();
         assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{env:?}: {error}");
         let requests = script.requests();
         assert!(requests.iter().all(|request| request.url == url), "{env:?}");
@@ -237,7 +231,7 @@ async fn test_jev_is_fitted_to_the_context_its_route_documents() {
         let script = Script::new([common::reply(200, answered)]);
         let jev = settings(env).decision(&script.http()).unwrap();
         assert_eq!(jev.profile().max_largest_tokens, context, "{env:?}");
-        let _ = jev.evaluate(&json!("page"), &question()).await;
+        let _ = jev.evaluate(&json!("page"), &one()).await;
         let sent = script.requests()[0].header("typesafe-danger-zone-long-context").map(str::to_string);
         assert_eq!(sent.as_deref(), header.then_some("true"), "{env:?}");
     }
@@ -250,7 +244,7 @@ async fn test_a_resellers_unmetered_call_is_an_unknown_cost_not_the_models_list_
     let env = [("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")];
     let jev = settings(&env).decision(&script.http()).unwrap();
     assert!(jev.profile().validated(), "a Jev release the thresholds apply to");
-    let evaluation = jev.evaluate(&json!("page"), &question()).await.unwrap();
+    let evaluation = jev.evaluate(&json!("page"), &one()).await.unwrap();
     assert_eq!((evaluation.cost.basis, evaluation.cost.dollars), (CostBasis::Unknown, None));
 }
 
@@ -293,7 +287,7 @@ async fn test_source_model_defaults_and_explicit_pins() {
         if let Some(pin) = pin {
             env.push(("FASTBROWSE_DECISION_MODEL", pin));
         }
-        assert!(settings(&env).decision(&script.http()).unwrap().evaluate(&json!("page"), &question()).await.is_err());
+        assert!(settings(&env).decision(&script.http()).unwrap().evaluate(&json!("page"), &one()).await.is_err());
         assert_eq!(script.bodies()[0]["model"], expected);
     }
 }

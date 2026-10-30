@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::{Script, answering, reply, text};
+use common::{Script, answering, direct, keys, noul, reply, text};
 use fastbrowse_clients::failover::FailoverDecisionClient;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_clients::system_one::{IMAGES_HEADER, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient, TYPESAFE_URL};
@@ -29,10 +29,6 @@ fn choice() -> Question {
         .into()
 }
 
-fn noul(instructions: &str) -> Question {
-    NoulQuestion::new(instructions, None, None).into()
-}
-
 fn questions(pairs: impl IntoIterator<Item = (&'static str, Question)>) -> IndexMap<String, Question> {
     pairs.into_iter().map(|(key, question)| (key.to_string(), question)).collect()
 }
@@ -46,17 +42,8 @@ fn choice_answer(updates: Value) -> Value {
     answer
 }
 
-fn keys(request: &Request) -> Vec<String> {
-    let body: Value = serde_json::from_slice(&request.body).unwrap();
-    body["questions"].as_object().unwrap().keys().cloned().collect()
-}
-
 fn host(request: &Request) -> String {
     url::Url::parse(&request.url).unwrap().host_str().unwrap().to_string()
-}
-
-fn direct(http: Http) -> SystemOneClient {
-    SystemOneClient::new("key", http, TYPESAFE_URL, JEV_MODEL).typesafe()
 }
 
 fn gateway(http: Http) -> VercelGatewayJevClient {
