@@ -79,7 +79,7 @@ export interface RunOptions extends PerRun<BrowserOptions> {
   downloads?: string;
   /** Where to write a video of the run. The server needs ffmpeg for it. */
   record?: string;
-  /** Draw visual cursor feedback for visible local Chrome on Linux X11 with Cua Driver. */
+  /** The agent's cursor over visible local Chrome on Linux X11 with Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off. */
   cursor?: boolean;
   secrets?: Secrets;
   /** Called with the address the run ended on. Anything but true keeps the run from `complete`. */

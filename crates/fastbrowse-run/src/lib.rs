@@ -107,7 +107,9 @@ pub struct RunTask {
     /// The HTTP client the model clients and DevTools discovery use; a caller's outlives the run.
     pub http: Option<Http>,
     pub record: Option<PathBuf>,
-    pub cursor: bool,
+    /// Draw the agent's cursor over a visible local or attached Chrome. Unset draws it wherever it can be placed;
+    /// `Some(true)` also brings the window to the front so it can be; `Some(false)` never draws it.
+    pub cursor: Option<bool>,
     /// Read every page over HTTP and start no browser; see [`fetch`].
     pub fetch: bool,
     /// Read over HTTP first, and start the browser only if the fetched run ends needing one: a step that would act, or
@@ -156,7 +158,7 @@ impl Default for RunTask {
             settings: None,
             http: None,
             record: None,
-            cursor: false,
+            cursor: None,
             fetch: false,
             fetch_first: false,
             cancel: None,
@@ -393,7 +395,7 @@ async fn browser(task: &RunTask, chrome: &LocalChrome, http: &Http) -> Result<(B
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
         return Err(refused("cdp_url and cdp_port both name a browser to attach to; pass one"));
     }
-    let foreground = task.foreground || task.cursor;
+    let foreground = task.foreground || task.cursor == Some(true);
     if task.cdp_url.is_some() || task.cdp_port.is_some() {
         if key.is_some() {
             return Err(refused("cdp_url/cdp_port is a browser to attach to; a cloud key would start a second one"));
@@ -511,7 +513,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
                 )));
             }
         }
-        if options.attach || options.cursor {
+        if options.attach || options.cursor == Some(true) {
             return Err(RunError::Invalid(
                 "fetch mode starts no browser, so it cannot be combined with attach or cursor".into(),
             ));
@@ -602,7 +604,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         session = Some(opened.clone());
         opened.open().await?;
         // A cloud or headless browser has no window on this machine to draw over.
-        let shown = options.cursor
+        let shown = options.cursor != Some(false)
             && options.browser_api_key.is_none()
             && is_loopback(&opened.connection().cdp_url)
             && (options.cdp_url.is_some() || options.cdp_port.is_some() || chrome.headed);

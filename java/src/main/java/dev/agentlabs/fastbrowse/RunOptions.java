@@ -23,7 +23,8 @@ import java.util.function.Predicate;
  *     data is {@code RunResult.data()}
  * @param downloads a directory that keeps the files the run downloads
  * @param record where to write a video of the run; the server needs ffmpeg for it
- * @param cursor draw visual cursor feedback for visible local Chrome on Linux X11 with the Cua Driver
+ * @param cursor the agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: null draws it wherever
+ *     it can be placed, true also brings the window to the front for it, false turns it off
  * @param secrets the secrets the run may type, by name and origin; the values stay with {@code resolver}
  * @param resolver gives a secret's value when the run is about to type it
  * @param until called with the address the run ended on; false keeps it from {@code complete}
@@ -43,7 +44,7 @@ public record RunOptions(
         JsonNode outputSchema,
         String downloads,
         String record,
-        boolean cursor,
+        Boolean cursor,
         List<SecretRef> secrets,
         SecretResolver resolver,
         Predicate<String> until,
@@ -69,7 +70,7 @@ public record RunOptions(
         private JsonNode outputSchema;
         private String downloads;
         private String record;
-        private boolean cursor;
+        private Boolean cursor;
         private List<SecretRef> secrets;
         private SecretResolver resolver;
         private Predicate<String> until;
@@ -128,7 +129,7 @@ public record RunOptions(
             return this;
         }
 
-        public Builder cursor(boolean cursor) {
+        public Builder cursor(Boolean cursor) {
             this.cursor = cursor;
             return this;
         }

@@ -996,9 +996,16 @@
           "title": "Record"
         },
         "cursor": {
-          "default": false,
-          "title": "Cursor",
-          "type": "boolean"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
         },
         "local": {
           "default": false,

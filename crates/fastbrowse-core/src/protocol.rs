@@ -283,9 +283,10 @@ pub struct RunParams {
     pub downloads: Option<PathBuf>,
     #[serde(default)]
     pub record: Option<PathBuf>,
-    /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub cursor: bool,
+    /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. Unset draws it wherever
+    /// it can be placed, true also brings the window to the front for it, false turns it off.
+    #[serde(default, deserialize_with = "lax::opt_boolean")]
+    pub cursor: Option<bool>,
     /// Local Chrome instead of a Browser Use Cloud browser.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub local: bool,
@@ -530,7 +531,7 @@ impl Schema for RunParams {
                 Field::default("until", Ty::Bool, false),
                 Field::default("downloads", path(), none()),
                 Field::default("record", path(), none()),
-                Field::default("cursor", Ty::Bool, false),
+                Field::default("cursor", Ty::optional(Ty::Bool), none()),
                 Field::default("local", Ty::Bool, false),
                 Field::default("chrome", Ty::optional(LocalChrome::ty()), none()),
                 Field::default("cloud_profile", text(), none()),

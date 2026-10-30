@@ -300,7 +300,7 @@ type RunParams struct {
 	Until              bool              `json:"until,omitempty"`
 	Downloads          *string           `json:"downloads,omitempty"`
 	Record             *string           `json:"record,omitempty"`
-	Cursor             bool              `json:"cursor,omitempty"`
+	Cursor             *bool             `json:"cursor,omitempty"`
 	Local              bool              `json:"local,omitempty"`
 	Chrome             *LocalChrome      `json:"chrome,omitempty"`
 	CloudProfile       *string           `json:"cloud_profile,omitempty"`
