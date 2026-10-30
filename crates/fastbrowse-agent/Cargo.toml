@@ -9,16 +9,16 @@ description = "fastbrowse's agent: the run loop, policy, planning, retrieval and
 
 [dependencies]
 fastbrowse-core = { workspace = true }
-indexmap = { version = "2", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+indexmap = { version = "2.14.2", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
 # Insertion order: a prompt or a Jev state must list its keys in the order Python wrote them.
-serde_json = { version = "1", features = ["preserve_order"] }
-thiserror = "2"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+thiserror = "2.0.21"
 # `jev_spend`: the scope a run's Jev calls bill their receipts into, which lives with the clients.
 fastbrowse-clients = { workspace = true }
 # Owned startup calls run beside browser startup, page reads beside paging, and a time limit bounds the run.
-tokio = { version = "1", features = ["rt", "time", "macros", "sync"] }
-url = "2.5"
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync"] }
+url = "2.5.8"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "time", "macros", "sync", "test-util"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "test-util"] }

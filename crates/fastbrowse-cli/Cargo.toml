@@ -22,19 +22,19 @@ fastbrowse-core = { workspace = true }
 fastbrowse-clients = { workspace = true }
 fastbrowse-agent = { workspace = true }
 fastbrowse-run = { workspace = true }
-indexmap = { version = "2", features = ["serde"] }
-log = "0.4"
-serde = { version = "1", features = ["derive"] }
+indexmap = { version = "2.14.2", features = ["serde"] }
+log = "0.4.34"
+serde = { version = "1.0.229", features = ["derive"] }
 # float_roundtrip: a cost read one unit off is written back as another number.
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net"] }
 # The MCP server's streamable HTTP transport: a server, HTTP/1.1 only, as uvicorn serves it.
-hyper = { version = "1", features = ["server", "http1"] }
-hyper-util = { version = "0.1", features = ["server", "http1", "tokio"] }
-http-body-util = "0.1"
-bytes = "1"
-sha1 = { version = "0.10", default-features = false }
-sha2 = { version = "0.10", default-features = false }
+hyper = { version = "1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", features = ["server", "http1", "tokio"] }
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+sha1 = { version = "0.11.0", default-features = false }
+sha2 = { version = "0.11.1", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net", "io-util", "test-util"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "io-util", "test-util"] }
