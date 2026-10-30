@@ -166,7 +166,7 @@ impl Agent {
             format!("\n\n## Stored secrets\n{}. Filling a field with one types its hidden value.", stored.join(", "))
         };
         let system = format!("{RECOVERY}{UNTRUSTED}");
-        let notes = state.notes.render_for_navigation(false);
+        let notes = state.notes.render_for_navigation();
         let started = self.redact(state.started_url.as_deref().or(state.first_url.as_deref()).unwrap_or_default());
         let status = observation.response_status.map_or("None".to_string(), |s| s.to_string());
         let mut content = format!(

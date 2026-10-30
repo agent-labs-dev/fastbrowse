@@ -920,7 +920,7 @@ impl Agent {
                 .ready_plan
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.requirements.iter().map(|r| r.text.clone()).collect()),
-            notes: state.notes.render_for_navigation(false),
+            notes: state.notes.render_for_navigation(),
             history: state.history.clone(),
             check_login,
             check_bot,

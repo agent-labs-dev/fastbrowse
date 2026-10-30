@@ -578,7 +578,7 @@ impl Agent {
         );
         let recent: Vec<Value> = state.history.iter().map(Dump::dump_exclude_none).collect();
         context.insert("recent_actions".into(), Value::Array(recent));
-        context.insert("notes".into(), state.notes.render_for_navigation(true).into());
+        context.insert("notes".into(), state.notes.render_for_navigation().into());
         Ok(context)
     }
 

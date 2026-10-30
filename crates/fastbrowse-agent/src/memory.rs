@@ -844,10 +844,12 @@ impl Notes {
         plan.requirements.iter().filter(|requirement| !self.evidenced(&requirement.id)).cloned().collect()
     }
 
-    /// Claims across read sources for picking the next action; completion checks use full quoted evidence.
+    /// Claims across read sources, each with the page text it quotes, for picking the next action and writing a field.
     ///
-    /// `quotes` adds each claim's literal source text, for a writer that must copy a value exactly.
-    pub fn render_for_navigation(&self, quotes: bool) -> String {
+    /// A claim is model prose and can name a value wrongly; the quote is what the page said. A reader called the Phone
+    /// page's "katherine@example.com: 423345" a saved password, and Jev, shown only that, went back to the Phone page
+    /// for the code instead of typing it.
+    pub fn render_for_navigation(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
         let mut sources: IndexMap<String, usize> = IndexMap::new();
         let mut ranks: HashMap<Option<&str>, usize> = HashMap::new();
@@ -871,8 +873,7 @@ impl Notes {
                 }
             }
             let mut line = format!("{} requirements={}{source}", quoted(&fact.text, false), self.requirement_list(key));
-            if let (true, Some(evidence)) = (quotes, &fact.evidence) {
-                // A claim is model prose and can normalize a code or a name; the quote is what the page said.
+            if let Some(evidence) = fact.evidence.as_ref().filter(|evidence| evidence.quote != fact.text) {
                 line = format!("{line} quote={}", quoted(&evidence.quote, false));
             }
             lines.push(line);
