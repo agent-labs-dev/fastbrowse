@@ -163,12 +163,6 @@ async fn test_the_reasoning_setting_becomes_the_effort() {
     let off = [ENV.as_slice(), &[("FASTBROWSE_LLM_REASONING", "none")]].concat();
     let error = config_error(settings(&off).llm(&Script::default().http()));
     assert!(error.contains("not none"), "{error}");
-    // One purpose's effort is that purpose's alone.
-    let read = [ENV.as_slice(), &[("FASTBROWSE_LLM_REASONING_READ", "medium")]].concat();
-    let (seen, _) = generate(&read, &[Message::user("?")], vec![answer(r#"{"answer":"ok"}"#)]).await;
-    assert_eq!(body(&seen[0])["output_config"]["effort"], "medium");
-    let verify_off = [ENV.as_slice(), &[("FASTBROWSE_LLM_REASONING_VERIFY", "none")]].concat();
-    assert!(config_error(settings(&verify_off).llm(&Script::default().http())).contains("not none"));
 }
 
 #[test]

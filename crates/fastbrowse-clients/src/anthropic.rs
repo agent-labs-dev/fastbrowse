@@ -175,10 +175,9 @@ impl AnthropicLLM {
         base_url: &str,
         models: HashMap<LLMPurpose, String>,
         effort: Option<ReasoningEffort>,
-        purpose_effort: HashMap<LLMPurpose, ReasoningEffort>,
         extra_body: Map<String, Value>,
     ) -> Result<AnthropicLLM, String> {
-        if effort == Some(ReasoningEffort::None) || purpose_effort.values().any(|e| *e == ReasoningEffort::None) {
+        if effort == Some(ReasoningEffort::None) {
             return Err("Claude takes a reasoning effort of low, medium or high, not none".into());
         }
         let clashes: Vec<&str> =
@@ -186,12 +185,7 @@ impl AnthropicLLM {
         if !clashes.is_empty() {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
         }
-        let options = LLMOptions {
-            reasoning_effort: effort,
-            purpose_reasoning: purpose_effort,
-            provider_routing: None,
-            ..LLMOptions::default()
-        };
+        let options = LLMOptions { reasoning_effort: effort, provider_routing: None, ..LLMOptions::default() };
         OpenAICompatibleLLM::with_wire(api_key, http, base_url, models, options, Wire::AnthropicMessages, extra_body)
             .map(AnthropicLLM)
     }
