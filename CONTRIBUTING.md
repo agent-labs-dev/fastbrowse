@@ -58,6 +58,13 @@ uv run python -m fastbrowse.evals.publication --check-diff origin/main
 npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk
+go -C go generate ./... && git diff --exit-code -- go
+test -z "$(gofmt -l go)" && go -C go vet ./...
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...
+python3 scripts/java_types.py && git diff --exit-code -- java
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify
+python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
+(cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx)
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
@@ -65,7 +72,9 @@ just rust
 ```
 
 The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-checks and tests the SDK in
-`packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. Audit evidence commands and tool limits are in the
+`packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. The Go, Java and .NET tests run
+against the binary from `cargo build -p fastbrowse-cli --features scripted`, and need Go, Java 17 or newer with
+Maven, and .NET 10. Audit evidence commands and tool limits are in the
 [sift project skill](.agents/skills/sift-project/SKILL.md).
 
 The protocol's messages are the types in `crates/fastbrowse-core/src/protocol.rs` and the models those use, and
