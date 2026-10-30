@@ -22,7 +22,7 @@ use pyo3::types::{PyBytes, PyCFunction, PyTuple};
 
 use crate::bridge::{Context, Failure, HostJev, HostLlm, HostSecrets, HostTransport, LlmCall, Sent};
 use crate::host::{host_call, runtime};
-use crate::options::Options;
+use crate::options::{Options, Refusal};
 
 pyo3::create_exception!(
     fastbrowse._native,
@@ -171,7 +171,10 @@ fn run_task(
     let mut options: Options =
         serde_json::from_str(options).map_err(|error| PyValueError::new_err(error.to_string()))?;
     let refs = options.secrets.take();
-    let mut run = options.task().map_err(PyValueError::new_err)?;
+    let mut run = options.task().map_err(|refusal| match refusal {
+        Refusal::Invalid(message) => PyValueError::new_err(message),
+        Refusal::Configuration(error) => refused("configuration", error.0),
+    })?;
     let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
     let result = event_loop.call_method0("create_future")?;
     let finished = event_loop.call_method0("create_future")?;
@@ -340,12 +343,55 @@ fn monotonic() -> f64 {
     fastbrowse_core::telemetry::monotonic()
 }
 
+/// `fastbrowse.origins.origin_of`: the origin the document grant compares, or None for no http(s) address.
+#[pyfunction]
+fn origin_of(url: &str) -> Option<String> {
+    fastbrowse_core::origins::origin_of(url)
+}
+
+/// `fastbrowse.origins.parse_origin`: the normalized origin a grant entry names, or `ValueError`.
+#[pyfunction]
+fn parse_origin(value: &str) -> PyResult<String> {
+    fastbrowse_core::origins::parse_origin(value).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// `fastbrowse.safety.origin_of`: the origin a secret is declared for and typed on, `*.` patterns included.
+#[pyfunction]
+fn secret_origin(url: &str) -> String {
+    fastbrowse_core::safety::origin_of(url)
+}
+
+/// `fastbrowse.safety.secret_allowed`, by the rule the run itself applies before it asks for a value.
+#[pyfunction]
+fn secret_allowed(origins: Vec<String>, origin: &str) -> bool {
+    let secret = fastbrowse_core::models::SecretRef { name: String::new(), origins };
+    fastbrowse_core::safety::secret_allowed(&secret, origin)
+}
+
+/// `fastbrowse.totp`: the code an authenticator key gives at unix time `when`, or `ValueError` naming why it cannot.
+#[pyfunction]
+fn totp_at(key: &str, when: f64) -> PyResult<String> {
+    fastbrowse_browser::adapters::totp::totp_at(key, when).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// `fastbrowse.totp`: how many seconds each of the key's codes lasts, or `ValueError`.
+#[pyfunction]
+fn totp_period(key: &str) -> PyResult<u32> {
+    fastbrowse_browser::adapters::totp::period_of(key).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;
     m.add_function(wrap_pyfunction!(monotonic, m)?)?;
+    m.add_function(wrap_pyfunction!(origin_of, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
+    m.add_function(wrap_pyfunction!(secret_origin, m)?)?;
+    m.add_function(wrap_pyfunction!(secret_allowed, m)?)?;
+    m.add_function(wrap_pyfunction!(totp_at, m)?)?;
+    m.add_function(wrap_pyfunction!(totp_period, m)?)?;
     m.add_class::<connect::Page>()?;
     m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
     m.add_class::<Run>()?;

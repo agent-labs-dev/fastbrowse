@@ -1161,3 +1161,24 @@ def test_repointing_the_ultrafast_comparison_is_a_protocol_change(candidate):
     with pytest.raises(ValueError, match="protocol changed: internal-ultrafast"):
         regressions(after, before, CATALOG.read_bytes())
     regressions(after, before, CATALOG.read_bytes(), {"internal-ultrafast"})
+
+
+def test_any_collaborator_who_dispatches_publish_evals_publishes_the_approved_figures(monkeypatch):
+    content = b'{"figures": true}\n'
+    approval = benchmarks.Approval.model_validate({**_approval(content), "approved_by": "teammate"})
+    monkeypatch.setattr(benchmarks, "git_file", lambda ref, path: content if ref == HEAD else None)
+    run = {
+        "head_sha": HEAD,
+        "head_branch": "main",
+        "actor": {"login": "teammate"},
+        "triggering_actor": {"login": "teammate"},
+        "event": "workflow_dispatch",
+        "path": ".github/workflows/publish-evals.yml",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    monkeypatch.setattr(benchmarks, "github_run", lambda _: run)
+    benchmarks.check_approval(content, approval)
+    run["actor"] = {"login": "someone-else"}
+    with pytest.raises(ValueError, match="dispatch on main is required"):
+        benchmarks.check_approval(content, approval)

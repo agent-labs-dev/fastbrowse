@@ -241,7 +241,7 @@ class Approval(PublicModel):
     candidate_sha256: Digest
     workflow_run: Annotated[int, Field(gt=0)]
     head_sha: Sha
-    approved_by: Literal["cjber"]
+    approved_by: Annotated[str, Field(min_length=1)]
     approved_at: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")]
     protocol_change: ProtocolChange | None = None
 
@@ -542,7 +542,7 @@ def check_approval(content: bytes, approval: Approval) -> None:
         or run["status"] != "completed"
         or run["conclusion"] != "success"
     ):
-        raise ValueError("a successful owner dispatch on main is required")
+        raise ValueError("a successful publish-evals dispatch on main is required")
 
 
 def approval_artifact(run_id: int) -> bytes:

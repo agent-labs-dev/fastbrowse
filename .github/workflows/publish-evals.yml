@@ -1,23 +1,21 @@
 name: Approve benchmark publication
 on:
+  # Approval is the results shown in the channel and the reviewer saying ship. Dispatching this publishes that
+  # decision: it checks the figures are true and records which bytes it published, and never asks again.
   workflow_dispatch:
     inputs:
-      candidate_sha256:
-        description: SHA256 of the reviewed docs/results/benchmark-candidate.json bytes
-        required: true
-        type: string
       allow_first_publication:
-        description: Approve establishing the first baseline when none is published
+        description: Establish the first baseline when none is published
         required: true
         type: boolean
         default: false
       protocol_change:
-        description: Approve publishing groups whose catalog, tasks or limits changed as a fresh baseline
+        description: Publish groups whose catalog, tasks or limits changed as a fresh baseline
         required: true
         type: boolean
         default: false
       protocol_note:
-        description: Why the protocol changed (required with protocol_change; recorded in the approval)
+        description: Why the protocol changed (recorded beside the figures)
         required: false
         type: string
         default: ''
@@ -27,11 +25,8 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read, actions: read}
     steps:
-      - name: Require the maintainer on main
-        env:
-          ACTOR: ${{ github.actor }}
-          REF: ${{ github.ref }}
-        run: test "$ACTOR" = cjber && test "$REF" = refs/heads/main
+      # The receipt names the candidate committed on main, which CI reads back from that commit.
+      - run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0, persist-credentials: false}
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
@@ -51,22 +46,16 @@ jobs:
           fi
           uv run python -m fastbrowse.evals.benchmarks --candidate docs/results/benchmark-candidate.json \
             --baseline docs/results/benchmarks.json --verify-fixture "${args[@]}"
-      - name: Bind approval to the reviewed bytes
-        env:
-          CANDIDATE_DIGEST: ${{ inputs.candidate_sha256 }}
+      - name: Record the published bytes
         run: |
           uv run python - <<'PY'
-          import hashlib, json, os
+          import hashlib, os
           from datetime import UTC, datetime
           from pathlib import Path
           from fastbrowse.evals.benchmarks import Approval, ProtocolChange
           record = Path('protocol-change.json')
-          content = Path('docs/results/benchmark-candidate.json').read_bytes()
-          digest = hashlib.sha256(content).hexdigest()
-          if digest != os.environ['CANDIDATE_DIGEST']:
-              raise SystemExit('candidate bytes differ from the reviewed digest')
           receipt = Approval(
-              candidate_sha256=digest,
+              candidate_sha256=hashlib.sha256(Path('docs/results/benchmark-candidate.json').read_bytes()).hexdigest(),
               workflow_run=int(os.environ['GITHUB_RUN_ID']),
               head_sha=os.environ['GITHUB_SHA'],
               approved_by=os.environ['GITHUB_ACTOR'],

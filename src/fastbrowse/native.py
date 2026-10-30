@@ -15,7 +15,7 @@ import json
 import signal
 import sys
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar, NoReturn
 
@@ -103,6 +103,7 @@ def options(arguments: dict[str, Any]) -> str:
     output_schema: type[BaseModel] | None = arguments["output_schema"]
     secrets: SecretResolver | None = arguments["secrets"]
     origins, viewport, inputs = arguments["allowed_origins"], arguments["viewport"], arguments["inputs"]
+    settings: Mapping[str, str] | None = arguments["settings"]
     return json.dumps(
         {
             **{name: arguments[name] for name in _PLAIN},
@@ -122,6 +123,7 @@ def options(arguments: dict[str, Any]) -> str:
             "downloads": None if arguments["downloads"] is None else str(arguments["downloads"]),
             "record": None if arguments["record"] is None else str(arguments["record"]),
             "config": _dumped(arguments["config"]),
+            "settings": None if settings is None else dict(settings),
         }
     )
 
@@ -399,32 +401,27 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
 
     # A `traced()` block collecting this run's events gets the core's too.
     events = collecting()
-    native = core.run_task(
-        task,
-        options(arguments),
-        on_event=None if on_event is None else raised.wrap(event),
-        on_frame=None if on_frame is None else raised.wrap(on_frame),
-        until=None if until is None else raised.wrap(until),
-        resolve_secret=None if secrets is None else raised.wrap(secrets.resolve),
-        check_access=None if check_access is None else _check(check_access),
-        jev=None if jev is None else _jev(jev),
-        llm=None if llm is None else _llm(llm),
-        http=None if http is None else _http(http),
-        trace=events is not None,
-    )
+    try:
+        # Settings passed in are read as the run is made, so a refusal can come before the run starts.
+        native = core.run_task(
+            task,
+            options(arguments),
+            on_event=None if on_event is None else raised.wrap(event),
+            on_frame=None if on_frame is None else raised.wrap(on_frame),
+            until=None if until is None else raised.wrap(until),
+            resolve_secret=None if secrets is None else raised.wrap(secrets.resolve),
+            check_access=None if check_access is None else _check(check_access),
+            jev=None if jev is None else _jev(jev),
+            llm=None if llm is None else _llm(llm),
+            http=None if http is None else _http(http),
+            trace=events is not None,
+        )
+    except core.RunRefused as exc:
+        raise _refusal(exc, raised) from None
     try:
         payload = await native
     except core.RunRefused as exc:
-        kind, message = exc.args
-        if kind == "configuration":
-            raise ConfigurationError(message) from None
-        if kind == "recording":
-            raise RecordingError(message) from None
-        if kind == "cancelled":
-            raise asyncio.CancelledError(message) from None
-        if kind == "callback" and raised.first is not None:
-            raise raised.first from None
-        raise ValueError(message) from None
+        raise _refusal(exc, raised) from None
     except asyncio.CancelledError:
         # The browser is closed before the cancellation reaches the caller.
         await asyncio.shield(native.finished)
@@ -433,6 +430,20 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         if events is not None:
             events.extend(_on_this_clock(json.loads(native.trace_events()), time.monotonic() - core.monotonic()))
     return RunResult.model_validate_json(payload)
+
+
+def _refusal(exc: Exception, raised: _Raised) -> BaseException:
+    """What `run_task` raises for a run the core refused, by the kind the core names."""
+    kind, message = exc.args
+    if kind == "configuration":
+        return ConfigurationError(message)
+    if kind == "recording":
+        return RecordingError(message)
+    if kind == "cancelled":
+        return asyncio.CancelledError(message)
+    if kind == "callback" and raised.first is not None:
+        return raised.first
+    return ValueError(message)
 
 
 def _on_this_clock(events: list[dict[str, Any]], offset: float) -> list[dict[str, Any]]:

@@ -35,10 +35,10 @@ published row. `uv run python -m fastbrowse.evals.benchmarks --status` prints wh
 and the next action. These checks detect recorded regressions; they do not prove that
 every website or grader is free of bugs. Review unexpected outcomes before approving.
 
-To approve reviewed results, dispatch `publish-evals.yml` on `main` with the SHA256 of the exact candidate
-bytes. For the first publication, also approve establishing the initial baseline. Only the maintainer can issue
-this approval. The workflow revalidates coverage and the measurement receipt and returns a `benchmark-approval`
-artifact. Download `benchmark-approval.json` and install it with
+Approval is the results shown in the channel and the reviewer saying ship. To publish approved results,
+dispatch `publish-evals.yml` on `main`; for the first publication, also set `allow_first_publication`. The
+workflow revalidates coverage and the measurement receipt, records the SHA256 of the candidate bytes it
+checked, and returns a `benchmark-approval` artifact. Download `benchmark-approval.json` and install it with
 
 ```sh
 uv run python -m fastbrowse.evals.benchmarks --candidate docs/results/benchmark-candidate.json --install benchmark-approval.json

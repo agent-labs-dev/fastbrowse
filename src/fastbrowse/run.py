@@ -126,6 +126,7 @@ async def run_task(
     cursor: bool = False,
     fetch: bool = False,
     fetch_first: bool = False,
+    settings: Mapping[str, str] | None = None,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
 
@@ -203,6 +204,13 @@ async def run_task(
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. The planner, recovery and the answer see it in its own section headed as not
     requirements, and Jev sees it as `background`; requirements come from `task` alone.
+
+    `settings` configures the run by the environment variables' own names (`OPENROUTER_API_KEY`,
+    `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_LLM_PROVIDER`,
+    `FASTBROWSE_LLM_MODEL` and the rest), read instead of the environment and `.env`: neither is consulted, so a
+    key the process happens to hold reaches no provider it was not given for. It is for an embedder that keeps its
+    credentials elsewhere and decides the model backend itself; settings that do not configure a backend raise
+    `ConfigurationError`, as an unconfigured environment does. `jev` and `llm`, when given, still win.
 
     The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`).
     """
