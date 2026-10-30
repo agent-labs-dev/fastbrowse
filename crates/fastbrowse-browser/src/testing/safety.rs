@@ -15,22 +15,22 @@ use crate::page::act::Point;
 use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_QUIET_SECONDS, SETTLE_SECONDS};
 use crate::session::{BrowserSession, Shared, SnapshotScript, State, py_json};
 
-/// `page_module._SETTLE_SECONDS`: the longest an action waits for the page to settle.
+/// The longest an action waits for the page to settle.
 pub fn settle_seconds() -> f64 {
     SETTLE_SECONDS
 }
 
-/// `page_module._SETTLE_QUIET_SECONDS`: how long the DOM must be still to count as settled.
+/// How long the DOM must be still to count as settled.
 pub fn settle_quiet_seconds() -> f64 {
     SETTLE_QUIET_SECONDS
 }
 
-/// `page_module._FRAME_READ_SECONDS`: a child frame's full read budget.
+/// A child frame's full read budget.
 pub fn frame_read_seconds() -> f64 {
     FRAME_READ_SECONDS
 }
 
-/// As if `page_module._FRAME_RECHECK_SECONDS` had passed since each frame missed its deadline, so the next read
+/// As if `FRAME_RECHECK_SECONDS` had passed since each frame missed its deadline, so the next read
 /// gives every such frame its full budget again.
 pub fn expire_frame_rechecks(page: &CdpPage) {
     let past = Instant::now().checked_sub(secs(FRAME_RECHECK_SECONDS)).expect("monotonic clock far enough along");
@@ -39,9 +39,9 @@ pub fn expire_frame_rechecks(page: &CdpPage) {
     }
 }
 
-/// `await page._upload(page._last.controls[control_id], files, (1.0, 1.0))`.
+/// Upload `files` to the last observation's `control_id`.
 ///
-/// With `grant`, the upload runs as if `session._grant = OriginGrant(grant)` had been set first: through a page on
+/// With `grant`, the upload runs as if the session held that origin grant: through a page on
 /// a session that shares this one's socket, tabs and active tab, and differs only in its grant.
 pub async fn upload(
     page: &CdpPage,
