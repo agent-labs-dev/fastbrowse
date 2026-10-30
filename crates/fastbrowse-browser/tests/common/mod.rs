@@ -31,7 +31,6 @@ pub fn sites_dir() -> PathBuf {
 #[derive(Default)]
 pub struct RecordingArtifactSink {
     pub artifacts: Mutex<Vec<Artifact>>,
-    pub contents: Mutex<Vec<Vec<u8>>>,
 }
 
 impl ArtifactSink for RecordingArtifactSink {
@@ -53,7 +52,6 @@ impl ArtifactSink for RecordingArtifactSink {
                 uri: format!("memory://{name}"),
             };
             self.artifacts.lock().unwrap().push(artifact.clone());
-            self.contents.lock().unwrap().push(content.to_vec());
             Ok(artifact)
         })
     }
