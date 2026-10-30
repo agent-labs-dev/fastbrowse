@@ -4,6 +4,14 @@
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
 // biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
 ((mode, allowedOrigins = null) => {
+  // Reading a cross-origin frame's document can throw.
+  const childDocument = frame => {
+    try {
+      return frame.contentDocument;
+    } catch {
+      return null;
+    }
+  };
   const granted = doc => {
     if (allowedOrigins === null) return true;
     const frame = doc.defaultView.frameElement;
@@ -98,12 +106,7 @@
           );
         if (e.shadowRoot) include(e.shadowRoot);
         if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-          let inner = null;
-          try {
-            inner = e.contentDocument;
-          } catch {
-            inner = null;
-          }
+          const inner = childDocument(e);
           if (inner?.body && granted(inner)) include(inner);
         }
       }
@@ -356,12 +359,7 @@
     for (const e of root.querySelectorAll('*')) {
       if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-        let inner = null;
-        try {
-          inner = e.contentDocument;
-        } catch {
-          inner = null;
-        }
+        const inner = childDocument(e);
         if (inner && inner.body && granted(inner)) yield* walk(inner);
         else inaccessible++;
       }
@@ -887,6 +885,14 @@
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
   // its own at all. Each child is read in its own coordinates, shifted by where its frame sits.
   const words = [];
+  const readFrames = (doc, dx, dy, read) => {
+    for (const frame of doc.querySelectorAll('iframe,frame')) {
+      const inner = childDocument(frame);
+      if (!inner || !granted(inner)) continue;
+      const f = frame.getBoundingClientRect();
+      read(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
+    }
+  };
   // Geometry, the cheaper test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
@@ -914,17 +920,7 @@
         words.push(value);
       }
     }
-    for (const frame of doc.querySelectorAll('iframe,frame')) {
-      let inner = null;
-      try {
-        inner = frame.contentDocument;
-      } catch {
-        inner = null;
-      }
-      if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      readText(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
-    }
+    readFrames(doc, dx, dy, readText);
   };
   readText(document, 0, 0);
   const viewport_text = words.join('\n');
@@ -947,17 +943,7 @@
       visual_content = 1;
       return;
     }
-    for (const frame of doc.querySelectorAll('iframe,frame')) {
-      let inner = null;
-      try {
-        inner = frame.contentDocument;
-      } catch {
-        inner = null;
-      }
-      if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      readVisual(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
-    }
+    readFrames(doc, dx, dy, readVisual);
   };
   readVisual(document, 0, 0);
 
