@@ -544,7 +544,7 @@ impl Schema for StepResult {
                 Field::default("page_changed", Ty::optional(Ty::Bool), Value::Null)
                     .doc("Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."),
                 Field::required("duration_ms", Ty::Int.ge(0)),
-                Field::default("choices", Ty::list(StepChoice::ty()), Value::Array(vec![])).doc(
+                Field::default("choices", Ty::list(StepChoice::ty()), Value::Array(vec![])).omitted_when_empty().doc(
                     "The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.",
                 ),
             ],

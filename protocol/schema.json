@@ -1675,8 +1675,7 @@
         "note",
         "facts",
         "page_changed",
-        "duration_ms",
-        "choices"
+        "duration_ms"
       ],
       "title": "StepResult",
       "type": "object"

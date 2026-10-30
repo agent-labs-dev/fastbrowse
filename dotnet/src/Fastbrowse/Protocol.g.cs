@@ -758,7 +758,7 @@ public sealed record StepResult
     /// The controls Jev was offered for this step's decision, when <c>Config.step_choices</c> asked for them.
     /// </summary>
     [JsonPropertyName("choices")]
-    public required IReadOnlyList<StepChoice> Choices { get; init; }
+    public IReadOnlyList<StepChoice>? Choices { get; init; }
 }
 
 /// <summary>

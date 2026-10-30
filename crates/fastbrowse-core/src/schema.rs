@@ -139,11 +139,23 @@ pub struct Field {
     pub factory: bool,
     /// `exclude=True`: never written, so a serialization schema leaves it out.
     pub exclude: bool,
+    /// `exclude_if` an empty value: written only when it holds something, so a serialization schema does not require
+    /// it.
+    pub omitted_when_empty: bool,
 }
 
 impl Field {
     pub fn required(name: &str, ty: Ty) -> Field {
-        Field { name: name.into(), alias: None, ty, default: None, description: None, factory: false, exclude: false }
+        Field {
+            name: name.into(),
+            alias: None,
+            ty,
+            default: None,
+            description: None,
+            factory: false,
+            exclude: false,
+            omitted_when_empty: false,
+        }
     }
     pub fn default(name: &str, ty: Ty, default: impl Into<Value>) -> Field {
         Field { default: Some(default.into()), ..Field::required(name, ty) }
@@ -155,6 +167,10 @@ impl Field {
     /// A field the model holds and never writes.
     pub fn excluded(self) -> Field {
         Field { exclude: true, ..self }
+    }
+    /// A field left out of what is written while it is empty, as `skip_serializing_if` leaves it.
+    pub fn omitted_when_empty(self) -> Field {
+        Field { omitted_when_empty: true, ..self }
     }
     pub fn doc(mut self, description: &str) -> Field {
         self.description = Some(description.into());
@@ -429,7 +445,7 @@ impl Generator {
             if let Some(default) = &field.default {
                 schema.insert("default".into(), default.clone());
             }
-            if serializing || field.is_required() {
+            if (serializing && !field.omitted_when_empty) || field.is_required() {
                 required.push(Value::from(field.key()));
             }
             properties.insert(field.key().to_string(), Value::Object(schema));

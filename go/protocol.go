@@ -449,7 +449,7 @@ type StepResult struct {
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
 	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
-	Choices []StepChoice `json:"choices"`
+	Choices []StepChoice `json:"choices,omitempty"`
 }
 
 // The wall a `needs_login` or `blocked` run stopped at, typed so a caller can route it without parsing `error`.

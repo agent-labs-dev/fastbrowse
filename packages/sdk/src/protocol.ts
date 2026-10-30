@@ -293,7 +293,7 @@ export interface StepResult {
   /**
    * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
    */
-  choices: StepChoice[];
+  choices?: StepChoice[];
 }
 export interface StepFact {
   text: string;
