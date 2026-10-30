@@ -6,6 +6,23 @@ The file contains sanitized per-run grades, completion, time, cost, LLM and Jev 
 throughput. Official rubric scores retain their source meaning. Internal hosted and Ultrafast comparisons use
 separate matched task groups.
 
+## What may be published
+
+- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
+  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
+- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
+  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
+  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
+
+## The candidate contract
+
+Three programs share the candidate's schema: Parallax's `parallax browser publish-candidate` writes it,
+`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
+(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
+the changed writer through both readers.
+
+## Schemas
+
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
 `stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
@@ -18,6 +35,8 @@ Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser agai
 browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
+
+## Validation and approval
 
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
