@@ -30,7 +30,7 @@ GroupId = Literal[
     "bu-bench",
     "online-mind2web",
 ]
-Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "browserbase", "browser-harness"]
+Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "browser-harness"]
 FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
 PUBLISHED = RESULTS / "benchmarks.json"
@@ -51,8 +51,8 @@ class Row(PublicModel):
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     seconds: Amount
     dollars: Amount | None
-    """None when the arm does not report its cost: Browserbase's agent reports neither its model nor its spend, so
-    its rows carry a pass rate and seconds and the site shows "cost not reported" in place of a cost."""
+    """None when the arm does not report its cost, so its rows carry a pass rate and seconds and the site shows
+    "cost not reported" in place of a cost."""
     physical_runs: Annotated[int, Field(gt=0)]
     # The efficiency figures a comparison is normalized onto, so a slow page or a provider's margin cannot move it.
     # A build from before they existed omits them and they read as zero; the site then shows them as not recorded
@@ -86,7 +86,7 @@ class Coverage(NamedTuple):
     guards."""
     required: tuple[Arm, ...] | None = None
     """The arms every group must measure, or None for all of them. Any other arm in `arms` is measured when it ran:
-    a vendor arm that could not run (Browserbase while its key is refused) has no rows, and the site shows it as not
+    a vendor arm that could not run has no rows, and the site shows it as not
     measured."""
     partial: tuple[Arm, ...] = ()
     """The arms that run only the tasks of the group's task set the catalog lists them for. The task set is the
@@ -98,13 +98,13 @@ class Coverage(NamedTuple):
 # current catalog by `check_catalog`. The hosted group grew to 52 when the hosted agent's final page became readable,
 # so it runs the six navigation tasks too.
 #
-# The head-to-head (internal-hosted) is one Parallax invocation over one task set, the tasks fastbrowse, the hosted
-# Browser Use agent and Browserbase's agent all run, with rows from whichever of its four arms ran. Browser Use
+# The head-to-head (internal-hosted) is one Parallax invocation over one task set, the tasks fastbrowse and the hosted
+# Browser Use agent both run, with rows from whichever of its arms ran. Browser Use
 # Ultrafast returns no answer, so it runs only the tasks of that set graded without one; Browser Harness, a coding agent
 # given no credentials, runs only its credential-free completion tasks. The official suites publish
 # the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks them publishable.
-HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browserbase", "browser-harness")
-OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use", "browserbase")
+HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browser-harness")
+OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
     "internal-hosted": Coverage(
