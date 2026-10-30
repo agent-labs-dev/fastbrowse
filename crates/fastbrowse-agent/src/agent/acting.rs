@@ -654,7 +654,12 @@ impl Agent {
         Ok((!written.missing).then(|| due(&written, &state.history, &target.label)))
     }
 
-    async fn value_absent(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step<bool> {
+    pub(super) async fn value_absent(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        target: &Control,
+    ) -> Step<bool> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let question = NoulQuestion::new(
             format!(
@@ -670,10 +675,11 @@ impl Agent {
         let questions = IndexMap::from([("stated".to_string(), question)]);
         let evaluation = self.jev.evaluate(&page, &questions).await?;
         state.ledger.record([evaluation.cost.clone()])?;
-        let stated = match evaluation.answers.get("stated") {
-            Some(Answer::Noul(answer)) => answer.probability,
-            _ => 0.0,
+        // No answer is no finding: it says nothing about the value, so it cannot stop the run as absent.
+        let Some(Answer::Noul(answer)) = evaluation.answers.get("stated") else {
+            return Err(fastbrowse_core::decision::DecisionError::Failed("expected a noul answer".into()).into());
         };
+        let stated = answer.probability;
         // Jev's own answer: a NEEDS_INPUT stop stands unless Jev says the value is given.
         Ok(stated <= EVEN_ODDS)
     }
@@ -697,11 +703,7 @@ impl Agent {
         let criteria: IndexMap<String, Value> =
             keys.iter().map(|(key, option)| (key.clone(), self.mask(option).into())).collect();
         let picked = self.ask_choice(state, observation, question, criteria).await?;
-        keys.get(&picked).cloned().ok_or_else(|| {
-            Flow::from(fastbrowse_core::decision::DecisionError::Failed(format!(
-                "Jev picked {picked}, which was not offered"
-            )))
-        })
+        Ok(keys[&picked].clone())
     }
 
     async fn ask_choice(
@@ -712,6 +714,7 @@ impl Agent {
         criteria: IndexMap<String, Value>,
     ) -> Step<String> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let offered: HashSet<String> = criteria.keys().cloned().collect();
         let choice = Question::Choice(ChoiceQuestion::new(
             format!("{UNTRUSTED}\n\n# Task\n{}\n\n{question}", state.task),
             criteria,
@@ -720,10 +723,14 @@ impl Agent {
         let questions = IndexMap::from([("pick".to_string(), choice)]);
         let evaluation = self.jev.evaluate(&page, &questions).await?;
         state.ledger.record([evaluation.cost.clone()])?;
-        match evaluation.answers.get("pick") {
-            Some(Answer::Choice(answer)) => Ok(answer.choice.clone()),
-            _ => Err(fastbrowse_core::decision::DecisionError::Failed("expected a choice answer".into()).into()),
+        let Some(Answer::Choice(answer)) = evaluation.answers.get("pick") else {
+            return Err(fastbrowse_core::decision::DecisionError::Failed("expected a choice answer".into()).into());
+        };
+        if !offered.contains(&answer.choice) {
+            let message = format!("Jev picked {}, which was not offered", answer.choice);
+            return Err(fastbrowse_core::decision::DecisionError::Failed(message).into());
         }
+        Ok(answer.choice.clone())
     }
 
     async fn accept_dialog(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {

@@ -285,6 +285,21 @@ async fn test_scroll_can_return_to_content_above_the_viewport() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_scroll_lands_inside_a_small_window() {
+    let _gate = gate().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/long-list.html").await;
+    let session_id = active(&h);
+    let small = json!({"width": 400, "height": 300, "deviceScaleFactor": 1, "mobile": false});
+    h.session.send("Emulation.setDeviceMetricsOverride", small, Some(&session_id)).await.expect("resize");
+    let down = act(&h.page, Action::new(Operation::Scroll), &h.observe().await).await;
+    assert_eq!(down.outcome, StepOutcome::Executed);
+    let (s, sid) = (&h.session, session_id.as_str());
+    wait_until(|| async { eval_value(s, sid, "window.scrollY").await.as_f64().unwrap_or_default() > 200.0 }).await;
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_observe_lists_controls_and_masks_password() {
     let _gate = gate().await;
     let Some(h) = loaded().await else { return };

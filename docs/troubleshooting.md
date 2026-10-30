@@ -103,7 +103,7 @@ be fine, and the same run later may pass.
 **Next step.** Read `error` for the provider or address, then run the task again later. Step and dollar limits
 do not bound elapsed time, so set `Limits(max_seconds=...)` in the embedding API, or `--max-seconds` on the
 MCP server, for a deadline. When looking into a stalled run, write its trace with `--trace FILE` or `FASTBROWSE_TRACE=FILE` and keep the last event
-with the result.
+with the result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
 
 ### An attached Chrome that waits for approval
 

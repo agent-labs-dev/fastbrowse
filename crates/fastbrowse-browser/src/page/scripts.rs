@@ -176,6 +176,14 @@ pub static UNCOVER_JS: LazyLock<String> = LazyLock::new(|| {
     .concat()
 });
 
+/// What is drawn at a point, through open shadow roots, and walks up through shadow hosts: an overlay drawn by a custom
+/// element keeps its fixed box, or its dialog role, inside its shadow root, where a walk by parentElement stops.
+pub const DEEP_HIT_JS: &str = "const deepHit = (doc, x, y) => { let hit = doc.elementFromPoint(x, y); \
+     while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); \
+     if (!inner || inner === hit) break; hit = inner; } return hit; }; \
+     const up = n => n.parentElement || (n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null); \
+     const holds = (a, b) => { for (let n = b; n; n = up(n)) if (n === a) return true; return false; }; ";
+
 /// What covers the control's centre, through its frames: an obstruction the page means to be dealt with first (a
 /// dialog, an open menu, a popover), a band fixed to the window (an anchored ad, a sticky footer, a chat bubble)
 /// that floats over whatever is scrolled beneath it, or anything else, such as a full-window backdrop or a panel
@@ -184,18 +192,13 @@ pub static UNCOVER_JS: LazyLock<String> = LazyLock::new(|| {
 pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
     [
         "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; ",
+        DEEP_HIT_JS,
         "const OBSTRUCTIONS = ",
         &py_json(&Value::from(OBSTRUCTIONS)),
         "; ",
         "const rect = e.getBoundingClientRect(); let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2; ",
         "let node = e, doc = e.ownerDocument; while (true) { const view = doc.defaultView; ",
-        "let hit = doc.elementFromPoint(x, y); ",
-        "while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); ",
-        "if (!inner || inner === hit) break; hit = inner; } ",
-        // Up through shadow hosts: an overlay drawn by a custom element keeps its fixed box, or its dialog role, inside
-        // its shadow root, where a walk by parentElement stopped, so a band was refused and a dialog could pass for one.
-        "const up = n => n.parentElement || (n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null); ",
-        "const holds = (a, b) => { for (let n = b; n; n = up(n)) if (n === a) return true; return false; }; ",
+        "const hit = deepHit(doc, x, y); ",
         "if (hit && !holds(node, hit)) { let obstruction = null; ",
         "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; ",
         "if (obstruction && !holds(obstruction, node)) return 'obstruction'; ",

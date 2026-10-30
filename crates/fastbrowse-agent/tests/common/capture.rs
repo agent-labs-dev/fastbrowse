@@ -173,6 +173,15 @@ pub fn unordered_lines(mut ledger: Value) -> Value {
     ledger
 }
 
+/// A value's JSON for a failure message, cut at 3000 characters.
+pub fn clip(value: &Value) -> String {
+    let text = value.to_string();
+    match text.char_indices().nth(3000) {
+        Some((at, _)) => format!("{}...", &text[..at]),
+        None => text,
+    }
+}
+
 /// Replays every case in `files`, or re-records them under `FASTBROWSE_UPDATE_GOLDEN=1`, and fails on any that
 /// differ. `CASE` narrows the run to the cases whose name holds it.
 pub fn replay_files(

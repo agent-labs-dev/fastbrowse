@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant};
 
+use crate::page::truthy;
 use fastbrowse_core::BoxFuture;
 use futures_util::future::{FutureExt, Shared};
 use serde::{Deserialize, Serialize};
@@ -167,18 +168,6 @@ fn log_warning(message: &str) {
 /// a consistent value.
 fn lock<T>(mutex: &StdMutex<T>) -> StdMutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Python truthiness for a JSON value, as `result.get("isError")` and `structuredContent or {}` test it.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
 }
 
 struct Io {

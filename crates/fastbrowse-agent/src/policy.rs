@@ -331,6 +331,16 @@ impl RelevanceCache {
     }
 }
 
+/// The controls a step's decision was made from, the chosen one marked, so a run can be read against what was on offer.
+/// The labels are the observation's own, which is already masked for the models.
+fn choices(controls: &[Control], chosen: Option<&Control>) -> Map<String, Value> {
+    let offered = controls.iter().map(|control| {
+        let picked = chosen.is_some_and(|chosen| chosen.id == control.id);
+        json!({"id": control.id, "label": control.label, "operations": control.operations, "chosen": picked})
+    });
+    Map::from_iter([("controls".to_string(), offered.collect())])
+}
+
 /// Ask Jev for the next action, reducing the observation when it will not fit.
 pub async fn decide(
     jev: &dyn DecisionClient,
@@ -370,6 +380,7 @@ pub async fn decide(
                 Ok(mut decision) => {
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
                     decision.input_tokens += tokens;
+                    trace.event("decide_choices", || choices(&controls, decision.target.as_ref()));
                     return Ok(decision);
                 }
                 Err(AgentError::Jev(DecisionError::InputTooLarge(_))) => {}

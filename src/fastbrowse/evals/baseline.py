@@ -22,6 +22,8 @@ FIELDS = {
     "normalized_status",
     "seconds",
     "dollars",
+    "llm_calls",
+    "tokens_per_second",
     "model",
     "text_model",
     "step_cap",

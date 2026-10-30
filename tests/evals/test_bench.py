@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from fastbrowse.evals.bench import agent_environment, compare_runs, corpus, load_run, run_params
+from fastbrowse.evals.bench import agent_environment, compare_runs, corpus, load_run, priced, run_dollars, run_params
 from fastbrowse.evals.replay import (
     EMBEDDED_JSON,
     MISS_STATUS,
@@ -19,6 +20,7 @@ from fastbrowse.evals.replay import (
     nearest_body,
     request_key,
 )
+from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
 
 LLM = "/llm/chat/completions"
 JEV = "/jev/v1/systemone"
@@ -275,3 +277,12 @@ def test_a_run_still_going_is_not_compared(tmp_path: Path) -> None:
         load_run(path)
     path.write_text(json.dumps({"meta": {"finished": "2026-10-23T00:00:00+00:00"}, "tasks": []}))
     assert load_run(path)["tasks"] == []
+
+
+def test_an_unpriced_exchange_is_counted_and_a_partial_run_cost_is_not_a_cost() -> None:
+    exchange = Exchange("k", "/p", "plan", None, {}, 200, "application/json", "{}", 0.0, cost=0.25)
+    assert priced([exchange, dataclasses.replace(exchange, cost=None)]) == (0.25, 1)
+    metered = CostLine(component=CostComponent.LLM, dollars=0.25, basis=CostBasis.METERED)
+    unknown = metered.model_copy(update={"dollars": None, "basis": CostBasis.UNKNOWN})
+    assert run_dollars(CostBreakdown(lines=(metered, unknown))) is None
+    assert run_dollars(CostBreakdown(lines=(metered,))) == 0.25

@@ -134,6 +134,7 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
             "a cloud key would start a second one",
         ),
         (task(|o, _| o.cloud_profile = Some("p".into())), "needs a key"),
+        (task(|o, _| o.proxy_country = Some("de".into())), "proxy_country belongs to a Browser Use Cloud browser"),
     ];
     for (options, expected) in cases {
         // Arguments that contradict each other are refused outright; a browser that cannot start ends the run.

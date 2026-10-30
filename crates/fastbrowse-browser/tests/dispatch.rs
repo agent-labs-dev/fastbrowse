@@ -714,9 +714,7 @@ async fn test_covered_target_reports_visible_overlay_controls() {
                 let Some(chrome) = common::chrome() else { return };
                 let proxy = failing_proxy(chrome.cdp_url.clone(), |command| {
                     command["method"] == "Runtime.evaluate"
-                        && command["params"]["expression"]
-                            .as_str()
-                            .is_some_and(|e| e.contains("let cover = hit?.closest"))
+                        && command["params"]["expression"].as_str().is_some_and(|e| e.contains("let cover = null"))
                 })
                 .await;
                 let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };

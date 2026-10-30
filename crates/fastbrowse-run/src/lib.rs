@@ -73,6 +73,7 @@ impl From<ConfigurationError> for RunError {
     }
 }
 
+pub use fastbrowse_browser::adapters::local_chrome::which;
 pub use fastbrowse_core::protocol::RunTask;
 
 /// What a run is given besides its arguments: the caller's own objects, which no wire carries.
@@ -537,8 +538,11 @@ async fn browser(
         return Ok((connection, Owned::Handed));
     }
     let Some(key) = key else {
-        let cloud =
-            [("cloud_profile", task.cloud_profile.is_some()), ("cloud_extensions", !task.cloud_extensions.is_empty())];
+        let cloud = [
+            ("cloud_profile", task.cloud_profile.is_some()),
+            ("proxy_country", task.proxy_country.is_some()),
+            ("cloud_extensions", !task.cloud_extensions.is_empty()),
+        ];
         if let Some((name, _)) = cloud.iter().find(|(_, on)| *on) {
             return Err(refused(&format!("{name} belongs to a Browser Use Cloud browser, which needs a key")));
         }
@@ -573,7 +577,10 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
         Owned::Handed => {}
         Owned::Local(mut process) => process.close().await,
         Owned::Cloud(mut remote) => {
-            let _ = remote.stop().await;
+            if remote.stop().await.is_err() {
+                // The error's text can carry the service's reply; the browser bills until its timeout either way.
+                fastbrowse_browser::warn("the cloud browser did not stop and bills until its timeout");
+            }
             cost.extend(remote.cost());
         }
     }

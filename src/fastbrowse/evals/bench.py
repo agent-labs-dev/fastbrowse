@@ -39,7 +39,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -57,11 +57,11 @@ from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
 from fastbrowse.evals.mock_tasks import MockTask
-from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Latency, Proxy, openrouter_forward
+from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Exchange, Latency, Proxy, openrouter_forward
 from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
 from fastbrowse.evals.tasks import LocalTask
-from fastbrowse.models import RunResult, SecretRef
+from fastbrowse.models import CostBreakdown, RunResult, SecretRef
 from fastbrowse.protocol import PROTOCOL_VERSION
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -511,7 +511,8 @@ async def bench_task(
             "events": driven.events,
             "model_requests": proxy.requests,
         },
-        "cost_usd": None if result is None else round(result.cost.known_dollars, 6),
+        "cost_usd": None if result is None else run_dollars(result.cost),
+        "unknown_cost": result is not None and result.cost.has_unknown,
         "result": normalized(result, driven.error, grade_record)
         | {"misses": sorted(f"{m.purpose} {m.model}" for m in proxy.misses)},
         "misses": [m.to_json() for m in proxy.misses],
@@ -613,10 +614,11 @@ async def run_suite(args: argparse.Namespace) -> int:
                 entry["fill_passes"] = done
                 if not proxy.forwarded:
                     break
-        cost = sum(exchange.cost or 0.0 for exchange in cassette.exchanges[before:])
+        cost, unpriced = priced(cassette.exchanges[before:])
         spent += cost
         if forward is not None:
-            entry["recorded_cost_usd"] = round(cost, 6)
+            entry["recorded_cost_usd"] = None if unpriced else round(cost, 6)
+            entry["unpriced_exchanges"] = unpriced
         run["tasks"].append(entry)
         _write(args.out, run)
         if entry["misses"]:
@@ -626,12 +628,25 @@ async def run_suite(args: argparse.Namespace) -> int:
         extra = f"{len(entry['misses'])} misses"
         if forward is not None:
             extra += f", {entry['forwarded']} forwarded, ${cost:.4f} (total ${spent:.4f})"
+            if unpriced:
+                extra += f", {unpriced} unpriced, so the budget undercounts"
         _print_row(entry, extra=extra)
     # The file is rewritten after every task, so a reader can tell a finished run from one still going.
     run["meta"]["finished"] = datetime.now(UTC).isoformat(timespec="seconds")
     _write(args.out, run)
     print(f"{mode}: {len(run['tasks'])} tasks, ${spent:.4f} spent; run written to {args.out}")
     return 0
+
+
+def run_dollars(cost: CostBreakdown) -> float | None:
+    """A run's dollars; a partial total is not its cost."""
+    return None if cost.has_unknown else round(cost.known_dollars, 6)
+
+
+def priced(exchanges: Sequence[Exchange]) -> tuple[float, int]:
+    """What the exchanges with a price cost, and how many have none."""
+    prices = [exchange.cost for exchange in exchanges]
+    return sum(price for price in prices if price is not None), prices.count(None)
 
 
 def _print_row(entry: dict[str, Any], extra: str = "") -> None:

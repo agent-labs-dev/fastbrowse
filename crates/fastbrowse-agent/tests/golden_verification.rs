@@ -209,14 +209,6 @@ fn sorted(mut state: Value) -> Value {
     state
 }
 
-fn clip(value: &Value) -> String {
-    let text = value.to_string();
-    match text.char_indices().nth(3000) {
-        Some((at, _)) => format!("{}...", &text[..at]),
-        None => text,
-    }
-}
-
 /// Cases Rust cannot reproduce, with why.
 fn rust_skip(case: &Value) -> Option<String> {
     let outcome = &case["outcome"];

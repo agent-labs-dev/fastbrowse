@@ -509,10 +509,10 @@ fn literal(values: &[Value], value: &Value) -> Checked {
     fail(Issue::new("literal_error", format!("Input should be {expected}")).ctx(json!({ "expected": expected })))
 }
 
-/// JSON equality as a literal compares: `1` is not `true`, and `1.0` is `1`.
+/// JSON equality as a literal compares: `1` is not `true`, `1.0` is `1`, and integers past 2^53 stay distinct.
 fn same(allowed: &Value, value: &Value) -> bool {
     match (allowed, value) {
-        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (Value::Number(a), Value::Number(b)) if a.is_f64() || b.is_f64() => a.as_f64() == b.as_f64(),
         (a, b) => a == b,
     }
 }
@@ -574,6 +574,13 @@ mod tests {
 
     fn cite() -> Ty {
         ModelTy::frozen("_Cite", vec![Field::required("first", Ty::Str), Field::required("last", Ty::Str)]).ty()
+    }
+
+    #[test]
+    fn a_literal_compares_large_integers_exactly() {
+        assert!(!same(&json!(9_007_199_254_740_992_i64), &json!(9_007_199_254_740_993_i64)));
+        assert!(same(&json!(1), &json!(1.0)));
+        assert!(!same(&json!(1), &json!(true)));
     }
 
     /// `retrieval._ReadClaim` and `_ReadResponse`, cut to what the error cases reach.
