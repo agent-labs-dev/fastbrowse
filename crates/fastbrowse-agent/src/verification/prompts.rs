@@ -13,7 +13,7 @@ pub(super) fn unmet_action(requirement_text: &str) -> String {
 pub(super) fn unmet_information(requirement_text: &str, cited: bool) -> String {
     let fact = if cited { "" } else { " No note in state cites evidence for this requirement." };
     format!(
-        "{UNTRUSTED}\nIs this requirement not answered by the cited notes in state? It is answered only when a note quotes the page supporting it, for every entity and constraint it names.{fact}\n\n{requirement_text}"
+        "{UNTRUSTED}\nIs this requirement not answered by the cited notes in state? It is answered only when a note quotes the page supporting it, for every entity and constraint it names. A tally note is a count code made of the records its basis names, and those records' quotes support it.{fact}\n\n{requirement_text}"
     )
 }
 
