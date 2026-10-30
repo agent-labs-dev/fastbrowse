@@ -237,7 +237,9 @@ CASES: tuple[AuditCase, ...] = (
         purpose="A local shop lookup follows search results and reads the product price.",
         argv=("{cli}", PRICE_TASK, "--start", "{base_url}/shop.html", "--local", "--json"),
         fixture=True,
-        assertions=(a("the answer contains the price", "json", "contains", "34.50", "answer"),),
+        assertions=(
+            a("the answer gives the price", "json", "claim", "The output gives the Blue Kettle's price as 34.50."),
+        ),
         expect_exit=0,
         expect_status="complete",
         spends=True,
@@ -624,7 +626,7 @@ CASES: tuple[AuditCase, ...] = (
         env=(("FASTBROWSE_PROFILE", "/proc/fastbrowse-audit-unused-profile"), ("FASTBROWSE_HEADED", "1")),
         assertions=(
             a("opened a cloud browser", "stderr", "contains", "watch live:"),
-            a("returned the heading", "json", "contains", "Example Domain", "answer"),
+            a("returned the heading", "json", "claim", "The output gives the page heading as Example Domain."),
         ),
         expect_exit=0,
         expect_status="complete",

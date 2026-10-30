@@ -161,7 +161,6 @@ def _row(
 ) -> dict[str, object]:
     """The fields every suite's row carries, so one report can read both."""
     return {
-        "correct": failure is None,
         "normalized_status": normalize(result.status),
         "task": task_id,
         "passed": failure is None,

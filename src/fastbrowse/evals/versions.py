@@ -220,7 +220,7 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 # Published results.
 
 _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_version", "status",
-         "normalized_status", "task_successful", "passed", "correct",
+         "normalized_status", "task_successful", "passed",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
          "answered", "session_seconds", "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
          "actions", "decisions", "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip

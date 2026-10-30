@@ -13,7 +13,7 @@ on:
     inputs:
       repeat:
         # At least 3: fewer is a diagnostic, not the run a published comparison rests on, so the job refuses it
-        # before spending. The pass target is fixed at 100% for the same reason and cannot be lowered.
+        # before spending. Every task must pass every run, for the same reason.
         description: Runs per task (at least 3)
         default: "3"
       budget:
@@ -70,9 +70,9 @@ jobs:
         run: uv run python scripts/eval_stability.py --check-providers
       - name: Run the fixture eval suites
         id: fixtures
-        # The runner exits non-zero on any failed attempt. The stability check below is the verdict at a fixed
-        # 100% target, and it requires every task of both suites at the full repeat count, so a runner that died
-        # part way cannot pass on the rows it left.
+        # The runner exits non-zero on any failed attempt. The stability check below is the verdict: every task
+        # of both suites must pass every run at the full repeat count, so a runner that died part way cannot pass
+        # on the rows it left.
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -91,7 +91,6 @@ jobs:
         if: always() && steps.fixtures.outcome != 'skipped'
         run: |
           uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl \
-            --target 1.0 \
             --suite local mock \
             --repeat "$EVAL_REPEAT"
       - name: Check the publication gate

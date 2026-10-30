@@ -74,3 +74,37 @@ def test_case_budget_reaches_the_subprocess(monkeypatch: pytest.MonkeyPatch) -> 
     argv, kwargs = calls[0]
     assert argv[argv.index("--max-dollars") + 1] == "0.012"
     assert kwargs["env"]["FB_AUDIT_MAX_DOLLARS"] == "0.012"
+
+
+def test_the_audit_download_is_served_beside_the_eval_pages() -> None:
+    import httpx
+
+    from fastbrowse.audit.runner import _AUDIT_FIXTURES
+    from fastbrowse.evals.local import FIXTURES, fixture_server
+
+    with fixture_server(roots=(_AUDIT_FIXTURES, FIXTURES)) as (base, _):
+        report = httpx.get(f"{base}/audit-report.csv")
+        page = httpx.get(f"{base}/shop.html")
+    assert report.headers["content-disposition"] == 'attachment; filename="audit-report.csv"'
+    assert report.content == b"city,population\nLyon,522250\n"
+    assert page.headers["content-type"].startswith("text/html")
+
+
+@pytest.mark.parametrize(("verdict", "ok"), [(None, True), ("the output does not hold", False)])
+def test_a_claim_is_judged_against_the_run_output(monkeypatch: pytest.MonkeyPatch, verdict, ok) -> None:
+    from fastbrowse.audit import runner
+    from fastbrowse.audit.cases import a
+
+    seen = {}
+
+    async def judge(_jev, **kwargs):
+        seen.update(kwargs)
+        return verdict
+
+    monkeypatch.setattr(runner, "jev_from_environment", lambda http: None)
+    monkeypatch.setattr(runner, "judge", judge)
+    ctx = {"task": "Find the price.", "json": {"answer": "It costs $34.50", "data": None}}
+    result = runner._evaluate(a("price", "json", "claim", "The output gives the price as 34.50."), ctx)
+    assert result["ok"] is ok
+    assert seen["answer"] == "It costs $34.50"
+    assert seen["claims"][0].statement == "The output gives the price as 34.50."

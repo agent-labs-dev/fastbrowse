@@ -119,17 +119,33 @@ class GatewayJev(Jev):
         return float(answer["probability"])
 
 
+JEV_KEYS = {"typesafe": "TYPESAFE_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}
+"""Each Jev source and its key, in the order the core picks the first keyed one when FASTBROWSE_DECISION_SOURCE is
+unset."""
+
+
+def jev_source(env: Mapping[str, str]) -> str:
+    """The source Jev starts on: FASTBROWSE_DECISION_SOURCE, else the first keyed one, else the gateway."""
+    if chosen := env.get("FASTBROWSE_DECISION_SOURCE"):
+        if chosen not in JEV_KEYS:
+            raise ValueError(f"FASTBROWSE_DECISION_SOURCE is {chosen!r}, not one of {', '.join(JEV_KEYS)}")
+        return chosen
+    return next((source for source, key in JEV_KEYS.items() if env.get(key)), "gateway")
+
+
 def jev_from_environment(http: httpx.AsyncClient) -> Jev:
-    """The judge on the provider a run would start on: the direct API, else OpenRouter, else the gateway."""
+    """The judge on the source a run would start on."""
     # Matched without case, as the core reads its settings.
-    keys = {name.upper(): value for name, value in environment().items()}
-    if key := keys.get("TYPESAFE_API_KEY"):
+    env = {name.upper(): value for name, value in environment().items()}
+    source = jev_source(env)
+    key = env.get(JEV_KEYS[source])
+    if not key:
+        raise RuntimeError(f"the judge needs {JEV_KEYS[source]} for the {source} route")
+    if source == "typesafe":
         return Jev(http, api_key=key, base_url=TYPESAFE_URL, model=TYPESAFE_MODEL)
-    if key := keys.get("OPENROUTER_API_KEY"):
+    if source == "openrouter":
         return Jev(http, api_key=key, base_url=OPENROUTER_URL, model=OPENROUTER_MODEL)
-    if key := keys.get("AI_GATEWAY_API_KEY"):
-        return GatewayJev(http, api_key=key)
-    raise RuntimeError("the judge needs TYPESAFE_API_KEY, OPENROUTER_API_KEY or AI_GATEWAY_API_KEY")
+    return GatewayJev(http, api_key=key)
 
 
 async def judge(

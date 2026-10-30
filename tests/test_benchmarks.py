@@ -43,7 +43,7 @@ def candidate() -> dict:
         (
             "internal-ultrafast",
             "task-success",
-            ["fastbrowse", "jev-ultrafast"],
+            ["fastbrowse-pool", "jev-ultrafast"],
             sorted(t["id"] for t in tasks if "jev-ultrafast" in t["arms"]),
             3,
         ),
@@ -71,6 +71,7 @@ def candidate() -> dict:
                         "seconds": 10.0,
                         "dollars": 0.01,
                         "physical_runs": 1,
+                        "llm_calls": 10,
                     }
                     for task in ids
                     for repeat in range(repeats)
@@ -79,7 +80,7 @@ def candidate() -> dict:
             }
         )
     return {
-        "schema_version": 1,
+        "schema_version": 5,
         "campaign_id": "test-campaign",
         "agent_sha": "a" * 40,
         "runner_sha": "b" * 40,
@@ -90,22 +91,12 @@ def candidate() -> dict:
     }
 
 
-def _current(candidate: dict) -> dict:
-    """The fixture as a new measurement makes it: schema 5, the Ultrafast comparison run on fastbrowse's own pool."""
-    out = copy.deepcopy(candidate)
-    out["schema_version"] = 5
-    for row in out["groups"][1]["rows"]:
-        if row["arm"] == "fastbrowse":
-            row["arm"] = "fastbrowse-pool"
-    return out
-
-
 def test_complete_candidate_matches_the_catalog(candidate):
-    check_catalog(Candidate.model_validate(_current(candidate)), CATALOG)
+    check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
 def test_official_suite_can_publish_without_new_comparator_runs(candidate):
-    candidate.update(schema_version=2, groups=[candidate["groups"][2]])
+    candidate.update(groups=[candidate["groups"][2]])
     check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
@@ -141,9 +132,6 @@ def test_internal_fastbrowse_group_covers_the_full_catalog_without_comparators(c
     }
     candidate.update(schema_version=3, groups=[group])
     check_catalog(Candidate.model_validate(candidate), CATALOG)
-    candidate["schema_version"] = 2
-    with pytest.raises(ValidationError, match="four original"):
-        Candidate.model_validate(candidate)
 
 
 def test_internal_fastbrowse_group_rejects_a_missing_catalog_slot(candidate):
@@ -184,58 +172,43 @@ def test_a_new_candidate_cannot_keep_a_retired_task(candidate):
         check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
-def test_legacy_schema_still_requires_all_four_groups(candidate):
-    candidate["groups"] = [candidate["groups"][2]]
-    with pytest.raises(ValidationError, match="all four"):
-        Candidate.model_validate(candidate)
-
-
-def test_legacy_complete_candidate_without_group_provenance_remains_valid(candidate):
-    for group in candidate["groups"]:
-        del group["agent_sha"], group["runner_sha"]
-    Candidate.model_validate(candidate)
-
-
 def test_copied_groups_cannot_be_attributed_to_a_new_build(candidate):
-    candidate.update(schema_version=2, agent_sha="c" * 40)
+    candidate.update(agent_sha="c" * 40)
     candidate["fixture"]["head_sha"] = "c" * 40
     with pytest.raises(ValidationError, match="measured agent and runner"):
         Candidate.model_validate(candidate)
 
 
 def test_independent_groups_require_explicit_provenance(candidate):
-    candidate["schema_version"] = 2
     del candidate["groups"][0]["agent_sha"]
-    with pytest.raises(ValidationError, match="measured agent and runner"):
+    with pytest.raises(ValidationError, match="agent_sha"):
         Candidate.model_validate(candidate)
 
 
 @pytest.mark.parametrize("groups", [[], [2, 2]])
 def test_independent_publication_requires_unique_complete_groups(candidate, groups):
-    candidate.update(schema_version=2, groups=[candidate["groups"][i] for i in groups])
+    candidate.update(groups=[candidate["groups"][i] for i in groups])
     with pytest.raises(ValidationError):
         Candidate.model_validate(candidate)
 
 
 def test_published_groups_cannot_be_removed(candidate):
     before = Candidate.model_validate(candidate)
-    candidate.update(schema_version=2, groups=[candidate["groups"][2]])
+    candidate.update(groups=[candidate["groups"][2]])
     with pytest.raises(ValueError, match="cannot disappear"):
         regressions(Candidate.model_validate(candidate), before)
 
 
 def test_new_complete_suite_can_be_added_to_an_approved_campaign(candidate):
-    candidate["schema_version"] = 2
     before = Candidate.model_validate({**candidate, "groups": [candidate["groups"][2]]})
     regressions(Candidate.model_validate(candidate), before)
 
 
-def test_legacy_schema_cannot_bypass_an_approved_group_provenance_check(candidate):
-    before = Candidate.model_validate({**candidate, "schema_version": 2})
-    for group in candidate["groups"]:
-        del group["agent_sha"], group["runner_sha"]
+def test_a_candidate_cannot_downgrade_the_schema(candidate):
+    before = Candidate.model_validate(candidate)
+    older = {**candidate, "schema_version": 4, "groups": [candidate["groups"][2]]}
     with pytest.raises(ValueError, match="cannot downgrade"):
-        regressions(Candidate.model_validate(candidate), before)
+        regressions(Candidate.model_validate(older), before)
 
 
 @pytest.mark.parametrize(
@@ -451,7 +424,7 @@ def test_a_protocol_change_skips_only_the_changed_groups(candidate):
     # internal-ultrafast kept its protocol, so it is still compared with its published figures.
     task = changed["groups"][1]["task_ids"][0]
     for row in changed["groups"][1]["rows"]:
-        if row["task"] == task and row["arm"] == "fastbrowse":
+        if row["task"] == task and row["arm"] == "fastbrowse-pool":
             row["score"] = 0.0
     with pytest.raises(ValueError, match="source-score regression: internal-ultrafast"):
         regressions(Candidate.model_validate(changed), base, changed={"internal-hosted"})
@@ -460,7 +433,7 @@ def test_a_protocol_change_skips_only_the_changed_groups(candidate):
 def test_a_protocol_change_cannot_drop_a_published_group(candidate):
     base = Candidate.model_validate(candidate)
     changed = _changed(candidate)
-    changed.update(schema_version=2, groups=changed["groups"][:3])
+    changed.update(groups=changed["groups"][:3])
     with pytest.raises(ValueError, match="cannot disappear"):
         regressions(Candidate.model_validate(changed), base, changed={"internal-hosted", "online-mind2web"})
 
@@ -922,6 +895,16 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
         benchmarks.main()
 
 
+def test_check_diff_holds_a_changed_record_to_the_current_schema(candidate, tmp_path, monkeypatch):
+    from fastbrowse.evals.benchmarks import check_diff
+
+    _repository(tmp_path, monkeypatch, {})
+    older = {**candidate, "schema_version": 4, "groups": [candidate["groups"][2]]}
+    (tmp_path / "docs/results/benchmark-candidate.json").write_bytes(_bytes(older))
+    with pytest.raises(ValueError, match="must use schema 5"):
+        check_diff("base", Path("catalog.json"))
+
+
 def test_check_diff_admits_only_the_archive_pair_an_approved_change_names(candidate, tmp_path, monkeypatch):
     from fastbrowse.evals.benchmarks import check_diff, protocol_change
 
@@ -1058,7 +1041,7 @@ def test_an_export_row_count_matching_the_groups_is_accepted(candidate):
 
 def test_status_names_the_receipt_and_the_single_next_action(candidate, tmp_path):
     path = tmp_path / "benchmark-candidate.json"
-    path.write_text(json.dumps(_export_candidate(_current(candidate))))
+    path.write_text(json.dumps(_export_candidate(candidate)))
     report = benchmarks.status(path, CATALOG, tmp_path / "absent.json")
     assert "PASS export" in report
     assert "no published baseline" in report
@@ -1131,7 +1114,6 @@ def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
         # Figures approved before keep the pairing they were measured under.
         (4, ("fastbrowse", "jev-ultrafast"), True),
         (4, ("fastbrowse-pool", "jev-ultrafast"), False),
-        (2, ("fastbrowse", "jev-ultrafast"), True),
     ],
 )
 def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid):
@@ -1157,7 +1139,7 @@ def test_the_pool_arm_is_the_one_guarded_in_the_ultrafast_comparison(candidate):
     for row in data["groups"][0]["rows"]:
         if row["task"] == task and row["arm"] == "fastbrowse-pool":
             row["llm_calls"] = 40
-    with pytest.raises(ValueError, match="llm_calls regression: internal-ultrafast"):
+    with pytest.raises(ValueError, match="efficiency regression: internal-ultrafast"):
         regressions(Candidate.model_validate(data), before)
 
 

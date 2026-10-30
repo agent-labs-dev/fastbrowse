@@ -339,11 +339,8 @@ def _shape(row: Mapping[str, Any]) -> list[Finding]:
         problems.append(_finding(REFUSE, "shape", f"{where}: seconds is not a finite non-negative number"))
     if row.get("dollars") is not None and (not _number(row.get("dollars")) or row["dollars"] < 0):
         problems.append(_finding(REFUSE, "shape", f"{where}: dollars is neither null nor a finite non-negative number"))
-    for field in ("passed", "correct"):
-        if not isinstance(row.get(field), bool):
-            problems.append(_finding(REFUSE, "shape", f"{where}: {field} is not a boolean"))
-    if row.get("passed") is True and row.get("correct") is not True:
-        problems.append(_finding(REFUSE, "grade", f"{where}: passed a row whose grade is not correct"))
+    if not isinstance(row.get("passed"), bool):
+        problems.append(_finding(REFUSE, "shape", f"{where}: passed is not a boolean"))
     return problems
 
 
@@ -584,7 +581,7 @@ def _selected_matches(entry: Mapping[str, Any], row: Mapping[str, Any]) -> list[
     """The retained attempt is the row: its time, cost and grade cannot differ from what was published."""
     where = _where(row)
     problems = []
-    for field in ("seconds", "dollars", "unknown_cost", "correct", "passed"):
+    for field in ("seconds", "dollars", "unknown_cost", "passed"):
         if field in row and field in entry and entry.get(field) != row.get(field):
             problems.append(_finding(REFUSE, "ledger", f"{where}: the selected attempt's {field} differs from the row"))
     return problems
@@ -726,7 +723,7 @@ def _over(base: float, candidate: float, floor: float) -> bool:
     return base > 0 and candidate > base * REGRESSION_FACTOR and candidate - base > floor
 
 
-def _moves(
+def moves(
     where: str,
     release: str,
     measured_base: Sequence[Mapping[str, Any]],
@@ -889,7 +886,7 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
                     f"{passed_base}/{len(measured_base)}; a per-task pass rate cannot decline",
                 )
             )
-        findings += _moves(where, release, measured_base, measured_candidate)
+        findings += moves(where, release, measured_base, measured_candidate)
     return findings
 
 

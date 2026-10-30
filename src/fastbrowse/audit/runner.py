@@ -13,6 +13,7 @@ output, plus any file or recording it produced.
 """
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -25,9 +26,15 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from fastbrowse import __file__ as _fastbrowse_file
 from fastbrowse.audit.cases import CASES, Assertion, AuditCase
-from fastbrowse.audit.live import fixture_server
+from fastbrowse.evals.judge import Claim, jev_from_environment, judge
+from fastbrowse.evals.local import FIXTURES, fixture_server
+
+# Audit-only pages, served ahead of the eval fixtures they sit beside.
+_AUDIT_FIXTURES = Path(__file__).with_name("fixtures")
 
 # Keys the refusal cases must not see, whether they come from the environment or from a `.env` the case
 # would otherwise inherit. A case that needs one sets it back explicitly.
@@ -118,6 +125,25 @@ def _actual(source: str, pointer: str, ctx: Mapping[str, Any]) -> Any:
             return None
 
 
+def _holds(claim: str, ctx: Mapping[str, Any]) -> bool:
+    """Whether the run's answer and data state `claim`, judged by Jev rather than matched as text."""
+    output = ctx.get("json")
+    if not isinstance(output, Mapping):
+        return False
+
+    async def ask() -> str | None:
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            return await judge(
+                jev_from_environment(http),
+                task=ctx["task"],
+                answer=output.get("answer"),
+                data=output.get("data"),
+                claims=(Claim(claim),),
+            )
+
+    return asyncio.run(ask()) is None
+
+
 def _evaluate(assertion: Assertion, ctx: Mapping[str, Any]) -> dict[str, Any]:
     value = assertion.value
     actual = _actual(assertion.source, assertion.pointer, ctx)
@@ -167,6 +193,8 @@ def _evaluate(assertion: Assertion, ctx: Mapping[str, Any]) -> dict[str, Any]:
             ok = actual is True
         case "nonempty":
             ok = actual is True
+        case "claim":
+            ok = _holds(str(value), ctx)
         case _:
             ok = False
     return {"name": assertion.name, "expected": value, "actual": actual, "ok": ok}
@@ -242,15 +270,16 @@ def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool)
     started = time.monotonic()
     recorder: Mapping[str, Any] = {}
     if case.fixture:
-        with fixture_server() as (base_url, record_state):
+        with fixture_server(roots=(_AUDIT_FIXTURES, FIXTURES)) as (base_url, posts):
             mapping["base_url"] = base_url
             rows = _execute(case, mapping, cwd, budget)
-            recorder = record_state()
+            recorder = posts.snapshot()
     else:
         rows = _execute(case, mapping, cwd, budget)
     duration = round(time.monotonic() - started, 3)
 
     ctx: dict[str, Any] = {
+        "task": case.purpose,
         "exit_code": rows["exit_code"],
         "stdout": rows["stdout"],
         "stderr": rows["stderr"],

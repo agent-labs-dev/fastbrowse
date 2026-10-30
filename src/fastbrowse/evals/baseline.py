@@ -17,6 +17,7 @@ FIELDS = {
     "suite_version",
     "repeat",
     "passed",
+    # Rows no longer carry it; the committed compact baselines do, and they are immutable.
     "correct",
     "normalized_status",
     "seconds",

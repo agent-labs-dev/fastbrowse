@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import re
-import statistics
 import subprocess
 import tempfile
 from collections.abc import Collection
@@ -14,7 +13,7 @@ from typing import Annotated, Literal, NamedTuple, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from fastbrowse.evals.catalog import CatalogTask, eligible
-from fastbrowse.evals.publication import REGRESSION_FACTOR
+from fastbrowse.evals.publication import moves
 from fastbrowse.models import Status
 
 Identifier = Annotated[str, Field(pattern=r"^[a-zA-Z0-9_.:+-]{1,160}$")]
@@ -103,8 +102,8 @@ def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
 
 class Group(PublicModel):
     id: GroupId
-    agent_sha: Sha | None = None
-    runner_sha: Sha | None = None
+    agent_sha: Sha
+    runner_sha: Sha
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
     source_sha256: Digest
     task_ids: list[Identifier]
@@ -162,8 +161,13 @@ class ExportReceipt(PublicModel):
     trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 
 
+SCHEMA = 5
+"""The schema a new or changed record is written under. Schemas 3 and 4 still read: the approved published figures
+and the staged candidate were written under them, and an approval binds the bytes it approved."""
+
+
 class Candidate(PublicModel):
-    schema_version: Literal[1, 2, 3, 4, 5]
+    schema_version: Literal[3, 4, 5]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -175,21 +179,13 @@ class Candidate(PublicModel):
 
     @model_validator(mode="after")
     def suites(self) -> Self:
-        expected = {"internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"}
         ids = {g.id for g in self.groups}
         if not self.groups or len(ids) != len(self.groups):
             raise ValueError("at least one complete, unique benchmark group is required")
-        if self.schema_version == 1 and (len(self.groups) != 4 or ids != expected):
-            raise ValueError("all four full benchmark groups are required")
-        if self.schema_version == 2 and not ids <= expected:
-            raise ValueError("schema 2 supports only the four original benchmark groups")
-        if self.schema_version < 4 and "internal-backend" in ids:
-            raise ValueError("the internal-backend group requires schema 4")
         for group in self.groups:
             group.check_slots(group_arms(group.id, self.schema_version))
             for field in ("agent_sha", "runner_sha"):
-                measured = getattr(group, field)
-                if (self.schema_version >= 2 or measured is not None) and measured != getattr(self, field):
+                if getattr(group, field) != getattr(self, field):
                     raise ValueError("each group must identify the measured agent and runner build")
         if (self.fixture is None) == (self.export is None):
             raise ValueError(
@@ -430,18 +426,13 @@ def regressions(
                 raise ValueError(f"source-score regression: {group.id}/{task}")
             if sum(r.completed for r in now) < sum(r.completed for r in before):
                 raise ValueError(f"completion regression: {group.id}/{task}")
-            # Wall time moves with cloud load, so it is not compared; LLM calls and model throughput are
-            # properties of the build. Jev calls are not: Jev decides every step, so more of them is not a
-            # regression. `dollars` is kept: it is a charge, not a duration.
-            for field, floor in (("llm_calls", 1.0), ("dollars", 0.001)):
-                a = statistics.median(getattr(r, field) for r in now)
-                b = statistics.median(getattr(r, field) for r in before)
-                if a > b * REGRESSION_FACTOR and a - b > floor:
-                    raise ValueError(f"{field} regression: {group.id}/{task}")
-            now_tps = statistics.median(r.tokens_per_second for r in now)
-            before_tps = statistics.median(r.tokens_per_second for r in before)
-            if before_tps > 0 and now_tps < before_tps / REGRESSION_FACTOR and before_tps - now_tps > 1.0:
-                raise ValueError(f"tokens_per_second regression: {group.id}/{task}")
+            moved = moves(f"{group.id}/{task}", "the published figures", _dumped(before), _dumped(now))
+            if moved:
+                raise ValueError(f"{moved[0].check} regression: {moved[0].detail}")
+
+
+def _dumped(rows: list[Row]) -> list[dict]:
+    return [row.model_dump() for row in rows]
 
 
 def github_run(run_id: int) -> dict:
@@ -649,6 +640,8 @@ def check_diff(base: str, catalog: Path) -> None:
         candidate = read(path)
         if git_file(base, str(path)) == path.read_bytes():
             continue
+        if candidate.schema_version != SCHEMA:
+            raise ValueError(f"a new or changed benchmark record must use schema {SCHEMA}")
         check_catalog(candidate, catalog)
         check_fixture(candidate)
         if baseline is None or old is None or old_approval is None:

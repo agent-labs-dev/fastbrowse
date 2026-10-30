@@ -96,6 +96,18 @@ async def test_the_judge_starts_on_the_provider_a_run_would(
     assert str(sent[0].url) == url
 
 
+async def test_the_judge_follows_the_chosen_decision_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    for name in (*KEYS, "FASTBROWSE_DECISION_SOURCE"):
+        monkeypatch.delenv(name, raising=False)
+    env = "".join(f"{name}=k\n" for name in KEYS) + "FASTBROWSE_DECISION_SOURCE=gateway\n"
+    (tmp_path / ".env").write_text(env, encoding="utf-8")
+    sent: list[httpx.Request] = []
+    async with _http(_answers("probability", 0.9), sent=sent) as http:
+        assert await judge(jev_from_environment(http), task="t", answer="43.25", claims=CLAIMS) is None
+    assert str(sent[0].url) == "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
+
+
 def test_no_key_says_which_the_judge_takes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     for name in KEYS:
