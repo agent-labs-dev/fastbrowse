@@ -161,9 +161,8 @@ fn floats_and_strings_are_spelled_as_python_spells_them() {
 #[test]
 fn page_keys_and_dates_match_python() {
     let functions = golden("functions.json");
-    let (observation, capture) = fixtures();
+    let (observation, _) = fixtures();
     assert_eq!(state_key(&observation), text_of(&functions, "state_key"));
-    assert_eq!(capture.read_key(), text_of(&functions, "read_key"));
     let dates = [
         observation.captured_at,
         DateTime::new(2026, 1, 31, 0, 0, 0),

@@ -147,7 +147,6 @@ pub(crate) struct TransactionCandidate {
     pub outcome_read: bool,
 }
 
-pub(crate) type ReadKey = (String, String, Vec<String>, Vec<String>);
 /// What the LLM said when it last gave up in recovery: the status the run ends with once recovery runs out.
 #[derive(Debug, Clone)]
 pub(crate) struct GaveUp {
@@ -291,8 +290,6 @@ pub(crate) struct RunState {
     pub invented: HashSet<String>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
-    /// Attempted reads by document, exact content and outstanding requirements, independent of URL edits.
-    pub reads: HashSet<ReadKey>,
     /// Documents read, by key, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<String, bool>,
     /// Open this page's next page, set when the reader says a list the run needs goes on past the page it read.
@@ -393,7 +390,6 @@ impl RunState {
             ready_plan: None,
             invented: HashSet::new(),
             downloads_forbidden: None,
-            reads: HashSet::new(),
             read_documents: HashMap::new(),
             next_page: false,
             paged_from: None,

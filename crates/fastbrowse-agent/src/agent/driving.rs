@@ -444,28 +444,21 @@ impl Agent {
                 Some(capture) => capture,
                 None => self.capture().await?,
             };
-            let (read_progress, skipped) =
+            let read_progress =
                 Box::pin(self.read(state, Some(capture), Some(observation), options.require_all_evidence)).await?;
             progressed = Some(read_progress);
             if read_progress {
                 renew(state);
             }
             changed = false;
-            let text = if skipped {
-                format!("This content was already read; duplicate read skipped. {}", read_exhausted(state))
-            } else if unread(state.plan(), &state.notes) {
+            let text = if unread(state.plan(), &state.notes) {
                 format!("Read this content. {}", read_exhausted(state))
             } else {
                 "Read this content.".to_string()
             };
             let text = self.redact(&text);
             effect_now = Some(text.clone());
-            act = ActResult {
-                outcome: if skipped { StepOutcome::Failed } else { StepOutcome::Executed },
-                page_changed: false,
-                detail: Some(text),
-                moved: false,
-            };
+            act = ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: Some(text), moved: false };
         } else {
             let redecided = state.redecided;
             let target = decision.target.as_ref().map(|target| target.id.clone());

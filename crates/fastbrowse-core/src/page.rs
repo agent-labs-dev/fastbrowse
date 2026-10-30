@@ -6,13 +6,12 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
 
 use crate::BoxFuture;
 use crate::models::{Artifact, Attachment, MaybeUnavailable, Operation, SourceControl, StepOutcome};
 use crate::py::datetime::DateTime;
-use crate::py::json::{Style, dumped_len, write};
-use crate::py::{lax, sha256_hex, text};
+use crate::py::json::dumped_len;
+use crate::py::{lax, text};
 
 pub fn cut_marker(omitted_chars: usize) -> String {
     format!("\n[Viewport text cut: {omitted_chars} characters omitted; read the page for the rest]")
@@ -315,18 +314,6 @@ impl Capture {
             None => "",
         };
         text::prefix(rest, (block.end - block.start).max(0) as usize)
-    }
-
-    pub fn read_key(&self) -> String {
-        let contexts: Vec<Value> = self
-            .blocks
-            .iter()
-            .filter_map(|block| block.control_context.as_ref().map(|context| json!([block.source_id, context])))
-            .collect();
-        if contexts.is_empty() {
-            return self.sha256.clone();
-        }
-        sha256_hex(write(&json!([self.sha256, contexts]), Style::DUMPS.sorted()).as_bytes())
     }
 }
 

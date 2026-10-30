@@ -110,14 +110,14 @@ fn context_question(task: &str, actions: &[&str]) -> Question {
 }
 
 impl Agent {
-    /// Return (added evidence, skipped duplicate), since only new evidence makes a read progress.
+    /// Return whether the read added evidence, since only new evidence makes a read progress.
     pub(super) async fn read(
         &self,
         state: &mut RunState,
         capture: Option<Capture>,
         observation: Option<&Observation>,
         require_all_evidence: bool,
-    ) -> Step<(bool, bool)> {
+    ) -> Step<bool> {
         let capture = match capture {
             Some(capture) => capture,
             None => self.capture().await?,
@@ -167,21 +167,8 @@ impl Agent {
         }
         let wanted_ids: Vec<String> = wanted.iter().map(|r| r.id.clone()).collect();
         if let Some(observation) = observation {
-            // This exact content is either read now or was read before, so the notes hold what the page shows.
+            // This content is read now, so the notes hold what the page shows.
             state.read_documents.insert(observation.document_key.clone(), false);
-            let content = (
-                observation.document_key.clone(),
-                capture.read_key(),
-                wanted_ids.clone(),
-                state.open_answer_outputs.clone(),
-            );
-            if state.reads.contains(&content) && !transaction_pending {
-                self.event("read_skipped", || {
-                    Map::from_iter([("reason".into(), "unchanged_content_and_requirements".into())])
-                });
-                return Ok((false, true));
-            }
-            state.reads.insert(content);
         }
         if text::strip(&capture.text).is_empty() {
             // An empty page may still be rendering; only new content warrants another read.
@@ -198,7 +185,7 @@ impl Agent {
             for candidate in &mut state.transaction_candidates {
                 candidate.outcome_read = true;
             }
-            return Ok((false, false));
+            return Ok(false);
         }
         let following = observation.and_then(next_page_control);
         let began = if following.is_some() || state.pages > 0 { state.first_url.clone() } else { None };
@@ -325,7 +312,7 @@ impl Agent {
         if let Some(observation) = observation {
             self.follow_pages(state, &continues, following.as_ref(), observation, outcome.expands.as_deref());
         }
-        Ok((progressed, false))
+        Ok(progressed)
     }
 
     /// Start reading a page of a list, its readings judged as any other read is.
@@ -637,7 +624,6 @@ impl Agent {
         match capture {
             Some(capture) if !state.paging_failed => {
                 state.ledger.check(0.0)?;
-                let read_key = capture.read_key();
                 let options =
                     StepOptions { capture: Some(capture), require_all_evidence: true, ..StepOptions::default() };
                 match Box::pin(self.step(
@@ -652,12 +638,6 @@ impl Agent {
                     Err(flow) if flow.is_llm() => {
                         let Flow::Agent(error) = &flow else { unreachable!("an LLM error is an agent error") };
                         state.paging_failed = true;
-                        state.reads.remove(&(
-                            observation.document_key.clone(),
-                            read_key,
-                            wanted.iter().map(|r| r.id.clone()).collect(),
-                            state.open_answer_outputs.clone(),
-                        ));
                         let hint = self.redact(&format!("Pagination read failed: {error}. Read this page again."));
                         state.hint = Some(hint.clone());
                         state.history.push(HistoryEntry {
