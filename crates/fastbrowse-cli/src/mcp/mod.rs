@@ -6,8 +6,9 @@
 //! fastbrowse-mcp --transport http --port 8765            # streamable HTTP on 127.0.0.1, at /mcp
 //! ```
 //!
-//! MCP is JSON-RPC, so the subset this server speaks is written here directly: initialize, ping, the list methods, `tools/call`, cancellation, progress and log notifications. Every
-//! reply is the bytes FastMCP 1.30 writes, error texts included.
+//! MCP is JSON-RPC, so the subset this server speaks is written here directly: initialize, ping, the list methods,
+//! `tools/call`, cancellation, progress and log notifications. Every reply is the bytes FastMCP 1.30 writes, error
+//! texts included.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
