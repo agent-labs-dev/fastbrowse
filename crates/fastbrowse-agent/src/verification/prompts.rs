@@ -6,7 +6,7 @@ pub(super) const REACHED: &str = "When the requested outcome is to open or reach
 
 pub(super) fn unmet_action(requirement_text: &str) -> String {
     format!(
-        "{UNTRUSTED}\nIs this requirement not visibly satisfied? The actions in state are the run's own record; a requirement that orders actions is satisfied only when they show that order. {REACHED}\n\n{requirement_text}"
+        "{UNTRUSTED}\nIs this requirement not satisfied? The page and the actions in state are the evidence: the actions are the run's own record of what each one visibly did, so an earlier action's effect counts after its page is gone. A requirement that orders actions is satisfied only when they show that order. {REACHED}\n\n{requirement_text}"
     )
 }
 

@@ -60,7 +60,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::SwitchTab => "Switch to another open tab.",
         Operation::Dialog => "Respond to the open browser dialog.",
         Operation::Read => "Read this page's content to extract information the task needs.",
-        Operation::Done => "Every requirement is visibly satisfied.",
+        Operation::Done => "Every requirement is satisfied.",
         Operation::Escalate => "No offered operation can make progress.",
     }
 }

@@ -211,8 +211,8 @@ pub async fn check_done(
         let (question, unmet, met) = match requirement.kind {
             RequirementKind::Action => (
                 prompts::unmet_action(&requirement.text),
-                "It is not satisfied, or there is no visible confirmation.",
-                "The page visibly confirms it is satisfied.",
+                "It is not satisfied, or neither the page nor the action record shows it.",
+                "The page or the action record shows it is satisfied.",
             ),
             RequirementKind::Information => (
                 prompts::unmet_information(&requirement.text, notes.evidenced(&requirement.id)),
