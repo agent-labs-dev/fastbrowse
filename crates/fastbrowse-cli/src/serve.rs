@@ -448,7 +448,7 @@ impl Server {
         let mut line = message.dump_json().into_bytes();
         line.push(b'\n');
         self.0.transport.send(&line);
-        // Python hands each write to a thread and waits for it, which lets the other tasks run; so does this.
+        // Yield after each write so the run's other tasks can make progress.
         tokio::task::yield_now().await;
     }
 }
