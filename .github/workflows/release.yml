@@ -3,10 +3,8 @@ name: Release
 # the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
 # yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
-# Approval is the decision. A tag publishes once the sdist, the wheels and the binaries are green; it no longer
-# waits on a separate eval run, because a mechanical gate that re-decides an already-approved release held
-# approved numbers and packages back over one missing secret. The fixture suites still run nightly, on demand,
-# and their results are published on the site.
+# Approval is the decision: a tag publishes once the sdist, the wheels and the binaries are green. The fixture
+# suites run nightly and on demand in evals.yml, and do not gate a release.
 #
 # Run by hand, it stops after the binaries and publishes nothing. That is how a change to the build is tried
 # without spending a version number, which no registry gives back.
