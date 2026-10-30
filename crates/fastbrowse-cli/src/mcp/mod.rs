@@ -71,7 +71,7 @@ pub struct ServerConfig {
     pub cursor: bool,
     /// Bearer token every HTTP request but `/healthz` must carry. `None` is allowed only on loopback.
     pub mcp_token: Option<String>,
-    /// `_OVERRUN_GRACE_SECONDS`, which a test shortens.
+    /// [`OVERRUN_GRACE_SECONDS`], which a test shortens.
     pub grace_seconds: f64,
 }
 

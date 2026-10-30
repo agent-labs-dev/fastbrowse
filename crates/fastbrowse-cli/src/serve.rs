@@ -296,8 +296,8 @@ impl Server {
 
     /// Start a run, and answer it from a task of its own so the server keeps reading while it goes on.
     ///
-    /// Everything up to the run's first wait happens here, before the next line is read, as Python starts the task
-    /// eagerly: a `run/cancel` or the end of input on the next line finds the run under way.
+    /// Everything up to the run's first wait happens here, before the next line is read: a
+    /// `run/cancel` or the end of input on the next line finds the run under way.
     async fn start_run(&self, id: Option<RequestId>, params: RunParams) {
         let cancel = Cancel::default();
         let busy = {
@@ -526,8 +526,8 @@ pub fn reply(
     match outcome {
         Ok(result) => Ok(result),
         Err(RunError::Configuration(message)) => Err(refused(ErrorCode::Configuration, message)),
-        // A callback's failure stopped the run, and the reply says what the client failed, as Python's `run_task`
-        // lets the callback's exception through. What the run did before then is in the events.
+        // A callback's failure stopped the run, and the reply says what the client failed. What the
+        // run did before then is in the events.
         Err(RunError::Cancelled) => match failure {
             Some(failure) => Ok(options::error_result(failure.to_string())),
             None => Err(refused(ErrorCode::Cancelled, format!("run {} was cancelled", repr(run_id)))),
