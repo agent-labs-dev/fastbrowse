@@ -33,6 +33,12 @@ use tokio::time::{sleep, timeout};
 
 const TOOLS: [&str; 5] = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"];
 const CALL_SECONDS: Duration = Duration::from_secs(2);
+// `move_cursor` replies only once its glide has landed, and the driver's own pace takes up to about three seconds
+// across a screen, longer than the half second between quick clicks, so each glide was cut off by the next and the
+// arrow landed nowhere. A fixed glide lands on every click; a shorter one jumps whole inches between drawn frames.
+const GLIDE_MS: f64 = 550.0;
+// A driver that ignores the fixed glide still lands within its own 5s ceiling; waiting that long is not a failure.
+const MOVE_SECONDS: Duration = Duration::from_secs(6);
 const START_SECONDS: Duration = Duration::from_secs(5);
 const STOP_SECONDS: Duration = Duration::from_secs(1);
 // The driver ends an idle session after about five minutes; start_session is idempotent, so it is the keepalive.
@@ -45,7 +51,6 @@ const MAX_SIDE_INSET: f64 = 40.0;
 const OVERLAY_TITLE: &str = "Cua.AgentCursorOverlay";
 // asyncio's `limit=2**20`: a reply line longer than this is a broken driver, not a list of windows.
 const LINE_LIMIT: usize = 1 << 20;
-const WATCH_POLLS: usize = 80;
 const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// What the page itself reports about where its viewport sits in its window, in device-independent pixels.
@@ -65,6 +70,9 @@ pub struct Geometry {
     pub zoom: f64,
     pub pinch_scale: f64,
     pub visible: bool,
+    /// Whether this is the tab and document that supplied the action point. Any other page still says whether the
+    /// browser is showing and in front, but a point taken from the old one means nothing on it.
+    pub same_page: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -88,6 +96,16 @@ pub type GeometryFn = Arc<dyn Fn() -> BoxFuture<'static, Option<Geometry>> + Sen
 /// the width evenly. Both insets come from the page's own report (`outerHeight - innerHeight`), so nothing here is
 /// a guess about a particular browser's chrome; a result that looks wrong draws nothing.
 pub fn viewport_point(geometry: &Geometry, x: f64, y: f64) -> Option<(f64, f64)> {
+    let (side, top) = viewport_inset(geometry)?;
+    if !((0.0..=geometry.inner_width).contains(&x) && (0.0..=geometry.inner_height).contains(&y)) {
+        return None;
+    }
+    Some((geometry.screen_x + side + x * geometry.zoom, geometry.screen_y + top + y * geometry.zoom))
+}
+
+/// Where the viewport starts inside the window frame, or None when this frame cannot place any point: a hidden tab,
+/// a pinch zoom, or an inset too large to be the browser's own chrome (a docked DevTools panel).
+fn viewport_inset(geometry: &Geometry) -> Option<(f64, f64)> {
     if !geometry.visible || (geometry.pinch_scale - 1.0).abs() > 0.01 || geometry.zoom <= 0.0 {
         return None;
     }
@@ -98,10 +116,7 @@ pub fn viewport_point(geometry: &Geometry, x: f64, y: f64) -> Option<(f64, f64)>
     if !((-1.0..=MAX_SIDE_INSET).contains(&side) && (-1.0..=MAX_TOP_INSET).contains(&top)) {
         return None;
     }
-    if !((0.0..=geometry.inner_width).contains(&x) && (0.0..=geometry.inner_height).contains(&y)) {
-        return None;
-    }
-    Some((geometry.screen_x + side.max(0.0) + x * geometry.zoom, geometry.screen_y + top.max(0.0) + y * geometry.zoom))
+    Some((side.max(0.0), top.max(0.0)))
 }
 
 /// The browser's own window, when it is the one frontmost, else None.
@@ -295,8 +310,12 @@ impl Driver {
     }
 
     async fn tool(&self, name: &str, arguments: Value) -> Result<Value, Failure> {
+        self.tool_within(name, arguments, CALL_SECONDS).await
+    }
+
+    async fn tool_within(&self, name: &str, arguments: Value, seconds: Duration) -> Result<Value, Failure> {
         let params = json!({"name": name, "arguments": arguments});
-        let Value::Object(mut result) = self.request("tools/call", Some(params), CALL_SECONDS).await? else {
+        let Value::Object(mut result) = self.request("tools/call", Some(params), seconds).await? else {
             return Err(Failure::BadReply);
         };
         if result.get("isError").is_some_and(truthy) {
@@ -434,17 +453,29 @@ impl CursorFeedback {
 
 impl Inner {
     async fn follow(self: Arc<Self>, geometry: GeometryFn, point: (f64, f64), generation: u64) {
-        let moved = timeout(CALL_SECONDS * 3, Arc::clone(&self).glide(geometry, point, generation)).await;
+        let moved = timeout(MOVE_SECONDS + CALL_SECONDS * 3, Arc::clone(&self).glide(&geometry, point)).await;
         if let Err(failure) = moved.unwrap_or(Err(Failure::Timeout)) {
-            self.fail(failure).await;
+            return self.fail(failure).await;
+        }
+        // Watched even when this move drew nothing: the previous drawing is still on screen and still needs hiding.
+        let mut tasks = lock(&self.tasks);
+        if tasks.generation == generation {
+            tasks.watching = Some(tokio::spawn(Arc::clone(&self).watch(geometry)));
         }
     }
 
-    async fn glide(self: Arc<Self>, geometry: GeometryFn, point: (f64, f64), generation: u64) -> Result<(), Failure> {
-        let reading = geometry().await;
-        let target = reading.as_ref().and_then(|reading| viewport_point(reading, point.0, point.1));
-        let (Some(reading), Some(target)) = (reading, target) else {
+    async fn glide(self: Arc<Self>, geometry: &GeometryFn, point: (f64, f64)) -> Result<(), Failure> {
+        let Some(reading) = geometry().await else {
+            // A page that has not reported its frame yet is not a reason to take the cursor away: it stays where
+            // the last step left it, the only place it could still be, and the watcher hides it if the page goes.
+            return Ok(());
+        };
+        if viewport_inset(&reading).is_none() {
             return self.show(false).await;
+        }
+        // A page that has already moved on, or a point outside the viewport, leaves the cursor at its last position.
+        let Some(target) = viewport_point(&reading, point.0, point.1).filter(|_| reading.same_page) else {
+            return Ok(());
         };
         if *lock(&self.last_call) + KEEPALIVE_SECONDS < Instant::now() {
             self.driver.tool("start_session", json!({"session": self.session})).await?;
@@ -453,23 +484,18 @@ impl Inner {
         self.show(window.is_some()).await?;
         if window.is_some() {
             let arguments = json!({"session": self.session, "x": target.0, "y": target.1, "scope": "window"});
-            self.driver.tool("move_cursor", arguments).await?;
+            self.driver.tool_within("move_cursor", arguments, MOVE_SECONDS).await?;
         }
         *lock(&self.last_call) = Instant::now();
-        if window.is_some() {
-            let mut tasks = lock(&self.tasks);
-            if tasks.generation == generation {
-                tasks.watching = Some(tokio::spawn(Arc::clone(&self).watch(geometry, reading)));
-            }
-        }
         Ok(())
     }
 
-    /// Hide a previous drawing when its page or foreground window changes.
-    async fn watch(self: Arc<Self>, geometry: GeometryFn, initial: Geometry) {
-        for _ in 0..WATCH_POLLS {
+    /// Hide a drawing once its browser stops showing a page it can be placed on, for as long as it is on screen: the
+    /// driver keeps it indefinitely, so nothing else takes it off a window that covers the browser later.
+    async fn watch(self: Arc<Self>, geometry: GeometryFn) {
+        loop {
             sleep(WATCH_INTERVAL).await;
-            match timeout(CALL_SECONDS, self.still_shown(&geometry, &initial)).await.unwrap_or(Err(Failure::Timeout)) {
+            match timeout(CALL_SECONDS, self.still_shown(&geometry)).await.unwrap_or(Err(Failure::Timeout)) {
                 Ok(true) => {}
                 Ok(false) => return,
                 Err(failure) => return self.fail(failure).await,
@@ -477,14 +503,27 @@ impl Inner {
         }
     }
 
-    async fn still_shown(&self, geometry: &GeometryFn, initial: &Geometry) -> Result<bool, Failure> {
-        let reading = geometry().await;
-        let same = reading.as_ref().is_some_and(|reading| reading.visible && reading == initial);
-        if !same || self.browser_window(initial).await?.is_none() {
-            self.show(false).await?;
+    /// Take a drawing away only when the page stops showing, can no longer be placed, or the browser stops being the
+    /// front window. A navigation or a scroll leaves the cursor at its last position.
+    async fn still_shown(&self, geometry: &GeometryFn) -> Result<bool, Failure> {
+        if *lock(&self.shown) == Some(false) {
             return Ok(false);
         }
-        Ok(true)
+        match geometry().await {
+            // A read that failed mid-navigation; the next poll reads the page that replaced it.
+            None => Ok(true),
+            Some(reading) if viewport_inset(&reading).is_none() => {
+                self.show(false).await?;
+                Ok(false)
+            }
+            Some(reading) => match self.browser_window(&reading).await? {
+                Some(_) => Ok(true),
+                None => {
+                    self.show(false).await?;
+                    Ok(false)
+                }
+            },
+        }
     }
 
     async fn browser_window(&self, reading: &Geometry) -> Result<Option<Window>, Failure> {
@@ -606,6 +645,15 @@ async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
         return Err(Failure::NoWindowScope);
     }
     driver.tool("start_session", json!({"session": session})).await?;
+    // The overlay fades out on its own after a short idle by default, and a run spends most of its time between
+    // steps: ask for a cursor that stays where it was left, and glides short enough to keep up with the clicks.
+    // A driver without this tool keeps its own defaults.
+    if tools.contains_key("set_agent_cursor_motion") {
+        let arguments = json!({"session": session, "idle_hide_ms": 0, "glide_duration_ms": GLIDE_MS});
+        if let Err(failure) = driver.tool("set_agent_cursor_motion", arguments).await {
+            log_warning(&format!("the cursor may fade while the run is idle ({})", failure.kind()));
+        }
+    }
     Ok(())
 }
 
@@ -689,6 +737,8 @@ for line in sys.stdin:
             time.sleep(30)
         if mode == "slow_hide" and name == "set_agent_cursor_enabled" and not arguments["enabled"]:
             time.sleep(0.5)
+        if mode == "long_glide" and name == "move_cursor":
+            time.sleep(2.2)
         structured = {"windows": windows} if name == "list_windows" else {}
         result = {"content": [], "structuredContent": structured}
     print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
@@ -709,6 +759,7 @@ if mode == "linger":
         zoom: 1.0,
         pinch_scale: 1.0,
         visible: true,
+        same_page: true,
     };
 
     fn raw_window(z_index: Option<i64>, x: f64) -> Value {
@@ -1062,23 +1113,64 @@ if mode == "linger":
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_later_page_change_hides_the_previous_cursor() {
+    async fn a_page_that_stops_showing_hides_the_previous_cursor() {
+        // The page after the change: hidden, or still showing but pinch-zoomed, so the drawing no longer marks what
+        // it was put on.
+        let after = [Geometry { visible: false, ..GEOMETRY }, Geometry { pinch_scale: 2.0, ..GEOMETRY }];
+        for after in after {
+            let fake = Fake::new("ok", None);
+            let changed = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&changed);
+            let geometry: GeometryFn = Arc::new(move || {
+                let reading = if flag.load(Ordering::SeqCst) { after } else { GEOMETRY };
+                Box::pin(async move { Some(reading) })
+            });
+            let feedback = fake.open().await.unwrap();
+            feedback.follow(geometry, (10.0, 20.0));
+            feedback.settled().await;
+            changed.store(true, Ordering::SeqCst);
+            let watching = lock(&feedback.inner.tasks).watching.take().expect("a drawn cursor is watched");
+            timeout(Duration::from_secs(3), watching).await.unwrap().unwrap();
+            feedback.close().await;
+            assert_eq!(fake.enabled(), [false], "{after:?}");
+            assert_eq!(fake.calls().iter().filter(|name| *name == "move_cursor").count(), 1);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_frame_that_blinks_out_leaves_the_cursor_where_it_was() {
+        // A page mid-navigation stops reporting its frame for a moment. That is not the browser going away, so
+        // the cursor stays drawn at its last position instead of blinking out between steps.
         let fake = Fake::new("ok", None);
-        let changed = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&changed);
+        let gone = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&gone);
         let geometry: GeometryFn = Arc::new(move || {
-            let gone = flag.load(Ordering::SeqCst);
-            Box::pin(async move { (!gone).then_some(GEOMETRY) })
+            let missing = flag.load(Ordering::SeqCst);
+            Box::pin(async move { (!missing).then_some(GEOMETRY) })
         });
         let feedback = fake.open().await.unwrap();
         feedback.follow(geometry, (10.0, 20.0));
         feedback.settled().await;
-        changed.store(true, Ordering::SeqCst);
-        let watching = lock(&feedback.inner.tasks).watching.take().expect("a drawn cursor is watched");
-        timeout(Duration::from_secs(3), watching).await.unwrap().unwrap();
+        gone.store(true, Ordering::SeqCst);
+        assert!(lock(&feedback.inner.tasks).watching.is_some());
+        sleep(WATCH_INTERVAL * 3).await;
         feedback.close().await;
-        assert_eq!(fake.enabled(), [false]);
+        // Nothing hid it: the frame went quiet, the page did not.
+        assert!(fake.enabled().is_empty());
         assert_eq!(fake.calls().iter().filter(|name| *name == "move_cursor").count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_glide_longer_than_a_call_keeps_the_cursor() {
+        // The driver replies to a move once its glide lands, which its own pace makes take seconds. Waiting that
+        // out is not a driver failure: it turned the cursor off for the rest of a run after its first long move.
+        let fake = Fake::new("long_glide", None);
+        let feedback = fake.open().await.unwrap();
+        feedback.follow(reading(), (10.0, 20.0));
+        feedback.settled().await;
+        assert!(!feedback.inner.disabled.load(Ordering::SeqCst));
+        assert!(feedback.running());
+        feedback.close().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

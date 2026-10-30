@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **`--cursor` lands on what was clicked.** The Cua Driver glides at its own pace, one to three seconds across the screen, and a run clicks every half second when the page is quick, so each glide was cut off by the next and the arrow sat mid-arc, nowhere near the click. On older drivers a glide over two seconds also turned the cursor off for the rest of the run. Glides are now fixed at 550 ms, and the arrow reaches each click about half a second after it.
+
+- **`--cursor` stays on screen for the whole run.** The Cua Driver fades its overlay after 15s idle, and a page change or a frame the run could not read also took it away, so the cursor vanished between steps. fastbrowse now asks the driver to keep it (`idle_hide_ms: 0`) and removes it only when the tab stops showing, the page is zoomed or docked out of place, or another window covers the browser, however long the run has been idle.
+
 ## [0.9.1] - 2026-10-30
 
 - **The project credits the people who contribute.** [CREDITS.md](CREDITS.md) lists everyone outside the team whose bug report, request or code led to a change, from Dhaiwat10's fix for hidden table rows to the Product Hunt comments behind this release's replay redaction and step choices, and the README's new Credits section thanks them. Every future fix or feature someone asked for thanks them in its changelog entry and adds them to the list.
