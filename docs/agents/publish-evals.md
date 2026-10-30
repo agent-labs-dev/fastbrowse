@@ -69,13 +69,24 @@ uv run python -m fastbrowse.evals.site_groups benchmark-candidate.json run-facts
 A group file holds no figure. It names the candidate group, campaign, build and candidate SHA256, and the site
 computes every figure from the candidate's per-attempt rows. Its `systems` maps each site system with rows to its
 arm, `cost_not_reported` lists those of them whose rows carry no cost, and `not_measured` lists the site systems
-with no rows. The live suite card shows the head-to-head group
-(`internal-hosted`) when the campaign ran it, else `internal-fastbrowse`. A card the candidate has no group for
+with no rows. The live suite has two cards: `live-suite` shows the head-to-head group (`internal-hosted`) and
+`live-suite-fastbrowse` shows `internal-fastbrowse`. A `reference` block in a group file is a vendor figure on another
+task set: the site labels it and never compares it, and a new campaign keeps it. A card the candidate has no group for
 keeps its file only while that file carries no measured figures: the site reads one candidate's rows, so a card still
 measured by an earlier campaign stops the write, and that campaign's group must be measured again. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
 publish a campaign again, dispatch `publish-evals.yml` with the campaign run's id.
 
-An upload to Langfuse does not approve publication.
+Official results reach the same candidate through their public rows. A run directory holds decrypted BU Bench goals
+and upstream records, so it leaves `official-benchmarks.yml` only encrypted, and that job also writes the
+`official-rows-<suite>-<arm>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after Parallax
+has held the run to every publication rule. Dispatch it first, then dispatch `benchmark-campaign.yml` on the same
+`fastbrowse_ref` and `parallax_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
+dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage merges each
+suite's arms into one group; its run facts take each suite's date and judge from those rows.
+
+Both workflows send every result to Langfuse as a step that runs even when the run stopped: `parallax browser
+track-ledger` for each campaign group and `track-official` for each suite and arm. The candidate is refused unless
+Langfuse holds them. An upload to Langfuse does not approve publication.
 
 ## Retiring a task or changing the protocol
 
