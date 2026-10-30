@@ -1285,10 +1285,12 @@ async fn read_inner(
                         .flat_map(|c| &c.tallies),
                 )
                 .collect();
+            // A group that names its records is counted from them; a field range stands in only for records not named.
             let malformed = groups.iter().any(|g| {
-                g.field.as_ref().is_some_and(|field| {
-                    g.key.is_some() || !g.records.is_empty() || field_groups(&page, &part, field).is_none()
-                })
+                g.records.is_empty()
+                    && g.field
+                        .as_ref()
+                        .is_some_and(|field| g.key.is_some() || field_groups(&page, &part, field).is_none())
             });
             if malformed {
                 // A malformed field range must be repaired on this capture before it poisons later pages' counts.
@@ -1468,9 +1470,12 @@ async fn read_inner(
             let mut groups: Vec<TallyGroup> = Vec::new();
             for group in &tally_read.groups {
                 match &group.field {
+                    Some(_) if !group.records.is_empty() => groups.push(TallyGroup { field: None, ..group.clone() }),
                     None => groups.push(group.clone()),
                     Some(field) => {
-                        let expanded = (group.key.is_none() && group.records.is_empty())
+                        let expanded = group
+                            .key
+                            .is_none()
                             .then(|| field_groups(&page, &part, field))
                             .flatten()
                             .filter(|expanded| !expanded.is_empty());
