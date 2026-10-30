@@ -5,7 +5,10 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
-use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult, WallKind};
+use fastbrowse_core::models::{
+    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepFallback, StepOutcome, StepResult,
+    WallKind,
+};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
@@ -199,6 +202,9 @@ impl Agent {
                     continue;
                 }
             };
+            state.choices = self.choices(&decision);
+            // A fresh decision clears the fallback the last one left, which only the step it led to could claim.
+            state.fallback = None;
             // Only an answered decision has asked the page's sign-in and bot questions; a dropped one asked nothing.
             state.last_page = Some(page);
             let thresholds = &self.config.thresholds;
@@ -246,6 +252,10 @@ impl Agent {
             if !state.open_answer_outputs.is_empty() || uncertain || !not_acting(decision.operation) {
                 let usable = without_failed_links(state, &observation);
                 if let Some(directed) = follow_recovery(state, &usable, &decision, uncertain) {
+                    // The step recorded is the recovery's, so the pick it set aside is recorded with it.
+                    if uncertain {
+                        state.fallback = Some(self.fallback(&decision, "jev unsure"));
+                    }
                     (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
                 }
             }
@@ -309,9 +319,7 @@ impl Agent {
                     // shown and nothing on it is unread. A read would re-buy what they hold.
                     state.owes_read = false;
                     state.read_here = true;
-                    self.event("read_not_owed", || {
-                        Map::from_iter([("url".into(), self.redact(&observation.url).into())])
-                    });
+                    self.event("read_not_owed", || Map::from_iter([("url".into(), observation.url.clone().into())]));
                     reading_owed = false;
                 }
                 if reading_owed {
@@ -362,6 +370,7 @@ impl Agent {
                 || (uncertain && !not_acting(decision.operation) && !try_unsure(state, &observation, &decision))
             {
                 let reason = format!("uncertain next step ({:.2})", decision.confidence());
+                state.fallback = Some(self.fallback(&decision, &reason));
                 Box::pin(self.consult(state, &observation, &reason)).await?;
                 continue;
             }
@@ -390,8 +399,39 @@ impl Agent {
         }
     }
 
+    /// Jev's offered controls as a step reports them. Their labels come from the masked observation already, and are
+    /// masked again so a label that reaches a step can never carry a secret whatever it was read from.
+    fn choices(&self, decision: &Decision) -> Vec<StepChoice> {
+        let chosen: Vec<&str> = [&decision.target, &decision.destination]
+            .into_iter()
+            .flatten()
+            .map(|control| control.id.as_str())
+            .collect();
+        decision
+            .offered
+            .iter()
+            .map(|control| StepChoice {
+                id: control.id.clone(),
+                role: control.role.clone(),
+                label: self.mask(&control.label),
+                context: control.context.as_deref().map(|context| self.mask(context)),
+                operations: control.operations.iter().copied().collect(),
+                chosen: chosen.contains(&control.id.as_str()),
+            })
+            .collect()
+    }
+
+    /// The fallback that took a decision off Jev's pick, as a step reports it: what it abandoned and how sure it was.
+    fn fallback(&self, decision: &Decision, reason: &str) -> StepFallback {
+        StepFallback {
+            reason: self.redact(reason),
+            confidence: decision.confidence(),
+            target: decision.target.as_ref().map(|control| self.mask(&control.label)),
+        }
+    }
+
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
-        self.event("redecide", || Map::from_iter([("url".into(), self.redact(&observation.url).into())]));
+        self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
     }
 
@@ -900,6 +940,8 @@ impl Agent {
             facts,
             page_changed: (decision.operation != Operation::Read).then_some(changed),
             duration_ms: started.elapsed().as_millis() as i64,
+            fallback: None,
+            choices: Vec::new(),
         };
         self.record_step(state, step, false, frame).await?;
         // The one stall rule: a run is stuck when its page has not changed for `unchanged_actions` steps.
@@ -979,7 +1021,7 @@ impl Agent {
         if twins.len() != 1 {
             return Ok(None);
         }
-        self.event("retarget", || Map::from_iter([("target".into(), self.redact(&target.label).into())]));
+        self.event("retarget", || Map::from_iter([("target".into(), target.label.clone().into())]));
         let retargeted = Action { target_id: Some(twins[0].id.clone()), ..action.clone() };
         let raw = self.raw().unwrap_or(fresh);
         Ok(Some(self.page.act(&retargeted, &raw).await?))
@@ -1131,10 +1173,8 @@ impl Agent {
     pub(super) async fn observe(&self) -> Step<Observation> {
         let observation = self.page.observe().await?;
         let revealed = self.reveals(&observation);
-        let mut seen = self.seen();
-        seen.raw = Some(observation.clone());
-        seen.secret_on_screen = revealed;
-        let mask = |value: &str| seen.redactor.mask(value);
+        let redactor = self.redactor();
+        let mask = |value: &str| redactor.mask(value);
         let mask_opt = |value: &Option<String>| value.as_deref().map(mask);
         let controls = observation
             .controls
@@ -1169,6 +1209,10 @@ impl Agent {
             }),
             ..observation.clone()
         };
+        drop(redactor);
+        let mut seen = self.seen();
+        seen.raw = Some(observation);
+        seen.secret_on_screen = revealed;
         seen.observed = Some(masked.clone());
         Ok(masked)
     }
@@ -1190,8 +1234,8 @@ impl Agent {
 
     pub(super) async fn capture(&self) -> Step<Capture> {
         let capture = self.page.capture().await?;
-        let seen = self.seen();
-        let mask = |value: &str| seen.redactor.mask(value);
+        let redactor = self.redactor();
+        let mask = |value: &str| redactor.mask(value);
         let text = mask(&capture.text);
         let digest = sha256_hex(text.as_bytes());
         let blocks = capture
@@ -1239,6 +1283,16 @@ impl Agent {
         capture_frame: bool,
         frame: Option<Vec<u8>>,
     ) -> Step {
+        // The step is what a caller replays the run from, as the result's steps and as the step event, so a secret a
+        // step's builder did not think to redact is caught on its way out.
+        let step = StepResult {
+            url: self.redact(&step.url),
+            target: step.target.as_deref().map(|target| self.redact(target)),
+            note: step.note.as_deref().map(|note| self.redact(note)),
+            choices: std::mem::take(&mut state.choices),
+            fallback: state.fallback.take(),
+            ..step
+        };
         state.steps.push(step.clone());
         // A stale step dispatched nothing; the stall budget bounds redraw loops.
         if step.outcome != StepOutcome::Stale {
@@ -1274,6 +1328,8 @@ impl Agent {
             facts: Vec::new(),
             page_changed,
             duration_ms: 0,
+            fallback: None,
+            choices: Vec::new(),
         };
         self.record_step(state, step, true, None).await
     }

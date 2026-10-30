@@ -294,6 +294,77 @@ impl Schema for StepFact {
     }
 }
 
+/// One control Jev was offered on a step, so a run that picked the wrong element, or fell back to the LLM, shows whether
+/// the right one was there to pick.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepChoice {
+    pub id: String,
+    pub role: String,
+    /// The label as Jev read it, with resolved secrets masked.
+    pub label: String,
+    /// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+    #[serde(default)]
+    pub context: Option<String>,
+    pub operations: Vec<Operation>,
+    /// Whether Jev chose this control: the target, and for a drag the destination too.
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub chosen: bool,
+}
+
+impl Schema for StepChoice {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "StepChoice",
+            vec![
+                Field::required("id", Ty::Str),
+                Field::required("role", Ty::Str),
+                Field::required("label", Ty::Str).doc("The label as Jev read it, with resolved secrets masked."),
+                Field::default("context", Ty::optional(Ty::Str), Value::Null).doc(
+                    "The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.",
+                ),
+                Field::required("operations", Ty::list(Operation::ty())),
+                Field::default("chosen", Ty::Bool, Value::Bool(false))
+                    .doc("Whether Jev chose this control: the target, and for a drag the destination too."),
+            ],
+        )
+        .ty()
+    }
+}
+
+/// Why a step acted on a recovery rather than on Jev's pick: the fallback that fired, and the pick it set aside.
+///
+/// The steps a small picker is least likely to get right are the ones it was unsure about, and a run that reports only
+/// the step it took afterwards leaves nothing to learn from but the pick that was abandoned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepFallback {
+    /// The reason the run stopped following Jev, as recovery was told it.
+    pub reason: String,
+    /// Jev's certainty on the step it gave up, on the weakest link of its choices.
+    pub confidence: f64,
+    /// The control Jev chose, by its label, when it chose one.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+impl Schema for StepFallback {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "StepFallback",
+            vec![
+                Field::required("reason", Ty::Str)
+                    .doc("The reason the run stopped following Jev, as recovery was told it."),
+                Field::required("confidence", Ty::Float.le(1).ge(0))
+                    .doc("Jev's certainty on the step it gave up, on the weakest link of its choices."),
+                Field::default("target", Ty::optional(Ty::Str), Value::Null)
+                    .doc("The control Jev chose, by its label, when it chose one."),
+            ],
+        )
+        .ty()
+    }
+}
+
 str_enum! {
     pub enum ArtifactKind {
         Download = "download",
@@ -488,6 +559,14 @@ pub struct StepResult {
     pub page_changed: Option<bool>,
     #[serde(deserialize_with = "lax::int_ge0")]
     pub duration_ms: i64,
+    /// The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
+    // Left out of the output when absent, so a run whose picker was never overridden reports what it always has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<StepFallback>,
+    /// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+    // Left out of the output when empty, so a run that did not ask reports what it always has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<StepChoice>,
 }
 
 impl Schema for StepResult {
@@ -509,6 +588,12 @@ impl Schema for StepResult {
                 Field::default("page_changed", Ty::optional(Ty::Bool), Value::Null)
                     .doc("Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."),
                 Field::required("duration_ms", Ty::Int.ge(0)),
+                Field::default("fallback", Ty::optional(StepFallback::ty()), Value::Null)
+                    .omitted_when_empty()
+                    .doc("The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."),
+                Field::default("choices", Ty::list(StepChoice::ty()), Value::Array(vec![])).omitted_when_empty().doc(
+                    "The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.",
+                ),
             ],
         )
         .ty()
