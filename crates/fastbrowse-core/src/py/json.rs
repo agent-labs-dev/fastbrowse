@@ -232,6 +232,21 @@ pub fn float(value: f64, style: Floats) -> String {
     format!("{sign}{body}")
 }
 
+/// `repr(value)` of a JSON scalar. An array or an object stays in its JSON spelling.
+pub fn scalar_repr(value: &Value) -> String {
+    match value {
+        Value::Null => "None".into(),
+        Value::Bool(true) => "True".into(),
+        Value::Bool(false) => "False".into(),
+        Value::Number(n) => match n.as_f64() {
+            Some(f) if n.is_f64() => float_str(f),
+            _ => n.to_string(),
+        },
+        Value::String(s) => crate::py::text::repr(s),
+        other => other.to_string(),
+    }
+}
+
 /// `str(value)` for a float, which is its `repr`.
 pub fn float_str(value: f64) -> String {
     match value {

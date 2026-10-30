@@ -111,11 +111,7 @@ macro_rules! str_enum_base {
                 let value = String::deserialize(deserializer)?;
                 $name::parse(&value).ok_or_else(|| {
                     let names: Vec<String> = $name::ALL.iter().map(|v| format!("'{}'", v.as_str())).collect();
-                    let expected = match names.split_last() {
-                        Some((last, [])) => last.clone(),
-                        Some((last, rest)) => format!("{} or {}", rest.join(", "), last),
-                        None => String::new(),
-                    };
+                    let expected = $crate::py::text::or_list(&names);
                     <D::Error as serde::de::Error>::custom(format!("Input should be {expected}"))
                 })
             }
