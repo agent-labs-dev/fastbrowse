@@ -1,52 +1,30 @@
 //! Whether a run may call itself finished: the done check, the verifier, the answer and its claim checks.
 
 use std::collections::{BTreeSet, HashSet};
-use std::sync::{Arc, Mutex};
 
 use fastbrowse_core::decision::{Answer, Question};
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
-    Bytes, CostComponent, Decider, Evidence, FactReader, LLMPurpose, Operation, RunResult, Status, StepOutcome,
-    UntilCheck,
+    Bytes, Decider, Evidence, FactReader, Operation, RunResult, Status, StepOutcome, UntilCheck,
 };
 use fastbrowse_core::page::Observation;
-use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::py::json::{Style, write};
-use fastbrowse_core::py::{sha256_hex, text};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::helpers::{
-    EvidenceKey, answer_evidence, blocked_action, guessed, guessed_page, lookup, misread, not_acting, partition_proof,
-    path_of, unread, verified, visited,
+    EvidenceKey, answer_evidence, lookup, partition_proof, path_of, unread, unread_transaction, visited,
 };
+use super::recovery::DONE;
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate};
 use super::{Agent, Outcome};
 use crate::batches::evaluate_batches;
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
-use crate::planner::{Plan, RequirementKind, RunReport, partition_plan};
+use crate::planner::{Plan, RunReport, partition_plan};
 use crate::retrieval::{
-    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, Stage, assemble_answer, compose, draft_answer,
-    names_subject, retain_fields,
+    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, names_subject,
 };
-use crate::support::generate;
-use crate::verification::{
-    CheckOptions, DoneCheck, DoneOptions, DoneVerdict, ExtractOptions, Extraction, LLMVerdict, RecordSchema,
-    VerifyOptions, check_claims, check_done, extract, verify_cache_key, verify_messages, visual_only_state,
-};
-
-/// An answer whose claims passed, or what a composer sent beside the verifier came back with.
-pub(super) enum Prepared {
-    Held(ComposedAnswer),
-    Drafted(Result<Generation<ComposedAnswer>, AgentError>),
-}
-
-/// `repr` of an evidence key, the order Python sorts a proof's facts in.
-fn repr_key(key: &EvidenceKey) -> String {
-    let frame = key.1.as_deref().map_or("None".to_string(), text::repr);
-    format!("({}, {frame}, {})", text::repr(&key.0), text::repr(&key.2))
-}
+use crate::verification::{DoneOptions, DoneVerdict, ExtractOptions, Extraction, RecordSchema, check_done, extract};
 
 impl Agent {
     async fn observe_if_changed(&self, observation: &Observation) -> Step<Observation> {
@@ -127,7 +105,7 @@ impl Agent {
         {
             let fresh = self.observe().await?;
             let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
             return Ok(None);
         }
         let mut missing: Vec<String> = Vec::new();
@@ -190,33 +168,27 @@ impl Agent {
                     open_answer_outputs: Vec::new(),
                     answer_corrections: child_corrections,
                     rejected_answer_evidence: None,
-                    answer_check_evidence: None,
-                    answer_check_cache: Default::default(),
                 },
             );
             let outcome = async {
-                let mut supported = true;
                 if state.oversized_answer && lookup(&plan) && unread(&plan, &state.notes) {
                     // Separate source reads can leave a bundled requirement unbound. Only a fully checked field answer
                     // can bind their combined quotes before the normal completion check.
-                    let (answer, held) = Box::pin(self.answer(state, None)).await?;
-                    supported = held;
-                    if supported {
-                        let mut basis: Vec<String> = Vec::new();
-                        for key in answer.claims.iter().flat_map(|c| c.evidence_ids.iter()) {
-                            if !basis.contains(key) {
-                                basis.push(key.clone());
-                            }
+                    let answer = Box::pin(self.answer(state, None)).await?;
+                    let mut basis: Vec<String> = Vec::new();
+                    for key in answer.claims.iter().flat_map(|c| c.evidence_ids.iter()) {
+                        if !basis.contains(key) {
+                            basis.push(key.clone());
                         }
-                        for requirement in &plan.requirements {
-                            let fact =
-                                Fact::derived(Some(&requirement.id), &answer.answer, basis.clone(), FactReader::Llm)?;
-                            state.notes.add(fact);
-                        }
-                        state.verified_answer = Some(answer);
                     }
+                    for requirement in &plan.requirements {
+                        let fact =
+                            Fact::derived(Some(&requirement.id), &answer.answer, basis.clone(), FactReader::Llm)?;
+                        state.notes.add(fact);
+                    }
+                    state.verified_answer = Some(answer);
                 }
-                if supported { Box::pin(self.finish_whole(state, None, None, true)).await } else { Ok(None) }
+                Box::pin(self.finish_whole(state, None, None, true)).await
             }
             .await;
             let child = Child::swap(state, saved);
@@ -269,7 +241,7 @@ impl Agent {
             state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
             let fresh = self.observe().await?;
             self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Llm).await?;
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
+            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
             return Ok(None);
         }
         let mut claims: Vec<Claim> = Vec::new();
@@ -279,7 +251,7 @@ impl Agent {
             }
         }
         let answer = assemble_answer(&claims, &state.notes, &state.plan().requirements, 0);
-        let result = match Box::pin(self.conclude(state, output_schema, Some(Prepared::Held(answer)), true)).await {
+        let result = match Box::pin(self.conclude(state, output_schema, Some(answer), true)).await {
             Err(Flow::Agent(AgentError::NotesTooLarge(message))) => {
                 let notes = state.notes.clone();
                 let ledger = state.ledger.clone();
@@ -294,7 +266,8 @@ impl Agent {
             };
             if !until(url).await {
                 let fresh = self.observe().await?;
-                Box::pin(self.recover(state, &fresh, "Completion condition not satisfied", Status::Stuck)).await?;
+                Box::pin(self.recover(state, &fresh, "Completion condition not satisfied", Status::Stuck, DONE))
+                    .await?;
                 return Ok(None);
             }
         }
@@ -325,21 +298,8 @@ impl Agent {
             return Err(failed.stop().into());
         }
         state.await_checks().await?;
-        state.reset_answer_check();
-        if !state.open_answer_outputs.is_empty()
-            && state.rejected_answer_evidence.as_ref() == Some(&answer_evidence(&state.notes, true))
-        {
-            // Re-reading the same partial quotes must not buy another completion check or reset recovery.
-            if state.finish_partitions.is_empty() {
-                let ids: Vec<String> = information_ids(state.plan());
-                state.notes.unevidence(ids.iter().map(String::as_str));
-                state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
-            }
-            let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified)).await?;
-            return Ok(None);
-        }
-        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        state.missing_answer_outputs.clear();
+        state.answer_corrections.clear();
         let plan = state.plan().clone();
         let draft = if plan.page_answer_expected() { draft_answer(&plan, &state.notes) } else { None };
         let notes = state.notes.clone();
@@ -349,161 +309,27 @@ impl Agent {
             tokens: self.config.tokens.clone(),
             history: &history,
             visited: &shown,
+            ledger: Some(&state.ledger),
             trace: self.trace.clone(),
         };
         let task = state.task.clone();
-        let checking =
-            check_done(&*self.jev, &task, &plan, &fresh, &notes, &self.config.thresholds, draft.as_ref(), &options);
-        // Without answer checks the draft's claims are checked beside the done check; with them, once it is offered.
-        let (check, claimed) = match draft.as_ref().filter(|_| plan.answer_checks.is_empty()) {
-            Some(draft) => {
-                let claiming = self.holds(state, draft.clone());
-                let (check, claimed) = tokio::join!(async { checking.await.map_err(Flow::from) }, claiming);
-                (check?, Some(claimed?))
-            }
-            None => (checking.await?, None),
-        };
+        let check =
+            check_done(&*self.jev, &task, &plan, &fresh, &notes, &self.config.thresholds, draft.as_ref(), &options)
+                .await?;
         state.ledger.record([check.cost.clone()])?;
-        let mut verifying: Option<Result<Generation<LLMVerdict>, Flow>> = None;
-        let held = match claimed {
-            Some(held) => held,
-            None if check.answer.is_some() && check.verdict != DoneVerdict::Reject => {
-                let doubted = self.doubt(state, &check);
-                let answer = check.answer.clone().expect("matched on an answer");
-                if doubted == DoneVerdict::Verify && !state.ledger.capped() {
-                    // The verifier judges completion from the page and the notes, and the claim check judges the
-                    // draft's claims against their quotes; neither reads the other's verdict, so they run side by
-                    // side. Under a cap the verifier waits, so it reserves against the claim check's receipts.
-                    // Python builds the request inside the verifier's task, so notes too large for it fail only when
-                    // the verdict is awaited, after the claim check has run.
-                    let request = self.verify_request(state, &fresh, &check).await;
-                    let ledger = state.ledger.clone();
-                    let judging = async {
-                        match request {
-                            Ok(request) => self.verify_done(ledger, request).await,
-                            Err(error) => Err(error),
-                        }
-                    };
-                    let (judged, held) = tokio::join!(judging, self.holds(state, answer));
-                    let held = held?;
-                    verifying = Some(judged.map(|(key, judged)| {
-                        state.verify_cache.insert(key, judged.clone());
-                        judged
-                    }));
-                    held
-                } else {
-                    Box::pin(self.holds(state, answer)).await?
-                }
-            }
-            None => None,
-        };
-        let mut check = check;
-        if check.answer.is_some() {
-            check.answer = held;
-        }
         self.event("done_check", || {
-            Map::from_iter([
-                ("verdict".into(), check.verdict.as_str().into()),
-                ("complete".into(), fastbrowse_core::py::round(check.complete, 3).into()),
-                ("unmet".into(), json!(check.unmet)),
-            ])
+            Map::from_iter([("verdict".into(), check.verdict.as_str().into()), ("unmet".into(), json!(check.unmet))])
         });
-        check.verdict = self.doubt(state, &check);
-        let mut accepted = check.verdict == DoneVerdict::Accept;
-        let mut missing: Vec<String> = Vec::new();
-        let mut misread_ids: HashSet<String> = HashSet::new();
-        let mut handed: Option<Prepared> = None;
-        if check.verdict == DoneVerdict::Verify {
-            // Write the answer while the verifier is still deciding. Both read the same finished notes, and every
-            // accepted run wants an answer, so the whole cost of guessing wrong is one discarded call.
-            // A verdict already in hand, from the verifier sent beside the claim check, needs no answer drafted against it:
-            // Python cancels that draft before it starts when its verifier has already answered.
-            let drafting = plan.page_answer_expected()
-                && check.answer.is_none()
-                && state.verified_answer.is_none()
-                && verifying.is_none();
-            let request = match verifying.take() {
-                Some(judged) => Err(judged),
-                // A request that cannot be built fails when its verdict is awaited, after the draft was sent, as in Python.
-                None => Ok(self.verify_request(state, &fresh, &check).await),
-            };
-            let options = if drafting { Some(self.compose_options(state).await?) } else { None };
-            let ledger = state.ledger.clone();
-            let judging = async {
-                match request {
-                    Err(judged) => judged.map(|judged| (None, judged)),
-                    Ok(Err(error)) => Err(error),
-                    Ok(Ok(request)) => {
-                        self.verify_done(ledger.clone(), request).await.map(|(key, judged)| (Some(key), judged))
-                    }
-                }
-            };
-            let composing = async {
-                let options = ComposeOptions { ledger: Some(&ledger), ..options? };
-                Some(compose(&*self.llm, &state.task, &plan, &state.notes, &options).await.map_err(Flow::from))
-            };
-            let (judged, drafted) = tokio::join!(judging, composing);
-            let judged = judged.map(|(key, judged)| {
-                if let Some(key) = key {
-                    state.verify_cache.insert(key, judged.clone());
-                }
-                judged
-            });
-            let judged = judged?;
-            handed = match drafted {
-                Some(Ok(generation)) => Some(Prepared::Drafted(Ok(generation))),
-                Some(Err(Flow::Agent(error))) => Some(Prepared::Drafted(Err(error))),
-                Some(Err(other)) => return Err(other),
-                None => None,
-            };
-            // After a covered or failed action, a requirement Jev did not confirm is not excused by its quote: an ad
-            // covered a new window's link, and the run cited the heading of the page it was on.
-            let mut held_unmet = check.unmet.clone();
-            if blocked_action(&state.history) {
-                held_unmet.extend(check.doubted.iter().cloned());
-            }
-            accepted = verified(&judged.data, &plan, &state.notes, &state.invented, Some(&state.lineage), &held_unmet);
-            // Asked to open httpx's project page, a run picked DONE on pypi.org before acting, Jev held the one
-            // requirement unmet, and flash-lite called it complete. Only an action can do what Jev says is undone.
-            let idle = !state.history.iter().any(|h| {
-                h.outcome == StepOutcome::Executed
-                    && h.operation.is_none_or(|op| !not_acting(op) && op != Operation::Escalate)
-            });
-            let undone =
-                plan.requirements.iter().any(|r| r.kind == RequirementKind::Action && check.unmet.contains(&r.id));
-            accepted = accepted && !(idle && undone);
-            missing = judged.data.missing.clone();
-            misread_ids = misread(&judged.data, &plan, &state.notes, &state.invented, Some(&state.lineage));
-        }
-        if accepted {
-            let prepared = match check.answer.clone() {
-                Some(answer) => Some(Prepared::Held(answer)),
-                None => handed.take(),
-            };
+        if check.verdict == DoneVerdict::Accept {
+            let prepared = check.answer.clone();
             let result = Box::pin(self.conclude(state, output_schema, prepared, !partition)).await?;
             fresh = self.observed().unwrap_or(fresh);
-            let mut result = Some(result);
-            if result.as_ref().is_some_and(|r| r.status == Status::Unverified)
-                && !state.missing_answer_outputs.is_empty()
-            {
-                if partition {
-                    return Ok(result);
-                }
-                // An ordinary rejected answer needs another read; grouped recovery retains its source proof.
-                if !state.oversized_answer {
-                    let ids = information_ids(state.plan());
-                    state.notes.unevidence(ids.iter().map(String::as_str));
-                }
-                state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
-                accepted = false;
-                result = None;
-            }
-            if accepted && let Some(until) = until {
-                let url = self.raw().map_or_else(|| fresh.url.clone(), |raw| raw.url);
-                accepted = until(url).await;
-            }
-            if accepted {
-                return Ok(result);
+            let reached = match until {
+                Some(until) => until(self.raw().map_or_else(|| fresh.url.clone(), |raw| raw.url)).await,
+                None => true,
+            };
+            if reached {
+                return Ok(Some(result));
             }
         }
         if partition {
@@ -511,107 +337,17 @@ impl Agent {
         }
         let requirements: IndexMap<String, String> =
             plan.requirements.iter().map(|r| (r.id.clone(), r.text.clone())).collect();
-        let mut unmet: Vec<String> = Vec::new();
-        let mut named: Vec<&String> = Vec::new();
-        for key in check.unmet.iter().chain(missing.iter()) {
-            if !named.contains(&key) {
-                named.push(key);
-            }
-        }
-        for key in named {
-            if !misread_ids.contains(key) {
-                unmet.push(format!("{key}: {}", requirements.get(key).unwrap_or(key)));
-            }
-        }
-        let mut misread_sorted: Vec<&String> = misread_ids.iter().collect();
-        misread_sorted.sort();
-        for key in misread_sorted {
-            let mut urls: Vec<String> = Vec::new();
-            for item in state.notes.supporting_evidence(key) {
-                if !urls.contains(&item.url) {
-                    urls.push(item.url);
-                }
-            }
-            unmet.push(format!(
-                "{key}: {} (read off {}, an address built from the task, not the page it describes)",
-                requirements[key],
-                urls.join(", ")
-            ));
-        }
-        let judge = guessed_page(&state.invented, Some(&state.lineage), false);
-        state.notes.discredit(misread_ids.iter().map(String::as_str), Arc::new(judge));
-        unmet.extend(state.missing_answer_outputs.iter().map(|output| format!("Answer output not verified: {output}")));
+        let unmet: Vec<String> =
+            check.unmet.iter().map(|key| format!("{key}: {}", requirements.get(key).unwrap_or(key))).collect();
         let joined = if unmet.is_empty() { "completion not confirmed".to_string() } else { unmet.join("; ") };
         let reason = self.redact(&format!("DONE rejected: {joined}"));
         state.history.push(crate::policy::HistoryEntry {
             effect: Some(reason.clone()),
             ..crate::policy::HistoryEntry::new(Some(Operation::Done), None, StepOutcome::Failed, false)
         });
-        // The verifier only runs when Jev's done check doubts; otherwise Jev's verdict is the last word.
-        let judge = if check.verdict == DoneVerdict::Verify { Decider::Llm } else { Decider::Jev };
-        self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, judge).await?;
-        let gives_up_as = if state.missing_answer_outputs.is_empty() { Status::Stuck } else { Status::Unverified };
-        Box::pin(self.recover(state, &fresh, &reason, gives_up_as)).await?;
+        self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Jev).await?;
+        Box::pin(self.recover(state, &fresh, &reason, Status::Stuck, DONE)).await?;
         Ok(None)
-    }
-
-    /// The verdict the run acts on: Jev judges the notes, not where they were read, so guessed searches go to the
-    /// verifier, and a doubted lookup with every requirement cited needs none.
-    fn doubt(&self, state: &RunState, check: &DoneCheck) -> DoneVerdict {
-        let plan = state.plan();
-        let lineage = Some(&state.lineage);
-        let guessed_ids = guessed(plan, &state.notes, &state.invented, false, lineage);
-        if check.verdict == DoneVerdict::Accept
-            && !guessed(plan, &state.notes, &state.invented, true, lineage).is_empty()
-        {
-            DoneVerdict::Verify
-        } else if check.verdict == DoneVerdict::Verify
-            && check.unmet.is_empty()
-            && guessed_ids.is_empty()
-            && lookup(plan)
-            && !blocked_action(&state.history)
-        {
-            // A doubted lookup reaches here with every requirement cited, and the verifier excuses a cited requirement,
-            // so all it could still do was refuse naming nothing, which it never did in 76 0.5.7 verifications. A run
-            // with a covered or failed action is the exception: it may be reading the page it meant to leave.
-            DoneVerdict::Accept
-        } else {
-            check.verdict
-        }
-    }
-
-    /// The verifier's request for this finish attempt, and the verdict an identical earlier request already bought.
-    async fn verify_request(&self, state: &RunState, fresh: &Observation, check: &DoneCheck) -> Step<VerifyRequest> {
-        // The screenshot goes only when the page carries state that the text cannot.
-        let screenshots = if visual_only_state(fresh) { self.screenshots().await? } else { Vec::new() };
-        let mut invented: Vec<String> = state.invented.iter().cloned().collect();
-        invented.sort();
-        let shown = visited(&state.visited, |url| self.redact(url));
-        let options = VerifyOptions { doubted: &check.doubted, invented: &invented, visited: &shown, ledger: None };
-        let messages =
-            verify_messages(&state.task, state.plan(), fresh, &screenshots, &state.notes, &state.history, &options)?;
-        let key = verify_cache_key(&messages);
-        let reused = state.verify_cache.get(&key).cloned();
-        if reused.is_some() {
-            self.event("verify_reused", || Map::from_iter([("doubted".into(), json!(check.doubted))]));
-        }
-        Ok(VerifyRequest { messages, key, reused })
-    }
-
-    /// The verifier's verdict, billed as it arrives: run beside the claim check, it can finish before a failure there
-    /// discards it. A request byte-identical to an earlier one in this run reuses the earlier verdict.
-    async fn verify_done(
-        &self,
-        ledger: Arc<fastbrowse_core::telemetry::Ledger>,
-        request: VerifyRequest,
-    ) -> Step<(String, Generation<LLMVerdict>)> {
-        if let Some(reused) = request.reused {
-            return Ok((request.key, reused));
-        }
-        let judged =
-            generate::<LLMVerdict>(&*self.llm, LLMPurpose::Verify, &request.messages, 0, Some(&ledger)).await?;
-        ledger.record([judged.cost.clone()])?;
-        Ok((request.key, judged))
     }
 
     async fn compose_options(&self, state: &mut RunState) -> Step<ComposeOptions<'static>> {
@@ -631,6 +367,7 @@ impl Agent {
             verified,
             independent_fields: state.oversized_answer,
             background: state.context.clone(),
+            trace: self.trace.clone(),
         })
     }
 
@@ -642,85 +379,17 @@ impl Agent {
         Ok(compose(&*self.llm, &state.task, &plan, &state.notes, &options).await?)
     }
 
-    /// Return the checked draft, or compose an answer and check its claims.
-    pub(super) async fn answer(
-        &self,
-        state: &mut RunState,
-        prepared: Option<Prepared>,
-    ) -> Step<(ComposedAnswer, bool)> {
-        let mut prepared = match prepared {
-            Some(Prepared::Held(answer)) => return Ok((answer, true)),
-            other => other,
-        };
-        if let Some(verified_answer) = state.verified_answer.clone() {
-            // New context can invalidate a cache entry without changing a previously supported answer.
-            prepared = None;
-            if let Some(held) = Box::pin(self.holds(state, verified_answer)).await? {
-                return Ok((held, true));
-            }
+    /// The draft Jev passed, or a composed answer. A composer that fails leaves the reader's facts, each with its
+    /// quote, which answer as they stand.
+    pub(super) async fn answer(&self, state: &mut RunState, prepared: Option<ComposedAnswer>) -> Step<ComposedAnswer> {
+        if let Some(answer) = prepared {
+            return Ok(answer);
         }
-        let mut facts = draft_answer(state.plan(), &state.notes);
-        let failed_checks = |corrections: &[AnswerCorrection]| -> (usize, usize) {
-            let failures: HashSet<(Stage, String, Vec<String>)> = corrections
-                .iter()
-                .map(|c| (c.stage, c.criterion.clone(), c.claims.iter().map(Dump::dump_json).collect()))
-                .collect();
-            (
-                failures.iter().filter(|f| f.0 == Stage::Source).count(),
-                failures.iter().filter(|f| f.0 == Stage::Assertion).count(),
-            )
-        };
-        let mut previous = (!state.answer_corrections.is_empty()).then(|| failed_checks(&state.answer_corrections));
-        let generated = match prepared {
-            Some(Prepared::Drafted(drafted)) => drafted.map_err(Flow::from),
-            _ => self.composed(state).await,
-        };
-        let mut composed = match generated {
-            Ok(generation) => generation.data,
-            Err(flow) if flow.is_llm() && facts.is_some() => {
-                // A composer that fails (one looped to its output cap) leaves the reader's facts, each with its quote,
-                // which is an answer the claim check can still pass.
-                previous = Some((0, 0));
-                facts.take().expect("checked above")
-            }
-            Err(flow) => return Err(flow),
-        };
-        let mut held = Box::pin(self.holds(state, composed.clone())).await?;
-        while held.is_none() && !state.answer_corrections.is_empty() {
-            let failures = failed_checks(&state.answer_corrections);
-            // Fixing cited sources can expose assertion failures; after that, only fewer assertions buy a repair.
-            if previous.is_some_and(|previous| failures >= previous) {
-                break;
-            }
-            previous = Some(failures);
-            let corrected = match self.composed(state).await {
-                Ok(corrected) => corrected,
-                Err(flow) if flow.is_llm() => break,
-                Err(flow) => return Err(flow),
-            };
-            composed = retain_fields(corrected.data, &composed, &state.notes);
-            held = Box::pin(self.holds(state, composed.clone())).await?;
+        match self.composed(state).await {
+            Ok(generation) => Ok(generation.data),
+            Err(flow) if flow.is_llm() => draft_answer(state.plan(), &state.notes).ok_or(flow),
+            Err(flow) => Err(flow),
         }
-        if held.is_none()
-            && let Some(facts) = facts
-            && facts != composed
-        {
-            // A list of forty records came back as one claim citing one quote, which no claim check should pass. The
-            // reader's own facts each carry the quote that shows them, so they are offered to the same check.
-            let failure = (
-                state.missing_answer_outputs.clone(),
-                state.open_answer_outputs.clone(),
-                state.answer_corrections.clone(),
-            );
-            let fallback = retain_fields(facts, &composed, &state.notes);
-            held = Box::pin(self.holds(state, fallback)).await?;
-            if held.is_none() {
-                // Recovery follows the returned answer's failure, not a sparser fallback's missing fields.
-                (state.missing_answer_outputs, state.open_answer_outputs, state.answer_corrections) = failure;
-            }
-        }
-        let supported = held.is_some();
-        Ok((held.unwrap_or(composed), supported))
     }
 
     pub(super) async fn transaction_evidence_ids(&self, state: &mut RunState) -> Step<Vec<String>> {
@@ -748,6 +417,25 @@ impl Agent {
             .flat_map(|c| std::iter::once(&c.from_url).chain(c.landed_url.as_ref()))
             .collect();
         Ok(evidence.iter().filter(|(_, item)| committed.contains(&item.url)).map(|(key, _)| key.clone()).collect())
+    }
+
+    /// Whether an action Jev classifies as committing still owes a read of what it landed on.
+    ///
+    /// Each unread candidate is classified before the read it would force, so a step that commits nothing, such as
+    /// adding an item to a cart, is not read as a receipt. A candidate Jev gives no answer for still owes its read.
+    pub(super) async fn unread_receipt(&self, state: &mut RunState) -> Step<bool> {
+        if !unread_transaction(state) {
+            return Ok(false);
+        }
+        let pending: Vec<(String, usize)> = state
+            .transaction_candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.outcome_read && c.committing.is_none())
+            .map(|(index, _)| (format!("irreversible_{index}"), index))
+            .collect();
+        self.classify(state, &pending).await?;
+        Ok(unread_transaction(state))
     }
 
     /// Ask Jev which candidates committed something, leaving `committing` unset where it gave no answer.
@@ -828,136 +516,6 @@ impl Agent {
         }
     }
 
-    pub(super) async fn holds(&self, state: &mut RunState, answer: ComposedAnswer) -> Step<Option<ComposedAnswer>> {
-        let plan = state.plan().clone();
-        if !state.finish_partitions.is_empty() && !plan.answer_checks.is_empty() && !answer.is_field_answer() {
-            state.missing_answer_outputs = plan.answer_checks.clone();
-            state.open_answer_outputs = plan.answer_checks.clone();
-            return Ok(None);
-        }
-        let mut answer = answer;
-        if let Some(outputs) = &answer.output_claims {
-            // Decomposition cannot erase an original obligation by leaving its field out of the generated checks.
-            let mut merged: IndexMap<String, Vec<usize>> = plan
-                .requirements
-                .iter()
-                .filter(|r| r.kind == RequirementKind::Information)
-                .map(|r| (r.text.clone(), (0..answer.claims.len()).collect()))
-                .collect();
-            for (check, indices) in outputs {
-                merged.insert(check.clone(), indices.clone());
-            }
-            answer.output_claims = Some(merged);
-        }
-        let mut facts: Vec<EvidenceKey> = answer_evidence(&state.notes, true).into_iter().collect();
-        facts.sort_by_key(repr_key);
-        let sources: Map<String, Value> = state.notes.evidence().into_iter().map(|(key, e)| (key, e.dump())).collect();
-        let proof = sha256_hex(
-            write(
-                &json!({"facts": facts, "sources": sources, "refused": state.notes.refused_ids()}),
-                Style::DUMPS.sorted(),
-            )
-            .as_bytes(),
-        );
-        if state.answer_check_evidence.as_ref() != Some(&proof) {
-            state.answer_check_cache.clear();
-            state.answer_check_evidence = Some(proof);
-        }
-        let mut transactions = self.transaction_evidence_ids(state).await?;
-        transactions.sort();
-        let key = (state.task.clone(), plan.dump_json(), answer.dump_json(), transactions.clone());
-        let (held, missing, corrections) = match state.answer_check_cache.get(&key) {
-            Some(cached) => cached.clone(),
-            None => {
-                let missing = Mutex::new(Vec::new());
-                let corrections = Mutex::new(Vec::new());
-                let verified_fields = Mutex::new(Vec::new());
-                let mut checks: Vec<String> = Vec::new();
-                // Each information requirement is asked after the plan's checks, so a requirement the generated checks
-                // leave out (a release's date beside its version) is still found missing.
-                if !plan.answer_checks.is_empty() {
-                    for check in plan.answer_checks.iter().chain(
-                        plan.requirements.iter().filter(|r| r.kind == RequirementKind::Information).map(|r| &r.text),
-                    ) {
-                        if !checks.contains(check) {
-                            checks.push(check.clone());
-                        }
-                    }
-                }
-                let collect_fields = state.oversized_answer && answer.is_field_answer();
-                let options = CheckOptions {
-                    tokens: self.config.tokens.clone(),
-                    ledger: Some(&state.ledger),
-                    missing_outputs: Some(&missing),
-                    corrections: Some(&corrections),
-                    verified_outputs: None,
-                    independent_fields: state.oversized_answer,
-                    trace: self.trace.clone(),
-                    transaction_evidence_ids: transactions,
-                    answer_checks: checks,
-                    verified_fields: collect_fields.then_some(&verified_fields),
-                };
-                let held = check_claims(&*self.jev, &answer, &state.notes, &self.config.thresholds, &options).await?;
-                drop(options);
-                let mut missing = missing.into_inner().unwrap_or_else(|p| p.into_inner());
-                let corrections = corrections.into_inner().unwrap_or_else(|p| p.into_inner());
-                let verified_fields = verified_fields.into_inner().unwrap_or_else(|p| p.into_inner());
-                if let Some(partial) = verified_fields.first() {
-                    let outputs = partial.output_claims.clone().unwrap_or_default();
-                    let fields: IndexMap<String, Vec<usize>> =
-                        outputs.into_iter().filter(|(check, _)| plan.answer_checks.contains(check)).collect();
-                    if !fields.is_empty() {
-                        let mut claims: Vec<Claim> = Vec::new();
-                        for index in fields.values().flatten() {
-                            let claim = &partial.claims[*index];
-                            if !claims.contains(claim) {
-                                claims.push(claim.clone());
-                            }
-                        }
-                        let base = assemble_answer(&claims, &state.notes, &plan.requirements, 0);
-                        let proof = partition_proof(&plan, &state.notes, &state.invented);
-                        let outputs = fields
-                            .iter()
-                            .map(|(check, indices)| {
-                                let positions = indices
-                                    .iter()
-                                    .map(|i| claims.iter().position(|c| *c == partial.claims[*i]).expect("collected"))
-                                    .collect();
-                                (check.clone(), positions)
-                            })
-                            .collect();
-                        state.partial_answers.insert(proof, base.with_outputs(outputs));
-                    }
-                }
-                if state.oversized_answer
-                    && answer.is_field_answer()
-                    && plan.answer_checks.iter().any(|check| missing.contains(check))
-                {
-                    missing.retain(|check| plan.answer_checks.contains(check));
-                }
-                // DONE and the composer fallback offered the same draft twice against unchanged proof.
-                let entry = (held, missing, corrections);
-                state.answer_check_cache.insert(key, entry.clone());
-                entry
-            }
-        };
-        state.answer_corrections = corrections;
-        let mut unique: Vec<String> = Vec::new();
-        for item in missing {
-            if !unique.contains(&item) {
-                unique.push(item);
-            }
-        }
-        state.missing_answer_outputs = unique;
-        if held.is_some() {
-            state.open_answer_outputs = Vec::new();
-            state.rejected_answer_evidence = None;
-        } else if !state.missing_answer_outputs.is_empty() {
-            state.open_answer_outputs = state.missing_answer_outputs.clone();
-        }
-        Ok(held)
-    }
-
     /// The caller's schema, filled from a capture taken inside this branch so it overlaps the answer.
     async fn extraction(
         &self,
@@ -975,7 +533,7 @@ impl Agent {
         &self,
         state: &mut RunState,
         output_schema: Option<&RecordSchema>,
-        prepared: Option<Prepared>,
+        prepared: Option<ComposedAnswer>,
         finalize: bool,
     ) -> Step<RunResult> {
         let mut evidence: Vec<Evidence> = state.notes.facts().iter().filter_map(|fact| fact.evidence.clone()).collect();
@@ -1001,14 +559,11 @@ impl Agent {
         let mut verified_ok = true;
         let mut answer_text = None;
         let mut citations = Vec::new();
-        if let Some((composed, held)) = answered {
-            verified_ok = held;
+        if let Some(composed) = answered {
             let (text, cited) = self.public_answer(&composed);
             answer_text = Some(text);
             citations = cited;
-            if held {
-                state.verified_answer = Some(composed);
-            }
+            state.verified_answer = Some(composed);
         }
         let mut data = Value::Null;
         if let Some(extraction) = extraction {
@@ -1057,17 +612,6 @@ impl Agent {
     }
 }
 
-/// A verifier request rendered for one finish attempt.
-pub(super) struct VerifyRequest {
-    messages: Vec<fastbrowse_core::llm::Message>,
-    key: String,
-    reused: Option<Generation<LLMVerdict>>,
-}
-
-fn information_ids(plan: &Plan) -> Vec<String> {
-    plan.requirements.iter().filter(|r| r.kind == RequirementKind::Information).map(|r| r.id.clone()).collect()
-}
-
 /// The fields a partition's finish has to itself, swapped into the run and back.
 struct Child {
     task: String,
@@ -1079,8 +623,6 @@ struct Child {
     open_answer_outputs: Vec<String>,
     answer_corrections: Vec<AnswerCorrection>,
     rejected_answer_evidence: Option<BTreeSet<EvidenceKey>>,
-    answer_check_evidence: Option<String>,
-    answer_check_cache: super::state::AnswerChecks,
 }
 
 impl Child {
@@ -1096,8 +638,6 @@ impl Child {
         swap(&mut state.open_answer_outputs, &mut child.open_answer_outputs);
         swap(&mut state.answer_corrections, &mut child.answer_corrections);
         swap(&mut state.rejected_answer_evidence, &mut child.rejected_answer_evidence);
-        swap(&mut state.answer_check_evidence, &mut child.answer_check_evidence);
-        swap(&mut state.answer_check_cache, &mut child.answer_check_cache);
         child
     }
 }

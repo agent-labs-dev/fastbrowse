@@ -7,7 +7,7 @@ use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::effects::{SETTING_ROLES, state_key};
 use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
-use fastbrowse_core::page::{Capture, Control, Dialog, Observation, pager_link};
+use fastbrowse_core::page::{Control, Dialog, Observation, pager_link};
 use fastbrowse_core::py::dump::{Dump, include, to_value};
 use fastbrowse_core::py::json::{Style, dumps, write};
 use fastbrowse_core::py::{sha256_hex, text};
@@ -16,23 +16,16 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 use url::Url;
 
-use super::state::{Lineage, ObservedLink, RunState, Signature};
+use super::state::{RunState, Signature};
 use crate::memory::{Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry, Reduction};
-use crate::retrieval::{names_subject, subject_words};
-use crate::verification::LLMVerdict;
 
 pub(crate) const STALE_LINK_FAILURES: i64 = 2;
 
 /// Operations that do not act on the page: a read changes nothing, and DONE is judged again by the finish.
 pub(crate) fn not_acting(operation: Operation) -> bool {
     matches!(operation, Operation::Read | Operation::Done)
-}
-
-/// What the run does through the page's own controls, so what follows is the site's doing, not the run's guess.
-pub(crate) fn site_action(operation: Operation) -> bool {
-    operation.is_targeted() || operation == Operation::Dialog
 }
 
 /// Recovery can direct page operations without a control; directed DONE still requires verification.
@@ -172,9 +165,7 @@ pub(crate) fn read_exhausted(state: &RunState) -> String {
         .map(|r| format!("{}: {}", r.id, r.text))
         .collect();
     let missing = if missing.is_empty() { state.task.clone() } else { missing.join("; ") };
-    format!(
-        "Still missing evidence for {missing}. Re-reading this unchanged content will not supply it; find additional content."
-    )
+    format!("Still missing evidence for {missing}.")
 }
 
 /// Name which one was chosen, not just what it read: a label alone cannot identify one of six identically labelled
@@ -190,139 +181,6 @@ pub(crate) fn describe(control: &Control) -> String {
 pub(crate) fn place(url: &str) -> (String, String) {
     let path = path_of(url);
     (origin_of(url), if path.is_empty() { "/".into() } else { path })
-}
-
-/// The requirements with a fact read on an address the run built from the task rather than clicked to.
-pub(crate) fn guessed(
-    plan: &Plan,
-    notes: &Notes,
-    invented: &HashSet<String>,
-    searches: bool,
-    lineage: Option<&Lineage>,
-) -> HashSet<String> {
-    let judge = guessed_page(invented, lineage, searches);
-    plan.requirements
-        .iter()
-        .filter(|r| notes.supporting_evidence(&r.id).iter().any(&judge))
-        .map(|r| r.id.clone())
-        .collect()
-}
-
-/// Whether a fact read at an address was read on the guess, judged as `guessed` judges it, so what a refusal blocks
-/// is exactly what the verifier was shown as guessed.
-pub(crate) fn guessed_page(
-    invented: &HashSet<String>,
-    lineage: Option<&Lineage>,
-    searches: bool,
-) -> impl Fn(&Evidence) -> bool + Send + Sync + 'static {
-    let places: IndexMap<(String, String), bool> =
-        invented.iter().map(|url| (place(url), fastbrowse_core::addresses::searched(url))).collect();
-    // A clone shares the run's lineage, so a later reading off the guess frees what this judges held.
-    let known = lineage.cloned().unwrap_or_default();
-    move |evidence: &Evidence| {
-        let url = &evidence.url;
-        // Lineage only clears a path match, never adds one: a page clicked to off the guess is judged by its path.
-        let address = fastbrowse_core::addresses::search_address(url);
-        let on_guess = known.reading(&address, &evidence.capture_sha256).or_else(|| known.address(&address));
-        let here = place(url);
-        on_guess != Some(false)
-            && places.contains_key(&here)
-            && (!searches || places[&here] || fastbrowse_core::addresses::searched(url))
-    }
-}
-
-/// Every address a quote cut from this capture can cite: the page's, and each child frame's own.
-pub(crate) fn sources(capture: &Capture) -> Vec<String> {
-    let mut found: Vec<String> = vec![capture.url.clone()];
-    for block in &capture.blocks {
-        if let Some(url) = &block.source_url
-            && !url.is_empty()
-            && !found.contains(url)
-        {
-            found.push(url.clone());
-        }
-    }
-    found
-}
-
-/// The requirements the verifier says were read off the wrong page, where that page was a guessed address.
-pub(crate) fn misread(
-    verdict: &LLMVerdict,
-    plan: &Plan,
-    notes: &Notes,
-    invented: &HashSet<String>,
-    lineage: Option<&Lineage>,
-) -> HashSet<String> {
-    let named = plan_ids(&verdict.ungrounded, plan);
-    let guessed = guessed(plan, notes, invented, false, lineage);
-    named.intersection(&guessed).cloned().collect()
-}
-
-fn id_key(raw: &str) -> String {
-    raw.to_lowercase().chars().filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit()).collect()
-}
-
-/// The plan's requirements the verifier named, however it spelled their ids.
-pub(crate) fn plan_ids(ids: &[String], plan: &Plan) -> HashSet<String> {
-    let known: IndexMap<String, String> = plan.requirements.iter().map(|r| (id_key(&r.id), r.id.clone())).collect();
-    let numbered: IndexMap<String, String> = plan
-        .requirements
-        .iter()
-        .filter_map(|r| {
-            let digits: String = r.id.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
-            (!digits.is_empty()).then(|| (digits.chars().rev().collect(), r.id.clone()))
-        })
-        .collect();
-    let mut found = HashSet::new();
-    for raw in ids {
-        let key = id_key(raw);
-        let matched = known.get(&key).cloned().or_else(|| {
-            (!key.is_empty() && key.chars().all(|c| c.is_ascii_digit())).then(|| numbered.get(&key).cloned()).flatten()
-        });
-        if let Some(matched) = matched {
-            found.insert(matched);
-        }
-    }
-    found
-}
-
-/// Whether an action the run chose was covered or failed: it may still be on the page it meant to leave.
-pub(crate) fn blocked_action(history: &[HistoryEntry]) -> bool {
-    history.iter().any(|entry| {
-        matches!(entry.outcome, StepOutcome::Covered | StepOutcome::Failed)
-            && entry.operation.is_some_and(|op| !matches!(op, Operation::Done | Operation::Read))
-    })
-}
-
-/// Whether the verifier's doubts leave the run finished.
-///
-/// An information requirement the notes cite facts for is not left open by the verifier alone: the answer's claims are
-/// checked against those quotes before it is given. On flash-lite the verifier named "compare the two release dates"
-/// missing with both dates in the notes, one run in three, until the run stopped stuck. Evidence read on a guessed
-/// address is not excused, since that is the wrong page the citing check cannot see. Nor is a requirement Jev's done
-/// check also held unmet: the claim check sees a quote and its claim, not which page the quote came from, and a run
-/// whose link was covered by an ad read the heading of the page it was still on and called it the new window's.
-pub(crate) fn verified(
-    verdict: &LLMVerdict,
-    plan: &Plan,
-    notes: &Notes,
-    invented: &HashSet<String>,
-    lineage: Option<&Lineage>,
-    held_unmet: &[String],
-) -> bool {
-    let cited: HashSet<String> = plan
-        .requirements
-        .iter()
-        .filter(|r| r.kind == RequirementKind::Information && notes.evidenced(&r.id))
-        .map(|r| r.id.clone())
-        .collect();
-    let misread = misread(verdict, plan, notes, invented, lineage);
-    let named: HashSet<String> =
-        plan_ids(&verdict.missing, plan).union(&plan_ids(&verdict.ungrounded, plan)).cloned().collect();
-    let excused: HashSet<String> =
-        cited.iter().filter(|id| !misread.contains(*id) && !held_unmet.contains(*id)).cloned().collect();
-    let doubted: Vec<&String> = named.iter().filter(|id| !excused.contains(*id)).collect();
-    doubted.is_empty() && (verdict.complete || !named.is_empty())
 }
 
 /// The kind of value the field declares it takes, when the text cannot be one, else None.
@@ -504,17 +362,6 @@ pub fn read_question(task: &str, wanted: &[Requirement], began_at: Option<&str>)
     }
 }
 
-pub fn next_page_notice(following: Option<&Control>) -> String {
-    // The capture is text: a "Next" link reads the same as any other word unless the page's controls say so.
-    match following {
-        None => String::new(),
-        Some(control) => format!(
-            "This page has a next-page control ({}): a list on it may continue. A requirement about the page that control opens is not answered by this page, whatever this page holds: leave it unanswered until that page is read.",
-            text::repr(&control.label)
-        ),
-    }
-}
-
 pub(crate) type LinkKey = (String, String);
 
 pub(crate) fn link_key(observation: &Observation, control: &Control) -> Option<LinkKey> {
@@ -554,28 +401,6 @@ pub(crate) fn stale_link_key(observation: &Observation, control: &Control) -> Op
         identity.push(json!(control.context));
     }
     Some((observation.document_key.clone(), dumps(&Value::Array(identity))))
-}
-
-/// The page without the links the run cannot use: failed, repeatedly stale, or downloads the task rules out.
-pub(crate) fn without_failed_links(state: &RunState, observation: &Observation) -> Observation {
-    if state.failed_links.is_empty() && state.stale_links.is_empty() && state.downloads_forbidden != Some(true) {
-        return observation.clone();
-    }
-    let forbidden = state.downloads_forbidden == Some(true);
-    Observation {
-        controls: observation
-            .controls
-            .iter()
-            .filter(|control| {
-                let failed = link_key(observation, control).is_some_and(|key| state.failed_links.contains_key(&key));
-                !(failed || (forbidden && starts_download(control)))
-                    && stale_link_key(observation, control)
-                        .is_none_or(|key| state.stale_links.get(&key).copied().unwrap_or(0) < STALE_LINK_FAILURES)
-            })
-            .cloned()
-            .collect(),
-        ..observation.clone()
-    }
 }
 
 /// Where a pager link goes: its origin, path and query.
@@ -737,149 +562,6 @@ pub(crate) fn code_decision(operation: Operation, target: Option<Control>) -> De
     }
 }
 
-/// Try uncertain observation moves once; state-changing choices need recovery's second opinion.
-pub(crate) fn try_unsure(state: &mut RunState, observation: &Observation, decision: &Decision) -> bool {
-    if !(decision.operation.is_scrolling() || decision.operation == Operation::Hover) {
-        return false;
-    }
-    let key = state_key(observation);
-    if state.tried_unsure.contains(&key) || state.attempts.contains_key(&signature(decision, observation)) {
-        return false;
-    }
-    state.tried_unsure.insert(key);
-    true
-}
-
-/// The page as Jev is offered it: without the fields the task was already found to give no value for.
-pub(crate) fn without_missing(observation: Observation, missing: &HashSet<(String, Option<String>)>) -> Observation {
-    if missing.is_empty() {
-        return observation;
-    }
-    let kept: Vec<Control> = observation
-        .controls
-        .iter()
-        .filter(|c| {
-            !c.operations.contains(&Operation::Fill) || !missing.contains(&(c.label.clone(), c.context.clone()))
-        })
-        .cloned()
-        .collect();
-    if kept.len() == observation.controls.len() { observation } else { Observation { controls: kept, ..observation } }
-}
-
-fn rstrip_slash(path: &str) -> &str {
-    path.trim_end_matches('/')
-}
-
-fn rpartition_slash(path: &str) -> (&str, &str) {
-    match path.rfind('/') {
-        Some(at) => (&path[..at], &path[at + 1..]),
-        None => ("", path),
-    }
-}
-
-pub(crate) fn unread_output_section(state: &RunState) -> Option<String> {
-    let mut read: HashSet<String> = state.read_urls.iter().cloned().collect();
-    read.extend(state.recovery_sections.iter().cloned());
-    read.extend(state.notes.current_evidence(None).values().map(|e| e.url.clone()));
-    let failed: HashSet<&String> = state.failed_links.values().map(|failure| &failure.url).collect();
-    for output in &state.open_answer_outputs {
-        let Some(target) = state.output_targets.get(output) else { continue };
-        let (field, subject) = (&target.field, &target.subject);
-        let words = subject_words(subject);
-        if words.is_empty() {
-            continue;
-        }
-        let mut roots: HashSet<(String, String)> = HashSet::new();
-        for link in state.observed_links.values() {
-            let (Some(source), Some(destination)) = (parse(&link.source), parse(&link.url)) else { continue };
-            if names_subject(&link.label, subject) {
-                roots.insert((netloc(&destination), rstrip_slash(destination.path()).to_string()));
-            }
-            if names_subject(&link.title, subject) {
-                for address in [&source, &destination] {
-                    let path = rstrip_slash(address.path());
-                    let tail = subject_words(rpartition_slash(path).1);
-                    if !tail.is_empty() && tail.iter().all(|word| words.contains(word)) {
-                        roots.insert((netloc(address), path.to_string()));
-                    }
-                }
-            }
-            if names_subject(rpartition_slash(destination.path()).1, subject) {
-                roots.insert((netloc(&destination), rstrip_slash(destination.path()).to_string()));
-            }
-        }
-        let mut candidates: Vec<(i64, usize, String)> = Vec::new();
-        for link in state.observed_links.values() {
-            if read.contains(&link.url) || failed.contains(&link.url) {
-                continue;
-            }
-            let Some(destination) = parse(&link.url) else { continue };
-            let path = rstrip_slash(destination.path());
-            let host = netloc(&destination);
-            // A target's directory and another target beside it are not sections of that target.
-            if roots.contains(&(host.clone(), path.to_string()))
-                || roots.contains(&(host, rpartition_slash(path).0.to_string()))
-            {
-                let label: HashSet<String> = subject_words(&link.label).into_iter().collect();
-                let overlap = subject_words(field).into_iter().collect::<HashSet<_>>().intersection(&label).count();
-                candidates.push((-(overlap as i64), text::len(path), link.url.clone()));
-            }
-        }
-        if let Some(best) = candidates.into_iter().min() {
-            return Some(best.2);
-        }
-    }
-    None
-}
-
-fn words(value: &str) -> HashSet<String> {
-    let folded = text::casefold(value);
-    let mut found = HashSet::new();
-    let mut word = String::new();
-    for c in folded.chars() {
-        if text::is_word(c) {
-            word.push(c);
-        } else if !word.is_empty() {
-            found.insert(std::mem::take(&mut word));
-        }
-    }
-    if !word.is_empty() {
-        found.insert(word);
-    }
-    found
-}
-
-pub(crate) fn recovery_routes(state: &RunState) -> String {
-    if state.open_answer_outputs.is_empty() {
-        return "[]".into();
-    }
-    let wanted = words(&state.open_answer_outputs.join(" "));
-    let mut read: HashSet<String> = state.read_urls.iter().cloned().collect();
-    read.extend(state.notes.current_evidence(None).values().map(|e| e.url.clone()));
-    let failed: HashSet<&String> = state.failed_links.values().map(|failure| &failure.url).collect();
-    let mut links: Vec<&ObservedLink> =
-        state.observed_links.values().filter(|link| !failed.contains(&link.url)).collect();
-    let score = |link: &ObservedLink| -> (i64, bool) {
-        let in_url = wanted.intersection(&words(&link.url)).count() as i64;
-        let around = wanted.intersection(&words(&format!("{} {} {}", link.source, link.title, link.label))).count();
-        (-(2 * in_url + around as i64), read.contains(&link.url))
-    };
-    // A stable sort, as Python's `sorted` is.
-    links.sort_by_key(|link| score(link));
-    let offered: Vec<Value> = links
-        .into_iter()
-        .map(|link| {
-            let mut entry = match link.dump() {
-                Value::Object(map) => map,
-                _ => serde_json::Map::new(),
-            };
-            entry.insert("read".into(), read.contains(&link.url).into());
-            Value::Object(entry)
-        })
-        .collect();
-    dumps(&Value::Array(offered))
-}
-
 /// The action recovery named, when Jev cannot act or repeats a failed read and the control still offers it.
 pub(crate) fn follow_recovery(
     state: &mut RunState,
@@ -895,15 +577,14 @@ pub(crate) fn follow_recovery(
     if operation == Operation::Navigate {
         let control_id = control_id?;
         if observation.dialog.is_some()
-            || (!state.observed_links.contains_key(&control_id)
-                && !navigation_urls(
-                    &state.task,
-                    &observation.url,
-                    state.caller_start.as_deref(),
-                    state.start_landing_url.as_deref(),
-                    true,
-                )
-                .contains(&control_id))
+            || !navigation_urls(
+                &state.task,
+                &observation.url,
+                state.caller_start.as_deref(),
+                state.start_landing_url.as_deref(),
+                true,
+            )
+            .contains(&control_id)
         {
             return None;
         }

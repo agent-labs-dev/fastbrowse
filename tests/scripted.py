@@ -66,7 +66,7 @@ class ScriptedJev:
                         confidence=1.0,
                     )
                 case NoulQuestion():
-                    answers[key] = NoulAnswer(probability=float(key == "complete"))
+                    answers[key] = NoulAnswer(probability=0.0)
                 case _:
                     raise AssertionError(f"the scripted Jev has no answer for {key!r}")
         return Evaluation(
@@ -95,7 +95,7 @@ class ScriptedJev:
 
 
 class ScriptedLLM:
-    """A plan that requires nothing, no shortcut, and a verifier that agrees: the answer by what is asked.
+    """A plan that requires nothing and no shortcut: the answer by what is asked.
 
     Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
     """
@@ -103,7 +103,6 @@ class ScriptedLLM:
     _REPLIES: Mapping[LLMPurpose, JsonValue] = {
         LLMPurpose.PLAN: {"requirements": [], "answer_expected": False},
         LLMPurpose.SHORTCUT: {"url": None},
-        LLMPurpose.VERIFY: {"complete": True, "missing": []},
     }
 
     async def generate[T: BaseModel](

@@ -137,10 +137,9 @@ impl DecisionClient for ScriptedJev {
                     );
                 }
                 Question::Noul(_) => {
-                    let probability = f64::from(u8::from(key == "complete"));
-                    answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability }));
+                    answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.0 }));
                 }
-                Question::Score(_) => {
+                Question::Score(_) | Question::Box(_) => {
                     failure =
                         Some(DecisionError::Failed(format!("the scripted Jev has no answer for {}", text::repr(key))));
                     break;
@@ -163,7 +162,7 @@ impl DecisionClient for ScriptedJev {
     }
 }
 
-/// A plan that requires nothing, no shortcut, and a verifier that agrees: the answer by what is asked.
+/// A plan that requires nothing and no shortcut: the answer by what is asked.
 ///
 /// Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
 pub struct ScriptedLLM;
@@ -173,7 +172,6 @@ impl ScriptedLLM {
         match purpose {
             LLMPurpose::Plan => Some(json!({"requirements": [], "answer_expected": false})),
             LLMPurpose::Shortcut => Some(json!({"url": null})),
-            LLMPurpose::Verify => Some(json!({"complete": true, "missing": []})),
             _ => None,
         }
     }
@@ -273,22 +271,16 @@ mod tests {
     }
 
     #[test]
-    fn test_no_page_is_a_wall_or_irreversible_and_a_finished_script_is_complete() {
+    fn test_no_page_is_a_wall_or_irreversible() {
         let question: Question = NoulQuestion::new("?", None, None).into();
         let jev = ScriptedJev::new(vec![]);
         let walls = ask(
             &jev,
-            &[
-                ("login_required", question.clone()),
-                ("bot_check", question.clone()),
-                ("irreversible", question.clone()),
-            ],
+            &[("login_required", question.clone()), ("bot_check", question.clone()), ("irreversible", question)],
         );
-        let done = ask(&jev, &[("complete", question)]);
         // The shipped thresholds stop a run above 0.70 for either wall and above 0.50 for an irreversible action.
         let probabilities: Vec<Option<f64>> = walls.answers.values().map(Answer::probability).collect();
         assert_eq!(probabilities, [Some(0.0), Some(0.0), Some(0.0)]);
-        assert_eq!(done.answers["complete"].probability(), Some(1.0));
     }
 
     #[test]

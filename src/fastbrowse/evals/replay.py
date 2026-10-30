@@ -72,6 +72,8 @@ CANONICAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     # `page.next_days`: the week after the capture date.
     (re.compile(rf"\b{_WEEKDAY} \d{{4}}-\d{{2}}-\d{{2}}\b"), "<next day>"),
+    # A screenshot sent to Jev as an asset is named by its pixels' digest, which differs from run to run.
+    (re.compile(r"\bscreenshot-[0-9a-f]{64}\b"), "screenshot-<image>"),
     # A capture time, should one reach a prompt.
     (re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b"), "<timestamp>"),
 )
@@ -125,6 +127,9 @@ def canonical_value(value: Any) -> Any:
     if isinstance(value, list):
         return [canonical_value(item) for item in value]
     if isinstance(value, dict):
+        if value.get("type") == "image" and "data_base64" in value:
+            # A screenshot asset's pixels, for the reason a data URL's are keyed as one image.
+            value = {**value, "data_base64": "<image>"}
         return {canonical_text(str(key)): canonical_value(item) for key, item in value.items()}
     raise TypeError(f"not a JSON value: {type(value).__name__}")
 

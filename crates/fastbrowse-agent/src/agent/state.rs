@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use fastbrowse_core::decision::{DecisionError, NoulQuestion};
 use fastbrowse_core::llm::{Generation, LLMError};
@@ -10,7 +10,6 @@ use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, St
 use fastbrowse_core::page::{BrowserError, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
-use serde::Serialize;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -19,9 +18,8 @@ use crate::comparison::NumericComparison;
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{OutputTarget, Plan};
-use crate::policy::{HistoryEntry, RelevanceCache};
+use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::{AnswerCorrection, ComposedAnswer, TallyReader};
-use crate::verification::LLMVerdict;
 
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
@@ -153,75 +151,6 @@ pub(crate) struct TransactionCandidate {
     pub outcome_read: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct ObservedLink {
-    pub source: String,
-    pub title: String,
-    pub label: String,
-    pub url: String,
-}
-
-/// Whether the page was on the guess, kept per browser history entry and per read, never per address.
-///
-/// A form or single-page app can keep its search outside the address, so a run that left a guessed search and set the
-/// same search up itself arrived back at the guessed address. The browser's own history says which page the run is
-/// on: Back, Forward and a reload return to an entry, and its lineage with it. A read is judged by what the run was
-/// doing when it read, so a quote read on the guess stays guessed.
-///
-/// A hold `Notes::discredit` keeps asks the lineage again each time it is checked, as Python's closure over the run's
-/// one `_Lineage` does, so the readings and addresses are shared by every clone rather than copied: a snapshot kept a
-/// reading held after the run read the same page again off the guess.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Lineage {
-    /// Each history entry, by whether the run was on the guess when the entry was made.
-    pub entries: HashMap<String, bool>,
-    /// Each history entry's address when last observed, so a site action that moved it there is told apart.
-    pub entry_addresses: HashMap<String, String>,
-    /// Each address by the lineage of the entry last observed there, for a quote with no recorded reading.
-    addresses: Arc<Mutex<HashMap<String, bool>>>,
-    /// Each reading, by source address and capture, by whether it was read on the guess.
-    captures: Arc<Mutex<HashMap<(String, String), bool>>>,
-}
-
-fn locked<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
-    shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-impl Lineage {
-    pub fn read(&mut self, capture: &str, sources: &[String], guessing: bool) {
-        // The same page read again off the guess is the page the run reached itself, so that reading stands. Text
-        // alone does not name a page: another address drawing identical text released the guessed one's hold.
-        let mut captures = locked(&self.captures);
-        for source in sources {
-            let key = (fastbrowse_core::addresses::search_address(source), capture.to_string());
-            if guessing {
-                captures.entry(key).or_insert(true);
-            } else {
-                captures.insert(key, false);
-            }
-        }
-    }
-
-    /// Whether this reading, by search address and capture, was taken on the guess.
-    pub fn reading(&self, address: &str, capture: &str) -> Option<bool> {
-        locked(&self.captures).get(&(address.to_string(), capture.to_string())).copied()
-    }
-
-    /// Whether the entry last observed at this search address was on the guess.
-    pub fn address(&self, address: &str) -> Option<bool> {
-        locked(&self.addresses).get(address).copied()
-    }
-
-    pub fn set_address(&mut self, address: String, guessing: bool) {
-        locked(&self.addresses).insert(address, guessing);
-    }
-}
-
-/// Checked answers by task, plan, answer and transaction evidence: the answer held, its missing outputs and
-/// corrections.
-pub(crate) type AnswerChecks =
-    HashMap<(String, String, String, Vec<String>), (Option<ComposedAnswer>, Vec<String>, Vec<AnswerCorrection>)>;
-
 pub(crate) type ReadKey = (String, String, Vec<String>, Vec<String>);
 /// One action on its targets, from one page state: the key both the cycle count and the no-op memory are kept by.
 pub(crate) type Signature = (Operation, Option<String>, Option<String>, String);
@@ -311,14 +240,10 @@ pub(crate) struct RunState {
     pub verified_answer: Option<ComposedAnswer>,
     pub missing_answer_outputs: Vec<String>,
     pub answer_corrections: Vec<AnswerCorrection>,
-    /// Verifier verdicts by the digest of the exact request that produced them, within this run.
-    pub verify_cache: HashMap<String, Generation<LLMVerdict>>,
     /// Bot-check documents this run has already reloaded once, so a challenge that survives is reported.
     pub challenge_reloads: HashSet<String>,
     pub open_answer_outputs: Vec<String>,
     pub rejected_answer_evidence: Option<BTreeSet<EvidenceKey>>,
-    pub answer_check_evidence: Option<String>,
-    pub answer_check_cache: AnswerChecks,
     pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
     pub history: Vec<HistoryEntry>,
@@ -331,11 +256,11 @@ pub(crate) struct RunState {
     pub hint: Option<String>,
     /// The operation and control id recovery named, taken when Jev is still unsure of the next step.
     pub directed: Option<(Operation, Option<String>)>,
-    /// An observed output section must be opened and read before another model chooses an action.
-    pub section_read: bool,
-    pub recovery_sections: HashSet<String>,
-    /// Guessed opening pages the run already left for the caller's start page, so it leaves each once.
-    pub left_guesses: HashSet<String>,
+    /// Jev's pick when asked again after a stall or an unsure pick, by the page state it was asked on, taken as the
+    /// next decision there.
+    pub picked: Option<(String, Decision)>,
+    /// Actions that changed nothing from their page state since the run last made progress.
+    pub idle: HashSet<Signature>,
     /// The commit an authorized run was last refused as unsure it is the one the task means.
     pub unsure_commit: Option<Commit>,
     /// That refused commit once recovery, shown the page and the task, named it as the next step. It covers the next
@@ -347,11 +272,6 @@ pub(crate) struct RunState {
     pub written: HashMap<String, HashSet<String>>,
     pub recoveries: i64,
     pub recovered_requirements: HashSet<String>,
-    pub terminal_verification_attempted: bool,
-    /// Steps, by `step_key`, whose reader a finish refused for an unread requirement asked once more.
-    pub unread_rereads: HashSet<String>,
-    /// The `step_key` of the capture the last read read.
-    pub read_step: Option<String>,
     pub blank_opening_checked: bool,
     pub recovery_log: VecDeque<String>,
     /// `history.len()` when a tripwire last recovered the run. Evidence a recovery already acted on is spent:
@@ -360,7 +280,7 @@ pub(crate) struct RunState {
     /// How often each action was taken from each page state, which is how a cycle is told from progress.
     pub attempts: HashMap<Signature, Attempts>,
     pub last_page: Option<(String, String)>,
-    /// The address of a sign-in wall an access inspection read instead of stopping on.
+    /// The address of the last page Jev judged a sign-in wall that blocks the task.
     pub passed_wall: Option<String>,
     /// Each page state and the action count when it was first reached.
     pub reached: HashMap<String, usize>,
@@ -372,18 +292,13 @@ pub(crate) struct RunState {
     /// Addresses this run built from the task rather than reached by clicking.
     pub invented: HashSet<String>,
     /// The page is an invented address, or one the page itself moved to from one.
-    pub guessing: bool,
-    pub lineage: Lineage,
     /// The last action itself took the page elsewhere, as the page reports it; read by the next observation only.
-    pub moved_by_action: bool,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
     /// An interaction changed the page after the notes last read it.
     pub owes_read: bool,
     /// This page has been read since it last changed.
     pub read_here: bool,
-    /// Page states where an unsure pick has been acted on instead of recovering; the next one there recovers.
-    pub tried_unsure: HashSet<String>,
     /// The fields, settings and submit controls each address has shown.
     pub form_controls_at: HashMap<String, HashSet<String>>,
     /// Attempted reads by document, exact content and outstanding requirements, independent of URL edits.
@@ -421,8 +336,6 @@ pub(crate) struct RunState {
     pub first_url: Option<String>,
     /// Addresses observed without an HTTP error, in order, including the starting address.
     pub visited: IndexMap<String, ()>,
-    pub observed_links: IndexMap<String, ObservedLink>,
-    pub read_urls: HashSet<String>,
     /// By document, the text of every capture a full read has already read there, whitespace-normalised. A page that
     /// redraws within one document can carry nothing this does not already hold, which is what tells an owed read
     /// that the notes still describe the page.
@@ -491,12 +404,9 @@ impl RunState {
             verified_answer: None,
             missing_answer_outputs: Vec::new(),
             answer_corrections: Vec::new(),
-            verify_cache: HashMap::new(),
             challenge_reloads: HashSet::new(),
             open_answer_outputs: Vec::new(),
             rejected_answer_evidence: None,
-            answer_check_evidence: None,
-            answer_check_cache: HashMap::new(),
             relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
             history: Vec::new(),
@@ -507,18 +417,14 @@ impl RunState {
             http_seen: HashSet::new(),
             hint: None,
             directed: None,
-            section_read: false,
-            recovery_sections: HashSet::new(),
-            left_guesses: HashSet::new(),
+            picked: None,
+            idle: HashSet::new(),
             unsure_commit: None,
             confirmed_commit: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
             recovered_requirements: HashSet::new(),
-            terminal_verification_attempted: false,
-            unread_rereads: HashSet::new(),
-            read_step: None,
             blank_opening_checked: false,
             recovery_log: VecDeque::new(),
             recovered_at: 0,
@@ -530,13 +436,9 @@ impl RunState {
             acted_from: None,
             ready_plan: None,
             invented: HashSet::new(),
-            guessing: false,
-            lineage: Lineage::default(),
-            moved_by_action: false,
             downloads_forbidden: None,
             owes_read: false,
             read_here: false,
-            tried_unsure: HashSet::new(),
             form_controls_at: HashMap::new(),
             reads: HashSet::new(),
             record_read_documents: HashSet::new(),
@@ -558,8 +460,6 @@ impl RunState {
             start_landing_url: None,
             first_url: None,
             visited: IndexMap::new(),
-            observed_links: IndexMap::new(),
-            read_urls: HashSet::new(),
             read_coverage: HashMap::new(),
             read_shas: HashMap::new(),
             redecided: false,
@@ -571,11 +471,6 @@ impl RunState {
             form_rejected: HashSet::new(),
             form_values: HashMap::new(),
         }
-    }
-
-    pub fn reset_answer_check(&mut self) {
-        self.missing_answer_outputs.clear();
-        self.answer_corrections.clear();
     }
 
     /// The plan, for code that only runs after `await_plan`: reading, judging DONE and answering.

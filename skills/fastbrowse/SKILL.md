@@ -37,8 +37,8 @@ Allow time for the browser run and wait for the process to finish. Progress goes
 goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an unfinished run's evidence.
 
 fastbrowse recommends `TYPESAFE_API_KEY` for Jev (direct TypeSafe) and uses `OPENROUTER_API_KEY` for the
-LLM, or `AI_GATEWAY_API_KEY` for the LLM when OpenRouter is absent. OpenRouter also serves Jev text when it
-is the only Jev key, but it is not recommended and never receives Jev image input; `AI_GATEWAY_API_KEY` also
+LLM, or `AI_GATEWAY_API_KEY` for the LLM when OpenRouter is absent. OpenRouter also serves Jev when it
+is the only Jev key, but it is not recommended; `AI_GATEWAY_API_KEY` also
 serves Jev only as a last resort rather than the recommended route. Local browsing needs Chrome;
 cloud browsing also needs `BROWSER_USE_API_KEY`. Pass `--local` or the existing browser's `--cdp-url` explicitly,
 since the CLI itself defaults to cloud. A cloud browser cannot reach the caller's localhost. Check for

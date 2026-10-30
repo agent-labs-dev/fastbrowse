@@ -7,12 +7,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::addresses::search_address;
+use fastbrowse_core::decision::{
+    Answer, BoxAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images, NoulAnswer, Question,
+};
 use fastbrowse_core::effects::step_key;
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, Evidence, FactReader, Limits, Operation, Status,
-    StepOutcome,
+    Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Evidence, FactReader, Limits, Operation,
+    Status, StepOutcome,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
@@ -27,18 +29,16 @@ use serde_json::json;
 use super::Agent;
 use super::driving::edit_progress;
 use super::helpers::{
-    access_inspection, answer_evidence, answered, code_decision, follow_recovery, guessed, guessed_page,
-    next_page_control, next_value, plan_ids, try_unsure, unread, unread_output_section, verified, visited,
-    without_missing,
+    access_inspection, answer_evidence, answered, code_decision, follow_recovery, next_page_control, next_value,
+    unread, visited,
 };
 use super::reading::covered;
-use super::state::{RunState, Spawned};
-use crate::memory::{Fact, Notes, Tally, fact_id};
-use crate::planner::{OutputTarget, Plan, Requirement, RequirementKind};
+use super::state::{RunState, Spawned, TransactionCandidate};
+use crate::memory::{Fact, Notes, fact_id};
+use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
 use crate::scripted::{ScriptedJev, ScriptedLLM};
-use crate::verification::{LLMVerdict, grounding};
 
 const INFO: RequirementKind = RequirementKind::Information;
 
@@ -127,17 +127,6 @@ async fn run_state() -> RunState {
     state
 }
 
-/// Leave grouped checks open as `partition_plan` makes them, each with its field and subject.
-fn open_outputs(state: &mut RunState, targets: &[(&str, &str)]) {
-    for (name, subject) in targets {
-        let key = format!("Report {name} for {subject}.");
-        state
-            .output_targets
-            .insert(key.clone(), OutputTarget { field: name.to_string(), subject: subject.to_string() });
-    }
-    state.open_answer_outputs = targets.iter().map(|(name, subject)| format!("Report {name} for {subject}.")).collect();
-}
-
 fn observation(controls: &[Control]) -> Observation {
     serde_json::from_value(json!({
         "url": "https://example.test/", "title": "t", "page_key": "k", "captured_at": "2026-09-26T20:00:00Z",
@@ -149,10 +138,6 @@ fn observation(controls: &[Control]) -> Observation {
 
 fn at(url: &str, controls: &[Control]) -> Observation {
     Observation { url: url.into(), page_key: url.into(), ..observation(controls) }
-}
-
-fn entry(url: &str, entry: Option<&str>) -> Observation {
-    Observation { history_entry: entry.map(String::from), ..at(url, &[]) }
 }
 
 fn field(label: &str) -> Control {
@@ -196,14 +181,6 @@ fn block_evidence(page: &Capture, source_id: &str) -> Evidence {
     .unwrap()
 }
 
-fn fare(url: &str, sha: &str) -> Fact {
-    Fact::read(Some("r1"), "$320", Evidence { url: url.into(), ..evidence(sha, 0, 4) }, FactReader::Llm)
-}
-
-fn fare_plan() -> Plan {
-    Plan::new(vec![Requirement::new("r1", "Fare", INFO)], true)
-}
-
 fn executed(operation: Option<Operation>, target: Option<&str>, page_changed: bool) -> HistoryEntry {
     HistoryEntry::new(operation, target, StepOutcome::Executed, page_changed)
 }
@@ -214,12 +191,6 @@ fn typed(target: &str, text: &str) -> HistoryEntry {
 
 fn set(ids: &[&str]) -> HashSet<String> {
     ids.iter().map(|id| id.to_string()).collect()
-}
-
-/// An executed step; `moved` is whether the page reported that the step itself took it elsewhere.
-fn did(state: &mut RunState, operation: Option<Operation>, target: Option<&str>, moved: bool) {
-    state.history.push(executed(operation, target, true));
-    state.moved_by_action = moved;
 }
 
 #[tokio::test]
@@ -242,17 +213,6 @@ async fn test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_the
 }
 
 #[test]
-fn test_a_field_found_to_have_no_value_is_no_longer_offered_to_jev() {
-    let name = Control { id: "name".into(), ..field("Enter Name") };
-    let submit = Control::new("submit", "button", "Enter Name", [Operation::Click]);
-    let page = observation(&[name, submit, field("Start Date")]);
-    assert_eq!(without_missing(page.clone(), &HashSet::new()), page);
-    let offered = without_missing(page.clone(), &HashSet::from([("Enter Name".to_string(), None)]));
-    assert_eq!(offered.controls.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["submit", "field"]);
-    assert_eq!(page.controls.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["name", "submit", "field"]);
-}
-
-#[test]
 fn test_an_answer_owed_with_nothing_read_is_unread() {
     let action_only = Plan::new(vec![Requirement::new("r1", "Search for the quote", RequirementKind::Action)], true);
     assert!(unread(&action_only, &Notes::default()));
@@ -269,27 +229,6 @@ async fn test_the_next_observation_records_what_an_action_did() {
     agent().note_effect(&mut state, &observation(&[after]));
     assert_eq!(state.history.last().unwrap().effect.as_deref(), Some("changed Search elsewhere value: Bath -> York"));
     assert!(state.acted_from.is_none());
-}
-
-#[tokio::test]
-async fn test_an_unsure_observation_move_is_acted_on_once_per_page_state() {
-    let mut state = run_state().await;
-    let (first, second) = (observation(&[button("Done")]), observation(&[button("Close dialog")]));
-    let done = code_decision(Operation::Hover, Some(button("Done")));
-    let close = code_decision(Operation::Hover, Some(button("Close")));
-    assert!(try_unsure(&mut state, &first, &done));
-    assert!(!try_unsure(&mut state, &first, &done));
-    assert!(try_unsure(&mut state, &second, &close));
-}
-
-#[tokio::test]
-async fn test_an_unsure_state_changing_action_needs_a_second_opinion() {
-    for label in ["Sign out", "Continue with Google", "Unrelated action"] {
-        let mut state = run_state().await;
-        let obs = observation(&[button(label)]);
-        let decision = code_decision(Operation::Click, Some(obs.controls[0].clone()));
-        assert!(!try_unsure(&mut state, &obs, &decision), "{label}");
-    }
 }
 
 #[tokio::test]
@@ -322,300 +261,6 @@ fn test_a_steps_identity_ignores_a_timer_but_not_its_heading() {
     };
     assert_eq!(step_key(&on, &shown("Review", "00:01")), step_key(&on, &shown("Review", "00:07")));
     assert_ne!(step_key(&on, &shown("Review", "00:01")), step_key(&on, &shown("Submit", "00:01")));
-}
-
-fn cited_notes(ids: &[&str]) -> Notes {
-    Notes::new(
-        ids.iter().enumerate().map(|(i, r)| Fact::read(Some(r), r, evidence("capture", i as i64, 4), FactReader::Llm)),
-    )
-}
-
-fn verdict(complete: bool, missing: &[&str], ungrounded: &[&str]) -> LLMVerdict {
-    LLMVerdict {
-        complete,
-        missing: missing.iter().map(|id| id.to_string()).collect(),
-        ungrounded: ungrounded.iter().map(|id| id.to_string()).collect(),
-    }
-}
-
-#[test]
-fn test_the_verifier_cannot_hold_open_a_requirement_the_notes_cite() {
-    let plan = Plan::new(
-        vec![
-            Requirement::new("httpx", "Find httpx's latest release date", INFO),
-            Requirement::new("requests", "Find requests' latest release date", INFO),
-            Requirement::new("compare", "Compare the two dates", INFO),
-            Requirement::new("signed-in", "Be signed in", RequirementKind::Action),
-        ],
-        true,
-    );
-    let notes = cited_notes(&["httpx", "compare"]);
-    for (complete, missing, accepted) in [
-        (true, &[][..], true),
-        (false, &["compare"][..], true),
-        (false, &["signed-in"][..], false),
-        (false, &["requests"][..], false),
-        (false, &[][..], false),
-    ] {
-        let doubt = verdict(complete, missing, &[]);
-        assert_eq!(verified(&doubt, &plan, &notes, &HashSet::new(), None, &[]), accepted, "{complete} {missing:?}");
-    }
-}
-
-#[test]
-fn test_evidence_does_not_excuse_a_requirement_read_off_a_guessed_address() {
-    let plan = Plan::new(
-        vec![
-            Requirement::new("httpx", "Find httpx's latest release date", INFO),
-            Requirement::new("compare", "Compare the two dates", INFO),
-        ],
-        true,
-    );
-    let notes = cited_notes(&["httpx", "compare"]);
-    for (ungrounded, invented, accepted, complete) in [
-        (&[][..], &["https://example.test/"][..], true, true),
-        // The citing excusal cannot see this: the requirement has evidence, read on an address the run guessed.
-        (&["httpx"][..], &["https://example.test/?q=httpx"][..], false, true),
-        // Read on the page the caller named or one the run clicked to, the doubt is the verifier's alone. The
-        // synthesis requirement is satisfied from notes, and no page ever shows a comparison.
-        (&["httpx"][..], &[][..], true, true),
-        (&["compare"][..], &[][..], true, true),
-        // A verifier that calls the run incomplete only for the excused doubt is excused with it, as for missing.
-        (&["httpx"][..], &[][..], true, false),
-        // A verdict naming something the plan never asked for says nothing about this run.
-        (&["invented-id"][..], &["https://example.test/"][..], true, true),
-    ] {
-        let doubt = verdict(complete, &[], ungrounded);
-        assert_eq!(verified(&doubt, &plan, &notes, &set(invented), None, &[]), accepted, "{ungrounded:?} {invented:?}");
-    }
-}
-
-#[tokio::test]
-async fn test_identical_text_at_another_address_does_not_free_a_guessed_reading() {
-    let (guess, own) = ("https://example.test/flights?q=BRS+to+YRK", "https://example.test/flights?tfs=set");
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[guess]), true);
-    let plan = fare_plan();
-    state.lineage.read("same", &[guess.to_string()], true);
-    let on_guess = fare(guess, "same");
-    state.notes.add(on_guess.clone());
-    let judge = Arc::new(guessed_page(&state.invented, Some(&state.lineage), false));
-    state.notes.discredit(["r1"], judge);
-
-    state.guessing = false;
-    state.lineage.read("same", &[own.to_string()], false);
-    state.notes.add(on_guess);
-    assert_eq!(state.notes.unresolved(&plan), plan.requirements);
-    let on_own = fare(own, "same");
-    state.notes.add(on_own.clone());
-    let supporting: HashSet<String> = state.notes.supporting("r1").into_iter().map(|(key, _)| key).collect();
-    assert_eq!(supporting, HashSet::from([fact_id(&on_own)]));
-}
-
-const GUESS: &str = "https://example.test/flights?q=BRS+to+YRK";
-const START: &str = "https://example.test/flights";
-const OTHER_GUESS: &str = "https://example.test/flights?q=BRS+to+YRK+one+way";
-
-/// One step of a lineage case: the operation and its target, where it landed, the history entry and whether the
-/// action itself moved the page.
-type LineageStep = (Option<Operation>, Option<&'static str>, String, Option<&'static str>, bool);
-
-#[tokio::test]
-async fn test_lineage_follows_the_browser_history_entry() {
-    use Operation::{Back, Click, Navigate, SwitchTab};
-    let step = |operation, target, url: &str, entry| -> LineageStep { (operation, target, url.into(), entry, false) };
-    let moved = |operation, target, url: &str, entry| -> LineageStep { (operation, target, url.into(), entry, true) };
-    let cases: Vec<(&str, Vec<LineageStep>, bool)> = vec![
-        // Back to an entry made on the guess restores it; Forward to one made off it restores that.
-        (
-            "back-to-guess",
-            vec![step(Some(Navigate), Some(START), START, Some("t:2")), step(Some(Back), None, GUESS, Some("t:1"))],
-            true,
-        ),
-        (
-            "forward-off-guess",
-            vec![
-                step(Some(Navigate), Some(START), START, Some("t:2")),
-                step(Some(Back), None, GUESS, Some("t:1")),
-                step(None, None, START, Some("t:2")),
-            ],
-            false,
-        ),
-        // Back past the start loads the caller's page afresh; it was never built.
-        ("back-past-start", vec![step(Some(Back), None, START, Some("t:0"))], false),
-        // A reload or a redraw is the same entry.
-        ("reload-on-guess", vec![step(Some(Click), None, GUESS, Some("t:1"))], true),
-        (
-            "reload-off-guess",
-            vec![step(Some(Navigate), Some(START), START, Some("t:2")), step(Some(Click), None, START, Some("t:2"))],
-            false,
-        ),
-        // A redirect is the navigation it follows: what the run asked for decides, as well as where it landed.
-        ("redirect-of-guess", vec![step(Some(Navigate), Some(GUESS), "https://example.test/moved", Some("t:2"))], true),
-        ("redirect-of-own", vec![step(Some(Navigate), Some(START), "https://example.test/home", Some("t:2"))], false),
-        // An entry the run's action on the site's controls itself made is the site's, whatever its path, unless it
-        // is a built address again; any other the page made, even just after an action, inherits the page.
-        ("site-search", vec![moved(Some(Click), Some("Search"), &format!("{START}?q=BRS+to+LDS"), Some("t:2"))], false),
-        ("site-sort", vec![moved(Some(Click), None, &format!("{GUESS}&sort=price"), Some("t:2"))], false),
-        ("site-resubmits-guess", vec![moved(Some(Click), Some("Search"), GUESS, Some("t:2"))], true),
-        ("page-pushstate-on-guess", vec![step(None, None, &format!("{GUESS}&page=2"), Some("t:2"))], true),
-        ("page-pushstate-after-click", vec![step(Some(Click), None, &format!("{GUESS}&ts=1"), Some("t:2"))], true),
-        // A NAVIGATE to another address the run built is still a guess.
-        ("navigate-to-other-guess", vec![step(Some(Navigate), Some(OTHER_GUESS), OTHER_GUESS, Some("t:2"))], true),
-        (
-            "pushstate-off-guess",
-            vec![step(Some(Navigate), Some(START), START, Some("t:2")), step(Some(Click), None, GUESS, Some("t:3"))],
-            false,
-        ),
-        // replaceState keeps the entry: the page rewriting its own address keeps its lineage, and the site moving it
-        // elsewhere after the run's action is the site's.
-        ("page-replacestate", vec![step(None, None, "https://example.test/other", Some("t:1"))], true),
-        ("site-replacestate", vec![moved(Some(Click), None, "https://example.test/other", Some("t:1"))], false),
-        (
-            "page-replacestate-after-click",
-            vec![step(Some(Click), None, "https://example.test/other", Some("t:1"))],
-            true,
-        ),
-        // A tab the page opened by itself inherits the page that opened it, one the run's click opened is the
-        // site's, and switching back restores the opener's entry.
-        ("page-popup-from-guess", vec![step(None, None, "https://example.test/popup", Some("u:1"))], true),
-        ("site-popup", vec![moved(Some(Click), None, "https://example.test/popup", Some("u:1"))], false),
-        (
-            "switch-back-to-guess",
-            vec![
-                step(Some(Navigate), Some(START), START, Some("t:2")),
-                step(Some(Click), None, "https://example.test/popup", Some("u:1")),
-                step(Some(SwitchTab), None, GUESS, Some("t:1")),
-            ],
-            true,
-        ),
-        // A browser that names no entry is judged as a new entry each time.
-        ("no-entry", vec![step(Some(Navigate), Some(START), START, None)], false),
-    ];
-    let agent = agent();
-    for (id, steps, guessing) in cases {
-        let mut state = run_state().await;
-        (state.invented, state.guessing) = (set(&[GUESS, OTHER_GUESS]), true);
-        agent.note_effect(&mut state, &entry(GUESS, Some("t:1")));
-        for (operation, target, url, history_entry, moved) in steps {
-            did(&mut state, operation, target, moved);
-            agent.note_effect(&mut state, &entry(&url, history_entry));
-        }
-        assert_eq!(state.guessing, guessing, "{id}");
-    }
-}
-
-#[tokio::test]
-async fn test_back_to_a_search_rebuilt_at_the_guessed_address_stays_the_runs_own() {
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[GUESS]), true);
-    agent.note_effect(&mut state, &entry(GUESS, Some("t:1")));
-    state.lineage.read("guess", &[GUESS.to_string()], state.guessing);
-    for (operation, target, url, history_entry) in [
-        (Operation::Navigate, Some(START), START, "t:2"),
-        (Operation::Click, Some("Search"), GUESS, "t:3"),
-        (Operation::Click, Some("Cheapest result"), "https://example.test/flights/result/1", "t:4"),
-        (Operation::Back, None, GUESS, "t:3"),
-    ] {
-        did(&mut state, Some(operation), target, false);
-        agent.note_effect(&mut state, &entry(url, Some(history_entry)));
-    }
-    assert!(!state.guessing);
-    state.lineage.read("rebuilt", &[GUESS.to_string()], state.guessing);
-    let plan = fare_plan();
-    let judged = |sha| guessed(&plan, &Notes::new([fare(GUESS, sha)]), &state.invented, false, Some(&state.lineage));
-    assert_eq!(judged("rebuilt"), set(&[]));
-    assert_eq!(judged("guess"), set(&["r1"]));
-}
-
-#[tokio::test]
-async fn test_a_corrected_search_kept_in_the_fragment_is_the_runs_own() {
-    let (old, new) = ("https://example.test/search#from=BRS&to=YRK", "https://example.test/search#from=BRS&to=LDS");
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[old]), true);
-    agent.note_effect(&mut state, &entry(old, Some("t:1")));
-    state.lineage.read("old", &[old.to_string()], state.guessing);
-    did(&mut state, Some(Operation::Navigate), Some(new), false);
-    agent.note_effect(&mut state, &entry(new, Some("t:2")));
-    assert!(!state.guessing);
-    state.lineage.read("new", &[new.to_string()], state.guessing);
-    let plan = fare_plan();
-    let new_fare = Notes::new([fare(new, "new")]);
-    assert_eq!(guessed(&plan, &new_fare, &state.invented, false, Some(&state.lineage)), set(&[]));
-    did(&mut state, Some(Operation::Navigate), Some(old), false);
-    agent.note_effect(&mut state, &entry(old, Some("t:3")));
-    assert!(state.guessing);
-    did(&mut state, Some(Operation::Click), None, false);
-    agent.note_effect(&mut state, &entry(old, Some("t:3")));
-    assert!(state.guessing);
-    let old_fare = Notes::new([fare(old, "old")]);
-    assert_eq!(guessed(&plan, &old_fare, &state.invented, false, Some(&state.lineage)), set(&["r1"]));
-}
-
-#[tokio::test]
-async fn test_a_guessed_address_reached_again_by_the_run_itself_is_judged_by_that_visit() {
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[GUESS]), true);
-    agent.note_effect(&mut state, &at(GUESS, &[]));
-    state.lineage.read("guess", &[GUESS.to_string()], state.guessing);
-    for (operation, landed) in [(Operation::Navigate, START), (Operation::Click, GUESS)] {
-        state.history.push(executed(Some(operation), None, true));
-        agent.note_effect(&mut state, &at(landed, &[]));
-    }
-    state.lineage.read("fresh", &[GUESS.to_string()], state.guessing);
-    let plan = fare_plan();
-    let judged = |sha| guessed(&plan, &Notes::new([fare(GUESS, sha)]), &state.invented, false, Some(&state.lineage));
-    assert_eq!(judged("fresh"), set(&[]));
-    assert_eq!(judged("guess"), set(&["r1"]));
-    // A redraw of the page the run is on, with no new arrival, keeps the judgement it arrived with.
-    agent.note_effect(&mut state, &at(GUESS, &[]));
-    assert_eq!(state.lineage.address(&search_address(GUESS)), Some(false));
-}
-
-#[tokio::test]
-async fn test_a_refused_reading_is_freed_when_the_run_reads_the_same_text_off_the_guess() {
-    let agent = agent();
-    let mut state = run_state().await;
-    (state.invented, state.guessing) = (set(&[GUESS]), true);
-    let plan = fare_plan();
-    agent.note_effect(&mut state, &at(GUESS, &[]));
-    state.lineage.read("same", &[GUESS.to_string()], state.guessing);
-    let read = fare(GUESS, "same");
-    state.notes.add(read.clone());
-    let judge = Arc::new(guessed_page(&state.invented, Some(&state.lineage), false));
-    state.notes.discredit(["r1"], judge);
-    state.notes.add(read.clone());
-    assert_eq!(state.notes.unresolved(&plan), plan.requirements);
-
-    for (operation, landed) in [(Operation::Navigate, START), (Operation::Click, GUESS)] {
-        state.history.push(executed(Some(operation), None, true));
-        agent.note_effect(&mut state, &at(landed, &[]));
-    }
-    state.lineage.read("same", &[GUESS.to_string()], state.guessing);
-    state.notes.add(read);
-    assert!(state.notes.unresolved(&plan).is_empty());
-    assert_eq!(guessed(&plan, &state.notes, &state.invented, false, Some(&state.lineage)), set(&[]));
-}
-
-#[tokio::test]
-async fn test_leaving_a_guess_for_the_callers_page_by_any_navigation_makes_later_reads_the_runs_own() {
-    let set_url = "https://example.test/flights?tfs=set";
-    for left_by in [Operation::Navigate, Operation::Back] {
-        let agent = agent();
-        let mut state = run_state().await;
-        (state.invented, state.guessing) = (set(&[GUESS]), true);
-        agent.note_effect(&mut state, &at(GUESS, &[]));
-        for (operation, landed) in [(left_by, START), (Operation::Click, set_url)] {
-            state.history.push(executed(Some(operation), None, true));
-            agent.note_effect(&mut state, &at(landed, &[]));
-        }
-        state.lineage.read("set", &[set_url.to_string()], state.guessing);
-        let notes = Notes::new([fare(set_url, "set")]);
-        assert_eq!(guessed(&fare_plan(), &notes, &state.invented, false, Some(&state.lineage)), set(&[]), "{left_by}");
-    }
 }
 
 #[test]
@@ -718,32 +363,6 @@ fn test_a_secret_is_compared_by_the_length_the_page_reveals() {
 #[test]
 fn test_an_upload_is_judged_by_the_page_not_by_a_value() {
     assert_eq!(progress("a.pdf", None, false, Operation::Upload, &[]), None);
-}
-
-#[test]
-fn test_tallies_keep_guessed_sources_subject_to_verification() {
-    let source = Evidence {
-        quote: "A quote by Ada".into(),
-        url: "https://example.test/quotes?tag=ada".into(),
-        ..evidence("capture", 0, 4)
-    };
-    let quote = Fact::read(None, &source.quote, source.clone(), FactReader::Llm);
-    let mut notes = Notes::new([quote.clone()]);
-    notes.add_tally(Tally { requirement_id: "r".into(), key: "Ada".into(), records: vec![fact_id(&quote)] }).unwrap();
-    notes.complete_tallies("r");
-    let plan = Plan::new(vec![Requirement::new("r", "Count quotes", INFO)], true);
-    assert_eq!(guessed(&plan, &notes, &set(&[&source.url]), false, None), set(&["r"]));
-    assert!(grounding(&notes, &plan, &[]).contains(&source.url));
-}
-
-#[test]
-fn test_a_verifier_naming_a_requirement_by_another_spelling_names_that_requirement() {
-    let plan = Plan::new(
-        vec![Requirement::new("req-1", "a", INFO), Requirement::new("req-2", "b", RequirementKind::Action)],
-        true,
-    );
-    let named: Vec<String> = ["req_1", "2", "REQ-2", "req-9", "summary"].map(String::from).to_vec();
-    assert_eq!(plan_ids(&named, &plan), set(&["req-1", "req-2"]));
 }
 
 #[test]
@@ -972,65 +591,6 @@ fn test_a_link_that_saves_a_file_is_not_a_next_page() {
     assert!(next_page_control(&at_page_one(link("next", "Next", "/list/page-2.csv"))).is_none());
     let pager = link("next", "Next", "/list/page-2");
     assert_eq!(next_page_control(&at_page_one(pager.clone())), Some(pager));
-}
-
-// tests/test_recovery_sections.py
-
-fn titled(url: &str, title: &str, controls: &[Control]) -> Observation {
-    Observation { url: url.into(), title: title.into(), ..observation(controls) }
-}
-
-#[tokio::test]
-async fn test_file_records_do_not_become_output_sections() {
-    let mut state = run_state().await;
-    open_outputs(&mut state, &[("links", "birch")]);
-    let main = "https://example.test/projects/birch";
-    let files = format!("{main}/files");
-    let seen = titled(&files, "Birch files", &[link("file", "version 1.2", &format!("{files}/123"))]);
-    agent().note_effect(&mut state, &seen);
-    state.read_urls.extend([main.to_string(), files]);
-    assert_eq!(unread_output_section(&state), None);
-}
-
-#[tokio::test]
-async fn test_directory_and_other_targets_are_not_sections_of_this_target() {
-    let mut state = run_state().await;
-    open_outputs(&mut state, &[("links", "Project Birch")]);
-    let root = "https://example.test/projects/birch";
-    let seen =
-        titled(root, "Project Birch", &[link("list", "Projects", "/projects"), link("other", "Elm", "/projects/elm")]);
-    agent().note_effect(&mut state, &seen);
-    state.read_urls.insert(root.into());
-    assert_eq!(unread_output_section(&state), None);
-}
-
-#[tokio::test]
-async fn test_an_exhausted_output_does_not_hide_another_targets_unread_section() {
-    let mut state = run_state().await;
-    open_outputs(&mut state, &[("links", "Elm"), ("links", "Birch")]);
-    let root = "https://example.test/projects/birch";
-    let seen = titled(&format!("{root}/comments"), "Birch", &[link("description", "Description", root)]);
-    agent().note_effect(&mut state, &seen);
-    assert_eq!(unread_output_section(&state).as_deref(), Some(root));
-}
-
-#[tokio::test]
-async fn test_a_target_name_holding_for_keeps_its_whole_name() {
-    let mut state = run_state().await;
-    open_outputs(&mut state, &[("links", "Leatrix Plus for Classic")]);
-    let root = "https://example.test/addons/leatrix-plus-for-classic";
-    let seen = titled(
-        root,
-        "Leatrix Plus for Classic",
-        &[
-            link("classic", "Classic", "/classic-era"),
-            link("news", "News", "/classic-era/news"),
-            link("description", "Description", &format!("{root}/description")),
-        ],
-    );
-    agent().note_effect(&mut state, &seen);
-    state.read_urls.insert(root.into());
-    assert_eq!(unread_output_section(&state), Some(format!("{root}/description")));
 }
 
 // tests/test_redrawn_read_recovery.py
@@ -1435,7 +995,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
 #[tokio::test]
 async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
     use fastbrowse_core::safety::irreversible_question;
-    for (requested, acts) in [(0.97, true), (0.40, false)] {
+    for (requested, acts) in [(0.97, true), (0.76, true), (0.40, false)] {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(Gatekeeper(requested)), Arc::new(ScriptedLLM));
         let mut state = run_state().await;
         state.task = "Check out and finish the order.".into();
@@ -1448,7 +1008,596 @@ async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
             ..super::helpers::code_decision(Operation::Click, Some(finish.clone()))
         };
         let question = irreversible_question(&state.task, Operation::Click, &finish, None);
-        let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, false).await;
+        let gated =
+            agent.gate_question(&mut state, &observation, &decision, Decider::Jev, "Finish", question, false).await;
         assert_eq!(gated.is_ok(), acts, "requested {requested}");
     }
+}
+
+/// The page used by the finish-path test, whose read has already supplied the cited requirement claim.
+struct FinishPage(Observation);
+
+impl Page for FinishPage {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let observation = self.0.clone();
+        Box::pin(async move { Ok(observation) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the finish-path test does not navigate")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("the finish-path test does not capture")
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the finish-path test does not act")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        unreachable!("the finish-path test does not watch")
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        unreachable!("the finish-path test does not take a screenshot")
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("the finish-path test does not ask for the address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// Accepts the draft made from a read claim and counts the done-check requests.
+struct DoneCheckJev(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl DecisionClient for DoneCheckJev {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let answers = questions
+            .keys()
+            .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.0 })))
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_cited_read_claim_finishes_after_one_done_check() {
+    let page = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
+    let fact = Fact::read(Some("r1"), "The answer is 42", block_evidence(&page, "s0"), FactReader::Llm);
+    let mut state = run_state().await;
+    state.task = "Report the answer.".into();
+    state.ready_plan = Some(Plan::new(vec![Requirement::new("r1", "Report the answer", INFO)], true));
+    state.notes = Notes::new([fact]);
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let agent = Agent::new(
+        Arc::new(FinishPage(observation(&[]))),
+        Arc::new(DoneCheckJev(requests.clone())),
+        Arc::new(ScriptedLLM),
+    );
+
+    let result = agent.finish(&mut state, None, None).await.expect("finish").expect("a completed result");
+    assert_eq!(result.status, Status::Complete);
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
+}
+
+/// A Jev that answers every yes/no with one probability, or with nothing.
+struct Receipts(Option<f64>);
+
+impl fastbrowse_core::decision::DecisionClient for Receipts {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        let answers = self
+            .0
+            .map(|probability| {
+                let answer = Answer::Noul(NoulAnswer { kind: Default::default(), probability });
+                questions.keys().map(|key| (key.clone(), answer.clone())).collect()
+            })
+            .unwrap_or_default();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_receipt_is_read_only_for_a_step_jev_says_committed() {
+    use fastbrowse_core::safety::irreversible_question;
+    // Adding to a cart on an authorized checkout used to force a full read of the list after every click.
+    for (probability, owed) in [(Some(0.1), false), (Some(0.9), true), (None, true)] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(Receipts(probability)), Arc::new(ScriptedLLM));
+        let mut state = run_state().await;
+        state.task = "Add the backpack to the cart and finish the order.".into();
+        state.authorization = Authorization { irreversible_actions: true };
+        state.ready_plan =
+            Some(Plan::new(vec![Requirement::new("a1", "Finish the order", RequirementKind::Action)], false));
+        state.transaction_candidates.push(TransactionCandidate {
+            question: irreversible_question(&state.task, Operation::Click, &button("Add to cart"), None),
+            from_url: "https://shop.test/inventory".into(),
+            landed_url: Some("https://shop.test/inventory".into()),
+            landed_status: None,
+            committing: None,
+            outcome_read: false,
+        });
+        assert_eq!(agent.unread_receipt(&mut state).await.ok(), Some(owed), "{probability:?}");
+    }
+}
+
+/// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
+/// field, it says the page holds nothing for the requirement. It says yes to the actions' context question with the given
+/// probability.
+struct FieldReader(Option<&'static str>, f64);
+
+impl fastbrowse_core::decision::DecisionClient for FieldReader {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        use fastbrowse_core::decision::{Answer, ChoiceAnswer, NoulAnswer, Question};
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let question = match question {
+                    Question::Choice(question) => question,
+                    Question::Noul(_) => {
+                        let answer = NoulAnswer { kind: Default::default(), probability: self.1 };
+                        return (key.clone(), Answer::Noul(answer));
+                    }
+                    _ => panic!("{key} is neither a read choice nor the context question"),
+                };
+                let wanted = |offered: &serde_json::Value| match self.0 {
+                    Some(field) => offered.get("value").and_then(serde_json::Value::as_str) == Some(field),
+                    None => offered.as_str().is_some_and(|text| text.starts_with("This page contains no evidence")),
+                };
+                let (choice, _) = question
+                    .criteria
+                    .iter()
+                    .find(|(_, offered)| wanted(offered))
+                    .unwrap_or_else(|| panic!("{:?} is not offered: {:?}", self.0, question.criteria));
+                let probabilities =
+                    question.criteria.keys().map(|c| (c.clone(), f64::from(u8::from(c == choice)))).collect();
+                let answer =
+                    ChoiceAnswer { kind: Default::default(), choice: choice.clone(), probabilities, confidence: 0.97 };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(async move {
+            Ok(fastbrowse_core::decision::Evaluation {
+                model: "jev".into(),
+                answers,
+                input_tokens: 0,
+                cost: free(),
+                requests: 1,
+            })
+        })
+    }
+
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
+    let field = "Date Picker 2: 27/12/2026";
+    // The scripted LLM has no reader reply, so a read that reached it would fail.
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    state.ready_plan = Some(Plan::new(
+        vec![
+            Requirement::new("pick", "Pick the last Sunday of December 2026 in Date Picker 2", RequirementKind::Action),
+            Requirement::new("shown", "Report the date shown in the Date Picker 2 field", INFO),
+        ],
+        true,
+    ));
+    // How a capture states a form field: its label, then the value it holds.
+    let page = capture(&[
+        (BlockKind::Heading, "Date Picker"),
+        (BlockKind::Paragraph, "Date Picker 1: 01/01/2026"),
+        (BlockKind::Paragraph, field),
+    ]);
+    let (added, skipped) = agent.read(&mut state, Some(page), None, false).await.expect("a read");
+    assert!(added && !skipped);
+    let fact = state.notes.facts().into_iter().find(|f| f.requirement_id.as_deref() == Some("shown")).expect("a fact");
+    assert_eq!(fact.reader, FactReader::JevChoice);
+    assert_eq!(fact.text, field);
+    assert_eq!(fact.evidence.as_ref().map(|e| e.quote.as_str()), Some(field));
+}
+
+// -- A stall is put to Jev first, and the LLM only hears of it when Jev stays unsure --------------------------------
+
+/// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it, and that has moved on from
+/// the observation asked about when its flag is set.
+#[derive(Default)]
+struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>, bool);
+
+/// A PNG's signature and header, which is all of it the image limits read.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    [&b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR"[..], &width.to_be_bytes(), &height.to_be_bytes()].concat()
+}
+
+impl Page for Screenshots {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        unreachable!("recovery does not observe")
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        let moved = self.1;
+        Box::pin(async move { Ok(moved) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("recovery does not navigate")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("recovery does not capture")
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("recovery does not act")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Ok(png(1280, 900)) })
+    }
+
+    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+        self.0.lock().unwrap().push((x, y));
+        let clicked = ActResult {
+            outcome: StepOutcome::Executed,
+            page_changed: true,
+            detail: None,
+            form_unchanged: false,
+            moved: false,
+        };
+        Box::pin(async move { Ok(clicked) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("recovery does not ask the address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        unreachable!("recovery does not ask the status")
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// The scripted Jev, its every choice held at `confidence`, and the states it was shown.
+struct Unsure(ScriptedJev, f64, std::sync::Mutex<Vec<serde_json::Value>>);
+
+impl fastbrowse_core::decision::DecisionClient for Unsure {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        use fastbrowse_core::decision::Answer;
+        self.2.lock().unwrap().push(state.clone());
+        let answered = self.0.evaluate(state, questions);
+        Box::pin(async move {
+            let mut evaluation = answered.await?;
+            for answer in evaluation.answers.values_mut() {
+                if let Answer::Choice(choice) = answer {
+                    choice.confidence = self.1;
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// An LLM that answers every recovery with a scroll and counts the times it was asked.
+#[derive(Default)]
+struct Recoverer(std::sync::atomic::AtomicUsize);
+
+impl fastbrowse_core::llm::LLMClient for Recoverer {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: fastbrowse_core::models::LLMPurpose,
+        _: &'a [fastbrowse_core::llm::Message],
+        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        _: i64,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Recover);
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let reply =
+                json!({"diagnosis": "Stuck", "next_subgoal": "Scroll on", "give_up": false, "operation": "scroll"});
+            let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
+        })
+    }
+}
+
+/// Recovery after a click on Apply changed nothing, put to a Jev that would click Next at `confidence`.
+async fn stalled_on_apply(confidence: f64) -> (RunState, Arc<Unsure>, Arc<Recoverer>) {
+    let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
+    let jev = Arc::new(Unsure(ScriptedJev::new(script), confidence, Default::default()));
+    let llm = Arc::new(Recoverer::default());
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), llm.clone());
+    let mut state = run_state().await;
+    let apply = button("Apply");
+    let page = observation(&[apply.clone(), button("Next")]);
+    let decision = code_decision(Operation::Click, Some(apply));
+    let withheld = super::recovery::withheld(&decision);
+    agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.expect("recovered");
+    (state, jev, llm)
+}
+
+#[tokio::test]
+async fn test_a_stall_jev_is_sure_of_is_answered_without_the_llm() {
+    let (state, jev, llm) = stalled_on_apply(0.9).await;
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let (_, picked) = state.picked.expect("Jev's pick is the next decision");
+    assert_eq!((picked.operation, picked.target.map(|c| c.label)), (Operation::Click, Some("Next".to_string())));
+    // Jev was told what failed, and the click that changed nothing was not among its options.
+    let shown = jev.2.lock().unwrap()[0].to_string();
+    assert!(shown.contains("did not move the task on from this page"), "{shown}");
+    assert!(!shown.contains("\"Apply\""), "{shown}");
+}
+
+#[tokio::test]
+async fn test_the_llm_recovers_only_when_jev_stays_unsure() {
+    let (state, _, llm) = stalled_on_apply(0.3).await;
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(state.picked.is_none());
+    assert_eq!(state.directed, Some((Operation::Scroll, None)));
+    assert_eq!(state.steps.last().map(|step| step.decided_by), Some(Decider::Llm));
+}
+
+// -- A covered click is put to Jev's eyes: pressed where the screenshot shows the control, only when Jev is sure ----
+
+/// A Jev that is sent images when `images`, answers that the control is shown with `shown`, finds it in the box from
+/// 0.2 to 0.4 across and 0.5 to 0.7 down, and keeps what it was asked.
+struct Seeing {
+    images: bool,
+    shown: f64,
+    asked: std::sync::Mutex<Vec<Asked>>,
+}
+
+/// A state, its questions and the images it refers to.
+type Asked = (serde_json::Value, IndexMap<String, Question>, Images);
+
+impl DecisionClient for Seeing {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        unreachable!("a covered control is asked about with its screenshot")
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.asked.lock().unwrap().push((state.clone(), questions.clone(), images.clone()));
+        let answers = IndexMap::from([
+            ("shown".to_string(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.shown })),
+            (
+                "where".to_string(),
+                Answer::Box(BoxAnswer {
+                    kind: Default::default(),
+                    edges: Edges { top: 0.5, bottom: 0.7, left: 0.2, right: 0.4 },
+                    confidence: Some(0.9),
+                }),
+            ),
+        ]);
+        let cost = CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0));
+        Box::pin(async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 1, requests: 1, cost }) })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { images: self.images, ..DecisionProfile::jev() }
+    }
+}
+
+async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
+    let page = Arc::new(Screenshots(Default::default(), moved));
+    let jev = Arc::new(Seeing { images, shown, asked: Default::default() });
+    let agent = Agent::new(page.clone(), jev.clone(), Arc::new(Recoverer::default()));
+    let mut state = run_state().await;
+    let target = button("Pick a date");
+    let seen = observation(std::slice::from_ref(&target));
+    let clicked = agent.click_where_seen(&mut state, &seen, &target).await.expect("asked");
+    (clicked, page, jev)
+}
+
+#[tokio::test]
+async fn test_a_covered_control_jev_sees_is_clicked_at_the_centre_of_its_box() {
+    let (clicked, page, jev) = click_where_seen(true, 0.9, false).await;
+    assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Executed));
+    let (x, y) = page.0.lock().unwrap()[0];
+    assert!((x - 0.3).abs() < 1e-9 && (y - 0.6).abs() < 1e-9, "{x}, {y}");
+    let asked = jev.asked.lock().unwrap();
+    let (state, questions, images) = &asked[0];
+    let reference = state["viewport_screenshot"].as_str().unwrap();
+    assert_eq!(images.get(reference), Some(&png(1280, 900)));
+    assert_eq!(state["control"]["label"], "Pick a date");
+    assert!(matches!(questions["shown"], Question::Noul(_)) && matches!(questions["where"], Question::Box(_)));
+}
+
+#[tokio::test]
+async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
+    let (clicked, page, _) = click_where_seen(true, 0.2, false).await;
+    assert!(clicked.is_none() && page.0.lock().unwrap().is_empty());
+    let (clicked, page, jev) = click_where_seen(false, 0.9, false).await;
+    assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && jev.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_screenshot() {
+    let (clicked, page, jev) = click_where_seen(true, 0.9, true).await;
+    assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && !jev.asked.lock().unwrap().is_empty());
+}
+
+// -- Jev reads a step as text, and sees the page only when that leaves it unsure ---------------------------------------
+
+/// The scripted Jev, its every choice held at the given confidence from text and at 0.9 once shown the page, and the
+/// number of images each request carried.
+struct Looks(ScriptedJev, f64, std::sync::Mutex<Vec<usize>>);
+
+impl DecisionClient for Looks {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.evaluate_images(state, questions, &fastbrowse_core::decision::NO_IMAGES)
+    }
+
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.2.lock().unwrap().push(images.len());
+        let confidence = if images.is_empty() { self.1 } else { 0.9 };
+        let answered = self.0.evaluate(state, questions);
+        Box::pin(async move {
+            let mut evaluation = answered.await?;
+            for answer in evaluation.answers.values_mut() {
+                if let Answer::Choice(choice) = answer {
+                    choice.confidence = confidence;
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { images: true, ..DecisionProfile::jev() }
+    }
+}
+
+#[tokio::test]
+async fn test_jev_sees_the_page_only_when_its_text_pick_is_unsure() {
+    for (text, images, confidence) in [(0.9, vec![0], 0.9), (0.3, vec![0, 1], 0.9)] {
+        let next = || crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None };
+        let jev = Arc::new(Looks(ScriptedJev::new(vec![next(), next()]), text, Default::default()));
+        let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), Arc::new(Recoverer::default()));
+        let state = run_state().await;
+        let context = agent.context(&state, Vec::new(), false, true).expect("a step context");
+        let decision =
+            agent.decide_looking(&state, &observation(&[button("Next")]), &context).await.expect("a decision");
+        assert_eq!(*jev.2.lock().unwrap(), images, "text pick at {text}");
+        assert!((decision.confidence() - confidence).abs() < 1e-9, "{}", decision.confidence());
+        assert_eq!(decision.cost.len(), images.len());
+    }
+}
+
+/// The LLM reader's one reply: the code a sign-in needs, quoted as context from the second block.
+struct ContextReader;
+
+impl fastbrowse_core::llm::LLMClient for ContextReader {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: fastbrowse_core::models::LLMPurpose,
+        messages: &'a [fastbrowse_core::llm::Message],
+        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        _: i64,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Read);
+            assert!(format!("{messages:?}").contains("Read only the context claims"), "{messages:?}");
+            let reply = json!({
+                "claims": [{"cite": {"first": "s1", "last": "s1"}, "text": "ada@example.com: 587373", "requirement_id": null}],
+                "answered": false,
+            });
+            let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_a_code_jev_finds_no_requirement_in_is_still_kept_for_the_sign_in() {
+    // Jev found nothing on the Phone page for the orders the read was asked about, and the code never reached the notes.
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(None, 0.98)), Arc::new(ContextReader));
+    let mut state = run_state().await;
+    state.ready_plan = Some(Plan::new(
+        vec![
+            Requirement::new(
+                "in",
+                "Sign in as ada@example.com with the code from the Phone page",
+                RequirementKind::Action,
+            ),
+            Requirement::new("orders", "Report the most expensive order", INFO),
+        ],
+        true,
+    ));
+    let page = capture(&[(BlockKind::Heading, "Authenticator"), (BlockKind::Paragraph, "ada@example.com: 587373")]);
+    agent.read(&mut state, Some(page), None, false).await.expect("a read");
+    let fact = state.notes.facts().into_iter().find(|f| f.text.contains("587373")).expect("the code");
+    assert_eq!(fact.requirement_id, None);
 }

@@ -22,9 +22,9 @@ ACCEPTED = 0.5
 """The probability at which Jev is taken to have said a claim holds."""
 
 OPENROUTER_URL = "https://openrouter.ai/api"
-OPENROUTER_MODEL = "jev-1.13"
+OPENROUTER_MODEL = "jev-1.14"
 TYPESAFE_URL = "https://api.typesafe.ai"
-TYPESAFE_MODEL = "jev-1.13.0"
+TYPESAFE_MODEL = "jev-1.14.0"
 GATEWAY_URL = "https://ai-gateway.vercel.sh"
 
 RETRY_DELAYS = (0.5, 1.5, 4.0, 8.0)
@@ -98,7 +98,7 @@ class GatewayJev(Jev):
     """Jev through the Vercel AI Gateway, which names a yes/no question `boolean` and its P(yes) `probability`."""
 
     def __init__(self, http: httpx.AsyncClient, *, api_key: str, base_url: str = GATEWAY_URL) -> None:
-        super().__init__(http, api_key=api_key, base_url=base_url, model="typesafe-ai/jev-1.13.0")
+        super().__init__(http, api_key=api_key, base_url=base_url, model="typesafe-ai/jev-1.14.0")
 
     def _request(
         self, state: JsonValue, questions: Mapping[str, JsonValue]

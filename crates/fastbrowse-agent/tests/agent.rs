@@ -13,8 +13,8 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostComponent, CostLine, Event, EventHandler, LLMPurpose, Limits, Operation, SecretValue,
-    StepOutcome, UntilCheck,
+    Artifact, Authorization, CostComponent, CostLine, Event, EventHandler, LLMPurpose, Limits, Operation, RunResult,
+    SecretValue, StepOutcome, UntilCheck,
 };
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
 use fastbrowse_core::py::dump::Dump;
@@ -303,7 +303,7 @@ fn normalized(mut outcome: Value) -> Value {
     outcome
 }
 
-async fn replay(case: Value) {
+async fn replay(case: Value) -> RunResult {
     let name = case["name"].as_str().unwrap().to_string();
     let jev = Arc::new(ReplayJev(Replies::new(&case, "jev", |r| {
         jev_key(r["state"].as_str().unwrap(), r["questions"].as_str().unwrap())
@@ -370,6 +370,7 @@ async fn replay(case: Value) {
     llm.0.finish();
     assert_eq!(normalized(result.dump()), normalized(case["outcome"].clone()), "{name}: result");
     assert_eq!(Value::Array(events.lock().unwrap().clone()), case["events"], "{name}: step events");
+    result
 }
 
 #[tokio::test(start_paused = true)]

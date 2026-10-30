@@ -3,20 +3,16 @@
 
 mod common;
 
-use std::sync::Mutex;
-
 use common::capture::*;
 use common::*;
 use fastbrowse_agent::memory::Notes;
 use fastbrowse_agent::planner::Plan;
 use fastbrowse_agent::policy::HistoryEntry;
-use fastbrowse_agent::retrieval::{Annotation, AnswerCorrection, ComposedAnswer, ScalarField};
+use fastbrowse_agent::retrieval::{Annotation, ComposedAnswer, ScalarField};
 use fastbrowse_agent::verification::{self, *};
 use fastbrowse_core::config::{Thresholds, TokenBudget};
-use fastbrowse_core::llm::Message;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::{Capture, Observation};
-use fastbrowse_core::py::base64;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use serde_json::{Map, Value, json};
@@ -30,10 +26,6 @@ fn strings(value: &Value) -> Vec<String> {
 
 fn opt<T: serde::de::DeserializeOwned>(args: &Value, key: &str) -> Option<T> {
     args.get(key).filter(|value| !value.is_null()).map(parse)
-}
-
-fn flag(args: &Value, key: &str, default: bool) -> bool {
-    args.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
 fn field(field: &Value) -> ScalarField {
@@ -77,15 +69,6 @@ fn record_schema(value: &Value) -> Result<RecordSchema, String> {
     Ok(RecordSchema { fields, model })
 }
 
-fn screenshots(value: &Value) -> Vec<Vec<u8>> {
-    value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|item| base64::decode(item["$bytes"].as_str().unwrap_or_default()).expect("base64"))
-        .collect()
-}
-
 fn outcome<T: Dump>(result: fastbrowse_agent::error::Result<T>) -> Value {
     match result {
         Ok(value) => json!({"result": value.dump()}),
@@ -106,37 +89,10 @@ fn replay(case: &Value) -> Result<(), String> {
     let trace = Trace::collecting();
     let tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
     let notes: Option<Notes> = args.get("notes").filter(|n| n.get("$notes").is_some()).map(notes_arg);
-    let missing: Mutex<Vec<String>> = Mutex::new(opt(args, "missing_outputs").unwrap_or_default());
-    let corrections: Mutex<Vec<AnswerCorrection>> = Mutex::new(opt(args, "corrections").unwrap_or_default());
-    let verified_fields: Mutex<Vec<ComposedAnswer>> = Mutex::new(opt(args, "verified_fields").unwrap_or_default());
-    let has = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
-    let check_options = || CheckOptions {
-        tokens: tokens.clone(),
-        ledger: ledger.as_ref(),
-        missing_outputs: has("missing_outputs").then_some(&missing),
-        corrections: has("corrections").then_some(&corrections),
-        verified_outputs: None,
-        independent_fields: flag(args, "independent_fields", true),
-        trace: trace.clone(),
-        transaction_evidence_ids: strings(args.get("transaction_evidence_ids").unwrap_or(&Value::Null)),
-        answer_checks: strings(args.get("answer_checks").unwrap_or(&Value::Null)),
-        verified_fields: has("verified_fields").then_some(&verified_fields),
-    };
     let notes_ref = || notes.as_ref().expect("a notes argument");
     let history: Vec<HistoryEntry> = opt(args, "history").unwrap_or_default();
     let visited = strings(args.get("visited").unwrap_or(&Value::Null));
-    let doubted = strings(args.get("doubted").unwrap_or(&Value::Null));
-    let invented = strings(args.get("invented").unwrap_or(&Value::Null));
-    let verify_options =
-        || VerifyOptions { doubted: &doubted, invented: &invented, visited: &visited, ledger: ledger.as_ref() };
     let result: Value = match name {
-        "visual_only_state" => json!({"result": visual_only_state(&parse::<Observation>(&args["observation"]))}),
-        "verify_cache_key" => json!({"result": verify_cache_key(&parse::<Vec<Message>>(&args["messages"]))}),
-        "_grounding" => json!({"result": grounding(notes_ref(), &parse::<Plan>(&args["plan"]), &invented)}),
-        "_output_context" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            json!({"result": output_context(&composed, notes_ref()).map(|c| c.dump())})
-        }
         "page_state" => {
             let questions = strings(args.get("questions").unwrap_or(&Value::Null));
             let context: Option<Map<String, Value>> = opt(args, "context");
@@ -148,35 +104,15 @@ fn replay(case: &Value) -> Result<(), String> {
                 context.as_ref(),
             ))
         }
-        "verify_messages" => outcome(verify_messages(
-            args["task"].as_str().unwrap(),
-            &parse::<Plan>(&args["plan"]),
-            &parse::<Observation>(&args["observation"]),
-            &screenshots(&args["screenshots"]),
-            notes_ref(),
-            &history,
-            &verify_options(),
-        )),
-        "llm_verify" => {
-            let found = block_on(llm_verify(
-                &llm,
-                args["task"].as_str().unwrap(),
-                &parse::<Plan>(&args["plan"]),
-                &parse::<Observation>(&args["observation"]),
-                &screenshots(&args["screenshots"]),
-                notes_ref(),
-                &history,
-                &verify_options(),
-            ));
-            match found {
-                Ok(generation) => json!({"result": {"data": generation.data.dump(), "cost": generation.cost.dump()}}),
-                Err(error) => error_outcome(&error),
-            }
-        }
         "check_done" => {
             let draft: Option<ComposedAnswer> = opt(args, "draft");
-            let options =
-                DoneOptions { tokens: tokens.clone(), history: &history, visited: &visited, trace: trace.clone() };
+            let options = DoneOptions {
+                tokens: tokens.clone(),
+                history: &history,
+                visited: &visited,
+                ledger: None,
+                trace: trace.clone(),
+            };
             outcome(block_on(check_done(
                 &jev,
                 args["task"].as_str().unwrap(),
@@ -185,22 +121,6 @@ fn replay(case: &Value) -> Result<(), String> {
                 notes_ref(),
                 &parse::<Thresholds>(&args["thresholds"]),
                 draft.as_ref(),
-                &options,
-            )))
-        }
-        "check_answer_outputs" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let options = check_options();
-            json!({"result": check_answer_outputs(&composed, notes_ref(), &strings(&args["checks"]), &options)})
-        }
-        "check_claims" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let options = check_options();
-            outcome(block_on(check_claims(
-                &jev,
-                &composed,
-                notes_ref(),
-                &parse::<Thresholds>(&args["thresholds"]),
                 &options,
             )))
         }
@@ -244,21 +164,8 @@ fn replay(case: &Value) -> Result<(), String> {
         // Calls sent side by side bill in whichever order they finish, so the lines are compared as a multiset.
         let actual = unordered_lines(ledger_json(ledger));
         let expected = unordered_lines(expected.clone());
-        if !expected.is_null() && !shares_ledger(case) && actual != expected {
+        if !expected.is_null() && actual != expected {
             problems.push(format!("ledger\n  rust:   {}\n  python: {}", clip(&actual), clip(&expected)));
-        }
-    }
-    let mutated = &case["mutated"];
-    let collected: [(&str, Value); 3] = [
-        ("missing_outputs", json!(missing.lock().unwrap().clone())),
-        ("corrections", corrections.lock().unwrap().dump()),
-        ("verified_fields", verified_fields.lock().unwrap().dump()),
-    ];
-    for (key, actual) in collected {
-        if let Some(expected) = mutated.get(key)
-            && actual != *expected
-        {
-            problems.push(format!("{key}\n  rust:   {}\n  python: {}", clip(&actual), clip(expected)));
         }
     }
     let mut written: Vec<String> = trace.events().iter().map(|e| e.to_string()).collect();
@@ -276,16 +183,6 @@ fn replay(case: &Value) -> Result<(), String> {
         problems.push(panic_text(&panic));
     }
     if problems.is_empty() { Ok(()) } else { Err(problems.join("\n")) }
-}
-
-/// The agent bills the done check and the verifier into the same ledger while `check_claims` runs beside them, and a
-/// fake that waits lets those receipts land inside a recorded call's ledger effect. Python's ledger after such a call
-/// holds lines from work outside it, and overlapping effects count one receipt twice, so neither ledger is a fixed
-/// answer there; the requests and the outcome still are.
-fn shares_ledger(case: &Value) -> bool {
-    let name = case["name"].as_str().unwrap_or_default();
-    case["function"] == "check_claims"
-        && (name.starts_with("tests/test_agent.py::") || name.starts_with("tests/test_finish_overlap.py::"))
 }
 
 fn unordered_lines(mut ledger: Value) -> Value {

@@ -49,20 +49,14 @@ pub struct CountedGroup {
 pub struct Standing {
     /// 1 plus the number of groups counted for the same requirement with a higher count; equal counts tie.
     pub rank: i64,
-    /// How many other groups share this count, shown or not.
+    /// How many other groups share this count.
     pub tied: i64,
-    /// The leading groups and those around this one, highest first; ranks between them are left out.
+    /// Every group counted for the requirement, highest first.
     pub groups: Vec<CountedGroup>,
     pub group_count: i64,
-    /// Whether every group counted for the requirement is complete, not only the groups shown.
+    /// Whether every group counted for the requirement is complete.
     pub complete: bool,
 }
-
-// A standing shows the leading groups and a few either side of the cited one. Listing every group above a low-ranked
-// one put hundreds of labels into each claim question, past the LLM's and Jev's input budgets.
-const LEADING_GROUPS: usize = 3;
-const NEIGHBOUR_GROUPS: usize = 2;
-const GROUP_LABEL_CHARS: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -712,29 +706,21 @@ impl Notes {
         tallies.sort_by(|a, b| {
             (std::cmp::Reverse(a.0.count()), &a.0.key).cmp(&(std::cmp::Reverse(b.0.count()), &b.0.key))
         });
-        let position = tallies.iter().position(|(counted, _)| counted.key == tally.key);
-        let position = match position {
-            Some(position) if tallies.len() >= 2 => position,
-            _ => return None,
-        };
-        let mut shown: BTreeSet<usize> = (0..LEADING_GROUPS.min(tallies.len())).collect();
-        shown.extend(position.saturating_sub(NEIGHBOUR_GROUPS)..tallies.len().min(position + NEIGHBOUR_GROUPS + 1));
+        if tallies.len() < 2 || !tallies.iter().any(|(counted, _)| counted.key == tally.key) {
+            return None;
+        }
         let rank_of = |count: usize| 1 + tallies.iter().filter(|(other, _)| other.count() > count).count() as i64;
         let count = tally.count();
         Some(Standing {
             rank: rank_of(count),
             tied: tallies.iter().filter(|(other, _)| other.count() == count).count() as i64 - 1,
-            groups: shown
-                .into_iter()
-                .map(|index| {
-                    let (group, complete) = tallies[index];
-                    // Only the cited group's label is its claim's subject; a long neighbour's label is context.
-                    let label = if index == position || text::len(&group.key) <= GROUP_LABEL_CHARS {
-                        group.key.clone()
-                    } else {
-                        format!("{}...", text::prefix(&group.key, GROUP_LABEL_CHARS - 3))
-                    };
-                    CountedGroup { rank: rank_of(group.count()), group: label, count: group.count() as i64, complete }
+            groups: tallies
+                .iter()
+                .map(|(group, complete)| CountedGroup {
+                    rank: rank_of(group.count()),
+                    group: group.key.clone(),
+                    count: group.count() as i64,
+                    complete: *complete,
                 })
                 .collect(),
             group_count: tallies.len() as i64,

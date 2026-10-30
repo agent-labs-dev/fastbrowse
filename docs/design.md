@@ -65,10 +65,15 @@ Missing or uncertain answers use the normal readers. This check is omitted when 
 not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.
 
 A filtered count or a comparison over a list that runs to further pages is read by the LLM on its first page,
-which cites the matching records. Each later page of the same shape is then put to Jev in one request, a yes or
-no for each block shaped like those records, and code counts the matches or keeps them as the comparison's
-records. A record Jev judges between 0.20 and 0.70 sends that page back to the LLM reader, and so does a page
-whose title or record shape differs. The last page is still read by the LLM, which closes the list.
+which cites the matching records, and for a comparison the delimiters around each record's label and value.
+The cited records name the list and say whether the count is grouped. When the reader says the list goes on, Jev
+is asked, with the task, whether the requirement needs every page of the list or only pages the task names; the
+reader does not decide this. From a yes at 0.70 or above, code pages the list itself and each later page of the
+same shape is put to Jev in one request, a yes or no for each record of the one run of blocks shaped like those
+records, matched against the requirement's own text. Code counts the matches, or ranks the kept records by the
+comparison's delimiters, and ends the list on the page with no next-page control. A record Jev judges between 0.20 and 0.70
+is sent to the LLM on its own, with only the records Jev was unsure of; a page whose title or record shape
+differs goes to the LLM reader.
 
 For a count, total or superlative, the reader cites every compared record on every page. Its conclusion
 lists those facts in `draws_on`, using evidence ids from collected notes or `claim:N` for earlier claims in
@@ -101,6 +106,9 @@ cancellation and finish their cleanup. Returning while a paid request still runs
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a run
 whose page has not changed for `unchanged_actions` steps goes to recovery, and recovery resets the count.
+Recovery asks Jev first: its state names what failed, and the action that changed nothing is left out of
+its options, which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
+`recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover.
 The same action taken a third time from the same page state does not count as a change.
 
 ## Run events and images

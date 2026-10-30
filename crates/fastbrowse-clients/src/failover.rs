@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
-    DecisionClient, DecisionError, DecisionProfile, Evaluation, Question, RetriesExhausted,
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, NO_IMAGES, Question, RetriesExhausted,
 };
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::LLMPurpose;
@@ -54,10 +54,11 @@ impl FailoverDecisionClient {
         &self,
         state: &Value,
         questions: &IndexMap<String, Question>,
+        images: &Images,
     ) -> Result<Evaluation, DecisionError> {
         let paid = Paid::default();
         let mut guard = PaidOnDrop { paid: paid.clone(), parent: JevSpend::current(), armed: true };
-        let result = jev_spend(Lines::Paid(paid.clone()), None, self.switching(state, questions)).await;
+        let result = jev_spend(Lines::Paid(paid.clone()), None, self.switching(state, questions, images)).await;
         guard.armed = false;
         let mut result = match result {
             Ok(result) => result,
@@ -80,10 +81,11 @@ impl FailoverDecisionClient {
         &self,
         state: &Value,
         questions: &IndexMap<String, Question>,
+        images: &Images,
     ) -> Result<Evaluation, DecisionError> {
         let on_backup = self.on_backup.load(Ordering::SeqCst);
         let client = if on_backup { &self.backup } else { &self.primary };
-        let error = match client.evaluate(state, questions).await {
+        let error = match client.evaluate_images(state, questions, images).await {
             Err(DecisionError::RetriesExhausted(error)) if !on_backup => error,
             // A revoked OPENROUTER_API_KEY failed every run at its first Jev call with a working gateway key beside it.
             Err(DecisionError::Rejected(reason)) if !on_backup => Box::new(RetriesExhausted {
@@ -107,7 +109,7 @@ impl FailoverDecisionClient {
         let held: IndexMap<String, _> = error.answered.iter().flat_map(|result| result.answers.clone()).collect();
         let remaining: IndexMap<String, Question> =
             questions.iter().filter(|(key, _)| !held.contains_key(*key)).map(|(k, q)| (k.clone(), q.clone())).collect();
-        let result = match self.backup.evaluate(state, &remaining).await {
+        let result = match self.backup.evaluate_images(state, &remaining, images).await {
             Ok(result) => result,
             Err(DecisionError::RetriesExhausted(backup_error)) => {
                 let requests = error.requests + backup_error.requests;
@@ -154,10 +156,21 @@ impl DecisionClient for FailoverDecisionClient {
         state: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        Box::pin(self.evaluate_paid(state, questions))
+        Box::pin(self.evaluate_paid(state, questions, &NO_IMAGES))
     }
 
-    /// The primary's. Every default backup serves Jev as well, so it accepts what the primary does.
+    /// Each provider strips the images its route is not sent.
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(self.evaluate_paid(state, questions, images))
+    }
+
+    /// The primary's. Every default backup serves Jev as well; one with less context than the primary answers an
+    /// oversized request as too large, which the step answers with a smaller state.
     fn profile(&self) -> DecisionProfile {
         self.primary.profile()
     }

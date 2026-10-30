@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use super::chunks::{Cite, chunk_page, cited, evidence, marks, read_message};
 use super::notes_room;
+use super::reading::reader_chunk_chars;
 use super::text::{Page, SpanKind, cells, found, lines_of, names, spans, table_header_from_text};
 use crate::comparison::digit;
 use crate::error::{AgentError, Result};
@@ -638,25 +639,25 @@ pub async fn propose_text_fields(
     task: &str,
     capture: &Capture,
     fields: &IndexMap<String, ScalarField>,
-    max_chars: i64,
+    max_chars: Option<i64>,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<(Proposed, Vec<CostLine>)> {
-    let wanted = wanted(fields);
     let page = Page::new(capture);
+    let system = format!(
+        "# Field extraction\nFor each requested field shown on this page, give only that field's value exactly as the page writes it, and the source_id of the block it is in. Omit a field the page does not show; never infer it.\n\n# Trust\n{UNTRUSTED}"
+    );
+    let question = format!("{task}\n\n# Fields\n{}", wanted(fields));
+    let chunk_chars = max_chars
+        .unwrap_or_else(|| reader_chunk_chars(&page, tokens, &system, &question, &[], "", &TextProposals::ty()));
     let mut found_fields: Proposed = IndexMap::new();
     let mut costs = Vec::new();
-    for part in chunk_page(&page, max_chars, 1) {
+    for part in chunk_page(&page, chunk_chars, 1) {
         let missing: Vec<&String> = fields.keys().filter(|name| !found_fields.contains_key(*name)).collect();
         if missing.is_empty() {
             break;
         }
-        let messages = [
-            Message::system(format!(
-                "# Field extraction\nFor each requested field shown on this page, give only that field's value exactly as the page writes it, and the source_id of the block it is in. Omit a field the page does not show; never infer it.\n\n# Trust\n{UNTRUSTED}"
-            )),
-            read_message(&page, &part, &format!("{task}\n\n# Fields\n{wanted}"), &[], ""),
-        ];
+        let messages = [Message::system(system.clone()), read_message(&page, &part, &question, &[], "")];
         let result =
             generate::<TextProposals>(llm, LLMPurpose::Read, &messages, tokens.read_output_tokens, ledger).await?;
         if let Some(ledger) = ledger {

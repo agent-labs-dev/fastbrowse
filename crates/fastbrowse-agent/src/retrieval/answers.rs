@@ -4,15 +4,13 @@ use std::collections::HashSet;
 
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED, background_section};
-use fastbrowse_core::page::cut_text;
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
+use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
-use fastbrowse_core::telemetry::Ledger;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use fastbrowse_core::validation::ModelSchema;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
@@ -293,6 +291,7 @@ pub struct ComposeOptions<'a> {
     pub independent_fields: bool,
     /// The caller's background, shown after the task as context and never as an output to answer.
     pub background: Option<String>,
+    pub trace: Trace,
 }
 
 impl ComposeOptions<'_> {
@@ -397,9 +396,6 @@ pub async fn compose(
             dumps(&Value::Object(payload)),
         );
     }
-    if !repair.is_empty() && complete_collections.is_empty() {
-        repair = cut_text(&repair, 8000, false);
-    }
     let background = background_section(options.background.as_deref(), "#");
     let prefix = format!("# Task\n{task}{background}\n\n# Plan\n{}\n\n{transaction}", plan.dump_json());
     let mut system = format!("{COMPOSER}{UNTRUSTED}");
@@ -469,9 +465,14 @@ pub async fn compose(
     let mut claims: Vec<Claim> = Vec::new();
     let all_facts = notes.facts();
     for (check, claim) in &drafts {
-        let unknown = claim.evidence_ids.iter().any(|key| !references.contains_key(key));
-        if claim.evidence_ids.is_empty() || unknown {
-            // Python logs the claim it dropped for citing an id it was never offered.
+        let unknown: Vec<&String> = claim.evidence_ids.iter().filter(|key| !references.contains_key(*key)).collect();
+        if claim.evidence_ids.is_empty() || !unknown.is_empty() {
+            options.trace.event("dropped_claim", || {
+                let mut fields = Map::new();
+                fields.insert("claim".into(), claim.text.as_str().into());
+                fields.insert("unknown".into(), json!(unknown));
+                fields
+            });
             continue;
         }
         let mut keys: Vec<String> = claim.evidence_ids.iter().map(|key| references[key].clone()).collect();
@@ -582,229 +583,6 @@ pub fn draft_answer(plan: &Plan, notes: &Notes) -> Option<ComposedAnswer> {
     }
     let claims: Vec<Claim> = claims.into_values().collect();
     Some(assemble_answer(&claims, notes, &plan.requirements, 0))
-}
-
-pub const TRANSACTION_CONTRADICTED: &str = "transaction_contradicted";
-
-/// `transaction_check_question`: a claim can cite a listing for something the run did not buy; the answer must agree
-/// with the receipt too.
-pub fn transaction_check_question(
-    composed: &ComposedAnswer,
-    notes: &Notes,
-    ids: &[String],
-    tokens: &TokenBudget,
-) -> Option<NoulQuestion> {
-    if ids.is_empty() || composed.claims.is_empty() {
-        return None;
-    }
-    let committed: Vec<String> =
-        notes.evidence().iter().filter(|(key, _)| ids.contains(key)).map(|(_, item)| item.dump_json()).collect();
-    if committed.is_empty() {
-        return None;
-    }
-    let context =
-        format!("{UNTRUSTED}\n\n# Answer\n{}\n\n# Pages where the run committed an action\n", composed.answer);
-    let question = "\n\nDoes the answer contradict what these pages show the run's action bought, submitted or booked, or its price?";
-    let transaction = NoulQuestion::new(
-        format!("{context}{question}"),
-        Some("Yes, the answer contradicts the pages the run committed an action on."),
-        Some("No, the answer agrees with the pages the run committed an action on."),
-    );
-    let room = tokens.remaining_chars(&dumps(&json!({"answer": composed.answer})), &[transaction.dump_json()], true);
-    // The latest pages are the confirmation and the review before it, so the budget keeps them first.
-    let mut kept: Vec<String> = Vec::new();
-    for line in committed.iter().rev() {
-        let mut trial = vec![line.clone()];
-        trial.extend(kept.iter().cloned());
-        if dumped_len(&trial.join("\n")) as i64 > room {
-            break;
-        }
-        kept.insert(0, line.clone());
-    }
-    if kept.is_empty() {
-        // A receipt larger than the budget is cut to fit rather than dropped: without it nothing checks the answer.
-        let last = &committed[committed.len() - 1];
-        let mut cut = text::prefix(last, room.max(0) as usize).to_string();
-        while !cut.is_empty() && dumped_len(&cut) as i64 > room {
-            let length = text::len(&cut);
-            cut = text::prefix(&cut, length * 9 / 10).to_string();
-        }
-        if !cut.is_empty() {
-            kept = vec![cut];
-        }
-    }
-    (!kept.is_empty())
-        .then(|| NoulQuestion { instructions: format!("{context}{}{question}", kept.join("\n")), ..transaction })
-}
-
-/// `OUTPUT_MISSING`: the key prefix of the question asking whether the answer leaves an answer check unstated.
-pub const OUTPUT_MISSING: &str = "output_missing_";
-/// Room for the other quotes a contradiction question shows beside a claim's own evidence.
-const COUNTEREVIDENCE_CHARS: usize = 4000;
-
-/// Jev's questions about a composed answer: whether each claim is unsupported or contradicted by its cited evidence,
-/// and whether the answer leaves a requested output out.
-///
-/// With answer checks the omission question is asked once per check, of the answer alone, so a refusal names the
-/// output to recover and the notes never have to fit beside it. Whether each stated output is evidenced is the claim
-/// questions' job.
-pub fn claim_check_questions(
-    composed: &ComposedAnswer,
-    notes: &Notes,
-    tokens: &TokenBudget,
-    check_omission: bool,
-    answer_checks: &[String],
-) -> Result<IndexMap<String, NoulQuestion>> {
-    let mut questions = IndexMap::new();
-    // A refused quote backs no claim: shown as a source, it let Jev pass a claim its quote could not carry.
-    let known: IndexMap<String, _> = notes.evidence().into_iter().filter(|(key, _)| !notes.refused(key)).collect();
-    // A counted record is shown as its tally's line: code checked each quote against the group when it was read and
-    // counted them, and a ranking citing every record put a hundred quotes into each of its questions.
-    let compared: HashSet<String> = notes.comparison_records(None).into_iter().collect();
-    let requirements: IndexMap<&str, &str> =
-        composed.requirements.iter().map(|r| (r.id.as_str(), r.text.as_str())).collect();
-    let facts = notes.facts();
-    let current = notes.current_evidence(None);
-    for (index, claim) in composed.claims.iter().enumerate() {
-        let expanded = notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str));
-        let mut counted: IndexMap<String, Vec<String>> = IndexMap::new();
-        for fact in &facts {
-            let Some(tally) = &fact.tally else { continue };
-            let key = fact_id(fact);
-            if !expanded.contains(&key) {
-                continue;
-            }
-            // A rank among counted groups rests on every group's count, which code holds; one group's line alone
-            // cannot show what it beat.
-            let standing = if claim.ranks { notes.standing(tally) } else { None };
-            let ranked = standing.is_some();
-            let mut metadata = Map::new();
-            metadata.insert("requirement".into(), requirements.get(tally.requirement_id.as_str()).copied().into());
-            metadata.insert("count".into(), tally.count().into());
-            metadata.insert("complete".into(), notes.fact_requirements(&key).contains(&tally.requirement_id).into());
-            if let Some(standing) = standing {
-                metadata.insert("standing".into(), standing.dump());
-            }
-            let line = format!(
-                "TALLY: {} {}",
-                write(&Value::String(fact.text.clone()), Style::DUMPS.unicode()),
-                write(&Value::Object(metadata), Style::DUMPS.unicode())
-            );
-            for record in &fact.basis {
-                // A comparison's operands are shown as their quotes, but a rank needs its standing beside them.
-                if !compared.contains(record) || ranked {
-                    counted.entry(record.clone()).or_default().push(line.clone());
-                }
-            }
-        }
-        // A derived fact is judged from the records it expands to, never from the reader's own conclusion.
-        let keys: Vec<&String> = expanded.iter().filter(|key| !notes.derived(key)).collect();
-        let lines = unique(keys.iter().map(|key| {
-            let quote = known.get(*key).map_or_else(|| format!("MISSING: {key}"), |evidence| evidence.dump_json());
-            let Some(lines) = counted.get(*key) else { return quote };
-            let tally = unique(lines.iter().cloned()).join("\n");
-            // A comparison operand keeps its quote beside its rank: the claim may state the field compared.
-            if compared.contains(*key) && known.contains_key(*key) { format!("{quote}\n{tally}") } else { tally }
-        }));
-        let evidence = lines.join("\n");
-        let cited: HashSet<(&String, &Option<String>)> =
-            keys.iter().filter_map(|key| known.get(*key)).map(|e| (&e.url, &e.frame_id)).collect();
-        let cited_quotes: HashSet<&String> = keys.iter().filter_map(|key| known.get(*key)).map(|e| &e.quote).collect();
-        // Other quotes still current on the cited pages: a value that was withdrawn, replaced or qualified there
-        // contradicts the claim even though the claim never cited it.
-        let others = unique(
-            current
-                .values()
-                .filter(|source| {
-                    cited.contains(&(&source.url, &source.frame_id)) && !cited_quotes.contains(&source.quote)
-                })
-                .map(|source| source.quote.clone()),
-        );
-        let context = if others.is_empty() {
-            String::new()
-        } else {
-            let listed: Vec<String> =
-                others.iter().map(|quote| write(&Value::String(quote.clone()), Style::DUMPS.unicode())).collect();
-            let cut = cut_text(&listed.join("\n"), COUNTEREVIDENCE_CHARS, false);
-            format!("\n\n# Other current quotes from the same pages\n{cut}")
-        };
-        for issue in ["unsupported", "contradicted"] {
-            let contradicted = issue == "contradicted";
-            let ending = if contradicted && !others.is_empty() {
-                ", or by another current quote from the same pages? Another quote contradicts it only when it gives a different value for the same entity and field, or withdraws, replaces or qualifies the claimed fact; values for other entities do not."
-            } else {
-                "?"
-            };
-            questions.insert(
-                format!("{issue}_{index}"),
-                NoulQuestion::new(
-                    format!(
-                        "{UNTRUSTED}\n\n# Claim\n{}\n\n# Evidence\n{evidence}{}\n\nIs the claim {issue} by its cited evidence{ending}",
-                        claim.text,
-                        if contradicted { context.as_str() } else { "" },
-                    ),
-                    Some(&format!("Yes, the claim is {issue}.")),
-                    Some(&format!("No, the claim is not {issue}.")),
-                ),
-            );
-        }
-    }
-    // Actions are evidenced by the page, which the done check already judged; quotes only evidence information.
-    let information: Vec<&Requirement> =
-        composed.requirements.iter().filter(|r| r.kind == RequirementKind::Information).collect();
-    if information.is_empty() || !check_omission {
-        return Ok(questions);
-    }
-    if !answer_checks.is_empty() {
-        // Where the answer's quotes were read: a heading read on the page a link was meant to open from states nothing
-        // about the page it opens, and the answer text alone cannot show that.
-        let read_on = unique(
-            composed
-                .claims
-                .iter()
-                .flat_map(|claim| notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)))
-                .filter_map(|key| known.get(&key).map(|evidence| evidence.url.clone())),
-        );
-        let sources = if read_on.is_empty() {
-            String::new()
-        } else {
-            format!("# The answer's quotes were read on\n{}\n\n", dumps(&json!(read_on)))
-        };
-        for (index, check) in answer_checks.iter().enumerate() {
-            questions.insert(
-                format!("{OUTPUT_MISSING}{index}"),
-                NoulQuestion::new(
-                    format!(
-                        "{UNTRUSTED}\n\n# Requested output\n{check}\n\n{sources}Does the answer in the state leave this requested output unstated? Judge each requested entity and field separately. A value stated for another entity, or only implied, leaves it unstated. So does a value read only on the page the task says to leave, when the output is about the window, tab or page a link or search there opens. A page reached on the way to the answer may hold it. A stated absence the task allows, such as no matching records, states it."
-                    ),
-                    Some("Yes, the requested output is not stated."),
-                    Some("No, the answer states the requested output."),
-                ),
-            );
-        }
-        return Ok(questions);
-    }
-    let listed: Vec<String> = information.iter().map(|r| r.dump_json()).collect();
-    let context =
-        format!("{UNTRUSTED}\n\n# Requirements\n{}\n\n# Answer\n{}\n\n# Notes\n", listed.join("\n"), composed.answer);
-    let mut question =
-        "\n\nDoes the answer leave any information requirement without an answer the notes evidence?".to_string();
-    if information.iter().any(|r| r.count_records) {
-        question.push_str(" A record count needs complete matching-record tallies or a quoted statement of the requested whole-list total. A group count, subtotal, or number loaded so far does not answer it. The quoted count must refer to the requested entities with the task's filters and scope.");
-    }
-    let omission = NoulQuestion::new(
-        format!("{context}{question}"),
-        Some("Yes, at least one requirement is unanswered or unevidenced."),
-        Some("No, every requirement is answered and evidenced."),
-    );
-    // Independent claim questions run in separate batches; they cannot consume this question's evidence budget.
-    let room = tokens.remaining_chars(&dumps(&json!({"answer": composed.answer})), &[omission.dump_json()], true);
-    let notes_text = notes.render(room, true, true)?;
-    questions.insert(
-        "requirement_omitted".into(),
-        NoulQuestion { instructions: format!("{context}{notes_text}{question}"), ..omission },
-    );
-    Ok(questions)
 }
 
 #[cfg(test)]

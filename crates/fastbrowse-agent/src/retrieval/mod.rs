@@ -5,14 +5,15 @@
 //! span; any other returns [`UnsupportedField`] so callers can choose another strategy.
 //!
 //! Python's one module is split here by what each part reads: `chunks` cuts a capture into prompts and spans,
-//! `choices` is Jev's short-fact read, `reading` the LLM reader, `fields` scalar extraction and `answers` the composer
-//! and the claim checks. Everything public is re-exported here under its Python name.
+//! `choices` is Jev's short-fact read, `records` Jev's record reader, `reading` the LLM reader, `fields` scalar
+//! extraction and `answers` the composer and the claim checks. Everything public is re-exported here under its Python name.
 
 mod answers;
 mod choices;
 mod chunks;
 mod fields;
 mod reading;
+mod records;
 pub(crate) mod text;
 
 use fastbrowse_core::config::TokenBudget;
@@ -21,9 +22,8 @@ use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::schema::{Ty, json_schema};
 
 pub use answers::{
-    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, OUTPUT_MISSING, Stage, TRANSACTION_CONTRADICTED,
-    assemble_answer, claim_check_questions, compose, draft_answer, partial_answer, retain_fields,
-    transaction_check_question,
+    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, partial_answer,
+    retain_fields,
 };
 pub use choices::read_candidates;
 pub use chunks::{Chunk, chunk, page_quotes, read_message_for};
@@ -33,9 +33,9 @@ pub use fields::{
     merge_candidates, propose_text_fields, propose_text_fields_from_notes,
 };
 pub use reading::{
-    ReadOptions, ReadOutcome, TallyReader, counted_collections_for, filter_tallies, names_subject, read, read_tallies,
-    subject_words,
+    ReadOptions, ReadOutcome, TallyReader, counted_collections_for, names_subject, read, read_tallies, subject_words,
 };
+pub use records::filter_tallies;
 
 /// `_route`: records which reader answers a read and why, so a run's trace shows where its LLM reads come from.
 pub(crate) fn route(
@@ -55,9 +55,6 @@ pub(crate) fn route(
     });
 }
 
-/// `_READ_CHUNK_CHARS`, the default chunk for `propose_text_fields`.
-pub const READ_CHUNK_CHARS: i64 = reading::READ_CHUNK_CHARS;
-
 /// `_notes_room`: reserve room for the prompt and response schema so notes cannot exceed the input budget.
 pub(crate) fn notes_room(tokens: &TokenBudget, messages: &[Message], response: &Ty) -> i64 {
     let prompt: String = messages.iter().map(|message| message.content.as_str()).collect();
@@ -74,7 +71,6 @@ pub fn response_schema(name: &str) -> Option<fastbrowse_core::validation::ModelS
         "_CollectionResponse" => reading::read_response_ty(true),
         "_RecordsResponse" => reading::RecordsResponse::ty(),
         "_TextProposals" => fields::TextProposals::ty(),
-        "_ListOrder" => reading::ListOrder::ty(),
         "_AnswerDraft" => answers::AnswerDraft::ty(),
         "_FieldAnswerDraft" => answers::field_answer_draft(&[
             (0, "The price of the first item".into()),

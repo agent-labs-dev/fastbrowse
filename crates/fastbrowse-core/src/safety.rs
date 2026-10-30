@@ -48,50 +48,6 @@ pub fn may_be_irreversible(operation: Operation, control: Option<&Control>) -> b
     }
 }
 
-// A playback control: its action is undone by the reverse action, so it commits nothing. The label must name playback
-// and nothing that turns "pause" into a commitment ("pause my subscription").
-const REVERSIBLE_TOGGLE: &[&str] = &["play", "pause", "resume", "unmute", "mute", "replay"];
-const COMMITTED_NOUN: &[&str] = &[
-    "subscription",
-    "membership",
-    "plan",
-    "billing",
-    "payment",
-    "invoice",
-    "order",
-    "shipment",
-    "delivery",
-    "account",
-    "profile",
-    "job",
-    "project",
-    "campaign",
-    "listing",
-    "ad",
-    "deploy",
-    "server",
-    "instance",
-    "customer",
-    "contract",
-    "policy",
-];
-
-/// Whether activating this control only flips playback, which the same control flips back.
-///
-/// Pausing a video, muting audio or resuming playback is reversible by whoever did it, with no effect outside the
-/// page, so it is not a commit to confirm. The label alone decides, and only when it also carries no noun that a pause
-/// would commit (a subscription, a shipment, an ad campaign).
-pub fn reversible_toggle(control: &Control) -> bool {
-    let label = text::strip(&control.label);
-    if text::find_word(label, REVERSIBLE_TOGGLE).is_none() || text::find_word(label, COMMITTED_NOUN).is_some() {
-        return false;
-    }
-    !control
-        .context
-        .as_deref()
-        .is_some_and(|context| !context.is_empty() && text::find_word(context, COMMITTED_NOUN).is_some())
-}
-
 /// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
 /// submits and the address it links to.
 fn describe_control(instructions: &mut String, operation: Operation, control: &Control, destination: Option<&Control>) {
@@ -140,26 +96,26 @@ pub fn irreversible_question(
     )
 }
 
-/// Whether the task itself asks for this commit, asked beside [`irreversible_question`] when the run is authorized.
+/// Whether the task asks for this commit, asked beside [`irreversible_question`] when the run is authorized.
 ///
 /// Told "Finish the order", Jev picked Finish at 0.86, under `sensitive_act_from`, and the refusal cost a 4.5s LLM
-/// recovery that only read the task back. Jev agreeing the task names the action is that second opinion.
+/// recovery that only read the task back. Jev agreeing the task asks for the action is that second opinion. Asked
+/// as one positive question, Jev put 11 commits a task asked for at 0.66 or more and 11 it did not, including ones
+/// the task forbade or only led up to, at 0.08 or less.
 ///
 /// A page can have several controls labelled Submit or Finish, so the question carries what tells this one apart, as
 /// the irreversible one does.
 pub fn requested_question(task: &str, operation: Operation, control: &Control) -> NoulQuestion {
     let mut instructions = format!(
-        "{UNTRUSTED}\nThe agent is doing this task: {task}\nIt is about to {operation} the element labelled {}.\n",
+        "{UNTRUSTED}\nThe task: {task}\nThe agent is about to {operation} the element labelled {}.\n",
         text::repr(&control.label)
     );
     describe_control(&mut instructions, operation, control, None);
-    instructions.push_str(
-        "Does the task itself tell the agent to take this exact action, not merely allow it or lead up to it?",
-    );
+    instructions.push_str("Does the task ask the agent to do this?");
     NoulQuestion::new(
         instructions,
-        Some("The task names this action as one the user wants done now."),
-        Some("The task does not ask for it, asks for something else, or says not to."),
+        Some("The task asks for this action."),
+        Some("The task asks for something else."),
     )
 }
 
@@ -771,20 +727,6 @@ mod tests {
             link.href = href.map(str::to_string);
             link.download = download;
             assert_eq!(starts_download(&link), expected, "{href:?}");
-        }
-    }
-
-    #[test]
-    fn test_playback_controls_are_reversible() {
-        for label in ["Pause", "Play", "Resume", "Mute"] {
-            assert!(reversible_toggle(&button(label)), "{label}");
-        }
-    }
-
-    #[test]
-    fn test_a_pause_that_commits_something_is_not_reversible() {
-        for label in ["Pause my subscription", "Pause billing", "Play the demo with your order", "Delete account"] {
-            assert!(!reversible_toggle(&button(label)), "{label}");
         }
     }
 
