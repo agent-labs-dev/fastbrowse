@@ -27,7 +27,7 @@ use crate::batches::evaluate_batches;
 use crate::comparison::{NumericComparison, QuotedField, digit};
 use crate::error::{AgentError, Result};
 use crate::memory::{Comparison, Fact, Notes, RenderOptions, Tally, fact_id, unique};
-use crate::planner::{FIELD_CATEGORIES, Requirement, RequirementKind};
+use crate::planner::{Requirement, RequirementKind};
 
 pub(super) fn counted_kind(kind: BlockKind) -> bool {
     matches!(kind, BlockKind::Record | BlockKind::ListItem)
@@ -1009,7 +1009,7 @@ fn reader_system(capture: &Capture, continuing: &[String], counting: &IndexMap<S
 
 const COLLECTION_EVIDENCE: &str = "\n\n# Collection evidence\nFor a collection summary, retain every inspected member and the collection's identifying boundary or total in records, including identities, roles and reply text. Account for every requested category. Report a bounded absence explicitly only when all members have been read and none matches. Selected excerpts, missing text and unread sections cannot establish absence. Use continues.records while more members or pages remain unread. When separate facts together answer one requirement, add a derived conclusion with that requirement id and draws_on for every supporting claim or prior note. A claim covering only some requested fields must leave requirement_id null. A requested link needs its quoted destination; navigation labels without destinations do not answer it. A written hostname or hostname/path is a destination without a URL scheme; preserve it separately from labels whose destinations are missing. Leave that field open when its destination has not been read.";
 
-const FIELD_COLLECTIONS: &str = " Also fill collections independently of claims: quote the boundary and every member of each inspected collection, even when another section or field is still missing. Code records completeness from the page's stated total and captured list members. A navigation link to a section is not its contents. If no member matches a requested field, include the entire collection and its boundary in collections, including excluded members. Prior summaries cannot establish that absence. ";
+const FIELD_COLLECTIONS: &str = " Also fill collections independently of claims: quote the boundary and every member of each inspected collection, even when another section or field is still missing. Code records completeness from the page's stated total and captured list members. A navigation link to a section is not its contents. If no member matches a requested field, include the entire collection and its boundary in collections, including excluded members. Prior summaries cannot establish that absence.";
 
 const PAGE_RECORDS: &str = "# Page records\nCollect the records on this page for the requested requirements. Return each requirement in continues even when no records match. For counts of matching records, including filtered counts, or rankings by count, use continues.tallies, grouped by the label stated in each record (key=null for an ungrouped count). Select only matching records. If excluded records separate matches, list each matching block range explicitly in the group's records. A page with no matches contributes an empty group. For comparisons of record values, use continues.records, including the compared value and the attributes that show each record matches. Prefer a tally field range for complete record blocks with the grouping label between the same exact prefix and suffix: key=null, records=[], field={span, prefix, suffix}. Delimiters must occur once per record; include the newline for a field starting a line. Every block in that range must be a matching record. When using tallies, leave the continuation's records empty. Omit records excluded by the task's filters, but never select only the page's winners. Earlier pages are being read separately. Use context for source block ranges needed to interpret these records, such as filters or table headers. Do not conclude comparisons.\n\n# Trust\n";
 
@@ -1186,7 +1186,6 @@ async fn read_inner(
         }
         if options.field_outputs {
             system.push_str(FIELD_COLLECTIONS);
-            system.push_str(FIELD_CATEGORIES);
         }
         system
     };
