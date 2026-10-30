@@ -314,7 +314,8 @@ def published() -> list[tuple[str, list[dict[str, Any]]]]:
 
 def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
-    every retry, so it says nothing about the arm."""
+    every retry, or by a first navigation that timed out or could not reach the site, so it says nothing about the
+    arm."""
     return [r for r in rows if r.get("normalized_status") != "unavailable"]
 
 
@@ -344,7 +345,7 @@ def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
     """`rows` split by the arms their task ran on, each scored on matched attempts.
 
     A task runs only on the arms it grades on equal terms (`LiveTask.arms`): pooled, a suite set fastbrowse on 21
-    tasks beside Browser Use on 14. An attempt a provider outage ended measured nothing; dropping it from one arm
+    tasks beside Browser Use on 14. An `unavailable` attempt measured nothing; dropping it from one arm
     alone would score the arms on different attempts, so at each task an attempt counts only where every arm measured
     the same repeat of it (rows from before repeats were recorded pair earliest first), and a task some arm has none at
     is left out. Groups with most arms first."""
@@ -396,7 +397,7 @@ class ArmSummary(BaseModel):
     passed: int
     total: int
     excluded: int = 0
-    """Attempts made but not scored: those a provider outage ended, and as many of this arm's at the same task when
+    """Attempts made but not scored: those that ended `unavailable`, and as many of this arm's at the same task when
     another arm lost one, so every arm is scored on the same attempts."""
     priced: int
     seconds: MetricSummary
