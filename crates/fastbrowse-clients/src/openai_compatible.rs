@@ -457,7 +457,7 @@ impl OpenAICompatibleLLM {
             output_format: options.output_format,
             reasoning_field: options.reasoning_field,
             extra_body,
-            http,
+            http: http.with_credential_header(options.auth_header),
             base_url: base_url.trim_end_matches('/').to_string(),
             models,
             reasoning_effort: options.reasoning_effort,
