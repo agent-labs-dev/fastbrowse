@@ -1433,7 +1433,6 @@ fn net_error(error: &str) -> bool {
         .is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
 }
 
-
 /// A CSV text's records in order, blank lines left out. A newline inside a quoted field belongs to its record.
 fn csv_rows(text: &str) -> Vec<&str> {
     let (mut rows, mut start, mut quoted) = (Vec::new(), 0, false);
