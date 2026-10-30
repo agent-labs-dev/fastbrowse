@@ -1093,6 +1093,24 @@ async fn test_a_choice_jev_was_not_offered_is_a_failed_decision_and_not_an_empty
 }
 
 #[tokio::test]
+async fn test_a_comparison_code_cannot_rank_is_traced_as_declined() {
+    use crate::comparison::{NumericComparison, Order, QuotedField};
+    use fastbrowse_core::telemetry::Trace;
+    let trace = Trace::collecting();
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM)).with_trace(trace.clone());
+    let mut state = run_state().await;
+    let comparison = NumericComparison {
+        order: Order::Lowest,
+        limit: 1,
+        label: QuotedField::new("", " - "),
+        value: QuotedField::new(" - ", " "),
+    };
+    state.comparisons.insert("r".into(), comparison);
+    agent.settle_ended(&mut state, &["r".to_string()]);
+    assert!(trace.events().iter().any(|e| e.to_string().contains("comparison_declined")));
+}
+
+#[tokio::test]
 async fn test_no_answer_on_a_value_is_not_a_finding_that_it_is_absent() {
     let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
     let mut state = run_state().await;
