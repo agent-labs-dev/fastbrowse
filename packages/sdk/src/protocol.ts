@@ -294,6 +294,10 @@ export interface StepResult {
    * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
    */
   choices?: StepChoice[];
+  /**
+   * The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
+   */
+  fallback?: StepFallback | null;
 }
 export interface StepFact {
   text: string;
@@ -305,6 +309,21 @@ export interface StepFact {
   url: string | null;
   reader: FactReader;
   deep_link: string | null;
+}
+/** Why a step acted on a recovery rather than on Jev's pick: the fallback that fired, and the pick it set aside. */
+export interface StepFallback {
+  /**
+   * The reason the run stopped following Jev, as recovery was told it.
+   */
+  reason: string;
+  /**
+   * Jev's certainty on the step it gave up, on the weakest link of its choices.
+   */
+  confidence: number;
+  /**
+   * The control Jev chose, by its label, when it chose one.
+   */
+  target: string | null;
 }
 export interface StepChoice {
   id: string;

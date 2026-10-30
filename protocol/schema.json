@@ -1624,6 +1624,43 @@
       "title": "StepFact",
       "type": "object"
     },
+    "StepFallback": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "description": "The reason the run stopped following Jev, as recovery was told it.",
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "Jev's certainty on the step it gave up, on the weakest link of its choices.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The control Jev chose, by its label, when it chose one.",
+          "title": "Target"
+        }
+      },
+      "required": [
+        "reason",
+        "confidence",
+        "target"
+      ],
+      "title": "StepFallback",
+      "type": "object"
+    },
     "StepOutcome": {
       "enum": [
         "executed",
@@ -1720,6 +1757,18 @@
           "minimum": 0,
           "title": "Duration Ms",
           "type": "integer"
+        },
+        "fallback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepFallback"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."
         },
         "choices": {
           "default": [],

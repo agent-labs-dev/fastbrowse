@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use fastbrowse_core::decision::jev_takes_png;
 use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
 use fastbrowse_core::models::{
-    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepOutcome, StepResult, WallKind,
+    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepFallback, StepOutcome, StepResult, WallKind,
 };
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
@@ -122,6 +122,8 @@ impl Agent {
                 }
             };
             state.choices = self.choices(&decision);
+            // A fresh decision clears the fallback the last one left, which only the step it led to could claim.
+            state.fallback = None;
             judge_site(state, &observation, &decision);
             let mut decided_by = Decider::Jev;
             let thresholds = &self.config.thresholds;
@@ -157,6 +159,10 @@ impl Agent {
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
             if let Some(directed) = follow_recovery(state, &observation, &decision, uncertain) {
+                // The step recorded is the recovery's, so the pick it set aside is recorded with it.
+                if uncertain {
+                    state.fallback = Some(self.fallback(&decision, "jev unsure"));
+                }
                 (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
             }
             if uncertain && state.ready_plan.is_none() {
@@ -173,6 +179,7 @@ impl Agent {
             // not act: a read changes nothing, and DONE is judged again by `finish`.
             if decision.operation == Operation::Escalate || (uncertain && !not_acting(decision.operation)) {
                 let reason = format!("uncertain next step ({:.2})", decision.confidence());
+                state.fallback = Some(self.fallback(&decision, &reason));
                 Box::pin(self.consult(state, &observation, &reason)).await?;
                 continue;
             }
@@ -212,6 +219,15 @@ impl Agent {
                 chosen: chosen.contains(&control.id.as_str()),
             })
             .collect()
+    }
+
+    /// The fallback that took a decision off Jev's pick, as a step reports it: what it abandoned and how sure it was.
+    fn fallback(&self, decision: &Decision, reason: &str) -> StepFallback {
+        StepFallback {
+            reason: self.redact(reason),
+            confidence: decision.confidence(),
+            target: decision.target.as_ref().map(|control| self.mask(&control.label)),
+        }
     }
 
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
@@ -654,6 +670,7 @@ impl Agent {
             facts,
             page_changed: (decision.operation != Operation::Read).then_some(changed),
             duration_ms: started.elapsed().as_millis() as i64,
+            fallback: None,
             choices: Vec::new(),
         };
         self.record_step(state, step, false, frame).await?;
@@ -944,6 +961,7 @@ impl Agent {
             target: step.target.as_deref().map(|target| self.redact(target)),
             note: step.note.as_deref().map(|note| self.redact(note)),
             choices: std::mem::take(&mut state.choices),
+            fallback: state.fallback.take(),
             ..step
         };
         state.steps.push(step.clone());
@@ -981,6 +999,7 @@ impl Agent {
             facts: Vec::new(),
             page_changed,
             duration_ms: 0,
+            fallback: None,
             choices: Vec::new(),
         };
         self.record_step(state, step, true, None).await
