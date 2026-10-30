@@ -150,8 +150,7 @@ jobs:
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with: {tool: nextest@0.9.150}
       - run: cargo nextest run --workspace --locked --no-fail-fast
-      # nextest does not run doctests. No crate has one today; this keeps it that way rather than silently
-      # dropping the check.
+      # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc
       # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.

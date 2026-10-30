@@ -39,7 +39,7 @@ another: on four cores over the same 985 tests, `cargo test --workspace` took 38
 `cargo nextest run --workspace` 161 s. Install it once with `cargo install cargo-nextest --locked` (or see
 [nextest's install page](https://get.nexte.st)), then `cargo nextest run --workspace`. `cargo test` still
 works and is still the way to run one binary or one test by name. nextest does not run doctests, so the gate
-runs `cargo test --workspace --doc` beside it; no crate has a doctest today.
+runs `cargo test --workspace --doc` beside it.
 
 Run the gate before you push. CI runs the same checks, and `main` requires them:
 
