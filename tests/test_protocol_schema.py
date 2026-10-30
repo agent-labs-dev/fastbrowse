@@ -17,7 +17,7 @@ _SCHEMA = Path(__file__).parents[1] / "protocol" / "schema.json"
 
 
 class _AsWritten(GenerateJsonSchema):
-    """A model the server writes has every field in its JSON, a default included."""
+    """A model the server writes has every field in its JSON, a default included, unless `exclude_if` leaves it out."""
 
     def field_is_required(
         self,
@@ -25,7 +25,7 @@ class _AsWritten(GenerateJsonSchema):
         total: bool,
     ) -> bool:
         if self.mode == "serialization":
-            return not field.get("serialization_exclude")
+            return not field.get("serialization_exclude") and "serialization_exclude_if" not in field
         return super().field_is_required(field, total)
 
 

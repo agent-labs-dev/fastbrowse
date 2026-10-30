@@ -12,8 +12,8 @@ use fastbrowse_core::config::ObservationLimits;
 use fastbrowse_core::effects::step_key;
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, Evidence, FactReader, Limits, Operation, Status,
-    StepOutcome,
+    Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Event, EventHandler, Evidence, FactReader,
+    Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
@@ -21,7 +21,7 @@ use fastbrowse_core::page::{
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::Redactor;
-use fastbrowse_core::telemetry::Ledger;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::json;
 
@@ -1396,7 +1396,7 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
         (vec![code.clone()], Status::Stuck, None, None),
     ] {
         let agent = agent();
-        agent.seen().redactor.register("PASSWORD", "hunter2", None);
+        agent.redactor().register("PASSWORD", "hunter2", None);
         agent.seen().raw = Some(at("https://shop.test:443/login?next=1", &controls));
         let wall = agent.wall(&stop(status, hint));
         assert_eq!(wall.as_ref().map(|w| w.kind), expected, "{status:?} {controls:?}");
@@ -1442,5 +1442,59 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
     assert_eq!(
         stop.error.as_deref(),
         Some("sign-in required at https://b.test: secret password is not available there")
+    );
+}
+
+/// A run is replayed from its result's steps, the step events a host shows as it goes, and the trace file, and a step's
+/// builder or an event's author, in the loop or anywhere it hands its trace, that forgets to redact must not put a
+/// resolved secret into any of them.
+#[tokio::test]
+async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
+    let events: Arc<std::sync::Mutex<Vec<Event>>> = Arc::default();
+    let sink = events.clone();
+    let on_event: EventHandler = Arc::new(move |event: Event| {
+        sink.lock().unwrap().push(event);
+        Box::pin(async {})
+    });
+    let trace = Trace::collecting();
+    let agent = agent().with_events(Some(on_event)).with_trace(trace.clone());
+    agent.redactor().register("password", "hunter2", Some("https://acme.test"));
+    let mut state = run_state().await;
+    let step = StepResult {
+        index: 0,
+        operation: Operation::Done,
+        decided_by: Decider::Llm,
+        outcome: StepOutcome::Failed,
+        url: "https://acme.test/account?pw=hunter2".into(),
+        target: Some("Signed in with hunter2".into()),
+        confidence: None,
+        note: Some("DONE rejected: Answer output not verified: hunter2".into()),
+        facts: Vec::new(),
+        page_changed: None,
+        duration_ms: 0,
+        choices: Vec::new(),
+    };
+    agent.record_step(&mut state, step, false, None).await.unwrap();
+    agent.event("read", || serde_json::Map::from_iter([("quotes".into(), json!(["typed hunter2", 3]))]));
+    // Readers and checks trace through a clone of the run's trace, never through the agent.
+    agent
+        .trace
+        .clone()
+        .event("record_filter", || serde_json::Map::from_iter([("requirement".into(), "hunter2".into())]));
+    let Some(Event::Step(event)) = events.lock().unwrap().pop() else { panic!("no step event") };
+    let redacted = StepResult {
+        url: "https://acme.test/account?pw=[secret:password]".into(),
+        target: Some("Signed in with [secret:password]".into()),
+        note: Some("DONE rejected: Answer output not verified: [secret:password]".into()),
+        ..event.step.clone()
+    };
+    assert_eq!(event.step, redacted);
+    assert_eq!(state.steps, vec![redacted]);
+    assert_eq!(
+        trace.events(),
+        vec![
+            json!({"event": "read", "quotes": ["typed [secret:password]", 3]}),
+            json!({"event": "record_filter", "requirement": "[secret:password]"}),
+        ]
     );
 }
