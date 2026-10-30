@@ -4,9 +4,9 @@ mod misc_support;
 use std::collections::HashSet;
 use std::time::Instant;
 
-use common::{Harness, harness, sites};
+use common::{Harness, eval_active, harness, sites, wait_until};
 use fastbrowse_core::page::BlockKind;
-use misc_support::{content_capture, eval_active, path, set_body, text_of, texts, visible, wait_until};
+use misc_support::{content_capture, path, set_body, text_of, texts, visible};
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
@@ -303,7 +303,7 @@ async fn test_record_candidates_preserve_frame_and_shadow_boundaries() {
                 host.attachShadow({{mode: 'open'}}).innerHTML = '<slot></slot>' + text;
             }}
         }}",
-                misc_support::js(boundary)
+                common::js(boundary)
             ),
         )
         .await;

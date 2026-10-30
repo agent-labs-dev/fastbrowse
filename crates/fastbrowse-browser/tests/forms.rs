@@ -5,8 +5,8 @@ mod dispatch_support;
 
 use std::time::Duration;
 
-use common::{Harness, harness, harness_on, sites};
-use dispatch_support::{action, eval_active, fill, find, observe_until};
+use common::{Harness, find, harness, harness_on, observe_until, sites};
+use dispatch_support::{action, eval_active, fill};
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation, StepOutcome};

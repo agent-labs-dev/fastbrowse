@@ -7,21 +7,26 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, LocalChrome};
-use fastbrowse_core::page::Observation;
+use fastbrowse_core::page::{Control, Observation};
+use serde_json::{Value, json};
+use tokio::time::{Instant, sleep};
 
 pub fn sites_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/browser/sites")
@@ -232,6 +237,69 @@ fn watch_for_exit(chrome: Option<u32>) {
     let me = std::process::id();
     let script = format!("while kill -0 {me} 2>/dev/null; do sleep 0.5; done; kill {chrome} 2>/dev/null");
     let _ = Command::new("sh").args(["-c", &script]).stdin(Stdio::null()).stdout(Stdio::null()).spawn();
+}
+
+/// `find`: the first control whose label contains `label`.
+pub fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
+    observation.controls.iter().find(|c| c.label.contains(label)).unwrap_or_else(|| {
+        panic!(
+            "no control labelled like {label:?} in {:?}",
+            observation.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
+        )
+    })
+}
+
+/// `wait_until`: poll `predicate` every 50ms until it holds, failing after `timeout_seconds`.
+pub async fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
+    while Instant::now() < deadline {
+        if predicate().await {
+            return;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    panic!("condition was not met in time");
+}
+
+/// `observe_until`: observe until a control is actually there, since an attached frame session predates its document.
+pub async fn observe_until(page: &CdpPage, label: &str) -> Observation {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let observation = page.observe().await.expect("observe");
+        if observation.controls.iter().any(|c| c.label.contains(label)) {
+            return observation;
+        }
+        assert!(Instant::now() < deadline, "condition was not met in time");
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// `eval_value`, keeping the failure: a read that straddles a navigation can fail.
+pub async fn try_eval(session: &BrowserSession, session_id: &str, expression: &str) -> Result<Value, BrowserError> {
+    let mut out = session
+        .send("Runtime.evaluate", json!({"expression": expression, "returnByValue": true}), Some(session_id))
+        .await?;
+    Ok(out["result"]["value"].take())
+}
+
+/// `eval_value`: `Runtime.evaluate` by value in `session_id`, outside the page's own evaluate; null when the
+/// expression threw or returned nothing.
+pub async fn eval_value(session: &BrowserSession, session_id: &str, expression: &str) -> Value {
+    try_eval(session, session_id, expression).await.expect("Runtime.evaluate")
+}
+
+/// `eval_value` in the active tab, the session nearly every test evaluates in.
+pub async fn eval_active(session: &BrowserSession, expression: &str) -> Value {
+    eval_value(session, &session.active_session_id().expect("active session"), expression).await
+}
+
+/// A string as a JS literal, for splicing into a script.
+pub fn js(text: &str) -> String {
+    serde_json::to_string(text).unwrap()
 }
 
 pub struct Harness {

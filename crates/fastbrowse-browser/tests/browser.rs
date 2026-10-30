@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{Harness, RecordingArtifactSink, chrome, harness, harness_on, sites};
+use common::{Harness, RecordingArtifactSink, chrome, eval_value, find, harness, harness_on, observe_until, sites};
 use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::error::BrowserError;
@@ -26,57 +26,12 @@ use tokio::time::{Instant, sleep, timeout};
 
 // -- helpers ----------------------------------------------------------------------------------------------------
 
-fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
-    observation.controls.iter().find(|c| c.label.contains(label)).unwrap_or_else(|| {
-        panic!(
-            "no control labelled like {label:?} in {:?}",
-            observation.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
-        )
-    })
-}
-
 async fn wait_until<F, Fut>(predicate: F)
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = bool>,
 {
-    wait_until_for(predicate, 5.0).await;
-}
-
-async fn wait_until_for<F, Fut>(mut predicate: F, timeout_seconds: f64)
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
-    while Instant::now() < deadline {
-        if predicate().await {
-            return;
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    panic!("condition was not met in time");
-}
-
-/// Observe until a control is actually there: an attached frame session predates its document.
-async fn observe_until(page: &CdpPage, label: &str) -> Observation {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let observation = page.observe().await.expect("observe");
-        if observation.controls.iter().any(|c| c.label.contains(label)) {
-            return observation;
-        }
-        assert!(Instant::now() < deadline, "condition was not met in time");
-        sleep(Duration::from_millis(50)).await;
-    }
-}
-
-async fn eval_value(session: &BrowserSession, session_id: &str, expression: &str) -> Value {
-    let out = session
-        .send("Runtime.evaluate", json!({"expression": expression, "returnByValue": true}), Some(session_id))
-        .await
-        .expect("Runtime.evaluate");
-    out["result"].get("value").cloned().unwrap_or(Value::Null)
+    common::wait_until(predicate, 5.0).await;
 }
 
 async fn eval_active(h: &Harness, expression: &str) -> Value {

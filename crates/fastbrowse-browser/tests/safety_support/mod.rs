@@ -1,9 +1,8 @@
-//! Helpers the safety and speed suites share: `find`, `observe_until`, `wait_until` and `eval_value`, a fixture server whose pages a test writes as a closure, and a CDP proxy that
+//! Helpers the safety and speed suites share: `observe_until`, a fixture server whose pages a test writes as a closure, and a CDP proxy that
 //! logs every message, standing in for the Python tests' wrapped `send_raw` and `_evaluate`.
 
 #![allow(dead_code)]
 
-use std::future::Future;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -11,8 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 use fastbrowse_browser::page::CdpPage;
-use fastbrowse_browser::session::BrowserSession;
-use fastbrowse_core::page::{Control, Observation};
+use fastbrowse_core::page::Observation;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep};
@@ -27,38 +25,11 @@ pub async fn one_at_a_time() -> tokio::sync::MutexGuard<'static, ()> {
     SERIAL.lock().await
 }
 
-/// `find`: the first control whose label contains `label`.
-pub fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
-    observation.controls.iter().find(|c| c.label.contains(label)).unwrap_or_else(|| {
-        panic!(
-            "no control labelled like {label:?} in {:?}",
-            observation.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
-        )
-    })
-}
-
 pub fn has(observation: &Observation, label: &str) -> bool {
     observation.controls.iter().any(|c| c.label.contains(label))
 }
 
-/// `wait_until`: poll `predicate` every 50ms until it holds, failing after `timeout_seconds`.
-pub async fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64)
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
-    while Instant::now() < deadline {
-        if predicate().await {
-            return;
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    panic!("condition was not met in time");
-}
-
-/// `observe_until`: observe until a control is actually there, since an attached frame session predates its
-/// document.
+/// `common::observe_until`, except that a failed observe is retried until the deadline.
 pub async fn observe_until(page: &CdpPage, label: &str) -> Observation {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -70,20 +41,6 @@ pub async fn observe_until(page: &CdpPage, label: &str) -> Observation {
         assert!(Instant::now() < deadline, "condition was not met in time");
         sleep(Duration::from_millis(50)).await;
     }
-}
-
-/// `eval_value`: `Runtime.evaluate` by value, outside the page's own evaluate.
-pub async fn eval_value(session: &BrowserSession, session_id: &str, expression: &str) -> Value {
-    let mut out = session
-        .send("Runtime.evaluate", json!({"expression": expression, "returnByValue": true}), Some(session_id))
-        .await
-        .expect("Runtime.evaluate");
-    out["result"]["value"].take()
-}
-
-/// `eval_value` in the active tab.
-pub async fn eval_active(session: &BrowserSession, expression: &str) -> Value {
-    eval_value(session, &session.active_session_id().expect("active session"), expression).await
 }
 
 // -- a fixture server --------------------------------------------------------------------------------------------
