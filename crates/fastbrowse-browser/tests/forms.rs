@@ -153,6 +153,19 @@ async fn test_input_can_announce_suggestions_after_typing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_button_carries_the_form_it_submits() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<form><label>Name<input></label><button>Send</button></form><button>Elsewhere</button>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let before = h.observe().await;
+    assert!(find(&before, "Send").form_id.is_some());
+    assert_eq!(find(&before, "Send").form_id, find(&before, "Name").form_id);
+    assert_eq!(find(&before, "Elsewhere").form_id, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_local_field_groups_do_not_include_a_sidebar_search() {
     let Some(h) = harness().await else { return };
     form(&h, "").await;

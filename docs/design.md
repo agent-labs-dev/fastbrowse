@@ -13,13 +13,17 @@ the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fa
 ## Authorization
 
 Jev judges every model-selected click, including links, navigation to a caller-supplied address, every Enter press and acceptance of
-confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. An authorized action whose
-confidence reaches `Thresholds.sensitive_act_from` proceeds without that classification.
+confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
+proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
+for it; otherwise the run stops at `needs_confirmation`. A pick under `Thresholds.recover_below` never
+reaches this gate, since it goes to recovery before it acts.
 
-A refusal is recorded as a failed step with a reason. An unauthorized action with sufficient confidence
-stops at `needs_confirmation`, and so does an authorized action Jev judges the task did not ask for; an
-uncertain action goes to recovery. The classifier can be wrong, so this
-gate is not a guarantee that every externally visible change is detected.
+A submission of a form that holds more than one password field, or one marked
+`autocomplete=new-password`, changes an account's credentials whatever the page calls it, so Jev is not
+asked whether it is irreversible: an unauthorized run stops at `needs_confirmation`, and an authorized one
+proceeds only when Jev judges the task asked for it. A refusal is recorded as a failed step with a reason.
+The classifier can be wrong, so this gate is not a guarantee that every externally visible change is
+detected.
 
 ## Navigation
 

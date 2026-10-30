@@ -195,7 +195,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -393,7 +392,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -582,7 +580,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -807,7 +804,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -1032,7 +1028,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -1228,7 +1223,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -1750,7 +1744,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -2328,7 +2321,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -2625,7 +2617,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -2957,7 +2948,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -4163,7 +4153,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -4667,7 +4656,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -4823,7 +4811,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -6043,7 +6030,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -9368,7 +9354,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -10609,7 +10594,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -11111,7 +11095,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -11274,7 +11257,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -11524,7 +11506,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -11759,7 +11740,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -11983,7 +11963,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -12214,7 +12193,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -12437,7 +12415,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -13756,7 +13733,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -15283,7 +15259,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -16813,7 +16788,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -18344,7 +18318,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -19684,7 +19657,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -20900,7 +20872,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -21550,7 +21521,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -21849,7 +21819,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -22402,7 +22371,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -22965,7 +22933,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -23491,7 +23458,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -23839,7 +23805,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -24390,7 +24355,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -24598,7 +24562,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -25176,7 +25139,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -25384,7 +25346,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -25962,7 +25923,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -26170,7 +26130,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -26748,7 +26707,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -26958,7 +26916,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -27536,7 +27493,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -27744,7 +27700,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -28312,7 +28267,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -28520,7 +28474,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -29098,7 +29051,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -29306,7 +29258,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -29756,7 +29707,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -29950,7 +29900,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -30146,7 +30095,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -30340,7 +30288,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -30498,7 +30445,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -30685,7 +30631,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -30880,7 +30825,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -31217,7 +31161,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -31533,7 +31476,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -31860,7 +31802,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -32221,7 +32162,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -32582,7 +32522,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -32870,7 +32809,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -33043,7 +32981,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -33214,7 +33151,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -33352,7 +33288,6 @@
      "config": {
       "thresholds": {
        "recover_below": 0.55,
-       "sensitive_act_from": 0.9,
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
@@ -33467,7 +33402,6 @@
    "config": {
     "thresholds": {
      "recover_below": 0.55,
-     "sensitive_act_from": 0.9,
      "login_required_above": 0.7,
      "bot_check_above": 0.7,
      "irreversible_above": 0.5,
@@ -33567,7 +33501,6 @@
    "config": {
     "thresholds": {
      "recover_below": 0.55,
-     "sensitive_act_from": 0.9,
      "login_required_above": 0.7,
      "bot_check_above": 0.7,
      "irreversible_above": 0.5,

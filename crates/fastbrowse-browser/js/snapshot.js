@@ -425,8 +425,9 @@
   const controls = [];
   // Controls with no accessible name of their own, whose label is an icon's or only their role.
   const unnamed = new Set();
+  // A button is scoped too, so a submission can be told apart by the fields of the form it sends.
   const fieldScope = e => {
-    if (!e.matches('input,textarea,select')) return null;
+    if (!e.matches('input,textarea,select,button')) return null;
     const form = e.form || e.closest('form,fieldset,[role="form"]');
     if (form) return String(identity(form));
     // Script-built forms can use a local group of labelled fields without an HTML form owner.

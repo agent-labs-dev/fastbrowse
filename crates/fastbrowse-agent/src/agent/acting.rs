@@ -11,8 +11,8 @@ use fastbrowse_core::py::dump::{Dump, include, to_value};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_credentials, downloads_question, irreversible_question, may_be_irreversible,
-    requested_question, resolve_secret, sets_new_password, starts_download,
+    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question,
+    may_be_irreversible, requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
@@ -134,26 +134,11 @@ impl Agent {
                     return Err(Stop::new(Status::NeedsInput, "navigation address contains a resolved secret").into());
                 }
                 if gate {
-                    state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-                    let question = NoulQuestion::new(
-                        "Does the caller ask the browser to open this address for the task?",
-                        Some("The address is a browsing destination or a source to inspect."),
-                        Some("The address is field data or quoted text, not a page to visit."),
-                    );
-                    let questions = IndexMap::from([("destination".to_string(), Question::Noul(question))]);
-                    let evaluation =
-                        self.jev.evaluate(&json!({"task": state.task, "address": url}), &questions).await?;
-                    state.ledger.record([evaluation.cost.clone()])?;
-                    let sure = matches!(evaluation.answers.get("destination"), Some(Answer::Noul(answer))
-                        if answer.probability >= self.config.thresholds.recover_below);
-                    if !sure {
-                        return Err(
-                            Unsure::new("the supplied address is not confidently a browsing destination").into()
-                        );
-                    }
                     self.gate_download(state, observation, decision, decided_by, &caller_link(&url)).await?;
-                    let question = navigation_question(&state.task, &url);
-                    self.gate_question(state, observation, decision, decided_by, &url, question, false).await?;
+                    let irreversible = navigation_question(&state.task, &url);
+                    let requested = requested_question(&state.task, &format!("open the address {url}.\n"));
+                    self.gate_question(state, observation, decision, decided_by, &url, Some(irreversible), requested)
+                        .await?;
                 }
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
@@ -210,10 +195,20 @@ impl Agent {
                 let accept = self.accept_dialog(state, observation).await?;
                 if accept
                     && let Some(dialog) = &observation.dialog
-                    && let Some(question) = dialog_question(&state.task, Some(dialog))
+                    && let Some(irreversible) = dialog_question(&state.task, Some(dialog))
                 {
-                    self.gate_question(state, observation, decision, decided_by, &dialog.message, question, false)
-                        .await?;
+                    let action = format!("accept this {} dialog: {}.\n", dialog.kind, text::repr(&dialog.message));
+                    let requested = requested_question(&state.task, &action);
+                    self.gate_question(
+                        state,
+                        observation,
+                        decision,
+                        decided_by,
+                        &dialog.message,
+                        Some(irreversible),
+                        requested,
+                    )
+                    .await?;
                 }
                 Ok(Action { accept_dialog: Some(accept), ..Action::new(Operation::Dialog) })
             }
@@ -237,7 +232,7 @@ impl Agent {
         decision: &Decision,
         decided_by: Decider,
     ) -> Step {
-        let Some(target) = decision.target.as_ref().filter(|t| may_be_irreversible(decision.operation, Some(t))) else {
+        let Some(target) = decision.target.as_ref().filter(|_| may_be_irreversible(decision.operation)) else {
             return Ok(());
         };
         self.gate_download(state, observation, decision, decided_by, target).await?;
@@ -245,10 +240,12 @@ impl Agent {
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
         }
-        let question = irreversible_question(&state.task, decision.operation, target, decision.destination.as_ref());
-        let force = matches!(decision.operation, Operation::Click | Operation::Enter)
-            && changes_credentials(&observation.controls, target, decision.operation);
-        self.gate_question(state, observation, decision, decided_by, &label, question, force).await
+        // A credential change is irreversible on the page's own structure, so Jev is not asked whether it is.
+        let irreversible = (!changes_credentials(&observation.controls, target, decision.operation))
+            .then(|| irreversible_question(&state.task, decision.operation, target, decision.destination.as_ref()));
+        let requested =
+            requested_question(&state.task, &control_action(decision.operation, target, &observation.controls));
+        self.gate_question(state, observation, decision, decided_by, &label, irreversible, requested).await
     }
 
     /// Refuse a control the page says downloads a file when the task rules downloading out.
@@ -305,6 +302,11 @@ impl Agent {
         Ok(forbidden)
     }
 
+    /// The one rule for an action that may commit: it proceeds when Jev judges it not irreversible, or when the run is
+    /// authorized and Jev judges the task asked for it. Otherwise the run stops for confirmation.
+    ///
+    /// `irreversible` is None for an action the page's structure shows commits, which only the task's request lifts.
+    /// A pick under `recover_below` never gets here: it goes to recovery before it acts.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn gate_question(
         &self,
@@ -313,28 +315,22 @@ impl Agent {
         decision: &Decision,
         decided_by: Decider,
         label: &str,
-        question: NoulQuestion,
-        force: bool,
+        irreversible: Option<NoulQuestion>,
+        requested: NoulQuestion,
     ) -> Step {
         let thresholds = &self.config.thresholds;
         let authorized = state.authorization.irreversible_actions;
-        // Authorized and confident proceeds whatever Jev would say about the action, so it is not asked. Only Jev's own
-        // confidence counts: a directed action carries the score of the action Jev chose instead.
-        if authorized && !decision.directed && decision.confidence() >= thresholds.sensitive_act_from {
-            return Ok(());
+        let mut questions = IndexMap::new();
+        if let Some(irreversible) = irreversible {
+            questions.insert("irreversible".to_string(), Question::Noul(irreversible));
         }
-        let what = format!("{} {}", decision.operation, text::repr(label));
-        let mut requested = None;
-        if !force {
+        if authorized {
+            questions.insert("requested".to_string(), Question::Noul(requested));
+        }
+        if !questions.is_empty() {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-            // Only the address goes with the question: the page's own text is what would argue a harmful action is
-            // harmless, and the control's label and form are already in the question.
-            let mut questions = IndexMap::from([("irreversible".to_string(), Question::Noul(question))]);
-            // Asked in the same call, so an authorized run whose task names the action pays no recovery for it.
-            if let Some(target) = decision.target.as_ref().filter(|_| authorized) {
-                let requested = requested_question(&state.task, decision.operation, target);
-                questions.insert("requested".to_string(), Question::Noul(requested));
-            }
+            // Only the address goes with the questions: the page's own text is what would argue a harmful action is
+            // harmless, and the control's label and form are already in them.
             let evaluation = self
                 .jev
                 .evaluate(&json!({"page": {"url": observation.url, "title": observation.title}}), &questions)
@@ -344,8 +340,7 @@ impl Agent {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
                 _ => None,
             };
-            let probability = noul("irreversible");
-            requested = noul("requested");
+            let (probability, requested) = (noul("irreversible"), noul("requested"));
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
@@ -354,30 +349,13 @@ impl Agent {
                     ("requested".into(), json!(requested)),
                 ])
             });
-            if probability.is_some_and(|p| p <= thresholds.irreversible_above) {
-                return Ok(());
-            }
-            // A directed action is recovery's pick after Jev was unsure, so its confidence is not the pick's.
-            if requested.is_some_and(|p| p > thresholds.requested_above)
-                && (decision.directed || decision.confidence() >= thresholds.recover_below)
+            if probability.is_some_and(|p| p <= thresholds.irreversible_above)
+                || requested.is_some_and(|p| p > thresholds.requested_above)
             {
                 return Ok(());
             }
         }
-        // An authorized run stops for confirmation when Jev says the task did not ask for this action, or for a
-        // credential change, which is never asked about.
-        let declined = authorized && (force || requested.is_some_and(|p| p <= thresholds.requested_above));
-        // Otherwise an unsure pick that may commit something is more likely the wrong pick than the step to confirm.
-        let unsure = !declined && (authorized || decision.confidence() < thresholds.recover_below);
-        let requested = requested.map_or_else(|| "not asked".to_string(), |p| format!("{p:.2}"));
-        let reason = if unsure {
-            format!(
-                "unsure {what} is the irreversible action the task means (pick {:.2}, requested {requested})",
-                decision.confidence()
-            )
-        } else {
-            format!("{what} needs confirmation")
-        };
+        let reason = format!("{} {} needs confirmation", decision.operation, text::repr(label));
         let confidence = (decided_by == Decider::Jev).then(|| decision.confidence());
         self.record_failure(
             state,
@@ -390,9 +368,6 @@ impl Agent {
             decided_by,
         )
         .await?;
-        if unsure {
-            return Err(Unsure::new(reason).into());
-        }
         Err(Stop::new(Status::NeedsConfirmation, reason).into())
     }
 
@@ -443,7 +418,17 @@ impl Agent {
         secrets: Vec<String>,
         origin: &str,
     ) -> Step<String> {
-        if sets_new_password(target) {
+        let Some(replacement) = sets_new_password(&observation.controls, target) else {
+            return Err(Stop::new(
+                Status::NeedsInput,
+                format!(
+                    "{} is one of several password fields outside a form, so whether it takes the current password or a new one is unclear",
+                    text::repr(&target.label)
+                ),
+            )
+            .into());
+        };
+        if replacement {
             if !secrets.iter().any(|name| name == "new_password") {
                 return Err(Stop::new(
                     Status::NeedsInput,

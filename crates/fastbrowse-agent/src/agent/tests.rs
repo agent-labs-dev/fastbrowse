@@ -857,10 +857,14 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
     );
 }
 
-// -- An authorized run whose task names the commit acts on it without a recovery ----------------------------------
+// -- The one rule for an action that may commit ------------------------------------------------------------------
 
-/// A Jev that judges every commit irreversible and answers `requested` as given.
-struct Gatekeeper(f64);
+/// A Jev that answers `irreversible` and `requested` as given, and counts its calls.
+struct Gatekeeper {
+    irreversible: f64,
+    requested: f64,
+    calls: std::sync::atomic::AtomicUsize,
+}
 
 impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
     fn evaluate<'a>(
@@ -869,10 +873,11 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
         questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
     ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
         use fastbrowse_core::decision::{Answer, NoulAnswer};
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let answers = questions
             .keys()
             .map(|key| {
-                let probability = if key == "requested" { self.0 } else { 0.95 };
+                let probability = if key == "requested" { self.requested } else { self.irreversible };
                 (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability }))
             })
             .collect();
@@ -893,30 +898,42 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
 }
 
 #[tokio::test]
-async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it_and_stops_when_it_does_not() {
-    use fastbrowse_core::safety::irreversible_question;
-    for (requested, acts) in [(0.97, true), (0.76, true), (0.40, false)] {
-        let agent = Agent::new(Arc::new(NoPage), Arc::new(Gatekeeper(requested)), Arc::new(ScriptedLLM));
+async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_task_asks_for_it() {
+    use fastbrowse_core::safety::{control_action, irreversible_question, requested_question};
+    use std::sync::atomic::Ordering;
+    // (authorized, a credential change, irreversible, requested, acts, Jev calls)
+    for (authorized, credential, irreversible, requested, acts, calls) in [
+        (false, false, 0.10, 0.0, true, 1),
+        (false, false, 0.95, 0.97, false, 1),
+        (true, false, 0.95, 0.97, true, 1),
+        (true, false, 0.95, 0.76, true, 1),
+        (true, false, 0.95, 0.40, false, 1),
+        // A credential change is never taken on Jev's word in an unauthorized run, and it is not even asked.
+        (false, true, 0.10, 0.97, false, 0),
+        (true, true, 0.10, 0.97, true, 1),
+        (true, true, 0.10, 0.40, false, 1),
+    ] {
+        let jev = Arc::new(Gatekeeper { irreversible, requested, calls: Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state().await;
         state.task = "Check out and finish the order.".into();
-        state.authorization = Authorization { irreversible_actions: true };
+        state.authorization = Authorization { irreversible_actions: authorized };
         let finish = button("Finish");
         let observation = observation(std::slice::from_ref(&finish));
-        // Jev's pick on the Sauce Demo overview page: Finish at 0.86, under sensitive_act_from.
         let decision = Decision {
             operation_confidence: 0.86,
             ..super::helpers::code_decision(Operation::Click, Some(finish.clone()))
         };
-        let question = irreversible_question(&state.task, Operation::Click, &finish, None);
+        let question = (!credential).then(|| irreversible_question(&state.task, Operation::Click, &finish, None));
+        let asked = requested_question(&state.task, &control_action(Operation::Click, &finish, &[]));
         let gated =
-            agent.gate_question(&mut state, &observation, &decision, Decider::Jev, "Finish", question, false).await;
-        assert_eq!(gated.is_ok(), acts, "requested {requested}");
-        // Jev says the task did not ask for it: the run stops for confirmation rather than going round recovery.
+            agent.gate_question(&mut state, &observation, &decision, Decider::Jev, "Finish", question, asked).await;
+        let case = format!("authorized {authorized}, credential {credential}, requested {requested}");
+        assert_eq!(gated.is_ok(), acts, "{case}");
+        assert_eq!(jev.calls.load(Ordering::SeqCst), calls, "{case}");
+        // A refusal stops the run for confirmation rather than going round recovery.
         if let Err(flow) = gated {
-            assert!(
-                matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation),
-                "requested {requested}"
-            );
+            assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
         }
     }
 }

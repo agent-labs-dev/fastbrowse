@@ -8,14 +8,12 @@ from fastbrowse.models import Frozen
 class Thresholds(Frozen):
     recover_below: float = 0.55
     """Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts."""
-    sensitive_act_from: float = 0.90
-    """Minimum confidence for an action code has classified as irreversible (authorization also required)."""
     login_required_above: float = 0.70
     bot_check_above: float = 0.70
     """Jev's agreement, on a page it also judged a wall, that the wall is a bot check and not a sign-in."""
     irreversible_above: float = 0.50
     requested_above: float = 0.50
-    """Jev's agreement that the task asks for an authorized commit, above which it proceeds under sensitive_act_from."""
+    """Jev's agreement that the task asks for a commit, above which an authorized run takes it."""
     claim_problem_above: float = 0.70
     """A requirement's "not satisfied" answer above this keeps the run working."""
     value_stated_above: float = 0.50

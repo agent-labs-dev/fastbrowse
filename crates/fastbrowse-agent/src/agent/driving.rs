@@ -533,7 +533,7 @@ impl Agent {
             let executed = result.outcome == StepOutcome::Executed;
             if executed && state.authorization.irreversible_actions {
                 let question = match &decision.target {
-                    Some(target) if fastbrowse_core::safety::may_be_irreversible(decision.operation, Some(target)) => {
+                    Some(target) if fastbrowse_core::safety::may_be_irreversible(decision.operation) => {
                         Some(fastbrowse_core::safety::irreversible_question(
                             &state.task,
                             decision.operation,

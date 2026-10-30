@@ -11,9 +11,6 @@ pub struct Thresholds {
     /// Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts.
     #[serde(deserialize_with = "lax::float")]
     pub recover_below: f64,
-    /// Minimum confidence for an action code has classified as irreversible (authorization also required).
-    #[serde(deserialize_with = "lax::float")]
-    pub sensitive_act_from: f64,
     #[serde(deserialize_with = "lax::float")]
     pub login_required_above: f64,
     /// Jev's agreement, on a page it also judged a wall, that the wall is a bot check and not a sign-in.
@@ -21,7 +18,7 @@ pub struct Thresholds {
     pub bot_check_above: f64,
     #[serde(deserialize_with = "lax::float")]
     pub irreversible_above: f64,
-    /// Jev's agreement that the task asks for an authorized commit, above which it proceeds under `sensitive_act_from`.
+    /// Jev's agreement that the task asks for a commit, above which an authorized run takes it.
     #[serde(deserialize_with = "lax::float")]
     pub requested_above: f64,
     /// A requirement's "not satisfied" answer above this keeps the run working.
@@ -39,7 +36,6 @@ impl Default for Thresholds {
     fn default() -> Self {
         Thresholds {
             recover_below: 0.55,
-            sensitive_act_from: 0.90,
             login_required_above: 0.70,
             bot_check_above: 0.70,
             irreversible_above: 0.50,
