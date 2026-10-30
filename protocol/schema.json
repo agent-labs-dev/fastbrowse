@@ -1412,6 +1412,60 @@
       "title": "Status",
       "type": "string"
     },
+    "StepChoice": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "label": {
+          "description": "The label as Jev read it, with resolved secrets masked.",
+          "title": "Label",
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.",
+          "title": "Context"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "title": "Operations",
+          "type": "array"
+        },
+        "chosen": {
+          "default": false,
+          "description": "Whether Jev chose this control: the target, and for a drag the destination too.",
+          "title": "Chosen",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "label",
+        "context",
+        "operations",
+        "chosen"
+      ],
+      "title": "StepChoice",
+      "type": "object"
+    },
     "StepEvent": {
       "additionalProperties": false,
       "properties": {
@@ -1613,6 +1667,15 @@
           "minimum": 0,
           "title": "Duration Ms",
           "type": "integer"
+        },
+        "choices": {
+          "default": [],
+          "description": "The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.",
+          "items": {
+            "$ref": "#/$defs/StepChoice"
+          },
+          "title": "Choices",
+          "type": "array"
         }
       },
       "required": [
