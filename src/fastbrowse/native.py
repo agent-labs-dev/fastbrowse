@@ -419,7 +419,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     except core.RunRefused as exc:
         raise _refusal(exc, raised) from None
     try:
-        payload = await native
+        payload, frame = await native
     except core.RunRefused as exc:
         raise _refusal(exc, raised) from None
     except asyncio.CancelledError:
@@ -429,7 +429,8 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     finally:
         if events is not None:
             events.extend(_on_this_clock(json.loads(native.trace_events()), time.monotonic() - core.monotonic()))
-    return RunResult.model_validate_json(payload)
+    # The final frame is excluded from the JSON, so the core hands its bytes over separately.
+    return RunResult.model_validate_json(payload).model_copy(update={"final_frame": frame})
 
 
 def _refusal(exc: Exception, raised: _Raised) -> BaseException:

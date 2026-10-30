@@ -2,9 +2,12 @@ name: Official benchmarks
 
 # Runs the upstream browser benchmarks, BU Bench and Online-Mind2Web, on one fastbrowse build with Parallax's
 # official runner (`parallax browser official`). Each suite is graded by its own upstream judge at a pinned
-# commit, run from that checkout's own virtualenv; Parallax only meters the judge's provider calls. Dispatch only:
-# every task drives a real browser and real model calls, so it spends money and is never triggered by a push or a
-# pull request.
+# commit, run from that checkout's own virtualenv; Parallax only meters the judge's provider calls. Dispatch only, by
+# hand or by the release workflow on a minor release: every task drives a real browser and real model calls, so it
+# spends money and is never triggered by a push or a pull request.
+#
+# Each task runs `repeat` times (at least 1; a release runs 3). A task's figure is the mean of its repeats' upstream
+# scores, and the group records its repeat count. Nothing here publishes to the site yet.
 #
 # No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
 # approved `budget` only decides whether the next task may start (`start-gate-v1`).
@@ -22,12 +25,12 @@ name: Official benchmarks
 #   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
 #   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
 #            PARALLAX_BU_BENCH_JUDGE, PARALLAX_MIND2WEB_JUDGE (the judge of each suite run, as JSON; see below)
+#            PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS (Parallax's own pre-check judge, keyed by PARALLAX_JUDGE_API_KEY)
 #
 # Both upstream judges call OpenAI directly. Here they call the OpenAI-compatible endpoint in `base_url`
-# (`parallax browser official --judge-base-url`), such as OpenRouter with its id for the upstream model; the run
-# records the route, and a published group says it differs from the upstream's.
-# `--judge-base-url`, and Online-Mind2Web's task loader and reasoning judge request, need a parallax_sha that
-# includes agent-labs-dev/parallax#361.
+# (`parallax browser official --judge-base-url`); the run records the route, and a published group says it differs
+# from the upstream's. `--judge-base-url`, and Online-Mind2Web's task loader and reasoning judge request, need a
+# parallax_sha that includes agent-labs-dev/parallax#361.
 #
 # Each judge variable is one JSON object with every price checked against that endpoint's listing:
 #   {"base_url": "https://...", "model": "...", "reasoning": "...", "pricing_checked": "YYYY-MM-DD",
@@ -36,10 +39,20 @@ name: Official benchmarks
 # plus, for a model with a long-context price tier, all three of
 #   "context_threshold_tokens", "context_input_usd_per_mtok", "context_output_usd_per_mtok".
 # The ceilings bound the judge meter's reservations, not the agent: set them to the provider's documented limits.
-# BU Bench's judge is its upstream default, gpt-5.6-luna at xhigh reasoning, through OpenRouter. Online-Mind2Web's
-# published WebJudge backbone, o4-mini, is retired upstream and names no successor, so its judge substitutes the
-# same gpt-5.6-luna at o4-mini's default medium reasoning; upstream labels results by their judge model, and these
-# are not directly comparable with its o4-mini figures.
+# Both suites are judged by anthropic/claude-opus-5.5 through OpenRouter (https://openrouter.ai/api/v1), at the
+# reasoning effort each variable records, so PARALLAX_JUDGE_API_KEY is an OpenRouter key. Neither is the upstream's
+# own judge model (BU Bench's default, and Online-Mind2Web's published WebJudge backbone o4-mini), so these results
+# are not directly comparable with the figures upstream publishes for its judges.
+#
+# This runs the fastbrowse arm, the one the official groups publish. Parallax can also measure the hosted Browser Use
+# and Browserbase agents on these suites (`parallax browser official --arm`) for comparison; their rows are published
+# only where Parallax marks them publishable. Ultrafast returns no answer, so it is not run on them.
+#
+# `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
+# reserve (1 dollar), browser reserve (1, or 0 on local Chrome) and the judge variable's `budget_usd` while in flight.
+# With the judge variables' 20 (BU Bench) and 60 (Online-Mind2Web) dollars, 8 workers on cloud browsers hold at
+# most 8 x 62 = 496 dollars on Online-Mind2Web. The 600 dollar default keeps all 8 workers running until 104
+# dollars is spent, and a suite stops early only if its actual spend passes 538 dollars (BU Bench: 578).
 
 on:
   workflow_dispatch:
@@ -65,13 +78,13 @@ on:
         options: [local, cloud]
         default: local
       repeat:
-        description: Runs per task (at least 3)
+        description: Runs per task (at least 1)
         required: true
         default: "3"
       budget:
-        description: Approved total dollars for each suite, agent and judge together, with no per-run ceilings
+        description: Approved total dollars for each suite, agent and judge together; it only gates new tasks
         required: true
-        default: "100"
+        default: "600"
       concurrency:
         description: Task workers per suite, sharing one start-gate ledger
         required: true
@@ -120,7 +133,7 @@ jobs:
               ''|*[!0-9]*) echo "::error::${pair%%:*} must be an integer, got '${pair#*:}'"; exit 1 ;;
             esac
           done
-          test "$REPEAT" -ge 3 || { echo "::error::repeat must be at least 3, got $REPEAT"; exit 1; }
+          test "$REPEAT" -ge 1 || { echo "::error::repeat must be at least 1, got $REPEAT"; exit 1; }
           test "$WORKERS" -ge 1 || { echo "::error::concurrency must be at least 1"; exit 1; }
           case "$BUDGET" in
             ''|*[!0-9.]*) echo "::error::budget must be a number, got '$BUDGET'"; exit 1 ;;
@@ -148,6 +161,8 @@ jobs:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           SUITE_SET: ${{ inputs.suites }}
         run: |
           missing=""
@@ -155,6 +170,8 @@ jobs:
           need PARALLAX_DEPLOY_KEY "$PARALLAX_DEPLOY_KEY"
           need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
+          need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
+          need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
           if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
           # Online-Mind2Web is gated: HF_TOKEN's account must also have accepted the dataset's access conditions.
@@ -318,6 +335,10 @@ jobs:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           # The upstream judge reads its key as OPENAI_API_KEY whatever endpoint it calls.
           OPENAI_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          # Parallax's own pre-check judge, which runs before the upstream judge.
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           # Ignored with a local browser: the runner then drives the local Chrome alone.
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           JUDGE: ${{ matrix.judge }}

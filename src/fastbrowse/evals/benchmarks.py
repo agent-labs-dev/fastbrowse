@@ -30,7 +30,8 @@ GroupId = Literal[
     "bu-bench",
     "online-mind2web",
 ]
-Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast"]
+Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "browserbase"]
+FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
 PUBLISHED = RESULTS / "benchmarks.json"
 APPROVAL = RESULTS / "benchmark-approval.json"
@@ -49,7 +50,9 @@ class Row(PublicModel):
     completed: bool
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     seconds: Amount
-    dollars: Amount
+    dollars: Amount | None
+    """None when the arm does not report its cost: Browserbase's agent reports neither its model nor its spend, so
+    its rows carry a pass rate and seconds and the site shows "cost not reported" in place of a cost."""
     physical_runs: Annotated[int, Field(gt=0)]
     # The efficiency figures a comparison is normalized onto, so a slow page or a provider's margin cannot move it.
     # A build from before they existed omits them and they read as zero; the site then shows them as not recorded
@@ -63,31 +66,51 @@ class Row(PublicModel):
     @model_validator(mode="after")
     def completion(self) -> Self:
         # fastbrowse-pool is fastbrowse itself on another browser, so its completion is its own run status too.
-        if self.arm in {"fastbrowse", "fastbrowse-pool"}:
+        if self.arm in FASTBROWSE_ARMS:
             status = Status(self.status)
             if self.completed != (status is Status.COMPLETE):
                 raise ValueError("Fastbrowse completion must agree with its run status")
+            if self.dollars is None:
+                raise ValueError("Fastbrowse rows report their cost")
         return self
 
 
 class Coverage(NamedTuple):
     counts: frozenset[int]
-    repeats: int
+    repeats: int | None
+    """The approved repeat count, or None where any positive count is approved: an official suite's figure per task
+    is the mean of its repeats' upstream scores, each kept as the upstream defines it."""
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
     arms: tuple[Arm, ...]
-    """The measured arms, the Fastbrowse arm first: it is the one whose figures the regression check guards."""
+    """The arms the group may measure, the Fastbrowse arm first: it is the one whose figures the regression check
+    guards."""
+    required: tuple[Arm, ...] | None = None
+    """The arms every group must measure, or None for all of them. Any other arm in `arms` is measured when it ran:
+    a vendor arm that could not run (Browserbase while its key is refused) has no rows, and the site shows it as not
+    measured."""
+    partial: tuple[Arm, ...] = ()
+    """The arms that run only the tasks of the group's task set the catalog lists them for. The task set is the
+    tasks every other arm in `arms` runs."""
 
 
 # Each count the approved protocol has had. Retiring stretch-wizard-correction, whose site left DNS, took one task
 # from the internal catalog; figures approved before then keep their count. A new candidate is held to the exact
-# current catalog by `check_catalog`.
+# current catalog by `check_catalog`. The hosted group grew to 52 when the hosted agent's final page became readable,
+# so it runs the six navigation tasks too.
+#
+# The head-to-head (internal-hosted) is one Parallax invocation over one task set, the tasks fastbrowse, the hosted
+# Browser Use agent and Browserbase's agent all run, with rows from whichever of its four arms ran. Browser Use
+# Ultrafast returns no answer, so it runs only the tasks of that set graded without one. The official suites publish
+# the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks them publishable.
+HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browserbase")
+OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use", "browserbase")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
-    "internal-hosted": Coverage(frozenset({46, 47}), 3, "task-success", ("fastbrowse", "browser-use")),
+    "internal-hosted": Coverage(frozenset({46, 47, 52}), 3, "task-success", HEAD_TO_HEAD, (), ("jev-ultrafast",)),
     "internal-ultrafast": Coverage(frozenset({6}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
-    "bu-bench": Coverage(frozenset({200}), 1, "weighted-rubric", ("fastbrowse",)),
-    "online-mind2web": Coverage(frozenset({300}), 1, "full-task-success", ("fastbrowse",)),
+    "bu-bench": Coverage(frozenset({200}), None, "weighted-rubric", OFFICIAL, ("fastbrowse",)),
+    "online-mind2web": Coverage(frozenset({300}), None, "full-task-success", OFFICIAL, ("fastbrowse",)),
 }
 POOL_ULTRAFAST_SCHEMA = 5
 """From this schema the Ultrafast comparison is fastbrowse with its own browser pool against `jev-ultrafast`: the
@@ -96,6 +119,7 @@ figures approved under an older schema keep that pairing."""
 
 
 def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
+    """The arms a group may measure under the candidate's schema."""
     if group == "internal-ultrafast" and schema_version < POOL_ULTRAFAST_SCHEMA:
         return ("fastbrowse", "jev-ultrafast")
     return COVERAGE[group].arms
@@ -117,18 +141,38 @@ class Group(PublicModel):
         spec = COVERAGE[self.id]
         if len(self.task_ids) not in spec.counts or len(set(self.task_ids)) != len(self.task_ids):
             raise ValueError("task coverage differs from the approved full protocol")
-        if self.repeats != spec.repeats or self.metric != spec.metric or not self.limits:
+        if spec.repeats not in (None, self.repeats) or self.metric != spec.metric or not self.limits:
             raise ValueError("repeats, metric and recorded limits are required")
         if self.metric != "weighted-rubric" and any(r.score not in {0, 1} for r in self.rows):
             raise ValueError("binary source grades cannot contain partial scores")
         return self
 
+    def measured_arms(self, arms: tuple[Arm, ...]) -> tuple[Arm, ...]:
+        """The arms of `arms` this group has rows for, in `arms` order."""
+        present = {r.arm for r in self.rows}
+        return tuple(arm for arm in arms if arm in present)
+
     def check_slots(self, arms: tuple[Arm, ...]) -> None:
-        """The arms depend on the candidate's schema, so the candidate checks each group's slots against them."""
-        expected = {(task, repeat, arm) for task in self.task_ids for repeat in range(self.repeats) for arm in arms}
-        actual = [(r.task, r.repeat, r.arm) for r in self.rows]
-        if len(actual) != len(set(actual)) or set(actual) != expected:
-            raise ValueError("every scheduled slot must have exactly one measured row")
+        """The arms depend on the candidate's schema, so the candidate checks each group's slots against them.
+
+        Each measured arm has one row for every repeat of every task it runs: the whole task set, or for a partial
+        arm the part of it its rows name, which `check_catalog` holds to the catalog. Its cost is reported on every
+        row or on none."""
+        spec = COVERAGE[self.id]
+        measured = self.measured_arms(arms)
+        if {r.arm for r in self.rows} - set(arms) or not measured:
+            raise ValueError(f"{self.id} measures only {', '.join(arms)}")
+        if missing := [arm for arm in (arms if spec.required is None else spec.required) if arm not in measured]:
+            raise ValueError(f"{self.id} must measure {', '.join(missing)}")
+        for arm in measured:
+            rows = [r for r in self.rows if r.arm == arm]
+            slots = [(r.task, r.repeat) for r in rows]
+            tasks = {task for task, _ in slots} if arm in spec.partial else set(self.task_ids)
+            expected = {(task, repeat) for task in tasks for repeat in range(self.repeats)}
+            if len(slots) != len(set(slots)) or set(slots) != expected or not tasks <= set(self.task_ids):
+                raise ValueError("every scheduled slot must have exactly one measured row")
+            if len({r.dollars is None for r in rows}) > 1:
+                raise ValueError(f"{self.id}/{arm} reports its cost on every row or on none")
 
 
 class Fixture(PublicModel):
@@ -265,11 +309,17 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
             raise ValueError(f"new internal-ultrafast rows pair fastbrowse-pool, from schema {POOL_ULTRAFAST_SCHEMA}")
         # A comparison covers the tasks every one of its arms is eligible for: the pool runs every fastbrowse task,
         # so the Ultrafast comparison covers the tasks fastbrowse and jev-ultrafast share whichever backend it ran.
+        # A partial arm is left out of the task set, which is the same whichever arms ran, and runs its own part.
         arms = group_arms(group.id, candidate.schema_version)
-        required = {task.id for task in tasks if all(eligible(arm, task) for arm in arms)}
+        partial = COVERAGE[group.id].partial
+        required = {task.id for task in tasks if all(eligible(arm, task) for arm in arms if arm not in partial)}
         if set(group.task_ids) != required or group.source_sha256 != candidate.catalog_sha256:
             kind = "fastbrowse" if group.id == "internal-fastbrowse" else "matched"
             raise ValueError(f"internal rows must cover the exact {kind} catalog")
+        for arm in group.measured_arms(partial):
+            own = {task.id for task in tasks if task.id in required and eligible(arm, task)}
+            if {r.task for r in group.rows if r.arm == arm} != own:
+                raise ValueError(f"{group.id}/{arm} must run exactly the tasks of its set the catalog lists it for")
 
 
 CATALOG_PATH = "src/fastbrowse/evals/benchmark-catalog.json"
@@ -417,6 +467,8 @@ def regressions(
         ):
             raise ValueError(f"protocol changed: {group.id}; matched baseline measurement is required")
         arm = group_arms(group.id, candidate.schema_version)[0]
+        if arm not in group.measured_arms((arm,)):
+            raise ValueError(f"protocol changed: {group.id} no longer measures {arm}")
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == arm and r.task == task]
             before = [r for r in old.rows if r.arm == arm and r.task == task]

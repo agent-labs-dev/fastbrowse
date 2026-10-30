@@ -66,7 +66,8 @@ fn resolver(event_loop: Arc<Py<PyAny>>, function: Py<PyAny>) -> HostResolve {
     Arc::new(move |name: String, origin: String| call((name, origin)))
 }
 
-/// A run under way. Awaiting it gives the `RunResult` as JSON; cancelling the task that awaits it stops the run.
+/// A run under way. Awaiting it gives the `RunResult` as JSON and its final frame's bytes (or None); cancelling the
+/// task that awaits it stops the run.
 #[pyclass(frozen)]
 struct Run {
     result: Py<PyAny>,
@@ -272,7 +273,9 @@ fn run_task(
                         let error = match &outcome {
                             _ if failure.failed() => Some(refused("callback", String::new())),
                             Ok(answered) => {
-                                result.call_method1("set_result", (answered.dump_json(),))?;
+                                // The final frame is left out of the JSON, so it travels beside it as bytes.
+                                let frame = answered.final_frame.as_deref().map(|frame| PyBytes::new(py, frame));
+                                result.call_method1("set_result", ((answered.dump_json(), frame),))?;
                                 None
                             }
                             Err(RunError::Cancelled) => Some(refused("cancelled", "the run was cancelled".into())),
