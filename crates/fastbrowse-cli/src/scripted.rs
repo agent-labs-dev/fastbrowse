@@ -261,12 +261,8 @@ const NAMES: [&str; 17] = [
     "scripted_run:two_frames",
 ];
 
-/// The run `name` stands for, as `--run-task` names it. `__main__:x` is how the SDK's scripted server names its runs.
+/// The run `name` stands for, as `--run-task` names it.
 pub fn named(name: &str, requests: Requests) -> Option<Arc<dyn Runner>> {
-    let name = match name.strip_prefix("__main__:") {
-        Some(run) => format!("scripted_run:{run}"),
-        None => name.to_string(),
-    };
     let name: &'static str = NAMES.iter().find(|known| **known == name)?;
     Some(Arc::new(move |task: RunTask, host: Host| -> BoxFuture<'static, Outcome> {
         Box::pin(run(name, task, host, requests.clone()))
