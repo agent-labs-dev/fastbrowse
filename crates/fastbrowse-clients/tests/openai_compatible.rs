@@ -603,6 +603,17 @@ fn test_extra_fields_cannot_replace_the_ones_the_client_sets() {
 }
 
 #[tokio::test]
+async fn test_an_error_that_echoes_a_key_from_a_custom_header_is_scrubbed() {
+    let script = Script::new([Step::Reply(Response::json(400, &json!({"error": {"message": "bad key sk-custom"}})))]);
+    let options = LLMOptions { auth_header: Some("x-gateway-key"), ..LLMOptions::default() };
+    let models = HashMap::from([(LLMPurpose::Read, "m".to_string())]);
+    let llm = OpenAICompatibleLLM::new("sk-custom", script.http(), "https://llm.test", models, options).unwrap();
+    let error = generate(&llm, LLMPurpose::Read, &[Message::user("?")], None).await.unwrap_err().to_string();
+    assert_eq!(script.requests()[0].header("x-gateway-key"), Some("sk-custom"));
+    assert!(!error.contains("sk-custom"), "{error}");
+}
+
+#[tokio::test]
 async fn test_a_keyless_client_sends_no_authorization_and_scrubs_nothing() {
     let reply = || completion(json!(r#"{"count": 1, "local": 2}"#), Value::Null);
     let script = Script::new([reply(), reply()]);

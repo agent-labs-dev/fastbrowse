@@ -325,9 +325,11 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
     if let (Some(key), Some(ledger)) = (&ledger_param, &ledger) {
         let expected = &case["ledger_after"][key];
         let expected = expected.get("$ledger").unwrap_or(expected);
-        let actual = ledger_json(ledger);
-        if !expected.is_null() && actual != *expected {
-            problems.push(format!("ledger\n  rust:   {}\n  python: {}", clip(&actual), clip(expected)));
+        // Calls sent side by side bill in whichever order they finish, so the lines are compared as a multiset.
+        let actual = unordered_lines(ledger_json(ledger));
+        let expected = unordered_lines(expected.clone());
+        if !expected.is_null() && actual != expected {
+            problems.push(format!("ledger\n  rust:   {}\n  python: {}", clip(&actual), clip(&expected)));
         }
     }
     let events = trace.events();

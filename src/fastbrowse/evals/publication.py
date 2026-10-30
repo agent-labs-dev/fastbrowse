@@ -42,6 +42,7 @@ from typing import Any, Literal, TypeGuard
 from pydantic import BaseModel, ConfigDict
 
 from fastbrowse.evals import baseline, versions
+from fastbrowse.evals.catalog import SUITES
 from fastbrowse.evals.status import Ending
 from fastbrowse.evals.storage import ArchiveReceipt, read_archive
 from fastbrowse.models import Limits
@@ -67,7 +68,7 @@ REGRESSION_COST_FLOOR_DOLLARS = 0.001
 _LEDGER_SUFFIX = ".attempts.jsonl"
 _HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
-_LIVE_SUITES = ("core", "dev", "heldout", "stretch-dev", "stretch-heldout")
+_LIVE_SUITES = tuple(SUITES)
 
 
 class Finding(BaseModel):
@@ -318,7 +319,6 @@ def _finding(severity: Literal["refuse", "regress", "advise"], check: str, detai
 
 def _suite_ids() -> dict[str, tuple[str, ...]]:
     """Every suite this build knows, so a row's suite version can be checked against the tasks it ran."""
-    from fastbrowse.evals.catalog import SUITES
     from fastbrowse.evals.mock_tasks import TASKS as MOCK
     from fastbrowse.evals.tasks import TASKS as LOCAL
 
@@ -736,6 +736,8 @@ def moves(
     findings = []
     base_calls = _median_metric(measured_base, "llm_calls")
     candidate_calls = _median_metric(measured_candidate, "llm_calls")
+    if base_calls is None or candidate_calls is None:
+        findings.append(_finding(ADVISE, "efficiency", f"{where}: LLM calls not compared, a side lacks them"))
     if (
         base_calls is not None
         and candidate_calls is not None
@@ -751,6 +753,8 @@ def moves(
         )
     base_tps = _median_metric(measured_base, "tokens_per_second")
     candidate_tps = _median_metric(measured_candidate, "tokens_per_second")
+    if base_tps is None or candidate_tps is None:
+        findings.append(_finding(ADVISE, "efficiency", f"{where}: tokens/s not compared, a side lacks them"))
     if (
         base_tps is not None
         and candidate_tps is not None
@@ -768,7 +772,9 @@ def moves(
         )
     base_prices = _prices(measured_base)
     candidate_prices = _prices(measured_candidate)
-    if len(base_prices) == len(measured_base) and len(candidate_prices) == len(measured_candidate):
+    if len(base_prices) != len(measured_base) or len(candidate_prices) != len(measured_candidate):
+        findings.append(_finding(ADVISE, "efficiency", f"{where}: cost not compared, a side has unpriced rows"))
+    else:
         base_cost = statistics.median(base_prices)
         candidate_cost = statistics.median(candidate_prices)
         if _over(base_cost, candidate_cost, REGRESSION_COST_FLOOR_DOLLARS):
@@ -1007,6 +1013,9 @@ def main(argv: list[str]) -> int:
     ledger_file = args.ledger or ledger_path(args.rows)
     ledger = read_jsonl(ledger_file) if ledger_file.exists() else None
     release = args.release or _release_of(rows_)
+    if release is None:
+        print("BLOCKED the rows do not all record one fastbrowse_version; pass --release to name the one expected")
+        return 1
     report = gate(
         rows_,
         release=release,

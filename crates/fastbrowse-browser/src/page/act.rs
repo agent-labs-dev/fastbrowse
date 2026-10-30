@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 use super::scripts::{
-    ACTIVATION_KEY_JS, COVER_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, OWNED_JS, PRESENTED_JS,
-    SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
+    ACTIVATION_KEY_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, OWNED_JS,
+    PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::secs;
@@ -453,11 +453,12 @@ impl CdpPage {
         // A cart or menu can cover a still-indexed button. Name the drawn obstruction so recovery can dismiss it.
         let script = format!(
             "(() => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             if (!e) return null; const rect = e.getBoundingClientRect(); \
-             const hit = e.ownerDocument.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); \
-             let cover = hit?.closest({obstructions}); \
-             if (!cover) for (let node = hit; node && node !== e.ownerDocument.body; node = node.parentElement) {{ \
-             if (!node.contains(e) && e.ownerDocument.defaultView.getComputedStyle(node).position === 'fixed' && \
+             if (!e) return null; const rect = e.getBoundingClientRect(); {deep_hit}\
+             const hit = deepHit(e.ownerDocument, rect.x + rect.width / 2, rect.y + rect.height / 2); \
+             let cover = null; for (let node = hit; node && !cover; node = up(node)) \
+             if (node.matches({obstructions})) cover = node; \
+             if (!cover) for (let node = hit; node && node !== e.ownerDocument.body; node = up(node)) {{ \
+             if (!holds(node, e) && e.ownerDocument.defaultView.getComputedStyle(node).position === 'fixed' && \
              node.querySelector('button,[role=button],a[href]')) {{ cover = node; break; }} }} \
              cover ||= hit; if (!cover) return null; const label = node => \
              (node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent || '')\
@@ -467,6 +468,7 @@ impl CdpPage {
              .map(label).filter(Boolean); \
              return JSON.stringify({{role:cover.getAttribute('role') || cover.tagName.toLowerCase(), \
              label:cover.getAttribute('aria-label') || cover.getAttribute('title') || null, controls}}); }})()",
+            deep_hit = DEEP_HIT_JS,
             obstructions = py_json(&Value::from(OBSTRUCTIONS)),
         );
         let mut detail = self.evaluate(session_id, &script).await.ok().filter(truthy);
@@ -501,8 +503,8 @@ impl CdpPage {
     async fn frame_controls(&self, session_id: &str, local_id: i64) -> Result<Vec<String>, BrowserError> {
         let expression = format!(
             "(() => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             if (!e) return null; const r = e.getBoundingClientRect(); \
-             const hit = e.ownerDocument.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); \
+             if (!e) return null; const r = e.getBoundingClientRect(); {DEEP_HIT_JS}\
+             const hit = deepHit(e.ownerDocument, r.x + r.width / 2, r.y + r.height / 2); \
              return hit?.tagName === 'IFRAME' || hit?.tagName === 'FRAME' ? hit : null; }})()"
         );
         let out = self
@@ -968,7 +970,9 @@ impl CdpPage {
     async fn scroll(&self, operation: Operation) -> Result<(), BrowserError> {
         let session_id = self.session.active_session_id()?;
         let delta = if operation == Operation::ScrollUp { -560 } else { 560 };
-        let params = json!({"type": "mouseWheel", "x": 550, "y": 650, "deltaX": 0, "deltaY": delta});
+        // The wheel lands where the page is under the pointer: a point outside the window scrolls nothing.
+        let centre = self.evaluate(&session_id, "[innerWidth / 2, innerHeight / 2]").await?;
+        let params = json!({"type": "mouseWheel", "x": centre[0], "y": centre[1], "deltaX": 0, "deltaY": delta});
         self.session.send("Input.dispatchMouseEvent", params, Some(&session_id)).await.map(drop)
     }
 

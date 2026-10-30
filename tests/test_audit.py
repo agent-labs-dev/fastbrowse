@@ -6,6 +6,7 @@ model and spends nothing. The paid tiers run only when `FASTBROWSE_AUDIT_SPEND` 
 never spends money by accident.
 """
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -88,6 +89,52 @@ def test_the_audit_download_is_served_beside_the_eval_pages() -> None:
     assert report.headers["content-disposition"] == 'attachment; filename="audit-report.csv"'
     assert report.content == b"city,population\nLyon,522250\n"
     assert page.headers["content-type"].startswith("text/html")
+
+
+@pytest.mark.parametrize(
+    ("payload", "cost"),
+    [
+        (None, None),
+        ({"cost": {"lines": [{"dollars": 0.5}, {"dollars": None}]}}, None),
+        ({"cost": {"lines": [{"dollars": 0.5}, {"dollars": 0.0}]}}, 0.5),
+    ],
+)
+def test_a_cost_not_fully_known_is_unknown(payload, cost) -> None:
+    from fastbrowse.audit import runner
+
+    assert runner._cost(payload) == cost
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "status"), [(0, "ok"), (2, "refused"), (None, "timed_out"), (-9, "crashed"), (101, "crashed")]
+)
+def test_a_timeout_or_a_crash_is_not_a_refusal(exit_code, status) -> None:
+    from fastbrowse.audit import runner
+
+    assert runner._observed_status(exit_code, None) == status
+
+
+def test_a_claim_is_judged_against_the_task_the_run_was_given(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastbrowse.audit import runner
+    from fastbrowse.audit.cases import a
+
+    seen = {}
+    monkeypatch.setattr(runner, "_holds", lambda claim, ctx: seen.update(ctx) or True)
+    monkeypatch.setattr(
+        runner,
+        "_execute",
+        lambda case, mapping, cwd, budget: {
+            "argv": ["fastbrowse", "What is the heading?"],
+            "exit_code": 0,
+            "stdout": "",
+            "stderr": "",
+            "json": {},
+        },
+    )
+    case = next(c for c in CASES if c.argv[0] == "{cli}" and not c.fixture and not c.spends)
+    case = dataclasses.replace(case, assertions=(a("c", "json", "claim", "Yes."),))
+    runner.run_case(case, workdir=tmp_path, max_dollars=1.0, spend=False)
+    assert seen["task"] == "What is the heading?"
 
 
 @pytest.mark.parametrize(("verdict", "ok"), [(None, True), ("the output does not hold", False)])

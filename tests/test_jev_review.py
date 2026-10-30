@@ -41,7 +41,10 @@ def test_a_claim_any_diff_part_supports_stands_and_a_change_any_changelog_part_m
     assert jev_review.combined("CHANGELOG.md", [[0.9, 0.1], [0.2, 0.3]]) == 0.2
 
 
-@pytest.mark.parametrize(("path", "visible"), [("pyproject.toml", True), (".github/workflows/ci.yml", False)])
+@pytest.mark.parametrize(
+    ("path", "visible"),
+    [("pyproject.toml", True), ("crates/fastbrowse-cli/src/entry.rs", True), (".github/workflows/ci.yml", False)],
+)
 def test_prose_is_judged_against_every_change_but_only_the_package_is_user_visible(
     monkeypatch: pytest.MonkeyPatch, path: str, visible: bool
 ) -> None:

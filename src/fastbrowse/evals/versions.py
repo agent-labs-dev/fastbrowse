@@ -224,7 +224,8 @@ _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_ve
          "normalized_status", "task_successful", "passed",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
          "answered", "session_seconds", "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
-         "actions", "decisions", "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
+         "actions", "decisions", "llm_calls", "tokens_per_second",
+         "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
              "benchmark_suite", "benchmark_runner_sha", "benchmark_runner_dirty",

@@ -59,7 +59,7 @@ impl Embedded {
             match named("FASTBROWSE_TEST_SERVER").as_deref() {
                 Some("scripted_run") => {
                     let run = format!("scripted_run:{}", named("FASTBROWSE_TEST_RUN").unwrap_or_default());
-                    (crate::scripted::named(&run, requests.clone()), Some(requests))
+                    (Some(crate::scripted::known(&run, requests.clone())), Some(requests))
                 }
                 _ => (None, None),
             }

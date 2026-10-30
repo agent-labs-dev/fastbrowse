@@ -85,7 +85,7 @@ async fn icons_with(markup: &str) -> Option<Harness> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_table_header_variants() {
-    let cases: [(&str, &str, &[&str]); 11] = [
+    let cases: [(&str, &str, &[&str]); 12] = [
         (
             "multiple-header-rows",
             "<thead><tr><td>Group</td></tr><tr><th>Name</th></tr></thead>\
@@ -139,6 +139,11 @@ async fn test_table_header_variants() {
             "<tr><th>Name</th><th style='display:none'>Id</th></tr>\
              <tr><td>Ada</td><td style='display:none'>7</td></tr>",
             &["| Name |\n| --- |\n| Ada |"],
+        ),
+        (
+            "icon-library-only-the-snapshot-knew",
+            "<tr><th>Name</th><th>Ok</th></tr><tr><td>Ada</td><td><i class='lucide lucide-check'></i></td></tr>",
+            &["| Name | Ok |\n| --- | --- |\n| Ada | [check icon] |"],
         ),
         (
             "invisible-cell-keeps-its-column",

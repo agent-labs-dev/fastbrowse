@@ -219,24 +219,7 @@ fn temporary_directory(prefix: &str) -> std::io::Result<PathBuf> {
 
 /// `shutil.which(name)`: a path with a separator is checked as given, a bare name looked up on PATH.
 pub fn which(name: &str) -> Option<PathBuf> {
-    let executable = |path: &Path| {
-        let Ok(metadata) = path.metadata() else { return false };
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-        }
-        #[cfg(not(unix))]
-        {
-            metadata.is_file()
-        }
-    };
-    if name.contains(std::path::MAIN_SEPARATOR) || name.contains('/') {
-        let path = PathBuf::from(name);
-        return executable(&path).then_some(path);
-    }
-    let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths).map(|directory| directory.join(name)).find(|path| executable(path))
+    fastbrowse_run::which(name).map(PathBuf::from)
 }
 
 /// Chrome, from `Settings.chrome` (a name or path that replaces discovery rather than joining it) or the usual names.

@@ -177,11 +177,13 @@ impl Drop for HttpEvent<'_> {
 pub struct Http {
     transport: Arc<dyn Transport>,
     pub trace: Trace,
+    /// The header a provider takes its key in, when that is none of the usual three.
+    credential_header: Option<&'static str>,
 }
 
 impl Http {
     pub fn new(transport: Arc<dyn Transport>) -> Http {
-        Http { transport, trace: Trace::disabled() }
+        Http { transport, trace: Trace::disabled(), credential_header: None }
     }
 
     /// hyper over rustls with the Mozilla roots.
@@ -191,6 +193,11 @@ impl Http {
 
     pub fn with_trace(mut self, trace: Trace) -> Http {
         self.trace = trace;
+        self
+    }
+
+    pub(crate) fn with_credential_header(mut self, header: Option<&'static str>) -> Http {
+        self.credential_header = header;
         self
     }
 
@@ -255,12 +262,14 @@ impl Http {
     }
 
     async fn send(&self, request: Request) -> Result<Response, TransportError> {
-        // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too.
+        // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too,
+        // as is one that echoes the header a custom endpoint was configured with.
         let credential = request
             .header("authorization")
             .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
             .or_else(|| request.header("x-api-key"))
             .or_else(|| request.header("api-key"))
+            .or_else(|| self.credential_header.and_then(|name| request.header(name)))
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
         let mut response = self.transport.send(request).await?;

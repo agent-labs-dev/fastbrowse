@@ -260,6 +260,8 @@ async def run_mock_task(
             task, base_url + task.start, cdp_url, downloads, secrets, limits, task.attachments
         )
         failure = task.check(result, site)
+        if failure is None and isinstance(result, RunResult) and result.status is not task.expect:
+            failure = f"status {result.status.value}, expected {task.expect.value}"
         if failure is None and task.claims:
             failure = await _judge_claims(task, result, None)
         extra = {

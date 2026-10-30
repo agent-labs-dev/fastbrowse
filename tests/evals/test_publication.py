@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from fastbrowse.evals import baseline as baseline_module
 from fastbrowse.evals import catalog as live
 from fastbrowse.evals import publication, versions
 from fastbrowse.evals.publication import REFUSE, REGRESS
@@ -493,6 +494,38 @@ def test_an_unpriced_candidate_never_compares_a_cost() -> None:
     candidate = attempts(3, dollars=None, unknown_cost=True)
     report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
     assert not any(finding.check == "cost" for finding in report.findings)
+
+
+def test_a_comparison_a_row_cannot_make_is_reported() -> None:
+    baseline = [baseline_row(passed=True) for _ in range(3)]
+    candidate = attempts(3, dollars=None, unknown_cost=True)
+    report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
+    notes = [finding.detail for finding in report.findings if finding.check == "efficiency"]
+    assert any("cost not compared" in note for note in notes)
+    assert not any(finding.check == "efficiency" for finding in report.blocking)
+
+
+def test_rows_from_two_builds_are_refused_without_a_named_release(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rows = [row(), row()]
+    rows[1] = rows[1] | {"run": rows[1]["run"] | {"fastbrowse_version": "0.0.1"}}
+    path = tmp_path / "rows.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert publication.main(["--rows", str(path), "--baseline", str(tmp_path)]) == 1
+    assert "one fastbrowse_version" in capsys.readouterr().out
+
+
+def test_a_published_row_keeps_what_a_release_is_compared_on() -> None:
+    source = attempts(1)[0] | {"llm_calls": 4, "tokens_per_second": 80.0}
+    assert {"llm_calls": 4, "tokens_per_second": 80.0}.items() <= versions.slim(source).items()
+    assert {"llm_calls", "tokens_per_second"} <= baseline_module.FIELDS
+
+
+def test_the_live_suites_are_the_catalog_suites() -> None:
+    from fastbrowse.evals.catalog import SUITES
+
+    assert set(publication._LIVE_SUITES) == set(SUITES)
 
 
 def test_the_cli_blocks_a_run_that_breaks_integrity(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

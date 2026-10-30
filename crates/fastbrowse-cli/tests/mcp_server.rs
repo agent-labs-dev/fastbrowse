@@ -398,6 +398,11 @@ fn test_a_secret_flag_must_name_an_origin() {
 }
 
 #[test]
+fn test_a_stand_in_run_that_names_nothing_is_refused() {
+    assert!(matches!(parse(&argv(&["--run-task", "nope"])), Err(fastbrowse_cli::argparse::Exit::Usage(_))));
+}
+
+#[test]
 fn test_a_secret_origin_is_parsed_as_an_origin() {
     let args = parse(&argv(&["--secret", "p=V@https://a.example:8443"])).unwrap();
     assert_eq!(args.secret, [("p".to_string(), "V".to_string(), "https://a.example:8443".to_string())]);

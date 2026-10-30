@@ -145,21 +145,6 @@ fn context_question(task: &str, actions: &[&str]) -> Question {
     .into()
 }
 
-/// Closes each list the reader proved ended, unless its requirement is still incomplete.
-fn close_ended(state: &mut RunState, ended: &[String]) {
-    for requirement_id in ended {
-        if state.incomplete.contains(requirement_id) {
-            continue;
-        }
-        if let Some(comparison) = state.comparisons.get(requirement_id).cloned() {
-            complete_comparison(&mut state.notes, requirement_id, &comparison);
-        }
-        if !state.notes.has_untallied_records(requirement_id) {
-            state.notes.complete_tallies(requirement_id);
-        }
-    }
-}
-
 impl Agent {
     /// Return whether the read added evidence, since only new evidence makes a read progress.
     pub(super) async fn read(
@@ -341,7 +326,7 @@ impl Agent {
         state.comparisons = outcome.comparisons.clone();
         // A records-only recovery can prove that a finite list ended. Apply its code-owned result here, where a normal
         // read can finish without `read_list_page` consuming an ended marker.
-        close_ended(state, &outcome.ended);
+        self.settle_ended(state, &outcome.ended);
         // A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source quote or a
         // newly evidenced requirement restores the read budget.
         let progressed = context_added
@@ -382,6 +367,26 @@ impl Agent {
             self.follow_pages(state, &continues, observation, outcome.expands.as_deref());
         }
         Ok(progressed)
+    }
+
+    /// Finish what a list's end settles. A comparison code cannot rank leaves its requirement to the notes alone, so
+    /// the trace says it was declined.
+    pub(super) fn settle_ended(&self, state: &mut RunState, ended: &[String]) {
+        for requirement_id in ended {
+            if state.incomplete.contains(requirement_id) {
+                continue;
+            }
+            if let Some(comparison) = state.comparisons.get(requirement_id).cloned()
+                && !complete_comparison(&mut state.notes, requirement_id, &comparison)
+            {
+                self.event("comparison_declined", || {
+                    Map::from_iter([("requirement_id".to_string(), Value::from(requirement_id.as_str()))])
+                });
+            }
+            if !state.notes.has_untallied_records(requirement_id) {
+                state.notes.complete_tallies(requirement_id);
+            }
+        }
     }
 
     /// Whether the page is on the list left open, by Jev's word. A read that saw no list going on ends the list only
@@ -459,7 +464,7 @@ impl Agent {
             state.list_url = Some(capture.url.clone());
             return Ok(ListRead::Read);
         }
-        close_ended(state, &outcome.ended);
+        self.settle_ended(state, &outcome.ended);
         if !wanted.iter().all(|r| state.notes.evidenced(&r.id)) {
             return Ok(ListRead::Unread);
         }

@@ -39,7 +39,7 @@ _DOUBT = 0.5
 _GENERATED = ("docs/results/",)
 # What a user of the package or its CLI can notice: the code, and the metadata that names its entry points and
 # the Pythons and dependencies it installs with.
-_USER_VISIBLE = ("src/", "pyproject.toml")
+_USER_VISIBLE = ("src/", "crates/", "packages/sdk/", "go/", "java/", "dotnet/", "pyproject.toml")
 
 
 def _git(*args: str) -> str:

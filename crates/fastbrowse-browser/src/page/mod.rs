@@ -1243,8 +1243,9 @@ impl CdpPage {
                         return Ok(false);
                     }
                     Ok((quiet, _)) => unchanged = quiet,
-                    // Navigation destroys the promise with its execution context. Only this read is retried.
-                    Err(_) => {}
+                    // Navigation destroys the promise with its execution context, which is itself a change, so a
+                    // deadline reached here is not read as a page left as it was. Only this read is retried.
+                    Err(_) => unchanged = false,
                 },
             }
             let remaining = deadline.saturating_duration_since(Instant::now());

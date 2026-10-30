@@ -131,8 +131,8 @@ struct View {
     id: String,
     cdp_url: Option<String>,
     live_url: Option<String>,
-    browser_cost: f64,
-    proxy_cost: f64,
+    browser_cost: Option<f64>,
+    proxy_cost: Option<f64>,
 }
 
 pub struct BrowserUseCloudBrowser {
@@ -391,10 +391,13 @@ fn lock(state: &Shared) -> std::sync::MutexGuard<'_, State> {
 }
 
 fn record_cost(state: &Shared, browser: &View) {
-    lock(state).cost = vec![
-        CostLine::new(CostComponent::Browser, CostBasis::Metered, Some(browser.browser_cost)),
-        CostLine::new(CostComponent::Proxy, CostBasis::Metered, Some(browser.proxy_cost)),
-    ];
+    // A cost the service left out is unknown, not a metered zero.
+    let line = |component, dollars: Option<f64>| {
+        let basis = if dollars.is_some() { CostBasis::Metered } else { CostBasis::Unknown };
+        CostLine::new(component, basis, dollars)
+    };
+    lock(state).cost =
+        vec![line(CostComponent::Browser, browser.browser_cost), line(CostComponent::Proxy, browser.proxy_cost)];
 }
 
 async fn call(api: &Api, method: &str, path: &str, body: &str) -> Result<Response, BrowserUseCloudError> {
@@ -433,8 +436,8 @@ fn view(raw: &Value) -> Option<View> {
         Some(_) => None,
     };
     let dollars = |alias: &str, name: &str| match field(alias, name) {
-        None => Some(0.0),
-        Some(value) => decimal(value),
+        None => Some(None),
+        Some(value) => decimal(value).map(Some),
     };
     Some(View {
         id: object.get("id")?.as_str()?.to_owned(),
@@ -1126,9 +1129,12 @@ mod tests {
     #[test]
     fn costs_read_decimal_strings_and_numbers() {
         let read = |raw: Value| view(&raw).map(|v| (v.browser_cost, v.proxy_cost));
-        assert_eq!(read(serde_json::json!({"id": "x", "browserCost": "0.25", "proxyCost": 0.1})), Some((0.25, 0.1)));
-        assert_eq!(read(serde_json::json!({"id": "x"})), Some((0.0, 0.0)));
-        assert_eq!(read(serde_json::json!({"id": "x", "browser_cost": "1E-2"})), Some((0.01, 0.0)));
+        assert_eq!(
+            read(serde_json::json!({"id": "x", "browserCost": "0.25", "proxyCost": 0.1})),
+            Some((Some(0.25), Some(0.1)))
+        );
+        assert_eq!(read(serde_json::json!({"id": "x"})), Some((None, None)));
+        assert_eq!(read(serde_json::json!({"id": "x", "browser_cost": "1E-2"})), Some((Some(0.01), None)));
         assert_eq!(read(serde_json::json!({"id": "x", "browserCost": "NaN"})), None);
         assert_eq!(read(serde_json::json!({"id": "x", "browserCost": null})), None);
         assert_eq!(read(serde_json::json!({"id": 1})), None);

@@ -210,15 +210,20 @@ def _environment(case: AuditCase) -> dict[str, str]:
     return env
 
 
-def _cost(payload: Any) -> float:
+def _cost(payload: Any) -> float | None:
+    """The run's dollars, or None when it reported none or any line of its cost is unknown: unknown is never zero."""
     if isinstance(payload, Mapping):
         if isinstance(payload.get("cost_usd"), (int, float)):
             return float(payload["cost_usd"])
         cost = payload.get("cost")
         if isinstance(cost, Mapping):
-            lines = cost.get("lines", [])
-            return round(sum(line["dollars"] for line in lines if isinstance(line, Mapping) and line.get("dollars")), 6)
-    return 0.0
+            dollars = [line.get("dollars") for line in cost.get("lines", [])]
+            return None if None in dollars else round(sum(dollars), 6)
+    return None
+
+
+def _dollars(cost: float | None) -> str:
+    return "unknown" if cost is None else f"${cost}"
 
 
 def _observed_status(exit_code: int | None, payload: Any) -> str:
@@ -226,7 +231,10 @@ def _observed_status(exit_code: int | None, payload: Any) -> str:
         return str(payload["status"])
     if exit_code == 0:
         return "ok"
-    return "refused"
+    if exit_code is None:
+        return "timed_out"
+    # A signal, or Rust's exit code for a panic: the program died rather than refused.
+    return "crashed" if exit_code < 0 or exit_code == 101 else "refused"
 
 
 def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool) -> dict[str, Any]:
@@ -263,7 +271,7 @@ def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool)
     duration = round(time.monotonic() - started, 3)
 
     ctx: dict[str, Any] = {
-        "task": case.purpose,
+        "task": rows["argv"][1] if case.argv[0] == "{cli}" else case.purpose,
         "exit_code": rows["exit_code"],
         "stdout": rows["stdout"],
         "stderr": rows["stderr"],
@@ -396,7 +404,7 @@ def _markdown(rows: Sequence[Mapping[str, Any]]) -> str:
         verdict = "pass" if not failed else "FAIL: " + ", ".join(failed)
         lines.append(
             f"| {row['id']} | {row['tier']} | {row['status']} | {row['exit_code']} | {row['duration_s']}s | "
-            f"${row['cost_usd']} | {verdict} |"
+            f"{_dollars(row['cost_usd'])} | {verdict} |"
         )
     passed = sum(1 for row in rows if all(item["ok"] for item in row["assertions"]))
     lines += ["", f"{passed}/{len(rows)} cases passed."]
@@ -433,7 +441,8 @@ def main(argv: list[str]) -> int:
         rows.append(row)
         failed = [item["name"] for item in row["assertions"] if not item["ok"]]
         mark = "PASS" if not failed else "FAIL"
-        print(f"{mark} {case.id:6} tier {case.tier} {row['status']:20} {row['duration_s']:>6}s ${row['cost_usd']}")
+        cost = _dollars(row["cost_usd"])
+        print(f"{mark} {case.id:6} tier {case.tier} {row['status']:20} {row['duration_s']:>6}s {cost}")
         if failed:
             print(f"      failed: {', '.join(failed)}")
 
