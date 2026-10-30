@@ -129,6 +129,12 @@ The cursor is drawn only when exactly one driver window matches the page's repor
 two share a scale, so a scaled display is skipped), that window is in front of every other, the tab is visible and
 the point is inside the viewport. Otherwise it is hidden. Any driver failure turns the feature off for the run.
 
+The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
+one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the
+arrow landed on nothing, and a glide past the two-second call bound turned the feature off. The run asks
+`set_agent_cursor_motion` for a fixed 550 ms glide, which lands on each click about half a second after it, and
+waits up to six seconds for a move. Shorter glides land sooner but cross the screen in a few frames.
+
 Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
 0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The driver offers no click
 pulse through `move_cursor`, so only the glide is shown. A docked DevTools panel or a pinch zoom hides the cursor,

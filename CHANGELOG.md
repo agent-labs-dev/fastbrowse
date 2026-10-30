@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **`--cursor` lands on what was clicked.** The Cua Driver glides at its own pace, one to three seconds across the screen, and a run clicks every half second when the page is quick, so each glide was cut off by the next and the arrow sat mid-arc, nowhere near the click. On older drivers a glide over two seconds also turned the cursor off for the rest of the run. Glides are now fixed at 550 ms, and the arrow reaches each click about half a second after it.
+
+- **`--cursor` stays on screen for the whole run.** The Cua Driver fades its overlay after 15s idle, and a page change or a frame the run could not read also took it away, so the cursor vanished between steps. fastbrowse now asks the driver to keep it (`idle_hide_ms: 0`) and removes it only when the tab stops showing.
+
 - **The README is shorter and says only what is published.** The Rust, Go, Java and .NET sections were printed three times, and the page offered `cargo add fastbrowse`, the Maven coordinates, `dotnet add package Fastbrowse` and `paru -S fastbrowse`, none of which resolves: those registries and the AUR do not hold fastbrowse yet. The first run now needs one key, `OPENROUTER_API_KEY`, with `--local`; the benchmark line states that fastbrowse was slower than the hosted Browser Use agent as well as cheaper; `run_task(settings=...)` and the restored rule modules are marked as not in 0.9.0; and every flag, the signed-in, attach and model settings and the status table moved to [the command-line reference](docs/cli.md).
 
 - **Browser Harness joins the head-to-head.** The benchmark campaign's head-to-head runs Browser Use's [Browser Harness](https://github.com/browser-use/browser-harness) 0.1.13 beside the other agents, driven by the Codex CLI with its CLI and skill on GPT-6 Luna, on a Browser Use Cloud browser. A coding agent given no credentials, it runs the set's credential-free completion tasks, and the site shows its share of the attempts.
