@@ -5,10 +5,10 @@ description: "Quality gate, audit evidence, live roots and cleanup boundaries fo
 
 # fastbrowse audit guidance
 
-fastbrowse is a Python 3.13+ package with CLI, MCP, embedding and `serve` entry points. Two owned JavaScript
-expressions run inside browser pages through CDP. Python browser tests exercise them against Chrome.
-`packages/sdk` is the TypeScript SDK published to npm as `fastbrowse`. It starts `fastbrowse serve --stdio`,
-and its tests run against that server from the uv environment.
+fastbrowse's core is Rust, in `crates/` (ADR 0004). The `fastbrowse` wheel carries it as `fastbrowse._native`, and
+`src/fastbrowse` is the thin Python layer: models, the native bridge and the evals. Two owned JavaScript expressions,
+`crates/fastbrowse-browser/js/snapshot.js` and `capture.js`, run inside pages through CDP. `packages/sdk`, `go`,
+`java` and `dotnet` are clients of `fastbrowse serve --stdio`.
 
 ## Gate
 
@@ -30,6 +30,7 @@ npm run check:sdk
 uv run actionlint
 uv run python .sift/agents.py check
 uv run python .sift/gate.py --base origin/main
+just rust
 ```
 
 Every command must exit 0. Node.js 22+ is needed only for development. CI retains the required `check`
@@ -63,6 +64,7 @@ gitleaks detect --source . --no-banner --redact
 ## Live roots
 
 - `fastbrowse.run_task`, package exports, public Pydantic models and callback protocols are consumed by embedders.
+- `crates/fastbrowse` re-exports `run_task` and its types for crates.io, and the crates under it publish at the same version. `crates/fastbrowse-py` (pyo3) and `crates/fastbrowse-node` (the Node addon) are called only across the language boundary.
 - `pyproject.toml` registers `fastbrowse.commands:fastbrowse` and `fastbrowse.commands:fastbrowse_mcp` console scripts, which run the Rust CLI in `fastbrowse._native`.
 - `fastbrowse serve` is the Rust CLI's; `fastbrowse.protocol` models are the wire the npm SDK reads.
 - `packages/sdk/src/index.ts` exports are the npm package's public API. `fastbrowse.scripted:run_task` is named
@@ -78,8 +80,14 @@ gitleaks detect --source . --no-banner --redact
 
 ## Model-read text
 
-Prompts in agent, planner, policy, retrieval, verification, safety and shortcut modules, MCP tool descriptions,
-LLM response schemas, Jev questions and task text are behavior. Never shorten them as cleanup.
+Text a model reads is behaviour, never cleanup:
+
+- Prompts and Jev questions in `crates/fastbrowse-agent/src` (agent, planner, policy, retrieval, verification,
+  shortcut) and `crates/fastbrowse-core/src/safety.rs`.
+- LLM response schemas, including `.doc()` field descriptions and `constrained(...)` bounds.
+- MCP tool descriptions in `crates/fastbrowse-cli/src/mcp`, and task text.
+- What the observation renders: `ObservationLimits` and `TokenBudget` in `crates/fastbrowse-core/src/config.rs`,
+  `crates/fastbrowse-browser/src/page/mod.rs`, and the two page scripts.
 Validate behavior changes against dev evals; heldout runs are before and after a round and are not debugged.
 See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prerequisites.
 
@@ -87,7 +95,10 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 
 | Paths | Zone |
 |---|---|
-| src/fastbrowse Python, crates/fastbrowse-browser/js/capture.js and snapshot.js | production |
+| crates/*/src, crates/fastbrowse-browser/js/capture.js and snapshot.js | production |
+| src/fastbrowse Python | production |
+| crates/*/tests Rust | test |
+| crates/*/tests/golden/, crates/fastbrowse-clients/tests/golden/ | fixture |
 | packages/sdk/src/ except protocol.ts | production |
 | packages/sdk/test/ | test |
 | go/ Go except protocol.go and *_test.go | production |
@@ -99,12 +110,16 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | packages/sdk/src/protocol.ts, protocol/schema.json, go/protocol.go, java/src/main/java/dev/agentlabs/fastbrowse/protocol/, dotnet/src/Fastbrowse/Protocol.g.cs | generated |
 | scripts/ | script |
 | tests/ Python, benchmarks/ Python | test |
-| tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/ | fixture |
+| tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/, bench/cassettes/ | fixture |
 | benchmarks/golden/ | generated |
 | docs/results/, src/fastbrowse/evals/versions.json, packaging/aur/.SRCINFO | generated |
 | crates/fastbrowse-browser/js/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
 | .github/, packaging/, tool manifests and lockfiles | config |
 | Markdown and .agents/skills/ | docs |
+
+The golden fixtures under `crates/*/tests/golden/` hold the exact requests the removed Python core made, keyed byte
+for byte, with the replies it got. A change to text a model reads changes those request strings. Rewrite only the
+changed text in them and keep every reply.
 
 ## Conventions
 
@@ -133,11 +148,17 @@ Detailed runs remain in private Langfuse. See `docs/agents/evals.md` before chan
 
 ## Anti-patterns
 
-None recorded yet.
+- **arbitrary-cap**: a limit on what a model, grader or trace sees that no provider documents, such as a text
+  prefix, a `take(N)`, a control quota or an output token ceiling (arbitrary-caps). Example:
+  `crates/fastbrowse-core/src/config.rs` `viewport_text_chars: 6000`. A documented limit is named as the
+  provider's, as `DecisionProfile` does for Jev.
+- **hidden-override**: code that rewrites, filters or replaces a model's output by a rule the model is never told
+  (model-second-guessing). Example: `crates/fastbrowse-agent/src/agent/recovery.rs` turning a give-up into done.
 
 ## Project rules and lenses
 
 Existing Ruff rules cover Python style and correctness. Biome lists its JavaScript correctness rules explicitly.
 Tests already enforce eval fingerprints, generated results, provider contracts, status semantics and safety behavior.
 The changelog check, no_slop and Vale own release entries and prose. Do not duplicate those in sift rules.
-No ast-grep rules, script rules or project lenses have been added: the audit found no new mechanical defect shape.
+No ast-grep or script rules have been added: whether a model reads a capped value needs judgment. The project
+lenses `.sift/lenses/arbitrary-caps.md` and `.sift/lenses/model-second-guessing.md` cover the shapes above.
