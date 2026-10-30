@@ -1,4 +1,4 @@
-//! Chrome on this machine: headless with a throwaway profile by default (`adapters/local_chrome.py`).
+//! Chrome on this machine: headless with a throwaway profile by default.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -235,7 +235,7 @@ fn temp_log() -> std::io::Result<(File, Option<PathBuf>)> {
     Ok((file, left))
 }
 
-/// The command line, flags in Python's order.
+/// The command line, in the order its test pins.
 fn launch_args(options: &LocalChrome, profile: &Path) -> Vec<String> {
     let mut args = Vec::new();
     if !options.headed {
