@@ -47,11 +47,11 @@ async fn test_jev_requests_go_to_the_chosen_source() {
         (&[("OPENROUTER_API_KEY", "o")], "https://openrouter.ai/api/v1/systemone"),
         (
             &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("AI_GATEWAY_API_KEY", "g")],
-            "https://api.typesafe.ai/v1/systemone",
+            "https://openrouter.ai/api/v1/systemone",
         ),
         (
-            &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_DECISION_SOURCE", "openrouter")],
-            "https://openrouter.ai/api/v1/systemone",
+            &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_DECISION_SOURCE", "typesafe")],
+            "https://api.typesafe.ai/v1/systemone",
         ),
         (&[("TYPESAFE_API_KEY", "t"), ("AI_GATEWAY_API_KEY", "g")], "https://api.typesafe.ai/v1/systemone"),
         (
@@ -628,7 +628,7 @@ fn the_example_dotenv_reads_as_python_dotenv_reads_it() {
     // `#` go with the `=` (checked against dotenv_values), so an example copied and never filled sends it as a key.
     assert_eq!(
         loaded.openrouter_api_key.as_ref().map(|key| key.expose()),
-        Some("# the LLM, and a supported Jev route, https://openrouter.ai/keys")
+        Some("# Jev and the LLM, https://openrouter.ai/keys")
     );
     assert_eq!(loaded.llm_source(), LLMProvider::OpenRouter);
     assert!(loaded.ai_gateway_api_key.is_none());

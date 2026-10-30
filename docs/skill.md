@@ -1,8 +1,8 @@
 # Use fastbrowse with your agent
 
 The [fastbrowse skill](../skills/fastbrowse/SKILL.md) lets an agent that supports Agent Skills delegate a website task to fastbrowse
-and interpret its status and citations. It prefers an existing local Chrome connection, then local Chrome.
-It uses an MCP server configured for that browser choice, or the CLI. Cloud browsing is available when requested or local browsing is unavailable.
+and interpret its status and citations. It uses a Browser Use Cloud browser by default, through an MCP server configured for that browser or the CLI.
+Local Chrome and an existing DevTools connection are available when requested, or when the task needs localhost.
 Agents without skill support can use the CLI or MCP server directly.
 Installing the skill installs instructions; the browser and model credentials still need configuration.
 
@@ -30,13 +30,11 @@ want to browse. Keep its `references` directory beside `SKILL.md`. Personal inst
 
 ## Configure and use
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the CLI path. Set `TYPESAFE_API_KEY`
-for Jev, direct TypeSafe, which is the recommended route, and `OPENROUTER_API_KEY` for the LLM. If no direct
-Jev key is available, OpenRouter also serves Jev, but it is not recommended. `AI_GATEWAY_API_KEY` is the LLM fallback, and on its own also serves Jev as a last resort rather than
-the recommended Jev route. Set keys in the calling process environment or a local `.env`, outside the
-conversation. Local Chrome is the skill default and needs only the model key. Add `BROWSER_USE_API_KEY` for
-cloud browsing. An existing DevTools connection reuses your Chrome; `--local` without a connection starts a
-separate browser.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the CLI path. Set `OPENROUTER_API_KEY`,
+the recommended route, for Jev and the LLM. `TYPESAFE_API_KEY` is the direct Jev route. `AI_GATEWAY_API_KEY` is the
+LLM fallback, and on its own also serves Jev as a last resort. Set keys in the calling process environment or a local `.env`, outside the
+conversation. The Browser Use Cloud browser is the skill default and needs `BROWSER_USE_API_KEY`. `--local` starts a separate
+Chrome and needs only the model key. An existing DevTools connection reuses your Chrome.
 The [CLI guide](../README.md#try-it) covers browser profiles, secrets, and budgets.
 For MCP, use the [server setup](../README.md#use-it-from-an-mcp-client) instead; credentials belong to the server's environment.
 

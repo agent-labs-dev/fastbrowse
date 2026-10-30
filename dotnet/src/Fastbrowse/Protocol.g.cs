@@ -499,9 +499,6 @@ public sealed record RunParams
     [JsonPropertyName("viewport")]
     public IReadOnlyList<long>? Viewport { get; init; }
 
-    [JsonPropertyName("cloud_allow_resizing")]
-    public bool? CloudAllowResizing { get; init; }
-
     [JsonPropertyName("cloud_extensions")]
     public IReadOnlyList<string>? CloudExtensions { get; init; }
 

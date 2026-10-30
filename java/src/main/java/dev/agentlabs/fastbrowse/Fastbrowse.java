@@ -340,7 +340,6 @@ public final class Fastbrowse implements AutoCloseable {
                 .foreground(browser.foreground() ? true : null)
                 .proxyCountry(browser.proxyCountry())
                 .viewport(viewport)
-                .cloudAllowResizing(browser.cloudAllowResizing() ? true : null)
                 .build();
     }
 

@@ -10,7 +10,7 @@ from fastbrowse.evals import judge as judging
 from fastbrowse.evals.judge import Claim, GatewayJev, Jev, jev_from_environment, judge
 
 CLAIMS = (Claim("The answer gives the total as 43.25."),)
-KEYS = ("TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY")
+KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY")
 
 
 def _http(*responses: httpx.Response | Exception, sent: list[httpx.Request]) -> httpx.AsyncClient:
@@ -77,8 +77,8 @@ async def test_the_gateway_is_asked_a_boolean_and_answers_a_probability() -> Non
 @pytest.mark.parametrize(
     ("keys", "url"),
     [
-        (KEYS, "https://api.typesafe.ai/v1/systemone"),
-        (KEYS[1:], "https://openrouter.ai/api/v1/systemone"),
+        (KEYS, "https://openrouter.ai/api/v1/systemone"),
+        (KEYS[1:], "https://api.typesafe.ai/v1/systemone"),
         (KEYS[2:], "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"),
     ],
 )

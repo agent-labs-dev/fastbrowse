@@ -70,9 +70,6 @@ public sealed record BrowserOptions
 
     /// <summary>The page's width and height in CSS pixels.</summary>
     public (int Width, int Height)? Viewport { get; init; }
-
-    /// <summary>Let a cloud browser's window be resized.</summary>
-    public bool CloudAllowResizing { get; init; }
 }
 
 /// <summary>A file a run may upload.</summary>

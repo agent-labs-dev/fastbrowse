@@ -119,7 +119,7 @@ class GatewayJev(Jev):
         return float(answer["probability"])
 
 
-JEV_KEYS = {"typesafe": "TYPESAFE_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}
+JEV_KEYS = {"openrouter": "OPENROUTER_API_KEY", "typesafe": "TYPESAFE_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}
 """Each Jev source and its key, in the order the core picks the first keyed one when FASTBROWSE_DECISION_SOURCE is
 unset."""
 

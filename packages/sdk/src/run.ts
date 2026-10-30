@@ -31,7 +31,6 @@ export interface BrowserOptions {
   /** The two-letter country a cloud browser browses from. */
   proxyCountry?: string;
   viewport?: [width: number, height: number];
-  cloudAllowResizing?: boolean;
 }
 
 export interface Attachment {
@@ -132,7 +131,6 @@ function browserFields(options: PerRun<BrowserOptions>): Sparse<RunParams> {
     foreground: options.foreground,
     proxy_country: options.proxyCountry,
     viewport: options.viewport,
-    cloud_allow_resizing: options.cloudAllowResizing,
   });
 }
 

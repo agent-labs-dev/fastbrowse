@@ -93,7 +93,6 @@ async fn test_the_fields_that_describe_the_task_arrive_as_run_tasks_arguments() 
         "authorization": {"irreversible_actions": true},
         "downloads": tools.path.join("downloads"),
         "viewport": [1280, 720],
-        "cloud_allow_resizing": true,
     }))
     .await;
     assert_eq!(call.task.task, "Add the kettle to the cart");
@@ -108,7 +107,6 @@ async fn test_the_fields_that_describe_the_task_arrive_as_run_tasks_arguments() 
     assert_eq!(call.task.authorization, Some(Authorization { irreversible_actions: true }));
     assert_eq!(call.task.downloads, Some(tools.path.join("downloads")));
     assert_eq!(call.task.viewport, Some((1280, 720)));
-    assert!(call.task.cloud_allow_resizing);
 }
 
 /// One `run` with `record` to the binary, whose PATH is `path`: the reply, or the refusal.
@@ -153,7 +151,7 @@ async fn test_fields_left_out_leave_run_task_its_own_defaults() {
     // None is what `run_task` reads as "the default limits" and "nothing authorized".
     assert!(call.task.limits.is_none() && call.task.authorization.is_none());
     assert!(call.task.downloads.is_none() && call.task.record.is_none() && call.task.viewport.is_none());
-    assert!(!call.task.cloud_allow_resizing && !call.task.attach);
+    assert!(!call.task.attach);
     // A run in a visible window stays behind it unless the caller asks to watch.
     assert!(!call.task.foreground && received(json!({"foreground": true})).await.task.foreground);
 }

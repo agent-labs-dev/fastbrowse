@@ -1114,11 +1114,6 @@
           "default": null,
           "title": "Viewport"
         },
-        "cloud_allow_resizing": {
-          "default": false,
-          "title": "Cloud Allow Resizing",
-          "type": "boolean"
-        },
         "cloud_extensions": {
           "default": [],
           "items": {

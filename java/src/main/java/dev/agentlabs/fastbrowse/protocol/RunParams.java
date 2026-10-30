@@ -39,7 +39,6 @@ public record RunParams(
     @JsonProperty("foreground") Boolean foreground,
     @JsonProperty("proxy_country") String proxyCountry,
     @JsonProperty("viewport") List<Long> viewport,
-    @JsonProperty("cloud_allow_resizing") Boolean cloudAllowResizing,
     @JsonProperty("cloud_extensions") List<String> cloudExtensions,
     @JsonProperty("cloud_timeout_minutes") Long cloudTimeoutMinutes,
     @JsonProperty("allowed_origins") List<String> allowedOrigins,
@@ -78,7 +77,6 @@ public record RunParams(
         private Boolean foreground;
         private String proxyCountry;
         private List<Long> viewport;
-        private Boolean cloudAllowResizing;
         private List<String> cloudExtensions;
         private Long cloudTimeoutMinutes;
         private List<String> allowedOrigins;
@@ -212,11 +210,6 @@ public record RunParams(
             return this;
         }
 
-        public Builder cloudAllowResizing(Boolean cloudAllowResizing) {
-            this.cloudAllowResizing = cloudAllowResizing;
-            return this;
-        }
-
         public Builder cloudExtensions(List<String> cloudExtensions) {
             this.cloudExtensions = cloudExtensions;
             return this;
@@ -243,7 +236,7 @@ public record RunParams(
         }
 
         public RunParams build() {
-            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudAllowResizing, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, fetchFirst);
+            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, fetchFirst);
         }
     }
 }
