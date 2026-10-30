@@ -14,8 +14,6 @@ class Thresholds(Frozen):
     irreversible_above: float = 0.50
     requested_above: float = 0.50
     """Jev's agreement that the task asks for a commit, above which an authorized run takes it."""
-    claim_problem_above: float = 0.70
-    """A requirement's "not satisfied" answer above this keeps the run working."""
     rewrite_from: float = 0.30
     """Jev's doubt that the read facts already answer the task, from which the LLM composer writes it instead."""
 

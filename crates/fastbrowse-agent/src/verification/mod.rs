@@ -297,7 +297,8 @@ pub async fn check_done(
     for id in ids {
         let id = id.to_string();
         match answers.get(&format!("unmet_{id}")) {
-            Some(Answer::Noul(answer)) if answer.probability <= thresholds.claim_problem_above => {}
+            // Jev's answer is the more probable one: a requirement it more likely than not judges unmet is unmet.
+            Some(Answer::Noul(answer)) if answer.probability < 0.5 => {}
             Some(Answer::Noul(_)) => unmet.push(id),
             _ => unanswered.push(id),
         }
@@ -599,6 +600,14 @@ mod tests {
     fn jev_judges_every_requirement_and_its_yes_finishes() {
         let check = done(vec![("unmet_r1", 0.1), ("unmet_r2", 0.1)], &counted_notes());
         assert_eq!(check.verdict, DoneVerdict::Accept);
+    }
+
+    #[test]
+    fn a_requirement_jev_more_likely_than_not_judges_unmet_keeps_the_run_working() {
+        // A completion check that read 0.69 as met ended a count with one page of three unread.
+        let check = done(vec![("unmet_r1", 0.1), ("unmet_r2", 0.69)], &counted_notes());
+        assert_eq!(check.verdict, DoneVerdict::Reject);
+        assert_eq!(check.unmet, ["r2"]);
     }
 
     #[test]

@@ -197,7 +197,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -390,7 +389,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -574,7 +572,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -794,7 +791,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -1014,7 +1010,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -1205,7 +1200,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -1722,7 +1716,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -2295,7 +2288,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -2587,7 +2579,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -2914,7 +2905,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -4115,7 +4105,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -4614,7 +4603,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -4765,7 +4753,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -5980,7 +5967,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -9300,7 +9286,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -10536,7 +10521,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11033,7 +11017,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11191,7 +11174,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11436,7 +11418,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11666,7 +11647,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11885,7 +11865,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -12111,7 +12090,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -12329,7 +12307,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -13643,7 +13620,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -15165,7 +15141,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -16694,7 +16669,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -18220,7 +18194,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -19555,7 +19528,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -20766,7 +20738,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -21411,7 +21382,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -21705,7 +21675,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -22253,7 +22222,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -22811,7 +22779,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -23332,7 +23299,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -23675,7 +23641,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -24221,7 +24186,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -24424,7 +24388,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -24997,7 +24960,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -25200,7 +25162,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -25773,7 +25734,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -25976,7 +25936,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -26549,7 +26508,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -26754,7 +26712,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -27327,7 +27284,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -27530,7 +27486,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -28093,7 +28048,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -28296,7 +28250,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -28869,7 +28822,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29072,7 +29024,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29517,7 +29468,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29706,7 +29656,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29897,7 +29846,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30086,7 +30034,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30268,7 +30215,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30458,7 +30404,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30790,7 +30735,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -31101,7 +31045,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -31423,7 +31366,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -31779,7 +31721,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32135,7 +32076,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32418,7 +32358,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32586,7 +32525,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32752,7 +32690,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32885,7 +32822,6 @@
        "login_required_above": 0.7,
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
-       "claim_problem_above": 0.7,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32995,7 +32931,6 @@
      "login_required_above": 0.7,
      "bot_check_above": 0.7,
      "irreversible_above": 0.5,
-     "claim_problem_above": 0.7,
      "rewrite_from": 0.3
     },
     "observation": {
@@ -33090,7 +33025,6 @@
      "login_required_above": 0.7,
      "bot_check_above": 0.7,
      "irreversible_above": 0.5,
-     "claim_problem_above": 0.7,
      "rewrite_from": 0.3
     },
     "observation": {
