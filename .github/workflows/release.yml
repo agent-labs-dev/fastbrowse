@@ -93,6 +93,55 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
 
+  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, the
+  # live campaign (every group and suite, three repeats) and both official suites (three repeats), all on this tag.
+  # A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is a
+  # dispatch, so a campaign that runs for hours never holds this run open, and the campaign opens the site pull
+  # request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
+  benchmarks:
+    needs: [build, github-release]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Decide whether this release measures itself
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if test "${VERSION##*.}" = 0; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')"
+          message=""
+          if test "${ref%% *}" = tag; then
+            message="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/${ref#* }" --jq .message)"
+          fi
+          if grep -qx 'Benchmarks: run' <<< "$message"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$GITHUB_REF_NAME is a patch release without 'Benchmarks: run' in its tag message; no benchmarks run"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Dispatch the evals, the campaign and the official suites
+        if: steps.decide.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PARALLAX_SHA: ${{ vars.PARALLAX_SHA }}
+        run: |
+          test -n "$PARALLAX_SHA" || { echo "::error::missing repository variable PARALLAX_SHA"; exit 1; }
+          # The release already ran the fixture suites, as a called workflow; a candidate binds to a dispatched run.
+          gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          gh workflow run benchmark-campaign.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f campaign_id="release-$VERSION" -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" \
+            -f groups=all
+          gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all
+
   pypi:
     needs: github-release
     runs-on: ubuntu-latest

@@ -160,6 +160,7 @@ ARM_BROWSERS = {
     "fastbrowse": ("browser-use-cloud", "local-chrome"),
     "fastbrowse-pool": ("fastbrowse-pool",),
     "jev-ultrafast": ("browser-use-cloud",),
+    "browser-harness": ("browser-use-cloud",),
     "browser-use": ("browser-use-hosted",),
 }
 """The browsers each arm is measured in. The pool and Browser Use's hosted browser are each the one their arm sells,

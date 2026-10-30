@@ -30,7 +30,7 @@ credentials, irreversible actions and spending under the control of code.
   origin it was declared for, and models only see its name. Step, time and dollar limits are enforced in code.
 - **Any browser.** A Browser Use Cloud browser by default, local Chrome, or any Chromium browser or Electron app
   that is already running.
-- **One agent, every interface.** A CLI, a Python library, a Node SDK with a native binary and no Python, an MCP
+- **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
   server, and a skill for coding agents.
 
 ![fastbrowse shopping a live store, adding a Raspberry Pi Pico 2 W and an in-stock BME280 sensor to the basket, filling in checkout without paying, and answering with every price cited](docs/assets/demo.gif)
@@ -38,31 +38,42 @@ credentials, irreversible actions and spending under the control of code.
 Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.29 in model calls. Playback is sped
 up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
-Against the hosted Browser Use agent, on 46 tasks with three repeats each, fastbrowse passed 99.2% to 96.3% at
-$0.0296 a run to $0.3180, and took 18.9s to 15.3s. See [How it compares](#how-it-compares).
+On 46 tasks run three times each against the hosted Browser Use agent, under the same limits on Browser Use
+Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. It was
+slower: 18.9s a task to 15.3s. These figures are the published campaign, release-0.7.1; see
+[How it compares](#how-it-compares).
 
 ## Try it
 
-You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, and model keys:
+You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, Chrome or Chromium, and an
+[OpenRouter](https://openrouter.ai/) key:
 
 ```sh
-export TYPESAFE_API_KEY=...     # Jev, the model that picks each action
-export OPENROUTER_API_KEY=...   # the LLM that plans, reads and writes
-export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
+export OPENROUTER_API_KEY=...
+uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/ --local
+```
+
+That one key serves both models: the LLM that plans, reads and writes, and Jev, the model that picks each action.
+`--local` runs the Chrome on your machine; `FASTBROWSE_CHROME` names the binary if it is not found.
+
+For regular use, add two keys and drop `--local`:
+
+```sh
+export TYPESAFE_API_KEY=...     # Jev direct from Typesafe, the recommended route
+export BROWSER_USE_API_KEY=...  # a Browser Use Cloud browser
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
-The cloud browser is the default because it passes bot checks a fresh local Chrome fails; it also prints a URL to
-watch the run live. `AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset.
-Jev can also run through OpenRouter (text only), the gateway as a last resort, or another decision host with
-`FASTBROWSE_DECISION_SOURCE`. [Jev routing](docs/jev.md#provider-failover) covers the order and
-[other hosts](docs/jev.md#other-decision-hosts).
+With a Browser Use key the cloud browser is the default, because it passes bot checks a fresh local Chrome fails;
+it also prints a URL to watch the run live. Without the key or `--local`, the command stops and asks for one.
+`AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. Jev can also run
+through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
+[Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
 
 Keys can live in a `.env` file in the working directory ([`.env.example`](.env.example) lists every setting), but
 values named by `--secret` must be in the process environment. `uv tool install fastbrowse` keeps the command on
-your PATH and `uv add fastbrowse` adds it to a project. On Arch Linux, the
-[AUR package](https://aur.archlinux.org/packages/fastbrowse) installs `fastbrowse` and `fastbrowse-mcp`:
-`paru -S fastbrowse`, or `makepkg -si` in [`packaging/aur`](packaging/aur).
+your PATH, `uv add fastbrowse` adds it to a project, and `npm install fastbrowse` gives Node.js the same agent with
+no Python.
 
 To work on fastbrowse itself:
 
@@ -74,163 +85,17 @@ uv run fastbrowse "What is the title of the top story right now?" --start https:
 ```
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
-prints the full result: every step, the quotes behind the answer, and cost by component.
-
-| Flag | Effect |
-|:--|:--|
-| `--start URL` | the first page; worked out from the task when omitted |
-| `--context TEXT` | background the run may use but never treats as the task |
-| `--local` | local Chrome instead of a cloud browser |
-| `--cloud` | force the cloud browser even when `FASTBROWSE_PROFILE` or `FASTBROWSE_HEADED` is set |
-| `--headed` | show the local Chrome window (implies `--local`) |
-| `--profile DIR` | keep the local Chrome profile in `DIR`, so sign-ins persist (implies `--local`) |
-| `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
-| `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--fetch-first` | read over HTTP, and start a browser only if the task needs one |
-| `--cdp-url URL`, `--cdp-port PORT` | drive a browser already running, at a `ws://` URL or on `127.0.0.1:PORT` |
-| `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab |
-| `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
-| `--foreground` | bring the run's tab to the front instead of working behind the current one |
-| `--proxy-country CC` | browse from that country (`uk`, `de`, ...; default `us`) |
-| `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation` |
-| `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only |
-| `--bitwarden ITEM` | use a vault login on the origin its saved URIs match, including its one-time code |
-| `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
-| `--downloads DIR` | keep downloaded files |
-| `--json` | print the full result |
-| `--trace FILE` | append each model call, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP |
-| `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
-| `--cursor` | draw the agent's cursor over a visible Chrome with [Cua Driver](https://github.com/trycua/cua) (needs `cua-driver`, and X11 on Linux) |
+prints the full result: every step, the quotes behind the answer, and cost by component. The exit code is the
+status, and only `complete` exits 0.
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
-uv run fastbrowse "Log in as standard_user with the saved password and add the backpack to the cart." \
-  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize
+uvx fastbrowse "Log in as standard_user with the saved password and add the backpack to the cart." \
+  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --local
 ```
 
-### Signed-in sites
-
-Sign in once by hand in a profile of its own, then point runs at it. `--headed` is only needed for the first run:
-
-```sh
-google-chrome --user-data-dir="$HOME/.fastbrowse/amazon" https://www.amazon.com/   # sign in, then close Chrome
-uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
-  --start https://www.amazon.com/ --profile ~/.fastbrowse/amazon --headed
-```
-
-On a cloud browser, `--cloud-profile prof_1234` runs as a [Browser Use Cloud](https://cloud.browser-use.com)
-profile someone signed in once. The run inherits its cookies and no model sees a credential.
-
-With the [Bitwarden CLI](https://bitwarden.com/help/cli/) unlocked, `--bitwarden ITEM` types the vault login. The
-item's saved URIs must match `--start`. Models see only `username`, `password` and, when the item holds an
-authenticator key, `one_time_code`, computed as it is typed:
-
-```sh
-export BW_SESSION="$(bw unlock --raw)"
-uv run fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
-  --start https://www.amazon.com/ --bitwarden Amazon --profile ~/.fastbrowse/amazon
-```
-
-To change a password, add the replacement as an origin-scoped secret named `new_password`, refer to it in the
-task, and pass `--authorize`. fastbrowse never generates a password or reuses the old one.
-
-### Open windows and Electron apps
-
-Any Chromium app that exposes a DevTools port can be driven. Restart the app with `--remote-debugging-port` (a
-running app ignores the flag), then attach to its window by title or URL:
-
-```sh
-open -a "Visual Studio Code" --args --remote-debugging-port=9222 ~/code/my-project   # elsewhere, pass the flag to the binary
-uv run fastbrowse "Open the Extensions view and report how many extensions are installed." \
-  --cdp-port 9222 --target-match my-project
-```
-
-`--attach` takes over the first window, skipping DevTools, and `--target-match` picks one by title or URL.
-Without `--start` the run begins on whatever the window shows, and the window stays open afterwards. Popups the
-window opens join the run.
-
-For a signed-in browser that stays open, start a Chrome with a data directory of its own (Chrome ignores the port
-on its default one), sign in, and leave it running. Each run opens and closes a background tab in it:
-
-```sh
-google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/chrome"
-uv run fastbrowse "Report my open orders." --start https://www.amazon.com/ --cdp-port 9222
-```
-
-A run in a visible window works in a tab behind the current one and never raises the window itself. Chrome still
-brings a window forward when it starts headed, when a page opens a popup, and, with `--attach`, on a click in the
-window's front tab.
-
-A DevTools port gives any program on the machine full control of the app and its sessions. Close the app, or
-restart it without the flag, when you are done.
-
-### Models
-
-The LLM defaults to `google/gemini-3.8-flash` at low reasoning effort, with `google/gemini-3.5-flash-lite` for
-proposing a direct address and typing field text.
-
-| Setting | Effect |
-|:--|:--|
-| `FASTBROWSE_LLM_MODEL` | the model for every purpose |
-| `FASTBROWSE_LLM_MODEL_<PURPOSE>` | the model for one purpose: `PLAN`, `READ`, `FIELD_TEXT`, `SHORTCUT`, `RECOVER`, `COMPOSE` or `VERIFY` |
-| `FASTBROWSE_LLM_REASONING`, `FASTBROWSE_LLM_REASONING_<PURPOSE>` | `none`, `low`, `medium` or `high`; `none` turns reasoning off for a model such as DeepSeek V4.1 Flash that otherwise reasons at every effort |
-| `FASTBROWSE_LLM_PROVIDER` | `openrouter`, `gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`, `azure`, `ollama`, `lmstudio`, `vllm` or `custom`; each reads its own key, such as `OPENAI_API_KEY`, and sends it to that provider alone |
-| `FASTBROWSE_LLM_BASE_URL`, `FASTBROWSE_LLM_API_KEY` | any OpenAI-compatible endpoint, such as a local vLLM at `http://127.0.0.1:8000/v1`; it needs `FASTBROWSE_LLM_MODEL`, and never receives the OpenRouter or gateway key |
-| `FASTBROWSE_LLM_STRICT=0`, `FASTBROWSE_LLM_EXTRA_BODY` | for that endpoint: send schemas in non-strict form, and add a JSON object to every request |
-
-[LLM providers](docs/llm-providers.md) lists what each preset sends and its default models. Jev still needs its
-own key. An endpoint that reports no price leaves those calls' cost unknown, so `--max-dollars` stops the run
-after the first one.
-
-### Results
-
-The exit code is the status. Only `complete` exits 0; configuration refusals exit 1 and bad syntax exits 2.
-
-| Status | Exit | Meaning |
-|:--|--:|:--|
-| `complete` | 0 | every information requirement is backed by a quote, and every action that changes the site is confirmed on the page |
-| `unverified` | 10 | it believes it finished but could not back every claim |
-| `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
-| `needs_login` | 4 | a sign-in wall that no `--secret` covers |
-| `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
-| `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
-| `stuck` | 9 | recovery ran out without reaching a page state the run had not seen |
-| `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
-| `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
-| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
-| `error` | 1 | a model or browser failure |
-
-The JSON result says why a run stopped where a caller can act on it:
-
-- `budget` names the limit a `budget_exceeded` run hit (`steps`, `seconds`, `dollars`, `jev_calls` or
-  `llm_calls`) and its value.
-- `wall` describes a `needs_login` or `blocked` page: its `kind` (`password`, `one_time_code`, `sign_in` or
-  `bot_check`), `origin`, the `fields` it asked for and `seen_at_ms`. A caller that can read the user's email or
-  texts can answer a `one_time_code` wall with a secret scoped to that origin and run again.
-- A `stuck` or `unverified` run that read evidence still returns a cited answer, starting `Answer (unverified)`.
-
-A cost a provider omits is looked up from its receipt, or bounded from OpenRouter's listed prices. A cost that
-cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A browser command
-unanswered for 120 seconds returns `unavailable`. Step and dollar limits do not bound elapsed time:
-`Limits(max_seconds=...)` does.
-
-[Troubleshooting](docs/troubleshooting.md) covers each status: what it means, common causes and the next step.
-
-## How it works
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture.svg" alt="The task is planned and the start page opened in parallel; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, and the answer cites every claim.">
-</picture>
-
-The LLM plans, reads and writes. Jev picks each action. Code owns the gates: irreversible actions stop without
-`--authorize`, secrets reach models by name only, and supported cookie banners are refused through autoconsent.
-More in [docs/design.md](docs/design.md).
-
-The core is Rust, in [crates/](crates), and every interface hands its work to it; the wheel carries it as
-`fastbrowse._native` ([ADR 0004](docs/adr/0004-rust-core-by-default.md)). Against the Python core it replaced, it
-reached the same result on all 36 fixture tasks with 18x less agent CPU, 54x faster startup and 5.4x less peak
-memory ([measurements](bench/results/rust-vs-python.md)).
+The [command-line reference](docs/cli.md#flags) has every flag, signed-in profiles and Bitwarden logins, driving open
+windows and Electron apps, model and provider settings, and every status with its exit code.
 
 ## How it compares
 
@@ -260,6 +125,22 @@ The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign releas
 data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).
 [Benchmark results](docs/benchmarks.md) gives the sources, cost basis and limitations, and
 [eval results and workflow](docs/evals.md) covers the diagnostic suites.
+
+## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
+  <img src="assets/architecture.svg" alt="The task is planned and the start page opened in parallel; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, and the answer cites every claim.">
+</picture>
+
+The LLM plans, reads and writes. Jev picks each action. Code owns the gates: irreversible actions stop without
+`--authorize`, secrets reach models by name only, and supported cookie banners are refused through autoconsent.
+More in [docs/design.md](docs/design.md).
+
+The core is Rust, in [crates/](crates), and every interface hands its work to it; the wheel carries it as
+`fastbrowse._native` ([ADR 0004](docs/adr/0004-rust-core-by-default.md)). Against the Python core it replaced, it
+reached the same result on all 36 fixture tasks with 18x less agent CPU, 54x faster startup and 5.4x less peak
+memory ([measurements](bench/results/rust-vs-python.md)).
 
 ## Embed it
 
@@ -344,7 +225,8 @@ No frame or screenshot is sent while a resolved secret may show on the page.
 `run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; see
 [Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
 
-**Choosing the model backend without the environment.** `run_task(settings={...})` takes the same names as the
+**Choosing the model backend without the environment.** Not in 0.9.0; it ships in the next release.
+`run_task(settings={...})` takes the same names as the
 environment variables (`OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`,
 `FASTBROWSE_LLM_PROVIDER`, `FASTBROWSE_LLM_MODEL` and the rest) and reads them instead of the environment and
 `.env`, so a service that keeps its credentials elsewhere hands the run exactly the keys it means to:
@@ -353,7 +235,7 @@ environment variables (`OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`, `TYPESAFE_API
 result = await run_task("Find the latest httpx release", settings={"OPENROUTER_API_KEY": my_key})
 ```
 
-**The same rules outside a run.** `fastbrowse.origins` (`origin_of`, `parse_origin`) parses `allowed_origins` as the
+**The same rules outside a run.** Not in 0.9.0; it ships in the next release. `fastbrowse.origins` (`origin_of`, `parse_origin`) parses `allowed_origins` as the
 run does; `fastbrowse.safety` (`secret_allowed`, `origin_of`, `ScopedSecrets`) answers where a secret may be typed,
 `*.` patterns included; `fastbrowse.totp.one_time_code(key)` makes the codes an authenticator key gives. Each wraps
 the core's own rule, so the answer before a run is the one the run gives.
@@ -426,34 +308,6 @@ and anything but `true` keeps the run from `complete`. The other options are `ru
 There is no binary for musl systems such as Alpine; point `binaryPath` or `FASTBROWSE_BINARY` at your own. The
 macOS binaries are ad-hoc signed, not notarized, and the Windows binary is unsigned. Bun and Deno are untested.
 
-## Use it from Rust
-
-The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, with the result's types:
-
-```toml
-[dependencies]
-fastbrowse = "0.9"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-```
-
-```rust
-use fastbrowse::{Limits, RunTask, run_task};
-
-let result = run_task(
-    "What is the top story's title?",
-    RunTask {
-        start: Some("https://news.ycombinator.com/".into()),
-        limits: Some(Limits { max_dollars: Some(0.25), ..Limits::default() }),
-        ..RunTask::default()
-    },
-)
-.await?;
-```
-
-The keys come from the environment, as the command reads them. `cargo install fastbrowse-cli` installs the
-`fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
-`fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
-
 ## Use it from Go
 
 The [Go module](go) starts the fastbrowse binary and runs tasks over the same protocol the JavaScript SDK uses:
@@ -478,211 +332,12 @@ the SHA-256 the module pins; `Options.BinaryPath` or `FASTBROWSE_BINARY` names a
 once its browser has closed. `RunOptions` takes the same options as the SDK: `OutputSchema`, `Secrets`, `Until`,
 `OnEvent` and `OnFrame`. One client runs one task at a time.
 
-## Use it from Java or Kotlin
+## Rust, Java and .NET
 
-The [Java client](java) is `dev.agentlabs:fastbrowse` on Maven Central, with the binary for each platform in its
-`natives-<platform>` jar. Java 17 or newer:
-
-```kotlin
-implementation("dev.agentlabs:fastbrowse:0.9.0")
-runtimeOnly("dev.agentlabs:fastbrowse:0.9.0:natives-linux-x64")
-```
-
-```java
-try (Fastbrowse fastbrowse = Fastbrowse.start()) {
-    RunResult result = fastbrowse.run("What is the top story's title?", RunOptions.builder()
-            .start("https://news.ycombinator.com/")
-            .build()).join();
-}
-```
-
-`run` returns a `CompletableFuture`, so Kotlin awaits it with `kotlinx-coroutines-jdk8`, and cancelling the future
-stops the run. `RunOptions` takes the same options as the SDK: `outputSchema`, `secrets`, `until`, `onEvent` and
-`onFrame`. One client runs one task at a time.
-
-## Use it from Rust
-
-The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, with the result's types:
-
-```toml
-[dependencies]
-fastbrowse = "0.9"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-```
-
-```rust
-use fastbrowse::{Limits, RunTask, run_task};
-
-let result = run_task(
-    "What is the top story's title?",
-    RunTask {
-        start: Some("https://news.ycombinator.com/".into()),
-        limits: Some(Limits { max_dollars: Some(0.25), ..Limits::default() }),
-        ..RunTask::default()
-    },
-)
-.await?;
-```
-
-The keys come from the environment, as the command reads them. `cargo install fastbrowse-cli` installs the
-`fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
-`fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
-
-## Use it from Go
-
-The [Go module](go) starts the fastbrowse binary and runs tasks over the same protocol the JavaScript SDK uses:
-
-```sh
-go get github.com/agent-labs-dev/fastbrowse/go
-```
-
-```go
-client, err := fastbrowse.Start(ctx, fastbrowse.Options{})
-if err != nil {
-	return err
-}
-defer client.Close(context.Background())
-result, err := client.Run(ctx, "What is the top story's title?", fastbrowse.RunOptions{
-	Start: "https://news.ycombinator.com/",
-})
-```
-
-The first `Start` downloads the release's binary for the platform into the user cache directory, checked against
-the SHA-256 the module pins; `Options.BinaryPath` or `FASTBROWSE_BINARY` names another. Cancelling `ctx` stops a run
-once its browser has closed. `RunOptions` takes the same options as the SDK: `OutputSchema`, `Secrets`, `Until`,
-`OnEvent` and `OnFrame`. One client runs one task at a time.
-
-## Use it from Java or Kotlin
-
-The [Java client](java) is `dev.agentlabs:fastbrowse` on Maven Central, with the binary for each platform in its
-`natives-<platform>` jar. Java 17 or newer:
-
-```kotlin
-implementation("dev.agentlabs:fastbrowse:0.9.0")
-runtimeOnly("dev.agentlabs:fastbrowse:0.9.0:natives-linux-x64")
-```
-
-```java
-try (Fastbrowse fastbrowse = Fastbrowse.start()) {
-    RunResult result = fastbrowse.run("What is the top story's title?", RunOptions.builder()
-            .start("https://news.ycombinator.com/")
-            .build()).join();
-}
-```
-
-`run` returns a `CompletableFuture`, so Kotlin awaits it with `kotlinx-coroutines-jdk8`, and cancelling the future
-stops the run. `RunOptions` takes the same options as the SDK: `outputSchema`, `secrets`, `until`, `onEvent` and
-`onFrame`. One client runs one task at a time.
-
-## Use it from .NET
-
-The [.NET client](dotnet) is `Fastbrowse` on NuGet, carrying the binary for each platform. .NET 10 or newer:
-
-```sh
-dotnet add package Fastbrowse
-```
-
-```csharp
-await using var fastbrowse = await FastbrowseClient.StartAsync();
-RunResult result = await fastbrowse.RunAsync("What is the top story's title?",
-    new RunOptions { Start = "https://news.ycombinator.com/" });
-```
-
-Cancelling the `CancellationToken` stops a run, and `RunAsync` throws once its browser has closed. `RunOptions` takes
-the same options as the SDK: `OutputSchema`, `Secrets` with `ResolveSecret`, `Until`, `OnEvent` and `OnFrame`. One
-client runs one task at a time.
-
-## Use it from Rust
-
-The [`fastbrowse`](crates/fastbrowse) crate is `run_task` in your own process, with the result's types:
-
-```toml
-[dependencies]
-fastbrowse = "0.9"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-```
-
-```rust
-use fastbrowse::{Limits, RunTask, run_task};
-
-let result = run_task(
-    "What is the top story's title?",
-    RunTask {
-        start: Some("https://news.ycombinator.com/".into()),
-        limits: Some(Limits { max_dollars: Some(0.25), ..Limits::default() }),
-        ..RunTask::default()
-    },
-)
-.await?;
-```
-
-The keys come from the environment, as the command reads them. `cargo install fastbrowse-cli` installs the
-`fastbrowse` command itself. The other crates (`fastbrowse-core`, `-run` and the rest) are published so the
-`fastbrowse` crate can be, and make no promise of their own; what is meant to be used is re-exported from it.
-
-## Use it from Go
-
-The [Go module](go) starts the fastbrowse binary and runs tasks over the same protocol the JavaScript SDK uses:
-
-```sh
-go get github.com/agent-labs-dev/fastbrowse/go
-```
-
-```go
-client, err := fastbrowse.Start(ctx, fastbrowse.Options{})
-if err != nil {
-	return err
-}
-defer client.Close(context.Background())
-result, err := client.Run(ctx, "What is the top story's title?", fastbrowse.RunOptions{
-	Start: "https://news.ycombinator.com/",
-})
-```
-
-The first `Start` downloads the release's binary for the platform into the user cache directory, checked against
-the SHA-256 the module pins; `Options.BinaryPath` or `FASTBROWSE_BINARY` names another. Cancelling `ctx` stops a run
-once its browser has closed. `RunOptions` takes the same options as the SDK: `OutputSchema`, `Secrets`, `Until`,
-`OnEvent` and `OnFrame`. One client runs one task at a time.
-
-## Use it from Java or Kotlin
-
-The [Java client](java) is `dev.agentlabs:fastbrowse` on Maven Central, with the binary for each platform in its
-`natives-<platform>` jar. Java 17 or newer:
-
-```kotlin
-implementation("dev.agentlabs:fastbrowse:0.9.0")
-runtimeOnly("dev.agentlabs:fastbrowse:0.9.0:natives-linux-x64")
-```
-
-```java
-try (Fastbrowse fastbrowse = Fastbrowse.start()) {
-    RunResult result = fastbrowse.run("What is the top story's title?", RunOptions.builder()
-            .start("https://news.ycombinator.com/")
-            .build()).join();
-}
-```
-
-`run` returns a `CompletableFuture`, so Kotlin awaits it with `kotlinx-coroutines-jdk8`, and cancelling the future
-stops the run. `RunOptions` takes the same options as the SDK: `outputSchema`, `secrets`, `until`, `onEvent` and
-`onFrame`. One client runs one task at a time.
-
-## Use it from .NET
-
-The [.NET client](dotnet) is `Fastbrowse` on NuGet, carrying the binary for each platform. .NET 10 or newer:
-
-```sh
-dotnet add package Fastbrowse
-```
-
-```csharp
-await using var fastbrowse = await FastbrowseClient.StartAsync();
-RunResult result = await fastbrowse.RunAsync("What is the top story's title?",
-    new RunOptions { Start = "https://news.ycombinator.com/" });
-```
-
-Cancelling the `CancellationToken` stops a run, and `RunAsync` throws once its browser has closed. `RunOptions` takes
-the same options as the SDK: `OutputSchema`, `Secrets` with `ResolveSecret`, `Until`, `OnEvent` and `OnFrame`. One
-client runs one task at a time.
+Clients for Rust ([crates/fastbrowse](crates/fastbrowse)), Java and Kotlin ([java](java)) and .NET
+([dotnet](dotnet)) are in this repository and run tasks the way the JavaScript and Go SDKs do. None is on
+crates.io, Maven Central or NuGet yet, so `cargo add fastbrowse`, the Maven coordinates and
+`dotnet add package Fastbrowse` do not resolve today.
 
 ## Use fastbrowse with your agent
 
