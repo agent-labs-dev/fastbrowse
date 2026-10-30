@@ -2885,8 +2885,8 @@
   "results": [
    {
     "error": {
-     "type": "LLMError",
-     "message": "LLM HTTP 401 auth: bad key [api key]"
+     "type": "LLMRejected",
+     "message": "LLM HTTP 401 auth: bad key [api key] (openrouter.ai rejected the API key)"
     }
    }
   ],
@@ -4411,7 +4411,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"state\",\"questions\":{\"green\":{\"instructions\":\"Green?\",\"type\":\"boolean\"},\"col\":{\"instructions\":\"Which colour?\",\"type\":\"choice\",\"criteria\":{\"blue\":\"Blue\",\"red\":\"Red\"}},\"sc\":{\"instructions\":\"How much?\",\"type\":\"score\",\"criteria\":[\"none\",\"some\",\"all\"]}}}",
@@ -4421,7 +4421,7 @@
   "results": [
    {
     "ok": {
-     "model": "typesafe-ai/jev",
+     "model": "typesafe-ai/jev-1.13.0",
      "answers": {
       "green": {
        "type": "noul",
@@ -4516,7 +4516,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"green\":{\"instructions\":\"Green?\",\"type\":\"boolean\"}}}",
@@ -4526,7 +4526,7 @@
   "results": [
    {
     "ok": {
-     "model": "typesafe-ai/jev",
+     "model": "typesafe-ai/jev-1.13.0",
      "answers": {
       "green": {
        "type": "noul",
@@ -4953,7 +4953,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -5028,7 +5028,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -5042,7 +5042,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -5052,7 +5052,7 @@
   "results": [
    {
     "ok": {
-     "model": "typesafe-ai/jev",
+     "model": "typesafe-ai/jev-1.13.0",
      "answers": {
       "q": {
        "type": "noul",
@@ -5275,7 +5275,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -5905,7 +5905,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -5915,8 +5915,8 @@
   "results": [
    {
     "error": {
-     "type": "JevError",
-     "message": "Jev request failed; HTTP 401 auth: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx bad key ["
+     "type": "JevRejected",
+     "message": "Jev HTTP 401 auth: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx bad key [ (ai-gateway.vercel.sh rejected the API key)"
     }
    }
   ],
@@ -6170,7 +6170,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"a\":{\"instructions\":\"a\",\"type\":\"boolean\"},\"b\":{\"instructions\":\"b\",\"type\":\"boolean\"}}}",
@@ -6184,7 +6184,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"a\":{\"instructions\":\"a\",\"type\":\"boolean\"},\"b\":{\"instructions\":\"b\",\"type\":\"boolean\"}}}",
@@ -6198,7 +6198,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"a\":{\"instructions\":\"a\",\"type\":\"boolean\"}}}",
@@ -6212,7 +6212,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"b\":{\"instructions\":\"b\",\"type\":\"boolean\"}}}",
@@ -6226,7 +6226,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"b\":{\"instructions\":\"b\",\"type\":\"boolean\"}}}",
@@ -6240,7 +6240,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"b\":{\"instructions\":\"b\",\"type\":\"boolean\"}}}",
@@ -6254,7 +6254,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"b\":{\"instructions\":\"b\",\"type\":\"boolean\"}}}",
@@ -6823,7 +6823,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -6837,7 +6837,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -6847,7 +6847,7 @@
   "results": [
    {
     "ok": {
-     "model": "typesafe-ai/jev",
+     "model": "typesafe-ai/jev-1.13.0",
      "answers": {
       "q": {
        "type": "noul",
@@ -6869,7 +6869,7 @@
    },
    {
     "ok": {
-     "model": "typesafe-ai/jev",
+     "model": "typesafe-ai/jev-1.13.0",
      "answers": {
       "q": {
        "type": "noul",
@@ -7127,7 +7127,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -7141,7 +7141,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -7155,7 +7155,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -7169,7 +7169,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -7183,7 +7183,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -7197,7 +7197,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -8114,7 +8114,7 @@
      "content-type": "application/json",
      "ai-gateway-auth-method": "api-key",
      "ai-gateway-protocol-version": "0.0.1",
-     "ai-model-id": "typesafe-ai/jev",
+     "ai-model-id": "typesafe-ai/jev-1.13.0",
      "ai-evaluation-model-specification-version": "4"
     },
     "body": "{\"state\":\"page\",\"questions\":{\"q\":{\"instructions\":\"Is it?\",\"type\":\"boolean\"}}}",
@@ -8124,7 +8124,7 @@
   "results": [
    {
     "ok": {
-     "model": "typesafe-ai/jev",
+     "model": "typesafe-ai/jev-1.13.0",
      "answers": {
       "q": {
        "type": "noul",

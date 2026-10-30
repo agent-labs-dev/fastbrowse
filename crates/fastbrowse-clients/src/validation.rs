@@ -576,6 +576,12 @@ pub(crate) async fn post(
     if response.status == 413 || (response.status == 400 && too_large) {
         return Err(DecisionError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
     }
+    if matches!(response.status, 401 | 403) {
+        let host = url::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_string)).unwrap_or_default();
+        return Err(
+            DecisionError::Rejected(format!("Jev {} ({host} rejected the API key)", describe(&response))).into()
+        );
+    }
     if !response.is_success() {
         return Err(response_error(&response, "Jev request failed").into());
     }

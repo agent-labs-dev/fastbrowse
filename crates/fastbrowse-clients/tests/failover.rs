@@ -172,7 +172,7 @@ async fn test_simultaneous_failures_stay_on_backup() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_request_errors_and_malformed_responses_do_not_switch() {
+async fn test_only_a_refused_key_among_request_errors_switches() {
     for primary in DecisionSource::JEV {
         for status in [400, 401, 403, 404, 422, 200] {
             let seen = Seen::default();
@@ -181,7 +181,14 @@ async fn test_request_errors_and_malformed_responses_do_not_switch() {
             for _ in 0..2 {
                 assert!(client.evaluate(&json!("page"), &questions()).await.is_err());
             }
-            assert_eq!(*seen.lock().unwrap(), vec![primary, primary], "{primary} {status}");
+            let seen = seen.lock().unwrap();
+            // A refused key is the one request error no repeat on that provider can clear, so it moves the run.
+            if matches!(status, 401 | 403) {
+                assert_eq!(seen[0], primary, "{primary} {status}");
+                assert!(seen[1..].iter().all(|p| *p != primary) && seen.len() == 3, "{primary} {status}: {seen:?}");
+            } else {
+                assert_eq!(*seen, vec![primary, primary], "{primary} {status}");
+            }
         }
     }
 }

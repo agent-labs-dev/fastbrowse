@@ -552,6 +552,10 @@ impl OpenAICompatibleLLM {
                 describe(&response)
             )));
         }
+        if matches!(response.status, 401 | 403) {
+            let host = self.host().unwrap_or_else(|| self.base_url.clone());
+            return Err(LLMError::Rejected(format!("LLM {} ({host} rejected the API key)", describe(&response))));
+        }
         if !response.is_success() {
             return Err(LLMError::Failed(format!("LLM {}", describe(&response))));
         }

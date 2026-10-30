@@ -68,7 +68,7 @@ async def test_the_gateway_is_asked_a_boolean_and_answers_a_probability() -> Non
         failure = await judge(GatewayJev(http, api_key="k"), task="t", answer="34.25", claims=CLAIMS)
     assert failure is not None
     assert str(sent[0].url) == "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
-    assert sent[0].headers["ai-model-id"] == "typesafe-ai/jev"
+    assert sent[0].headers["ai-model-id"] == "typesafe-ai/jev-1.13.0"
     body = json.loads(sent[0].content)
     assert "model" not in body
     assert body["questions"]["claim_0"]["type"] == "boolean"

@@ -98,7 +98,7 @@ class GatewayJev(Jev):
     """Jev through the Vercel AI Gateway, which names a yes/no question `boolean` and its P(yes) `probability`."""
 
     def __init__(self, http: httpx.AsyncClient, *, api_key: str, base_url: str = GATEWAY_URL) -> None:
-        super().__init__(http, api_key=api_key, base_url=base_url, model="typesafe-ai/jev")
+        super().__init__(http, api_key=api_key, base_url=base_url, model="typesafe-ai/jev-1.13.0")
 
     def _request(
         self, state: JsonValue, questions: Mapping[str, JsonValue]
