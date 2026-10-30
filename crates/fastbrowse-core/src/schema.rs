@@ -727,7 +727,7 @@ fn all_null(value: &Value) -> bool {
 #[error("a strict schema cannot hold a map with free keys; use a list of keyed entries")]
 pub struct FreeKeys;
 
-/// Port of `clients/openai_compatible.strict_schema`: every property required and no defaults.
+/// Every property required and no defaults.
 ///
 /// Strict mode refuses an optional property, so validation fills a default instead. Every constraint validation
 /// enforces stays in the schema, so the model is told each rule its reply is held to. A map with free keys is
