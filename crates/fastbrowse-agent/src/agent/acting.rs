@@ -500,7 +500,7 @@ impl Agent {
             }
             return Err(Stop::new(Status::NeedsInput, format!("secret {name} is not available for {origin}")).into());
         };
-        self.seen().redactor.register(name, &value, Some(origin));
+        self.redactor().register(name, &value, Some(origin));
         Ok(value)
     }
 
