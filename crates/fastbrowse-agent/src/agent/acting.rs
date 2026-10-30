@@ -321,23 +321,9 @@ impl Agent {
     ) -> Step {
         let thresholds = &self.config.thresholds;
         let authorized = state.authorization.irreversible_actions;
-        let commit = (
-            decision.operation,
-            decision.target.as_ref().map(|t| t.id.clone()),
-            label.to_string(),
-            observation.url.clone(),
-        );
-        // Spent by whatever is gated next, and only good for the action straight after the recovery that gave it.
-        let confirmed = state.confirmed_commit.take();
-        let fresh = state.recovered_at == state.history.len();
         // Authorized and confident proceeds whatever Jev would say about the action, so it is not asked. Only Jev's own
         // confidence counts: a directed action carries the score of the action Jev chose instead.
         if authorized && !decision.directed && decision.confidence() >= thresholds.sensitive_act_from {
-            return Ok(());
-        }
-        // Recovery saw the page and the task after this gate refused, and named this same commit: that is the second
-        // opinion the refusal asked for. A credential change is never waved through this way.
-        if authorized && !force && fresh && confirmed.as_ref() == Some(&commit) {
             return Ok(());
         }
         let what = format!("{} {}", decision.operation, text::repr(label));
@@ -348,7 +334,7 @@ impl Agent {
             // harmless, and the control's label and form are already in the question.
             let mut questions = IndexMap::from([("irreversible".to_string(), Question::Noul(question))]);
             // Asked in the same call, so an authorized run whose task names the action pays no recovery for it.
-            if let Some(target) = decision.target.as_ref().filter(|_| authorized && !decision.directed) {
+            if let Some(target) = decision.target.as_ref().filter(|_| authorized) {
                 let requested = requested_question(&state.task, decision.operation, target);
                 questions.insert("requested".to_string(), Question::Noul(requested));
             }
@@ -374,14 +360,18 @@ impl Agent {
             if probability.is_some_and(|p| p <= thresholds.irreversible_above) {
                 return Ok(());
             }
+            // A directed action is recovery's pick after Jev was unsure, so its confidence is not the pick's.
             if requested.is_some_and(|p| p > thresholds.requested_above)
-                && decision.confidence() >= thresholds.recover_below
+                && (decision.directed || decision.confidence() >= thresholds.recover_below)
             {
                 return Ok(());
             }
         }
-        // An unsure pick that may commit something is more likely the wrong pick than the step to confirm.
-        let unsure = authorized || decision.confidence() < thresholds.recover_below;
+        // An authorized run stops for confirmation when Jev says the task did not ask for this action, or for a
+        // credential change, which is never asked about.
+        let declined = authorized && (force || requested.is_some_and(|p| p <= thresholds.requested_above));
+        // Otherwise an unsure pick that may commit something is more likely the wrong pick than the step to confirm.
+        let unsure = !declined && (authorized || decision.confidence() < thresholds.recover_below);
         let requested = requested.map_or_else(|| "not asked".to_string(), |p| format!("{p:.2}"));
         let reason = if unsure {
             format!(
@@ -404,9 +394,6 @@ impl Agent {
         )
         .await?;
         if unsure {
-            if authorized {
-                state.unsure_commit = Some(commit);
-            }
             return Err(Unsure::new(reason).into());
         }
         Err(Stop::new(Status::NeedsConfirmation, reason).into())

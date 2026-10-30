@@ -148,8 +148,14 @@ pub(crate) struct TransactionCandidate {
 }
 
 pub(crate) type ReadKey = (String, String, Vec<String>, Vec<String>);
-/// An operation, the id and description of the control it acts on, and the address of the page.
-pub(crate) type Commit = (Operation, Option<String>, String, String);
+/// What the LLM said when it last gave up in recovery: the status the run ends with once recovery runs out.
+#[derive(Debug, Clone)]
+pub(crate) struct GaveUp {
+    pub status: Status,
+    /// Whether it named a sign-in as what blocks the task, which Jev must confirm on the page.
+    pub said_login: bool,
+    pub diagnosis: String,
+}
 
 /// A spawned task whose result any number of waiters can read, as an `asyncio.Task` can be awaited by many.
 ///
@@ -264,11 +270,6 @@ pub(crate) struct RunState {
     /// Jev's pick when asked again after a stall or an unsure pick, by the page state it was asked on, taken as the
     /// next decision there.
     pub picked: Option<(String, Decision)>,
-    /// The commit an authorized run was last refused as unsure it is the one the task means.
-    pub unsure_commit: Option<Commit>,
-    /// That refused commit once recovery, shown the page and the task, named it as the next step. It covers the next
-    /// action only, on that control and page: anything later is asked about afresh.
-    pub confirmed_commit: Option<Commit>,
     pub unchanged: i64,
     /// Controls a fill or select has written, by document, so only a field's first new value counts as progress by
     /// itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes.
@@ -276,9 +277,7 @@ pub(crate) struct RunState {
     pub recoveries: i64,
     pub blank_opening_checked: bool,
     pub recovery_log: VecDeque<String>,
-    /// `history.len()` when a tripwire last recovered the run. Evidence a recovery already acted on is spent:
-    /// `history` only grows, so a repetition count that reached the limit once would hold forever.
-    pub recovered_at: usize,
+    pub gave_up: Option<GaveUp>,
     pub last_page: Option<(String, String)>,
     /// The address of the last page Jev judged a sign-in wall that blocks the task.
     pub passed_wall: Option<String>,
@@ -389,14 +388,12 @@ impl RunState {
             hint: None,
             directed: None,
             picked: None,
-            unsure_commit: None,
-            confirmed_commit: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
             blank_opening_checked: false,
             recovery_log: VecDeque::new(),
-            recovered_at: 0,
+            gave_up: None,
             last_page: None,
             passed_wall: None,
             reached: HashMap::new(),

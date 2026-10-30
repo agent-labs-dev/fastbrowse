@@ -473,7 +473,8 @@ pub(crate) fn code_decision(operation: Operation, target: Option<Control>) -> De
     }
 }
 
-/// The action recovery named, when Jev cannot act or repeats a failed read and the control still offers it.
+/// The action recovery named, taken only when Jev is unsure or escalates and the control still offers it. Jev sees
+/// recovery's subgoal either way, so a pick it is sure of spends the direction unused.
 pub(crate) fn follow_recovery(
     state: &mut RunState,
     observation: &Observation,
@@ -481,7 +482,7 @@ pub(crate) fn follow_recovery(
     uncertain: bool,
 ) -> Option<Decision> {
     let directed = state.directed.take()?;
-    if state.open_answer_outputs.is_empty() && !uncertain && decision.operation != Operation::Escalate {
+    if !uncertain && decision.operation != Operation::Escalate {
         return None;
     }
     let (operation, control_id) = directed;

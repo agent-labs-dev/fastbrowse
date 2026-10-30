@@ -162,7 +162,8 @@ field-writing generation.
 
 **Common causes.**
 
-- Recovery found no way forward and gave up. `error` holds its diagnosis.
+- Recovery found no way forward, and Jev, given its subgoal, found none before `max_recoveries` ran out.
+  `error` holds recovery's diagnosis.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
@@ -193,7 +194,8 @@ holds the answer, or a narrower task.
 ## needs_confirmation (exit 3)
 
 **What it means.** The run stopped before an action Jev judged irreversible, such as submit, pay, delete or
-send, because the run was not authorized to take it. Nothing was committed by that action.
+send, because the run was not authorized to take it, or was authorized but Jev judged the task did not ask
+for it. Nothing was committed by that action.
 
 **Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
 `<operation> '<control>' needs confirmation`, and the refusal appears as a failed step. An uncertain pick of

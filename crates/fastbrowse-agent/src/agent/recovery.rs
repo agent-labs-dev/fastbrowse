@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::helpers::{controls_text, decision_label, describe, field_corrections, recovery_memory, recovery_text};
-use super::state::{FieldText, RunState, Step, Stop};
+use super::state::{Flow, GaveUp, RunState, Step, Stop};
 use super::{Agent, dumps_strings};
 use crate::policy::{Decision, decide};
 use crate::support::generate;
@@ -33,8 +33,6 @@ struct Recovery {
     operation: Option<Operation>,
     #[serde(deserialize_with = "fastbrowse_core::py::lax::boolean")]
     give_up: bool,
-    #[serde(default)]
-    text: Option<String>,
     #[serde(default, deserialize_with = "fastbrowse_core::py::lax::boolean")]
     needs_input: bool,
     #[serde(default, deserialize_with = "fastbrowse_core::py::lax::boolean")]
@@ -53,9 +51,6 @@ impl Schema for Recovery {
             Field::default("operation", Ty::optional(Operation::ty()), Value::Null)
                 .doc("Operation on the control or page; scroll goes down and scroll_up goes up."),
             Field::required("give_up", Ty::Bool).doc("True only when the task cannot progress without the user: false while an observed control or listed address still offers a way on, including an alternative the task allows."),
-            Field::default("text", Ty::optional(Ty::Str), Value::Null).doc(
-                "For a fill correction only: the exact non-secret value supplied by the task or notes for the chosen observed field. Null for other operations, secrets, or an uncertain value.",
-            ),
             Field::default("needs_input", Ty::Bool, false).doc(
                 "With give_up: true when what the user must supply is a value the task never gave, such as a field it names no value for; false for any other dead end.",
             ),
@@ -67,33 +62,7 @@ impl Schema for Recovery {
     }
 }
 
-const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. When the notes answer every open requirement and no unverified outputs remain, the next subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. For a fill correction, return its exact non-secret task value in text, bound to the chosen control. Use field semantics rather than a validation message as its identity. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
-
-/// Whether `text` occurs in `source` as a whole value: not inside a longer word, address or number.
-fn stated_in(text: &str, source: &str) -> bool {
-    let word = |c: char| fastbrowse_core::py::text::is_word(c);
-    let before_ok = |c: char| !(word(c) || matches!(c, '@' | '.' | '+' | '-'));
-    let mut from = 0;
-    while let Some(found) = source[from..].find(text) {
-        let start = from + found;
-        let end = start + text.len();
-        let before = source[..start].chars().next_back();
-        let rest = &source[end..];
-        let mut after = rest.chars();
-        let next = after.next();
-        let after_ok = match next {
-            None => true,
-            Some(c) if word(c) || matches!(c, '@' | '+' | '-') => false,
-            Some('.') => !after.next().is_some_and(word),
-            Some(_) => true,
-        };
-        if before.is_none_or(before_ok) && after_ok {
-            return true;
-        }
-        from = start + source[start..].chars().next().map_or(1, char::len_utf8);
-    }
-    false
-}
+const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. When the notes answer every open requirement and no unverified outputs remain, the next subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
 pub(super) type Withheld = Option<(Operation, Option<String>)>;
@@ -155,24 +124,18 @@ impl Agent {
             // Recovery spends every tripwire's evidence so the same threshold crossing cannot trigger it again.
             state.unchanged = 0;
         }
-        state.recovered_at = state.history.len();
         // Recovery that could not see a release's address clicked its download link to look for it, in a task that
         // said not to download. Asked before the controls are listed, a link the task rules out is never offered.
         if observation.controls.iter().any(starts_download) {
             self.downloads_forbidden(state).await?;
         }
+        let detail = if open_requirements.is_empty() {
+            reason.clone()
+        } else {
+            format!("{reason}\nStill to find:\n{open_requirements}")
+        };
         if stalled && state.recoveries > self.config.stall.max_recoveries {
-            if let Some(failure) = &state.http_failure
-                && gives_up_as != Status::NeedsInput
-            {
-                return Err(failure.stop().into());
-            }
-            let detail = if open_requirements.is_empty() {
-                reason
-            } else {
-                format!("{reason}\nStill to find:\n{open_requirements}")
-            };
-            return Err(Stop::new(self.walled(state, observation, gives_up_as, false).await?, detail).into());
+            return Err(self.stop_recovering(state, observation, gives_up_as, detail).await?);
         }
         if self.ask_jev_again(state, observation, &reason, withheld).await? {
             return Ok(());
@@ -239,22 +202,26 @@ impl Agent {
             generate::<Recovery>(&*self.llm, LLMPurpose::Recover, &messages, 0, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
         let data = generation.data;
-        if data.give_up {
-            // Asked of the model rather than carried from the step that raised it: a missing value can surface
-            // recoveries later, after an attempt to go on without it has failed for its absence.
-            let status = if data.needs_input {
+        // Giving up is the LLM's diagnosis of why the run cannot go on, kept as the status it ends with, but it is
+        // one more recovery rather than the end: Jev is asked again with the subgoal until the budget runs out.
+        // Asked of the model rather than carried from the step that raised it: a missing value can surface
+        // recoveries later, after an attempt to go on without it has failed for its absence.
+        state.gave_up = data.give_up.then(|| GaveUp {
+            status: if data.needs_input {
                 Status::NeedsInput
             } else if gives_up_as == Status::Unverified {
                 Status::Unverified
             } else {
-                self.walled(state, observation, Status::Stuck, data.needs_login).await?
-            };
-            if let Some(failure) = &state.http_failure
-                && status != Status::NeedsInput
-            {
-                return Err(failure.stop().into());
+                Status::Stuck
+            },
+            said_login: data.needs_login,
+            diagnosis: self.redact(&data.diagnosis),
+        });
+        if data.give_up {
+            state.recoveries += 1;
+            if state.recoveries > self.config.stall.max_recoveries {
+                return Err(self.stop_recovering(state, observation, gives_up_as, detail).await?);
             }
-            return Err(Stop::new(status, data.diagnosis).into());
         }
         let diagnosis = self.redact(&data.diagnosis);
         let hint = self.redact(&data.next_subgoal);
@@ -284,31 +251,10 @@ impl Agent {
                 state.directed = Some((operation, None));
             }
             (Some(operation), Some(chosen)) if chosen >= 0 && (chosen as usize) < observation.controls.len() => {
-                let named = &observation.controls[chosen as usize];
-                state.directed = Some((operation, Some(named.id.clone())));
-                if operation == Operation::Fill
-                    && named.operations.contains(&Operation::Fill)
-                    && !named.sensitive
-                    && let Some(text) = data.text.as_ref().filter(|t| !fastbrowse_core::py::text::strip(t).is_empty())
-                    && !self.reveals_text(text)
-                    && std::iter::once(state.task.as_str())
-                        .chain(state.inputs.values().map(String::as_str))
-                        .chain(state.notes.facts().iter().map(|fact| fact.text.as_str()))
-                        .any(|source| stated_in(text, source))
-                {
-                    state.form_values.insert(
-                        (observation.document_key.clone(), named.id.clone()),
-                        (named.clone(), FieldText { missing: false, text: text.clone(), values: Vec::new() }),
-                    );
-                }
-                let commit = (operation, Some(named.id.clone()), describe(named), observation.url.clone());
-                if state.unsure_commit.as_ref() == Some(&commit) {
-                    state.confirmed_commit = state.unsure_commit.clone();
-                }
+                state.directed = Some((operation, Some(observation.controls[chosen as usize].id.clone())));
             }
             _ => {}
         }
-        state.unsure_commit = None;
         let note = self.redact(&[reason.as_str(), data.diagnosis.as_str(), data.next_subgoal.as_str()].join("\n"));
         let step = StepResult {
             index: state.steps.len() as i64,
@@ -324,6 +270,28 @@ impl Agent {
             duration_ms: 0,
         };
         self.record_step(state, step, true, None).await
+    }
+
+    /// The stop once recovery has run out: the status the last give-up diagnosed, or `gives_up_as`, with an HTTP
+    /// failure on the current page standing for any but a missing input, and a sign-in the LLM named confirmed by Jev.
+    async fn stop_recovering(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        gives_up_as: Status,
+        detail: String,
+    ) -> Step<Flow> {
+        let gave_up = state.gave_up.take();
+        let status =
+            gave_up.as_ref().map_or(gives_up_as, |g| if g.status == Status::Stuck { gives_up_as } else { g.status });
+        if status != Status::NeedsInput
+            && let Some(failure) = &state.http_failure
+        {
+            return Ok(failure.stop().into());
+        }
+        let said_login = gave_up.as_ref().is_some_and(|g| g.said_login);
+        let status = self.walled(state, observation, status, said_login).await?;
+        Ok(Stop::new(status, gave_up.map_or(detail, |g| g.diagnosis)).into())
     }
 
     /// Jev asked again on this page, told what went wrong, with the action that changed nothing left out of its
@@ -394,19 +362,5 @@ impl Agent {
         state.directed = None;
         state.picked = Some((state_key(observation), decision));
         Ok(true)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::stated_in;
-
-    #[test]
-    fn a_value_is_stated_only_as_a_whole() {
-        assert!(stated_in("Bath", "Find a train from Bath to York"));
-        assert!(stated_in("Bath", "Leave Bath."));
-        assert!(!stated_in("Bath", "Bathurst"));
-        assert!(!stated_in("bob", "mail bob@example.com"));
-        assert!(!stated_in("example", "visit example.com"));
     }
 }

@@ -30,7 +30,7 @@ use super::driving::edit_progress;
 use super::helpers::{
     access_inspection, answer_evidence, code_decision, follow_recovery, next_page_control, next_value, unread, visited,
 };
-use super::state::{RunState, Spawned, TransactionCandidate};
+use super::state::{Flow, RunState, Spawned, TransactionCandidate};
 use crate::memory::{Fact, Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry};
@@ -235,6 +235,10 @@ async fn test_a_named_action_is_not_taken_over_a_confident_choice_or_on_a_contro
     let search = Control::new("search", "button", "Search", [Operation::Click]);
     let decision = code_decision(Operation::Click, Some(search.clone()));
     let mut state = run_state().await;
+    state.directed = Some((Operation::Click, Some("search".into())));
+    assert!(follow_recovery(&mut state, &observation(std::slice::from_ref(&search)), &decision, false).is_none());
+    // Answer outputs still open do not let the direction overrule a pick Jev is sure of.
+    state.open_answer_outputs = vec!["price".into()];
     state.directed = Some((Operation::Click, Some("search".into())));
     assert!(follow_recovery(&mut state, &observation(&[search]), &decision, false).is_none());
     state.directed = Some((Operation::Click, Some("search".into())));
@@ -900,7 +904,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
 }
 
 #[tokio::test]
-async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
+async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it_and_stops_when_it_does_not() {
     use fastbrowse_core::safety::irreversible_question;
     for (requested, acts) in [(0.97, true), (0.76, true), (0.40, false)] {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(Gatekeeper(requested)), Arc::new(ScriptedLLM));
@@ -918,6 +922,13 @@ async fn test_an_authorized_pick_under_the_bar_acts_when_the_task_names_it() {
         let gated =
             agent.gate_question(&mut state, &observation, &decision, Decider::Jev, "Finish", question, false).await;
         assert_eq!(gated.is_ok(), acts, "requested {requested}");
+        // Jev says the task did not ask for it: the run stops for confirmation rather than going round recovery.
+        if let Err(flow) = gated {
+            assert!(
+                matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation),
+                "requested {requested}"
+            );
+        }
     }
 }
 

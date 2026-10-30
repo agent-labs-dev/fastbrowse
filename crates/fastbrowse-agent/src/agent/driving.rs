@@ -176,9 +176,7 @@ impl Agent {
                 decided_by = Decider::Code;
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
-            if (!state.open_answer_outputs.is_empty() || uncertain || !not_acting(decision.operation))
-                && let Some(directed) = follow_recovery(state, &observation, &decision, uncertain)
-            {
+            if let Some(directed) = follow_recovery(state, &observation, &decision, uncertain) {
                 (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
             }
             if uncertain && state.ready_plan.is_none() {
@@ -186,12 +184,8 @@ impl Agent {
                 state.await_plan().await?;
                 continue;
             }
-            if decision.operation == Operation::Done {
-                state.directed = None;
-            } else if decision.operation == Operation::Read {
+            if decision.operation == Operation::Read {
                 state.await_plan().await?;
-                // A read spends the direction it was sent on, but may leave one of its own.
-                state.directed = None;
                 Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await?;
                 continue;
             }
@@ -1033,6 +1027,7 @@ impl Agent {
 fn renew(state: &mut RunState) {
     state.recoveries = 0;
     state.recovery_log.clear();
+    state.gave_up = None;
 }
 
 /// `_step`'s keyword arguments.

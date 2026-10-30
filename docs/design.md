@@ -17,7 +17,8 @@ confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. A
 confidence reaches `Thresholds.sensitive_act_from` proceeds without that classification.
 
 A refusal is recorded as a failed step with a reason. An unauthorized action with sufficient confidence
-stops at `needs_confirmation`; an uncertain action goes to recovery. The classifier can be wrong, so this
+stops at `needs_confirmation`, and so does an authorized action Jev judges the task did not ask for; an
+uncertain action goes to recovery. The classifier can be wrong, so this
 gate is not a guarantee that every externally visible change is detected.
 
 ## Navigation
@@ -107,7 +108,11 @@ nothing read since is no progress, and `unchanged_actions` such steps in a row g
 not seen before or a read that adds evidence resets the count and renews the `max_recoveries` budget.
 Recovery asks Jev first: its state names what failed, and the stalled action is left out of its options,
 which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
-`recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover.
+`recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover. Its
+subgoal reaches Jev with the next step, and the action it names is taken only when Jev is unsure again or
+escalates. When the LLM gives up, that counts as one more recovery: its diagnosis becomes the run's status
+once `max_recoveries` is spent, and a sign-in it names ends `needs_login` only when Jev agrees the page is a
+wall.
 
 ## Run events and images
 
