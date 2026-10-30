@@ -213,7 +213,7 @@
     // Headerless comparison rows need leading cells for identity and separate source spans for counting.
     if (!headers.length) return rows.map((row, index) => (index ? [line(rows[0]), line(row)].join('\n') : line(row)));
     const prefix = headers.map(line);
-    if (headers.length) prefix.push('| ' + headers[0].cells.map(() => '---').join(' | ') + ' |');
+    prefix.push('| ' + headers[0].cells.map(() => '---').join(' | ') + ' |');
     const data = rows.filter(row => !headers.includes(row));
     return data.length ? data.map(row => [...prefix, line(row)].join('\n')) : [prefix.join('\n')];
   };
