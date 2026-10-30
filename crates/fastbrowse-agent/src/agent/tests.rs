@@ -1396,7 +1396,7 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
         (vec![code.clone()], Status::Stuck, None, None),
     ] {
         let agent = agent();
-        agent.seen().redactor.register("PASSWORD", "hunter2", None);
+        agent.redactor().register("PASSWORD", "hunter2", None);
         agent.seen().raw = Some(at("https://shop.test:443/login?next=1", &controls));
         let wall = agent.wall(&stop(status, hint));
         assert_eq!(wall.as_ref().map(|w| w.kind), expected, "{status:?} {controls:?}");
@@ -1446,7 +1446,8 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
 }
 
 /// A run is replayed from its result's steps, the step events a host shows as it goes, and the trace file, and a step's
-/// builder or an event's author that forgets to redact must not put a resolved secret into any of them.
+/// builder or an event's author, in the loop or anywhere it hands its trace, that forgets to redact must not put a
+/// resolved secret into any of them.
 #[tokio::test]
 async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
     let events: Arc<std::sync::Mutex<Vec<Event>>> = Arc::default();
@@ -1457,7 +1458,7 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
     });
     let trace = Trace::collecting();
     let agent = agent().with_events(Some(on_event)).with_trace(trace.clone());
-    agent.seen().redactor.register("password", "hunter2", Some("https://acme.test"));
+    agent.redactor().register("password", "hunter2", Some("https://acme.test"));
     let mut state = run_state().await;
     let step = StepResult {
         index: 0,
@@ -1475,6 +1476,11 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
     };
     agent.record_step(&mut state, step, false, None).await.unwrap();
     agent.event("read", || serde_json::Map::from_iter([("quotes".into(), json!(["typed hunter2", 3]))]));
+    // Readers and checks trace through a clone of the run's trace, never through the agent.
+    agent
+        .trace
+        .clone()
+        .event("record_filter", || serde_json::Map::from_iter([("requirement".into(), "hunter2".into())]));
     let Some(Event::Step(event)) = events.lock().unwrap().pop() else { panic!("no step event") };
     let redacted = StepResult {
         url: "https://acme.test/account?pw=[secret:password]".into(),
@@ -1484,5 +1490,11 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
     };
     assert_eq!(event.step, redacted);
     assert_eq!(state.steps, vec![redacted]);
-    assert_eq!(trace.events(), vec![json!({"event": "read", "quotes": ["typed [secret:password]", 3]})]);
+    assert_eq!(
+        trace.events(),
+        vec![
+            json!({"event": "read", "quotes": ["typed [secret:password]", 3]}),
+            json!({"event": "record_filter", "requirement": "[secret:password]"}),
+        ]
+    );
 }

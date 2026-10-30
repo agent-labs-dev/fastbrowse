@@ -1150,10 +1150,8 @@ impl Agent {
     pub(super) async fn observe(&self) -> Step<Observation> {
         let observation = self.page.observe().await?;
         let revealed = self.reveals(&observation);
-        let mut seen = self.seen();
-        seen.raw = Some(observation.clone());
-        seen.secret_on_screen = revealed;
-        let mask = |value: &str| seen.redactor.mask(value);
+        let redactor = self.redactor();
+        let mask = |value: &str| redactor.mask(value);
         let mask_opt = |value: &Option<String>| value.as_deref().map(mask);
         let controls = observation
             .controls
@@ -1188,6 +1186,10 @@ impl Agent {
             }),
             ..observation.clone()
         };
+        drop(redactor);
+        let mut seen = self.seen();
+        seen.raw = Some(observation);
+        seen.secret_on_screen = revealed;
         seen.observed = Some(masked.clone());
         Ok(masked)
     }
@@ -1209,8 +1211,8 @@ impl Agent {
 
     pub(super) async fn capture(&self) -> Step<Capture> {
         let capture = self.page.capture().await?;
-        let seen = self.seen();
-        let mask = |value: &str| seen.redactor.mask(value);
+        let redactor = self.redactor();
+        let mask = |value: &str| redactor.mask(value);
         let text = mask(&capture.text);
         let digest = sha256_hex(text.as_bytes());
         let blocks = capture
