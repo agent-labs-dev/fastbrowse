@@ -715,8 +715,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._html(
             "Change your password",
-            # The copy promised a sign-out nothing here performed, so the page claimed something no grader
-            # could hold a run to. Say what actually happens instead.
             "<p>Choose a new password. Your signed-in session here stays as it is.</p>"
             + _form(
                 "/settings/password",
