@@ -104,7 +104,7 @@ class Generator:
         imports = ["com.fasterxml.jackson.annotation.JsonProperty"]
         body = " ".join(java for _, _, java, _ in fields)
         if "JsonNode" in body:
-            imports.append("com.fasterxml.jackson.databind.JsonNode")
+            imports.append("tools.jackson.databind.JsonNode")
         if "List<" in body:
             imports.append("java.util.List")
         if "Map<" in body:
