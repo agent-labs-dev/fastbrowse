@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 #[test]
 fn decisions_ask_and_choose_as_python_does() {
     let mut golden = golden("policy.json");
-    let updating = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    let updating = capture::updating();
     let cases = golden["cases"].as_array_mut().unwrap();
     assert!(cases.len() > 50);
     for case in cases.iter_mut() {
@@ -68,7 +68,7 @@ fn save(name: &str, value: &Value) {
 #[test]
 fn requests_are_built_as_python_builds_them() {
     let mut golden = golden("policy.json");
-    let updating = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    let updating = capture::updating();
     for case in golden["build_request"].as_array_mut().unwrap() {
         let observation: Observation = parse(&case["observation"]);
         let context: StepContext = parse(&case["context"]);

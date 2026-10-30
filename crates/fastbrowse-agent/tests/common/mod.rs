@@ -121,7 +121,7 @@ impl DecisionClient for ReplayJev {
         let written: serde_json::Map<String, Value> =
             questions.iter().map(|(key, question)| (key.clone(), question.dump())).collect();
         let (state, questions) = (write(state, Style::HTTPX), write(&Value::Object(written), Style::HTTPX));
-        if std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some() {
+        if capture::updating() {
             self.2.lock().unwrap().push((state, questions));
         } else {
             assert_eq!(state, call["jev"]["state"].as_str().unwrap(), "{name}: Jev state #{index}");

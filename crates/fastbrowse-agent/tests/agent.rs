@@ -4,6 +4,8 @@
 //! `FASTBROWSE_UPDATE_GOLDEN=1` re-records them after an intended behaviour change: recorded answers are kept, a new
 //! request is answered from the case's `jev` and `llm` scripts, and the diff of `agent.json` is the behaviour change.
 
+mod common;
+
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
@@ -515,7 +517,7 @@ async fn replay(mut case: Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> Value {
 
 #[tokio::test(start_paused = true)]
 async fn whole_loops_match_python() {
-    let update = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    let update = common::capture::updating();
     let mut cases_out = Vec::new();
     for case in cases() {
         cases_out.push(replay(case, update.then(Arc::default)).await);
