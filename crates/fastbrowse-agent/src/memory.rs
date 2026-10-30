@@ -420,11 +420,6 @@ impl Notes {
         self.pages.get(&(evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at))
     }
 
-    /// Whether a read has captured this address, whatever the page showed then.
-    pub fn read_address(&self, url: &str) -> bool {
-        self.pages.values().any(|page| page.url == url)
-    }
-
     pub fn facts(&self) -> Vec<&Fact> {
         self.facts.values().collect()
     }
