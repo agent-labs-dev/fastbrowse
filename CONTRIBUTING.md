@@ -147,4 +147,7 @@ versions they ran, with every physical attempt and its spend retained. See [docs
 - We aim to reply to every issue and PR within a few days: to merge, to ask for specific changes, or to close
   it with the reason.
 
+A merged fix for a bug you reported, a feature you asked for, or code you wrote credits you by your GitHub
+handle, in the changelog entry for that change and in [CREDITS.md](CREDITS.md).
+
 By contributing you agree your work is released under the [MIT License](LICENSE).

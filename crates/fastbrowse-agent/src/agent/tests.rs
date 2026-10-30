@@ -812,6 +812,15 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         fallback: None,
         choices: Vec::new(),
     };
+    // Choices taken before the secret was registered are masked as the step is recorded.
+    state.choices = vec![fastbrowse_core::models::StepChoice {
+        id: "a".into(),
+        role: "textbox".into(),
+        label: "Account hunter2".into(),
+        context: Some("signed in as hunter2".into()),
+        operations: vec![Operation::Fill],
+        chosen: true,
+    }];
     agent.record_step(&mut state, step, false, None).await.unwrap();
     agent.event("read", || serde_json::Map::from_iter([("quotes".into(), json!(["typed hunter2", 3]))]));
     // Readers and checks trace through a clone of the run's trace, never through the agent.
@@ -826,6 +835,9 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         note: Some("DONE rejected: Answer output not verified: [secret:password]".into()),
         ..event.step.clone()
     };
+    let masked = "\u{2022}".repeat(7);
+    assert_eq!(event.step.choices[0].label, format!("Account {masked}"));
+    assert_eq!(event.step.choices[0].context.as_deref(), Some(format!("signed in as {masked}").as_str()));
     assert_eq!(event.step, redacted);
     assert_eq!(state.steps, vec![redacted]);
     assert_eq!(

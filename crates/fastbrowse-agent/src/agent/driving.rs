@@ -960,7 +960,15 @@ impl Agent {
             url: self.redact(&step.url),
             target: step.target.as_deref().map(|target| self.redact(target)),
             note: step.note.as_deref().map(|note| self.redact(note)),
-            choices: std::mem::take(&mut state.choices),
+            // A secret resolved between the decision and this record (the step's own fill) is masked here too.
+            choices: std::mem::take(&mut state.choices)
+                .into_iter()
+                .map(|choice| StepChoice {
+                    label: self.mask(&choice.label),
+                    context: choice.context.as_deref().map(|context| self.mask(context)),
+                    ..choice
+                })
+                .collect(),
             fallback: state.fallback.take(),
             ..step
         };

@@ -573,6 +573,7 @@ async fn test_a_closed_tab_reaches_the_loop_as_unavailable() {
 mod cursor {
     use super::*;
     use crate::common::{control, harness};
+    use fastbrowse_browser::cursor::Geometry;
     use fastbrowse_browser::page::CdpPage;
     use fastbrowse_browser::testing::lifecycle::{cursor_geometry, open_cursor};
     use fastbrowse_core::config::Config;
@@ -585,8 +586,9 @@ mod cursor {
         h.goto("/").await;
         let observation = h.observe().await;
         let active = h.session.active_session_id().unwrap();
-        assert!(cursor_geometry(&h.page, &active, &observation.document_key).await.is_some());
-        assert!(cursor_geometry(&h.page, "another-session", &observation.document_key).await.is_none());
+        let same_page = |reading: Option<Geometry>| reading.expect("the page reports its frame").same_page;
+        assert!(same_page(cursor_geometry(&h.page, &active, &observation.document_key).await));
+        assert!(!same_page(cursor_geometry(&h.page, "another-session", &observation.document_key).await));
         h.close().await;
     }
 
@@ -599,8 +601,10 @@ mod cursor {
         h.goto("/dispatch.html").await;
         let after = h.observe().await;
         assert_ne!(before.document_key, after.document_key);
-        assert!(cursor_geometry(&h.page, &session_id, &before.document_key).await.is_none());
-        assert!(cursor_geometry(&h.page, &session_id, &after.document_key).await.is_some());
+        // The old point means nothing on the new document, but the new one still says whether the browser shows.
+        let same_page = |reading: Option<Geometry>| reading.expect("the new page reports its frame").same_page;
+        assert!(!same_page(cursor_geometry(&h.page, &session_id, &before.document_key).await));
+        assert!(same_page(cursor_geometry(&h.page, &session_id, &after.document_key).await));
         h.close().await;
     }
 

@@ -215,6 +215,11 @@ need goes in `docs/agents/` behind a line here that says when to read it.
 - Domain docs are single-context, one glossary and one ADR directory at the root:
   [docs/agents/domain.md](docs/agents/domain.md).
 
+## Credit contributors
+
+A fix for a reported bug, a feature someone asked for, or someone's merged code credits them in its changelog bullet
+and in [CREDITS.md](CREDITS.md). The rule is in [docs/agents/credits.md](docs/agents/credits.md).
+
 ## Releasing
 
 Release only when the maintainer says to. [docs/agents/release.md](docs/agents/release.md) has the steps and

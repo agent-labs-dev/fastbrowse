@@ -313,7 +313,8 @@ impl CdpPage {
         begun.is_some_and(|begun| self.session.input_navigations() > begun)
     }
 
-    /// Where the active page's viewport sits in its window, as the page itself reports it.
+    /// Where the active page's viewport sits in its window, as the page itself reports it, and whether that page is
+    /// still the tab and document the action point was taken from.
     #[cfg(feature = "cursor")]
     pub(crate) fn cursor_geometry(
         &self,
@@ -329,9 +330,6 @@ impl CdpPage {
             let (expected_session, expected_document) = (expected_session.clone(), expected_document.clone());
             Box::pin(async move {
                 let session_id = session.active_session_id().ok()?;
-                if session_id != expected_session {
-                    return None;
-                }
                 let known = *pid.lock().unwrap();
                 let browser_pid = match known {
                     Some(known) => known,
@@ -358,12 +356,11 @@ impl CdpPage {
                     return None;
                 }
                 let reading = reading["result"]["value"].as_array()?.clone();
-                if session.active_session_id().ok()? != session_id
-                    || reading.len() != 9
-                    || reading[8].as_str() != Some(expected_document.as_str())
-                {
+                if session.active_session_id().ok()? != session_id || reading.len() != 9 {
                     return None;
                 }
+                let same_page =
+                    session_id == expected_session && reading[8].as_str() == Some(expected_document.as_str());
                 // CSS pixels in the page, device-independent pixels in the window: their ratio is the page zoom.
                 let css_width = metrics["cssLayoutViewport"]["clientWidth"].as_f64().filter(|w| *w != 0.0)?;
                 let number = |i: usize| reading[i].as_f64();
@@ -378,6 +375,7 @@ impl CdpPage {
                     pinch_scale: number(6)?,
                     visible: reading[7].as_bool()?,
                     zoom: metrics["layoutViewport"]["clientWidth"].as_f64()? / css_width,
+                    same_page,
                 })
             })
         })
