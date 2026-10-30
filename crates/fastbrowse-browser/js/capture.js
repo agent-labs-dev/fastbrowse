@@ -121,7 +121,7 @@
   // Its text is then empty and the table reads as if the cell were blank, so name what is drawn there: the
   // image's alt text or label, or failing that the icon font's class, which is how those fonts name a glyph.
   const ICON_CLASS =
-    /^(?:icon-tabler|tabler-icon|lucide|glyphicon|fa|fas|far|bi|mdi|icon|ti|la|ri|ion|feather)-([a-z][a-z0-9-]{0,47})$/;
+    /^(?:icon-tabler|tabler-icon|lucide|glyphicon|fa|fas|far|bi|mdi|icon|ti|la|ri|ion|feather)-([a-z][a-z0-9-]*)$/;
   // Sizes, weights and effects share an icon library's prefix without naming a glyph, as does the library itself.
   const ICON_STYLE =
     /^(?:icon|tabler|solid|regular|light|thin|duotone|brands|xs|sm|lg|xl|\d+x|fw|spin|pulse|border|inverse|stack.*|pull-.*|rotate-.*|flip-.*)$/;
