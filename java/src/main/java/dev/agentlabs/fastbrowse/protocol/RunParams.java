@@ -3,9 +3,9 @@
 package dev.agentlabs.fastbrowse.protocol;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
+import tools.jackson.databind.JsonNode;
 
 /**
  * One run. Apart from {@code run_id}, each field is the {@code run_task} argument or the CLI flag of the same name.
