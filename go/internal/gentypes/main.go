@@ -19,12 +19,10 @@ import (
 
 type schema struct {
 	Type                 any                `json:"type"`
-	Title                string             `json:"title"`
 	Description          string             `json:"description"`
 	Ref                  string             `json:"$ref"`
 	AnyOf                []*schema          `json:"anyOf"`
 	Enum                 []any              `json:"enum"`
-	Const                any                `json:"const"`
 	Format               string             `json:"format"`
 	Properties           orderedProperties  `json:"properties"`
 	Required             []string           `json:"required"`
