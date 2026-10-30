@@ -296,8 +296,8 @@
     "version": 6
   },
   "search-price": {
-    "version": 2,
-    "fingerprint": "e2d17dd12dec1c01"
+    "version": 3,
+    "fingerprint": "21d92ec8e4c9f7a3"
   },
   "stretch-books-nonfiction-five-star": {
     "fingerprint": "1fb42fae24121a93",
@@ -344,8 +344,8 @@
     "version": 7
   },
   "table-extract": {
-    "version": 2,
-    "fingerprint": "8e0ef7ec329b92a8"
+    "version": 3,
+    "fingerprint": "c2867e2f8cf7e8aa"
   },
   "table-largest-due": {
     "fingerprint": "6fb9021727b5cd63",
