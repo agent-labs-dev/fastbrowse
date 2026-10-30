@@ -136,6 +136,21 @@ func TestAnEventCallbackThatFailsEndsTheRunWithStatusError(t *testing.T) {
 	}
 }
 
+func TestANotificationThatCannotBeDecodedEndsItsRun(t *testing.T) {
+	for _, notification := range []struct{ method, params string }{
+		{string(ServerMethodRunEvent), `{"run_id":"r","event":7}`},
+		{string(ServerMethodRunFrame), `{"run_id":"r","frame":"not base64!"}`},
+	} {
+		cancelled := false
+		run := &served{cancel: func() { cancelled = true }}
+		client := &Client{runs: map[string]*served{"r": run}}
+		client.notify(notification.method, json.RawMessage(notification.params))
+		if !cancelled || run.failure == "" {
+			t.Fatalf("%s: cancelled %v, failure %q", notification.method, cancelled, run.failure)
+		}
+	}
+}
+
 func TestAStatusIsAResultNotAnError(t *testing.T) {
 	client := scripted(t, "needs_login", Options{})
 	if result := run(t, client, "t", RunOptions{}); result.Status != StatusNeedsLogin {

@@ -237,7 +237,8 @@ func (c *Client) notify(method string, params json.RawMessage) {
 			RunID string `json:"run_id"`
 			Event Event  `json:"event"`
 		}
-		if json.Unmarshal(params, &message) != nil {
+		if err := json.Unmarshal(params, &message); err != nil {
+			c.undecodable(params, ServerMethodRunEvent, err)
 			return
 		}
 		if run := c.run(message.RunID); run != nil && run.options.OnEvent != nil && !c.failed(run) {
@@ -247,11 +248,13 @@ func (c *Client) notify(method string, params json.RawMessage) {
 		}
 	case ServerMethodRunFrame:
 		var message RunFrame
-		if json.Unmarshal(params, &message) != nil {
+		if err := json.Unmarshal(params, &message); err != nil {
+			c.undecodable(params, ServerMethodRunFrame, err)
 			return
 		}
 		jpeg, err := base64.StdEncoding.DecodeString(message.Frame)
 		if err != nil {
+			c.undecodable(params, ServerMethodRunFrame, err)
 			return
 		}
 		if run := c.run(message.RunID); run != nil && run.options.OnFrame != nil && !c.failed(run) {
@@ -259,6 +262,19 @@ func (c *Client) notify(method string, params json.RawMessage) {
 				c.fail(run, ServerMethodRunFrame, err)
 			}
 		}
+	}
+}
+
+// undecodable ends the run a notification belongs to: its callback would otherwise miss what the run did.
+func (c *Client) undecodable(params json.RawMessage, method ServerMethod, err error) {
+	var message struct {
+		RunID string `json:"run_id"`
+	}
+	if json.Unmarshal(params, &message) != nil {
+		return
+	}
+	if run := c.run(message.RunID); run != nil {
+		c.fail(run, method, err)
 	}
 }
 
