@@ -168,7 +168,6 @@ async fn test_table_rows_below_the_viewport_are_captured() {
     );
     let capture = content_capture(&h.page).await;
     assert_eq!(texts(&capture), ["| Below the viewport |"]);
-    assert_eq!(texts(&capture).join("\n\n"), "| Below the viewport |");
     assert!(capture.blocks.iter().all(|b| b.kind == BlockKind::Table));
     h.close().await;
 }
