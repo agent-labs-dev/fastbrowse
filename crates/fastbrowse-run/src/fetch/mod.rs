@@ -246,7 +246,6 @@ struct Loaded {
 pub struct FetchedPage {
     http: Http,
     origins: Option<Vec<String>>,
-    seconds: f64,
     check_access: Option<CheckAccess>,
     loaded: Mutex<Loaded>,
     needed_browser: AtomicBool,
@@ -257,7 +256,6 @@ impl FetchedPage {
         FetchedPage {
             http,
             origins: allowed_origins,
-            seconds: TIMEOUT_SECONDS,
             check_access,
             loaded: Mutex::new(Loaded::default()),
             needed_browser: AtomicBool::new(false),
@@ -331,7 +329,7 @@ impl Page for FetchedPage {
     fn navigate<'a>(&'a self, url: &'a str, back_to: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
         Box::pin(async move {
             self.gate().await?;
-            let capture = match fetch_capture(&self.http, url, self.origins.as_deref(), self.seconds).await {
+            let capture = match fetch_capture(&self.http, url, self.origins.as_deref(), TIMEOUT_SECONDS).await {
                 Ok(capture) => capture,
                 // A guessed address, not the caller's page: the loop falls back to `start` on a browser failure, and
                 // concluding that the task needs a browser here would end the run.
