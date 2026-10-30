@@ -49,6 +49,25 @@ pub(crate) enum Point {
     Gone,
 }
 
+/// A key an action presses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Enter,
+    Escape,
+    Space,
+}
+
+impl Key {
+    /// Its CDP key name, its code, the text it types and its Windows virtual key code.
+    fn cdp(self) -> (&'static str, &'static str, &'static str, i64) {
+        match self {
+            Self::Enter => ("Enter", "Enter", "\r", 13),
+            Self::Escape => ("Escape", "Escape", "", 27),
+            Self::Space => (" ", "Space", " ", 32),
+        }
+    }
+}
+
 /// Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or why nowhere.
 enum Route {
     At(f64, f64),
@@ -399,9 +418,9 @@ impl CdpPage {
                 }
             }
             Operation::Select => self.select(target, text, point).await,
-            Operation::Enter => self.key(target, "Enter", point).await,
+            Operation::Enter => self.key(target, Key::Enter, point).await,
             Operation::Drag => self.drag(target, point, action.destination_id.as_deref()).await,
-            Operation::Escape => self.key(None, "Escape", Point::Gone).await,
+            Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
             Operation::Scroll | Operation::ScrollUp => {
                 self.scroll(action.operation).await?;
                 Ok((StepOutcome::Executed, None))
@@ -572,7 +591,8 @@ impl CdpPage {
         let (session_id, local_id) = (&target.0, target.2);
         let key = self.evaluate(session_id, &format!("({ACTIVATION_KEY_JS})({local_id})")).await?;
         let key = match key.as_str() {
-            Some(k @ ("Enter" | " ")) => Some(k.to_owned()),
+            Some("Enter") => Some(Key::Enter),
+            Some(" ") => Some(Key::Space),
             None if key.is_null() => None,
             _ => return Err(bad("Literal['Enter', ' '] | None")),
         };
@@ -583,7 +603,7 @@ impl CdpPage {
         if let Some(refusal) = self.keys_reach(target, true, None).await? {
             return Ok(refusal);
         }
-        self.press_key(session_id, &key).await?;
+        self.press_key(session_id, key).await?;
         Ok((StepOutcome::Executed, Some("Pressed from the keyboard: a band fixed to the window covers it.".into())))
     }
 
@@ -908,7 +928,7 @@ impl CdpPage {
         })
     }
 
-    async fn key(&self, target: Option<&Target>, key: &str, point: Point) -> Result<Outcome, BrowserError> {
+    async fn key(&self, target: Option<&Target>, key: Key, point: Point) -> Result<Outcome, BrowserError> {
         let session_id = match target {
             Some(target) => target.0.clone(),
             None => self.session.active_session_id()?,
@@ -936,14 +956,8 @@ impl CdpPage {
         Ok((StepOutcome::Executed, None))
     }
 
-    async fn press_key(&self, session_id: &str, key: &str) -> Result<(), BrowserError> {
-        // Each key pressed: its code, the text it types and its Windows virtual key code.
-        let (code, text, virtual_key) = match key {
-            "Enter" => ("Enter", "\r", 13),
-            "Escape" => ("Escape", "", 27),
-            " " => ("Space", " ", 32),
-            _ => return Err(BrowserError::Failed(format!("unknown key {key}"))),
-        };
+    async fn press_key(&self, session_id: &str, key: Key) -> Result<(), BrowserError> {
+        let (key, code, text, virtual_key) = key.cdp();
         let down =
             json!({"type": "keyDown", "key": key, "code": code, "text": text, "windowsVirtualKeyCode": virtual_key});
         self.input(self.session.send("Input.dispatchKeyEvent", down, Some(session_id))).await?;
@@ -1200,7 +1214,7 @@ impl CdpPage {
     async fn cancel_drag(&self, session_id: &str, start: (f64, f64)) -> Result<(), BrowserError> {
         self.drag_move(session_id, start.0, start.1).await?;
         self.input(self.session.send("Input.cancelDragging", json!({}), Some(session_id))).await?;
-        self.key(None, "Escape", Point::Gone).await?;
+        self.key(None, Key::Escape, Point::Gone).await?;
         self.release(session_id, start.0, start.1).await
     }
 
