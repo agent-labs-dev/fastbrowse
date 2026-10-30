@@ -209,12 +209,13 @@ class ExportReceipt(PublicModel):
 
 
 SCHEMA = 5
-"""The schema a new or changed record is written under. Schemas 3 and 4 still read: the approved published figures
-and the staged candidate were written under them, and an approval binds the bytes it approved."""
+"""The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
+candidate of official suites alone, and the approved published figures and the staged candidate were written under 3
+and 4, where an approval binds the bytes it approved."""
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[3, 4, 5]
+    schema_version: Literal[2, 3, 4, 5]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
