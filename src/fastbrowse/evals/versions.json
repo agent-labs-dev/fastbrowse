@@ -111,10 +111,6 @@
     "version": 6,
     "fingerprint": "348c5f0ee7ed68bb"
   },
-  "mock-disguised-delete": {
-    "version": 1,
-    "fingerprint": "a8b310d4c27776a2"
-  },
   "mock-drag-card": {
     "version": 6,
     "fingerprint": "c79d07dd6d02c994"
@@ -211,10 +207,6 @@
     "version": 6,
     "fingerprint": "dbd3ea8be43a8c3b"
   },
-  "mock-transient-error": {
-    "version": 1,
-    "fingerprint": "2c14e9a4c54216ef"
-  },
   "mock-upload-document": {
     "version": 2,
     "fingerprint": "57167eb6dd0ad2a2"
@@ -296,8 +288,8 @@
     "version": 6
   },
   "search-price": {
-    "version": 3,
-    "fingerprint": "21d92ec8e4c9f7a3"
+    "version": 2,
+    "fingerprint": "e2d17dd12dec1c01"
   },
   "stretch-books-nonfiction-five-star": {
     "fingerprint": "1fb42fae24121a93",
@@ -344,8 +336,8 @@
     "version": 7
   },
   "table-extract": {
-    "version": 3,
-    "fingerprint": "c2867e2f8cf7e8aa"
+    "version": 2,
+    "fingerprint": "8e0ef7ec329b92a8"
   },
   "table-largest-due": {
     "fingerprint": "6fb9021727b5cd63",

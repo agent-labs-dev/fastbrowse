@@ -25,6 +25,7 @@ name: Official benchmarks
 #   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
 #   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
 #            PARALLAX_BU_BENCH_JUDGE, PARALLAX_MIND2WEB_JUDGE (the judge of each suite run, as JSON; see below)
+#            PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS (Parallax's own pre-check judge, keyed by PARALLAX_JUDGE_API_KEY)
 #
 # Both upstream judges call OpenAI directly. Here they call the OpenAI-compatible endpoint in `base_url`
 # (`parallax browser official --judge-base-url`); the run records the route, and a published group says it differs
@@ -44,7 +45,7 @@ name: Official benchmarks
 # are not directly comparable with the figures upstream publishes for its judges.
 #
 # This runs the fastbrowse arm, the one the official groups publish. Parallax can also measure the hosted Browser Use
-# and Browserbase agents on these suites (`parallax browser official --arm`) for comparison; their rows are published
+# browsers' own agent on these suites (`parallax browser official --arm`) for comparison; their rows are published
 # only where Parallax marks them publishable. Ultrafast returns no answer, so it is not run on them.
 #
 # `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
@@ -160,6 +161,8 @@ jobs:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           SUITE_SET: ${{ inputs.suites }}
         run: |
           missing=""
@@ -167,6 +170,8 @@ jobs:
           need PARALLAX_DEPLOY_KEY "$PARALLAX_DEPLOY_KEY"
           need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
+          need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
+          need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
           if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
           # Online-Mind2Web is gated: HF_TOKEN's account must also have accepted the dataset's access conditions.
@@ -268,10 +273,14 @@ jobs:
       - name: Install parallax and fastbrowse
         # Every later parallax command runs with --no-sync: a syncing `uv run` would put back the fastbrowse
         # parallax pins and measure that build instead of this one.
+        env:
+          FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
         run: |
           cd parallax
           uv sync --locked --extra browser --extra track
-          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+          # A git+file install records the commit in direct_url.json, so the run names the measured build
+          # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
+          uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
           uv run --no-sync python -c "import fastbrowse, parallax"
       - name: Check out the pinned upstream
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -330,6 +339,10 @@ jobs:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           # The upstream judge reads its key as OPENAI_API_KEY whatever endpoint it calls.
           OPENAI_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          # Parallax's own pre-check judge, which runs before the upstream judge.
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           # Ignored with a local browser: the runner then drives the local Chrome alone.
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           JUDGE: ${{ matrix.judge }}

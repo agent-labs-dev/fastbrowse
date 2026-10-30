@@ -25,6 +25,7 @@ COPY = (
     "CONTRIBUTING.md",
     "SECURITY.md",
     "docs/benchmarks.md",
+    "docs/cli.md",
     "docs/data-sources.md",
     "docs/design.md",
     "docs/evals.md",
@@ -56,6 +57,7 @@ TROUBLE_HEADING = re.compile(r"^## ([a-z_]+) \(exit (\d+)\)", re.MULTILINE)
 STATUS_MEMBER = re.compile(r'^\s+([A-Z_]+) = "([a-z_]+)"', re.MULTILINE)
 EXIT_ENTRY = re.compile(r"Status::([A-Za-z]+) => (\d+),")
 CLI = "crates/fastbrowse-cli/src/cli.rs"
+STATUS_TABLE = "docs/cli.md"
 
 
 def read(path: Path) -> str:
@@ -121,7 +123,7 @@ def check_env(copy: dict[str, str], implementation: str) -> list[str]:
 
 
 def check_statuses(root: Path, copy: dict[str, str]) -> list[str]:
-    """The status table in the README and the troubleshooting headings name every status, with its exit code."""
+    """The status table in docs/cli.md and the troubleshooting headings name every status, with its exit code."""
     names = set(statuses(root).values())
     codes = exit_codes(root)
     problems = [
@@ -130,16 +132,16 @@ def check_statuses(root: Path, copy: dict[str, str]) -> list[str]:
         if member not in codes
     ]
 
-    readme = copy.get("README.md", "")
-    rows = {name: code for name, code in STATUS_ROW.findall(readme)}
+    reference = copy.get(STATUS_TABLE, "")
+    rows = {name: code for name, code in STATUS_ROW.findall(reference)}
     for member, name in statuses(root).items():
         if name not in rows:
-            problems.append(f"README.md: the status table has no row for `{name}`")
+            problems.append(f"{STATUS_TABLE}: the status table has no row for `{name}`")
         elif member in codes and rows[name] != codes[member]:
-            problems.append(f"README.md: `{name}` exits {rows[name]}, but the CLI exits {codes[member]}")
+            problems.append(f"{STATUS_TABLE}: `{name}` exits {rows[name]}, but the CLI exits {codes[member]}")
     for name in rows:
         if name not in names:
-            problems.append(f"README.md: the status table documents `{name}`, which is not a status")
+            problems.append(f"{STATUS_TABLE}: the status table documents `{name}`, which is not a status")
 
     headings = dict(TROUBLE_HEADING.findall(copy.get("docs/troubleshooting.md", "")))
     for member, name in statuses(root).items():

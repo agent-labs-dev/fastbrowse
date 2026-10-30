@@ -17,12 +17,12 @@ own pool with `jev-ultrafast`; figures approved under schema 3 or 4 keep fastbro
 there. Every group records its agent and runner commits, which must match the candidate's build: adding a suite
 must retain the published groups and their regression checks, and results from different builds cannot be
 combined under one build receipt.
-`internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse, the hosted Browser
-Use agent and Browserbase's agent all run, the navigation tasks included, read on each hosted agent's final page
+`internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse and the hosted Browser
+Use agent both run, the navigation tasks included, read on each hosted agent's final page
 through its browser; figures approved at 46 or 47 tasks still read. It holds rows from whichever of `fastbrowse`,
-`browser-use`, `jev-ultrafast` and `browserbase` ran, each with every repeat of every task it runs. Ultrafast returns
+`browser-use`, `jev-ultrafast` and `browser-harness` ran, each with every repeat of every task it runs. Ultrafast returns
 no answer, so it runs only the tasks of the set graded without one. An arm that did not run has no rows and the site
-shows it as not measured. Browserbase reports neither its model nor its spend, so its rows carry `"dollars": null`
+shows it as not measured. An arm that reports neither its model nor its spend carries `"dollars": null`
 and the site shows its pass rate and seconds with "cost not reported"; fastbrowse rows always carry a cost. The
 official suites publish the fastbrowse arm, with a vendor arm's rows only where Parallax marks them publishable, and
 accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
@@ -61,7 +61,8 @@ computes every figure from the candidate's per-attempt rows. Its `systems` maps 
 arm, `cost_not_reported` lists those of them whose rows carry no cost, and `not_measured` lists the site systems
 with no rows. The live suite card shows the head-to-head group
 (`internal-hosted`) when the campaign ran it, else `internal-fastbrowse`. A card the candidate has no group for
-keeps its file. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
+keeps its file only while that file carries no measured figures: the site reads one candidate's rows, so a card still
+measured by an earlier campaign stops the write, and that campaign's group must be measured again. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
 publish a campaign again, dispatch `publish-evals.yml` with the campaign run's id.
 
 An upload to Langfuse does not approve publication.
