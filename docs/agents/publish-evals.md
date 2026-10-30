@@ -19,11 +19,11 @@ browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own po
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
 `internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse, the hosted Browser
-Use agent and Browserbase's agent all run, the navigation tasks included, read on each hosted agent's final page
+Use agent both run, the navigation tasks included, read on each hosted agent's final page
 through its browser; figures approved at 46 or 47 tasks still read. It holds rows from whichever of `fastbrowse`,
-`browser-use`, `jev-ultrafast` and `browserbase` ran, each with every repeat of every task it runs. Ultrafast returns
+`browser-use` and `jev-ultrafast` ran, each with every repeat of every task it runs. Ultrafast returns
 no answer, so it runs only the tasks of the set graded without one. An arm that did not run has no rows and the site
-shows it as not measured. Browserbase reports neither its model nor its spend, so its rows carry `"dollars": null`
+shows it as not measured. An arm that reports neither its model nor its spend carries `"dollars": null`
 and the site shows its pass rate and seconds with "cost not reported"; fastbrowse rows always carry a cost. The
 official suites publish the fastbrowse arm, with a vendor arm's rows only where Parallax marks them publishable, and
 accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
