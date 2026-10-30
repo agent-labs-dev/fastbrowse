@@ -369,7 +369,6 @@ class Proxy:
         forward: Forward | None = None,
         replay: bool = True,
         latency: Latency = Latency.ZERO,
-        on_miss: Callable[[Miss], None] | None = None,
     ) -> None:
         if forward is None and not replay:
             raise ValueError("a proxy that neither replays nor forwards has nothing to answer with")
@@ -377,7 +376,6 @@ class Proxy:
         self._forward = forward
         self._replay = replay
         self._latency = latency
-        self._on_miss = on_miss
         self._lock = threading.Lock()
         self._served: dict[str, int] = {}
         self._by_key: dict[str, list[Exchange]] = {}
@@ -412,8 +410,6 @@ class Proxy:
             miss = Miss(path=path, purpose=purpose, model=model, key=key, diff=miss_diff(body, nearest))
             with self._lock:
                 self.misses.append(miss)
-            if self._on_miss is not None:
-                self._on_miss(miss)
         if self._forward is None:
             message = f"replay miss: no recorded response for {purpose} ({model}) on {path}"
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
