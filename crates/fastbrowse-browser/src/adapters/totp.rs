@@ -226,6 +226,11 @@ pub fn totp_at(key: &str, when: f64) -> Result<String, TotpError> {
     Ok(parse_key(key)?.at(when))
 }
 
+/// How many seconds each of `key`'s codes lasts. Fails with TotpError on an unusable key.
+pub fn period_of(key: &str) -> Result<u32, TotpError> {
+    Ok(parse_key(key)?.period)
+}
+
 /// Validate `key` now and return a provider that computes a fresh code on each await.
 ///
 /// Wait for the next period when less than five seconds remain, capped at half the period, then read the clock

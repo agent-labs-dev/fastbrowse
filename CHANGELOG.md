@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **`run_task(settings=...)` sets the model backend from Python without the environment.** The Rust core read its keys and routes (`OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_LLM_PROVIDER` and the rest) only from the process environment and `.env`, so an embedder that keeps its credentials elsewhere had to write them into `os.environ`, and any key the process happened to hold, such as a `TYPESAFE_API_KEY` it meant for something else, chose the route. `settings` takes the same names and is read instead of both: nothing in the environment or `.env` reaches a provider, and settings that configure no backend raise `ConfigurationError` before the run starts.
+
+- **The origin, secret and one-time-code rules are importable from Python again.** Removing the Python core took `fastbrowse.origins`, `fastbrowse.safety` and `fastbrowse.adapters.totp` with it, though an embedder that stores logins needs the same answers outside a run: which saved login covers a page, whether a user's `https://*.site.com` scope is one a secret can be declared for, and the code an authenticator key gives. They are back as thin wrappers over the core's own rules, so the answer outside a run is the one the run gives: `fastbrowse.origins.origin_of` and `parse_origin` (as the JavaScript SDK already exports them), `fastbrowse.safety.origin_of`, `secret_allowed`, `resolve_secret` and `ScopedSecrets`, and `fastbrowse.totp.one_time_code`, `totp_at` and `TotpError`.
+
 ## [0.9.0] - 2026-10-29
 
 - **A .NET client.** `dotnet add package Fastbrowse` runs tasks from .NET over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. Cancelling the `CancellationToken` stops a run once its browser has closed. The package carries each platform's binary. .NET 10 or newer.
