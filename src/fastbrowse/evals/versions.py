@@ -258,14 +258,13 @@ def publish(release: str, source: Path) -> Path:
     Each live task needs three distinct measured repeats, and each fastbrowse task is compared at the task version
     it ran against the newest published release that ran the same protocol and model route with three attempts.
     """
-    from fastbrowse.evals.publication import gate, ledger_path, read_jsonl
+    from fastbrowse.evals.publication import _release_of, gate, ledger_path, read_jsonl
 
     if release == "auto":
-        rows = read_jsonl(source)
-        releases = {(row.get("run") or {}).get("fastbrowse_version") for row in rows}
-        if len(releases) != 1 or None in releases:
+        found = _release_of(read_jsonl(source))
+        if found is None:
             raise ValueError("rows must identify one fastbrowse release")
-        release = str(releases.pop())
+        release = found
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
         raise ValueError("release must be a numeric x.y.z version")
     target = RESULTS / f"{release}.jsonl"
