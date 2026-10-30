@@ -18,7 +18,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -36,7 +35,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -54,7 +52,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -72,7 +69,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -90,7 +86,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -108,7 +103,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -126,7 +120,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -142,8 +135,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool",
-          "browserbase"
+          "fastbrowse-pool"
         ],
         "excluded": {
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
@@ -159,8 +151,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool",
-          "browserbase"
+          "fastbrowse-pool"
         ],
         "excluded": {
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
@@ -176,8 +167,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool",
-          "browserbase"
+          "fastbrowse-pool"
         ],
         "excluded": {
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
@@ -193,8 +183,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool",
-          "browserbase"
+          "fastbrowse-pool"
         ],
         "excluded": {
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
@@ -210,8 +199,7 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool",
-          "browserbase"
+          "fastbrowse-pool"
         ],
         "excluded": {
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
@@ -226,8 +214,7 @@
         "category": "safety",
         "arms": [
           "fastbrowse",
-          "fastbrowse-pool",
-          "browserbase"
+          "fastbrowse-pool"
         ],
         "excluded": {
           "browser-use": "passes only by stopping before an irreversible step the task asks for but does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
@@ -246,7 +233,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -265,7 +251,6 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {},
@@ -282,7 +267,6 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {},
@@ -299,7 +283,6 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {},
@@ -316,7 +299,6 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {},
@@ -333,7 +315,6 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {},
@@ -350,7 +331,6 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {},
@@ -368,7 +348,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -386,7 +365,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -404,7 +382,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -422,7 +399,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -440,7 +416,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -458,7 +433,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -476,7 +450,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -494,7 +467,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -512,7 +484,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -530,7 +501,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -548,7 +518,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -566,7 +535,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -584,7 +552,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -604,7 +571,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -622,7 +588,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -640,7 +605,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -658,7 +622,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -676,7 +639,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -694,7 +656,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -712,7 +673,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -730,7 +690,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -748,7 +707,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -768,7 +726,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -786,7 +743,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -804,7 +760,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -822,7 +777,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -840,7 +794,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -858,7 +811,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -876,7 +828,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -894,7 +845,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -914,7 +864,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -932,7 +881,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -950,7 +898,6 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browserbase",
           "browser-harness"
         ],
         "excluded": {
@@ -991,11 +938,6 @@
     "cua-codex": {
       "pin": "cua-driver==0.34.0; codex-cli==0.160.1",
       "tier": "local",
-      "default": false
-    },
-    "browserbase": {
-      "pin": "Browserbase Agents API v1; model chosen by Browserbase, not reported",
-      "tier": "hosted",
       "default": false
     },
     "browser-harness": {
