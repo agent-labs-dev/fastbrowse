@@ -26,8 +26,8 @@
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.
 //!
-//! pydantic-settings reads names without regard to case, prefixes every field but the four keys with `FASTBROWSE_`,
-//! and validates in lax mode; [`Settings::from_sources`] does the same.
+//! [`Settings::from_sources`] reads names without regard to case, prefixes every field but the provider keys with
+//! `FASTBROWSE_`, and validates in lax mode.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
