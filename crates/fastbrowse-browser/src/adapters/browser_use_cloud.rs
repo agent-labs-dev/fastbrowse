@@ -38,9 +38,8 @@ const STOP_RETRY_SECONDS: f64 = 1.0;
 /// every attempt inside that window and gave up. The browser bills through the wait either way, so ten minutes, two
 /// edge delays, is worth spending to stop it; past that the run ends and the browser runs on to its timeout, logged.
 const STOP_WAIT_SECONDS: f64 = 600.0;
-/// `clients/validation.py`'s `RETRYABLE_STATUS`: statuses that say nothing about the request, so a repeat can clear
-/// them. 520 to 524 are Cloudflare's edge failing to reach the provider behind it.
-pub const RETRYABLE_STATUS: [u16; 12] = [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529];
+// 520 to 524 are Cloudflare's edge failing to reach the provider behind it.
+pub use crate::cdp::RETRYABLE_STATUS;
 
 /// Monotonic seconds, as Python's `time.monotonic`.
 pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
