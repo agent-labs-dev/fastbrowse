@@ -140,19 +140,34 @@ fn run(notes: &mut Notes, op: &Value) -> Value {
     }
 }
 
+/// `FASTBROWSE_UPDATE_GOLDEN=1` records each call's result as it is now, after an intended behaviour change.
 #[test]
 fn notes_answer_as_python_answers() {
-    let golden = golden("memory.json");
-    let cases = golden["cases"].as_array().unwrap();
+    let mut golden = golden("memory.json");
+    let update = capture::updating();
+    let cases = golden["cases"].as_array_mut().unwrap();
     assert!(cases.len() > 30);
-    for case in cases {
-        let ops = case["ops"].as_array().unwrap();
+    for case in cases.iter_mut() {
+        let name = case["name"].clone();
+        let ops = case["ops"].as_array_mut().unwrap();
         let facts: Vec<Fact> = parse(&ops[0]["facts"]);
         let mut notes = Notes::new(facts);
-        for (index, op) in ops.iter().enumerate().skip(1) {
+        for (index, op) in ops.iter_mut().enumerate().skip(1) {
             let result = run(&mut notes, op);
-            assert_eq!(result, op["result"], "{}: #{index} {}", case["name"], op["op"]);
+            if update {
+                op["result"] = result;
+            } else {
+                assert_eq!(result, op["result"], "{name}: #{index} {}", op["op"]);
+            }
         }
+    }
+    if update {
+        let mut out = Vec::new();
+        let mut writer =
+            serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
+        serde::Serialize::serialize(&golden, &mut writer).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/memory.json");
+        std::fs::write(path, capture::ascii(&String::from_utf8(out).unwrap()) + "\n").unwrap();
     }
 }
 

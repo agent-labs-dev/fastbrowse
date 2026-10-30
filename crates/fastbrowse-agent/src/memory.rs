@@ -900,11 +900,15 @@ impl Notes {
         let shown_ids = options.labels.as_ref().unwrap_or(&empty);
         let shown = |key: &str| shown_ids.get(key).cloned().unwrap_or_else(|| key.to_string());
         let evidence = self.evidence();
+        // A tally's count rests on the records it names, so they are shown with it: a reader or a check judging the
+        // count sees the rows it counted. Only a second reading of a row a tally already names is left out.
         let counted: HashSet<&String> =
             self.facts.values().filter(|fact| fact.tally.is_some()).flat_map(|fact| &fact.basis).collect();
         // A record can be counted and compared by price; its tally alone cannot evidence the price comparison.
         let compared: HashSet<String> = self.comparison_records(None).into_iter().collect();
-        let summarized: HashSet<String> = self.tally_records.difference(&compared).cloned().collect();
+        // Records a tally stands for when the notes run over the budget: the tally line is kept without them.
+        let omittable: HashSet<String> = self.tally_records.difference(&compared).cloned().collect();
+        let summarized: HashSet<&String> = omittable.iter().filter(|key| !counted.contains(key)).collect();
 
         let basis_text = |fact: &Fact| -> String {
             // A ranking can cite every counted record again; full span ids undo the tally's compact rendering.
@@ -1030,7 +1034,7 @@ impl Notes {
             kept.extend(
                 self.expand_evidence_ids(keys[..count].iter().copied())
                     .into_iter()
-                    .filter(|key| summarized.contains(key)),
+                    .filter(|key| omittable.contains(key)),
             );
             if options.preserve_requirements && required.iter().any(|key| !kept.contains(key)) {
                 return Err(AgentError::NotesTooLarge(format!(
@@ -1039,7 +1043,7 @@ impl Notes {
             }
             if ordered[..count]
                 .iter()
-                .any(|(_, fact)| fact.basis.iter().any(|key| !kept.contains(key) && !summarized.contains(key)))
+                .any(|(_, fact)| fact.basis.iter().any(|key| !kept.contains(key) && !omittable.contains(key)))
             {
                 continue;
             }

@@ -9,8 +9,9 @@
 //!
 //! `FASTBROWSE_UPDATE_GOLDEN=1` re-records the cases after an intended behaviour change: recorded answers are kept, a
 //! new Jev request reuses this case's earlier answer to each question key (a key never answered gets no and a choice
-//! of synthesis, none or the first option, at no confidence), a new LLM request gets the emptiest reply its schema
-//! allows, and the diff of the file is the behaviour change.
+//! of synthesis, none or the first option, at no confidence), a new LLM request takes the reply of the unanswered
+//! recorded request nearest to it, or the emptiest reply its schema allows when none is left, and the diff of the file
+//! is the behaviour change.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -68,7 +69,7 @@ pub fn write_cases(name: &str, cases: &[Value]) {
 
 /// Escapes every character outside ASCII as `\\uXXXX`, as the recorded lines are written. Serialized JSON holds
 /// such characters only inside strings, where the escape means the same character.
-fn ascii(json: &str) -> String {
+pub fn ascii(json: &str) -> String {
     let mut out = String::with_capacity(json.len());
     for c in json.chars() {
         if c.is_ascii() {
@@ -306,7 +307,17 @@ impl Answers {
     /// `request` as Rust wrote it.
     fn take(&self, key: &str, request: Value, fresh: impl FnOnce(&[Value]) -> Option<Value>) -> Value {
         let mut by_body = self.by_body.lock().unwrap();
-        let found = by_body.get_mut(key).and_then(VecDeque::pop_front);
+        let mut found = by_body.get_mut(key).and_then(VecDeque::pop_front);
+        if found.is_none() && self.log.is_some() && self.kind == "llm" {
+            // A reworded LLM request takes the reply of the unanswered recorded one nearest to it, so a prompt change
+            // keeps the case's answers and its diff shows only the new prompt.
+            let nearest = by_body
+                .iter()
+                .filter(|(_, calls)| !calls.is_empty())
+                .max_by_key(|(body, _)| common_prefix(body, key))
+                .map(|(body, _)| body.clone());
+            found = nearest.and_then(|body| by_body.get_mut(&body).and_then(VecDeque::pop_front));
+        }
         if let Some(log) = &self.log {
             let mut call = found.or_else(|| fresh(&self.recorded)).unwrap_or_else(|| self.missing(key));
             let mut logged = serde_json::Map::new();
