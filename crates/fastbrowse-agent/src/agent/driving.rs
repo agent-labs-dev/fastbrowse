@@ -561,8 +561,11 @@ impl Agent {
                 typed = Some(if action.secret { "<secret>".to_string() } else { self.mask(text) });
             }
             changed = result.page_changed;
+            // A read takes in the whole page, so scrolling leaves it as read.
+            let scrolled = matches!(decision.operation, Operation::Scroll | Operation::ScrollUp);
             if executed
                 && changed
+                && !scrolled
                 && let Some(read) = state.read_documents.get_mut(&observation.document_key)
             {
                 *read = true;

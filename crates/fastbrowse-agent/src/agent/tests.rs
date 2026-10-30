@@ -1672,3 +1672,39 @@ async fn a_task_already_begun_is_joined_not_cancelled() {
     assert!(!task.cancel_unstarted());
     assert_eq!(task.wait().await.and_then(Result::ok), Some(7));
 }
+
+/// Answers whether a page continues the list left open.
+struct SameList(f64);
+
+impl fastbrowse_core::decision::DecisionClient for SameList {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        use fastbrowse_core::decision::{Answer, Evaluation, NoulAnswer};
+        let noul =
+            |key: &String| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.0 }));
+        let answers = questions.keys().map(noul).collect();
+        Box::pin(async move {
+            Ok(Evaluation { model: "same-list".into(), answers, input_tokens: 0, cost: free(), requests: 1 })
+        })
+    }
+
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_page_off_the_list_leaves_it_open_and_a_later_page_ends_it() {
+    let mut state = run_state().await;
+    state.continuing.insert("count".into());
+    state.list_url = Some("https://site.test/page/7".into());
+    let mut capture = crate::retrieval::testing::capture(&[]);
+    capture.url = "https://site.test/author".into();
+    for (probability, ended) in [(0.06, false), (0.97, true)] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(probability)), Arc::new(ScriptedLLM));
+        assert_eq!(agent.list_ended(&mut state, &capture).await.ok(), Some(ended));
+    }
+}

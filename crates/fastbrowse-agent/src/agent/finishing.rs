@@ -274,7 +274,9 @@ impl Agent {
             history: &history,
             visited: &shown,
             changed_since_read: state.read_documents.get(&fresh.document_key).copied().unwrap_or(false),
+            page_read: Self::page_read(state, &fresh),
             site_failure: state.site_failure.as_ref().filter(|failure| failure.transient()).map(|f| f.message()),
+            continuing: state.continuing.clone(),
             ledger: Some(&state.ledger),
             trace: self.trace.clone(),
         };
@@ -282,7 +284,7 @@ impl Agent {
         let check =
             check_done(&*self.jev, &task, &plan, &fresh, &notes, &self.config.thresholds, draft.as_ref(), &options)
                 .await?;
-        state.ledger.record([check.cost.clone()])?;
+        state.ledger.record(check.costs.clone())?;
         self.event("done_check", || {
             Map::from_iter([("verdict".into(), check.verdict.as_str().into()), ("unmet".into(), json!(check.unmet))])
         });

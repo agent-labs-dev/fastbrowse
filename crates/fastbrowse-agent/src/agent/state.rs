@@ -364,6 +364,8 @@ pub(crate) struct RunState {
     pub missing: HashSet<(String, Option<String>)>,
     /// Requirements the reader said range over a list that goes on past the page it read.
     pub continuing: HashSet<String>,
+    /// The page that last showed those requirements' list going on.
+    pub list_url: Option<String>,
     /// Comparisons a page of their list lost a record from.
     pub incomplete: BTreeSet<String>,
     /// Authorized clicks can just navigate, so only candidates with notes are classified when answering.
@@ -459,6 +461,7 @@ impl RunState {
             redecided: false,
             missing: HashSet::new(),
             continuing: HashSet::new(),
+            list_url: None,
             incomplete: BTreeSet::new(),
             transaction_candidates: Vec::new(),
             form_values: HashMap::new(),
