@@ -338,8 +338,6 @@ class _Comparison:
     """Selected results, including unavailable outcomes. Earlier retries remain in the attempt ledger."""
     scored: list[Mapping[str, Any]]
     """The attempts every figure is taken from: as many per arm at each task."""
-    left_out: list[str]
-    """Tasks some arm has no measured attempt at, so none of their attempts are scored."""
 
 
 def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
@@ -365,8 +363,7 @@ def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
         for per_arm in tasks.values():
             if len(per_arm) == len(arms):
                 scored += _paired(per_arm)
-        left_out = sorted({r["task"] for r in group} - {r["task"] for r in scored})
-        comparisons.append(_Comparison(arms, group, scored, left_out))
+        comparisons.append(_Comparison(arms, group, scored))
     return comparisons
 
 
