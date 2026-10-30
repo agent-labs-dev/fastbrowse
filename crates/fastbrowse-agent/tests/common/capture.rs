@@ -9,7 +9,8 @@
 //!
 //! `FASTBROWSE_UPDATE_GOLDEN=1` re-records the cases after an intended behaviour change: recorded answers are kept, a
 //! new Jev request reuses this case's earlier answer to each question key (a key never answered gets no and a choice
-//! of synthesis, none or the first option, at no confidence), and the diff of the file is the behaviour change.
+//! of synthesis, none or the first option, at no confidence), a new LLM request gets the emptiest reply its schema
+//! allows, and the diff of the file is the behaviour change.
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -476,7 +477,7 @@ impl LLMClient for KeyedLLM<'_> {
         let key = llm_body(purpose.as_str(), &written, &schema.name(), &schema_json, max_output_tokens);
         let request = json!({"purpose": purpose.as_str(), "messages": written, "schema_name": schema.name(),
                              "schema": schema_json, "max_output_tokens": max_output_tokens});
-        let call = self.answers.take(&key, request, |_| None);
+        let call = self.answers.take(&key, request, |_| Some(fresh_llm(purpose, &schema.json_schema())));
         apply_effect(&call, &self.ledgers);
         Box::pin(async move {
             let response = &call["response"];
@@ -491,6 +492,39 @@ impl LLMClient for KeyedLLM<'_> {
             Ok(Generation { data, cost: parse(&response["cost"]) })
         })
     }
+}
+
+/// A call answering with the emptiest reply `schema` allows: no items, no text, false and null.
+fn fresh_llm(purpose: LLMPurpose, schema: &Value) -> Value {
+    fn empty(schema: &Value, defs: &Value) -> Value {
+        if let Some(reference) = schema["$ref"].as_str() {
+            return empty(&defs[reference.rsplit('/').next().unwrap_or_default()], defs);
+        }
+        if let Some(options) = schema["anyOf"].as_array() {
+            if options.iter().any(|option| option["type"] == "null") {
+                return Value::Null;
+            }
+            return options.first().map_or(Value::Null, |option| empty(option, defs));
+        }
+        match schema["type"].as_str() {
+            Some("array") => json!([]),
+            Some("boolean") => json!(false),
+            Some("string") => json!(schema["enum"].get(0).cloned().unwrap_or_else(|| "".into())),
+            Some("integer" | "number") => json!(0),
+            Some("null") => Value::Null,
+            _ => Value::Object(
+                schema["properties"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(name, property)| (name.clone(), empty(property, defs)))
+                    .collect(),
+            ),
+        }
+    }
+    let cost = json!({"component": "llm", "basis": "metered", "dollars": 0.001, "purpose": purpose.as_str(),
+                      "input_tokens": 0, "output_tokens": 0, "seconds": null});
+    json!({"response": {"data": empty(schema, &schema["$defs"]), "cost": cost}})
 }
 
 fn budget(message: &str) -> BudgetExceeded {

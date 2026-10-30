@@ -129,15 +129,20 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
         }
         "_counted_collections" => {
             let requirements: Vec<Requirement> = opt(args, "requirements").unwrap_or_default();
-            let targets: Option<Vec<Requirement>> = opt(args, "targets");
-            let facts = counted_collections_for(
+            let targets: Vec<Requirement> = opt(args, "targets").unwrap_or(requirements);
+            let found = block_on(counted_collections_for(
                 &capture(),
                 &strings(&args["requirement_ids"]),
                 args["read_end"].as_i64().unwrap(),
-                &requirements,
-                targets.as_deref(),
-            );
-            json!({"result": facts.dump()})
+                &targets,
+                Some(&jev),
+                &tokens,
+                ledger.as_ref(),
+            ));
+            match found {
+                Ok((facts, _)) => json!({"result": facts.dump()}),
+                Err(error) => error_outcome(&error),
+            }
         }
         "read_tallies" => {
             let readers: Vec<TallyReader> = parse(&args["readers"]);

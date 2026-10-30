@@ -23,10 +23,11 @@ use crate::error::Result;
 use crate::memory::{Fact, Notes, fact_id, unique};
 use crate::planner::Requirement;
 
-// A mistaken choice marks a requirement evidenced; favor the reader whenever selection is uncertain.
-const READ_CONFIDENCE: f64 = 0.90;
-const ABSENT_CONFIDENCE: f64 = 0.90;
-const NO_NEW_EVIDENCE_CONFIDENCE: f64 = 0.80;
+/// The one bar a Jev read answer must reach to stand: a value chosen, the page holding nothing, or the page adding
+/// nothing to the quotes already held. Each of those settles a requirement without the LLM reader, so a mistaken one
+/// marks a requirement evidenced, or skips the page that held it; under the bar the LLM reader reads the page instead,
+/// which costs a call and loses nothing.
+pub(super) const READ_CONFIDENCE: f64 = 0.90;
 // Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
 const FOCUS_WINDOW_CHARS: i64 = 1500;
 // Ours. Near even odds is Jev unable to tell, not relevance: on PyPI's release history the window holding the asked
@@ -256,11 +257,6 @@ pub(crate) async fn read_choices(
     trace: &Trace,
 ) -> Result<ChoiceRead> {
     let capture = page.capture;
-    // A group heading can supply a plausible scalar while the requested count needs its child records.
-    let requirements: Vec<Requirement> = requirements.iter().filter(|r| !r.count_records).cloned().collect();
-    if requirements.is_empty() {
-        return Ok(ChoiceRead::default());
-    }
     let mut previous: Vec<Value> = Vec::new();
     let mut seen: IndexSet<String> = IndexSet::new();
     let mut blocks: IndexMap<(String, Option<String>), &Block> = IndexMap::new();
@@ -312,7 +308,7 @@ pub(crate) async fn read_choices(
         route(trace, "llm", "no_bounded_candidate_set", None, Vec::new());
         return Ok(ChoiceRead::default());
     }
-    let (mut state, questions) = read_request(page, &requirements, &candidates, None);
+    let (mut state, questions) = read_request(page, requirements, &candidates, None);
     let mut asked = questions;
     let mut compare_previous = false;
     // A rejected answer reopens requirements without changing the quotes already held for this page.
@@ -346,14 +342,14 @@ pub(crate) async fn read_choices(
     let mut focused = false;
     let mut costs: Vec<CostLine> = Vec::new();
     if (candidates.is_empty() && !compare_previous) || !read_fits(&state, &asked, tokens) {
-        let (kept, narrowed, spent) = focus(jev, page, &requirements, tokens, ledger, trace).await?;
+        let (kept, narrowed, spent) = focus(jev, page, requirements, tokens, ledger, trace).await?;
         costs = spent;
         if kept.is_empty() {
             route(trace, "llm", "unfocused", None, Vec::new());
             return Ok(ChoiceRead { cost_lines: costs, ..ChoiceRead::default() });
         }
         candidates = narrowed;
-        let (narrowed_state, narrowed_questions) = read_request(page, &requirements, &candidates, Some(&kept));
+        let (narrowed_state, narrowed_questions) = read_request(page, requirements, &candidates, Some(&kept));
         state = narrowed_state;
         asked = narrowed_questions;
         focused = true;
@@ -379,7 +375,7 @@ pub(crate) async fn read_choices(
     if compare_previous
         && !focused
         && let Some(Answer::Noul(novelty)) = evaluation.answers.get("novelty")
-        && 1.0 - novelty.probability >= NO_NEW_EVIDENCE_CONFIDENCE
+        && 1.0 - novelty.probability >= READ_CONFIDENCE
     {
         route(trace, "none", "preserved_evidence", None, Vec::new());
         return Ok(ChoiceRead {
@@ -391,14 +387,10 @@ pub(crate) async fn read_choices(
     let mut facts: Vec<Fact> = Vec::new();
     let mut absent: Vec<String> = Vec::new();
     let groups = read_groups(&candidates);
-    for requirement in &requirements {
+    for requirement in requirements {
         let id = Some(requirement.id.as_str());
         let answer = match evaluation.answers.get(&requirement.id) {
-            Some(Answer::Choice(answer))
-                if answer.confidence >= if answer.choice == "absent" { ABSENT_CONFIDENCE } else { READ_CONFIDENCE } =>
-            {
-                answer
-            }
+            Some(Answer::Choice(answer)) if answer.confidence >= READ_CONFIDENCE => answer,
             found => {
                 let choice = match found {
                     Some(Answer::Choice(answer)) => Some(answer),
@@ -413,10 +405,6 @@ pub(crate) async fn read_choices(
             }
         };
         if answer.choice == "absent" {
-            if focused {
-                route(trace, "llm", "absent_after_focus", id, Vec::new());
-                continue;
-            }
             route(trace, "none", "absent", id, Vec::new());
             absent.push(requirement.id.clone());
             continue;

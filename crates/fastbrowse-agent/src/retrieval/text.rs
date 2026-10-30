@@ -168,12 +168,6 @@ pub(crate) fn loose_matches(value: &str, text: &str) -> Vec<(usize, usize)> {
     loose(value).find_iter(&chars)
 }
 
-/// `_loose(value).search(text) is not None`.
-pub(crate) fn loose_search(value: &str, text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    loose(value).search(&chars, 0).is_some()
-}
-
 /// `re.fullmatch(r"\s*\|?[\s:|\-]+\|?\s*", line) and "---" in line`: a markdown table's separator row.
 fn separator_row(line: &str) -> bool {
     !line.is_empty() && line.chars().all(|c| is_space(c) || matches!(c, ':' | '|' | '-')) && line.contains("---")

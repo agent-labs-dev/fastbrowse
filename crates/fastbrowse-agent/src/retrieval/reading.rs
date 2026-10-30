@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::decision::{Answer, DecisionClient, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
 use fastbrowse_core::models::{CostLine, Evidence, FactReader, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
@@ -18,10 +18,10 @@ use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::choices::read_choices;
+use super::choices::{READ_CONFIDENCE, read_choices};
 use super::chunks::{Chunk, Cite, chunk_page, cited, evidence, offered, read_message, source_marker};
 use super::records::through_end as scope;
-use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches, loose_search};
+use super::text::{Page, alnum_runs, counted_heading, lines_of, loose_matches};
 use super::{notes_room, route};
 use crate::batches::evaluate_batches;
 use crate::comparison::{NumericComparison, QuotedField, digit};
@@ -475,11 +475,9 @@ fn remember(
         }
     }
     let mut quote = claim.cite.as_ref().and_then(|cite| cited(page, part, cite));
-    if let Some(raw) = &claim.excerpt {
+    // A blank excerpt asks for the complete blocks, as a null one does.
+    if let Some(raw) = claim.excerpt.as_ref().filter(|raw| !text::strip(raw).is_empty()) {
         let Some(span) = quote.clone() else { return Ok(None) };
-        if text::strip(raw).is_empty() {
-            return Ok(None);
-        }
         let mut excerpt = text::strip(raw).to_string();
         let mut matches = loose_matches(&excerpt, &span.quote);
         if matches.is_empty() {
@@ -499,32 +497,36 @@ fn remember(
                 .join("\n");
             matches = loose_matches(&excerpt, &span.quote);
         }
-        let Some((offset, stop)) = excerpt_match(page, &span, &matches) else {
+        if matches.is_empty() {
             return Ok(None);
-        };
-        let (mut start, end) = (span.start + offset as i64, span.start + stop as i64);
-        let Some(block) = block_containing(page, start) else { return Ok(None) };
-        // A table excerpt can select an attribute row without the preceding cells identifying its columns.
-        if block.kind == BlockKind::Table {
-            start = span.start;
         }
-        let cite = claim.cite.as_ref().expect("an excerpt needs a cite");
-        if cite.first != cite.last && (start, end) != (span.start, span.end) {
-            // Narrowing a total to its value can discard the subjects in the reader's selected blocks.
-            let context = quoted(span.clone());
-            basis.push(fact_id(&context));
-            notes.add(context);
+        // An excerpt found more than once in its cited run still holds there: the claim keeps the whole run, which
+        // states it, rather than being refused or narrowed to one of the places it could be.
+        if let Some((offset, stop)) = excerpt_match(page, &span, &matches) {
+            let (mut start, end) = (span.start + offset as i64, span.start + stop as i64);
+            let Some(block) = block_containing(page, start) else { return Ok(None) };
+            // A table excerpt can select an attribute row without the preceding cells identifying its columns.
+            if block.kind == BlockKind::Table {
+                start = span.start;
+            }
+            let cite = claim.cite.as_ref().expect("an excerpt needs a cite");
+            if cite.first != cite.last && (start, end) != (span.start, span.end) {
+                // Narrowing a total to its value can discard the subjects in the reader's selected blocks.
+                let context = quoted(span.clone());
+                basis.push(fact_id(&context));
+                notes.add(context);
+            }
+            let narrowed = evidence(page, block, start, end);
+            // Narrowing one record to its value can discard the subject named beside it in the same block.
+            if cite.first == cite.last
+                && let Some(context) = block_context(page, &narrowed, FactReader::Llm)
+            {
+                let key = fact_id(&context);
+                notes.add(context);
+                push_unique(&mut basis, key);
+            }
+            quote = Some(narrowed);
         }
-        let narrowed = evidence(page, block, start, end);
-        // Narrowing one record to its value can discard the subject named beside it in the same block.
-        if cite.first == cite.last
-            && let Some(context) = block_context(page, &narrowed, FactReader::Llm)
-        {
-            let key = fact_id(&context);
-            notes.add(context);
-            push_unique(&mut basis, key);
-        }
-        quote = Some(narrowed);
     }
     // A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if quote.is_none() && (claim.cite.is_some() || basis.is_empty()) {
@@ -594,14 +596,12 @@ pub(crate) fn block_context(page: &Page<'_>, quote: &Evidence, reader: FactReade
     Some(Fact::read(None, &span.quote.clone(), span, reader))
 }
 
-/// `_excerpt_match`: the one place in the cited run an excerpt names, or None when it is missing or could be either of
-/// two.
+/// `_excerpt_match`: the one place in the cited run an excerpt names, or None when it could be either of two.
 ///
 /// Equal text in two places can be two records' values, the same price under two products, so a repeated excerpt is
-/// refused. One case is not ambiguous: the excerpt is the whole of exactly one block, and its other matches sit inside
+/// not narrowed to either. One case is not ambiguous: the excerpt is the whole of exactly one block, and its other matches sit inside
 /// longer blocks that say more around it. A wizard's result panel read "Multi-step form submitted successfully." and
-/// its toast "Success toast: Multi-step form submitted successfully."; refused as ambiguous, the confirmation was never
-/// noted, and two runs that had submitted the form ended stuck.
+/// its toast "Success toast: Multi-step form submitted successfully.", and the confirmation is the panel's.
 fn excerpt_match(page: &Page<'_>, span: &Evidence, matches: &[(usize, usize)]) -> Option<(usize, usize)> {
     if matches.len() == 1 {
         return Some(matches[0]);
@@ -678,28 +678,24 @@ fn digits_value(count: &str) -> Option<i64> {
     count.chars().try_fold(0i64, |total, c| total.checked_mul(10)?.checked_add(i64::from(digit(c)?)))
 }
 
-/// Fully shown counted lists as complete collections.
-///
-/// `targets` is every information requirement of the plan. When there is more than one, a list counts for a target
-/// only if the page names it: with one requirement left to read, an unrelated "Reviews (3)" on another target's page
-/// would otherwise close the last target's collection.
-pub(crate) fn counted_collections(
-    page: &Page<'_>,
-    requirement_ids: &[String],
-    read_end: i64,
-    requirements: &[Requirement],
-    targets: Option<&[Requirement]>,
-) -> Vec<Fact> {
+/// A counted list shown in full: its heading states how many members it has and the page shows that many.
+struct CountedList {
+    title: String,
+    heading_path: Vec<String>,
+    sources: Vec<Fact>,
+}
+
+/// The counted lists `page` shows in full up to `read_end`.
+fn counted_lists(page: &Page<'_>, read_end: i64) -> Vec<CountedList> {
     let capture = page.capture;
-    let targets = targets.unwrap_or(requirements);
     let blocks = &capture.blocks;
-    let mut collections = Vec::new();
+    let mut lists = Vec::new();
     for (index, heading) in blocks.iter().enumerate() {
         if heading.kind != BlockKind::Heading || heading.frame_id.is_some() {
             continue;
         }
         let title = page.slice(heading.start, heading.end);
-        let count = counted_heading(title);
+        let Some(count) = counted_heading(title) else { continue };
         let mut members: Vec<&Block> = Vec::new();
         for block in &blocks[index + 1..] {
             if block.frame_id != heading.frame_id || block.kind == BlockKind::Heading {
@@ -732,9 +728,6 @@ pub(crate) fn counted_collections(
                 continue;
             }
         }
-        if count.is_none() {
-            continue;
-        }
         if members.is_empty() || members[members.len() - 1].end > read_end {
             continue;
         }
@@ -744,19 +737,17 @@ pub(crate) fn counted_collections(
             // rejected on whichever run its frame did not load.
             continue;
         }
-        if let Some(count) = &count {
-            let total = match members[0].list_count {
-                Some(total) => total,
-                None => {
-                    if members.iter().any(|b| !counted_kind(b.kind)) {
-                        continue;
-                    }
-                    members.len() as i64
+        let total = match members[0].list_count {
+            Some(total) => total,
+            None => {
+                if members.iter().any(|b| !counted_kind(b.kind)) {
+                    continue;
                 }
-            };
-            if Some(total) != digits_value(count) {
-                continue;
+                members.len() as i64
             }
+        };
+        if Some(total) != digits_value(&count) {
+            continue;
         }
         let context = blocks[..index]
             .iter()
@@ -775,33 +766,69 @@ pub(crate) fn counted_collections(
         } else {
             std::iter::once(boundary).chain(members.iter().map(|b| quoted(evidence(page, b, b.start, b.end)))).collect()
         };
-        let keys: Vec<String> = sources.iter().map(fact_id).collect();
-        collections.extend(sources);
-        let named = |subject: &str| -> HashSet<String> {
-            targets
-                .iter()
-                .filter(|r| text::len(subject) > 3 && names_subject(&r.text, subject))
-                .map(|r| r.id.clone())
-                .collect()
-        };
-        let site = capture.title.split(" - ").next().unwrap_or_default();
-        let mut matching: HashSet<String> = HashSet::new();
-        for subject in heading.heading_path.iter().map(String::as_str).chain([site]) {
-            matching.extend(named(subject));
-        }
-        if count.is_some() {
-            // The counted heading can name the target itself. A label every requirement mentions names none.
-            let label = title.rfind('(').map_or(title, |at| &title[..at]);
-            let own = named(text::strip(label));
-            if own.len() < targets.len() {
-                matching.extend(own);
+        lists.push(CountedList { title: title.to_string(), heading_path: heading.heading_path.clone(), sources });
+    }
+    lists
+}
+
+/// Fully shown counted lists as complete collections of the requirements they cover, and what asking Jev cost.
+///
+/// `targets` is every information requirement of the plan. With one, a list read in full covers it. With more, Jev
+/// says which of the open requirements each list is the whole of: an unrelated "Reviews (3)" on another target's page
+/// would otherwise close the last target's collection. Without Jev no list covers any of several targets.
+pub(crate) async fn counted_collections(
+    page: &Page<'_>,
+    requirement_ids: &[String],
+    read_end: i64,
+    targets: &[Requirement],
+    jev: Option<&dyn DecisionClient>,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<(Vec<Fact>, Vec<CostLine>)> {
+    let capture = page.capture;
+    let lists = counted_lists(page, read_end);
+    let mut covered: HashSet<(usize, &String)> = HashSet::new();
+    let mut cost = Vec::new();
+    if targets.len() <= 1 {
+        covered.extend((0..lists.len()).flat_map(|index| requirement_ids.iter().map(move |id| (index, id))));
+    } else if let Some(jev) = jev {
+        let mut questions: IndexMap<String, Question> = IndexMap::new();
+        let mut asked: IndexMap<String, (usize, &String)> = IndexMap::new();
+        for index in 0..lists.len() {
+            for id in requirement_ids {
+                let Some(requirement) = targets.iter().find(|r| &r.id == id) else { continue };
+                let key = format!("l{index}.{id}");
+                let instructions = format!(
+                    "{UNTRUSTED} Requirement: {}\nIs counted list l{index} in lists, read in full on this page, the whole list of what this requirement asks about? A list of something else on the same page, such as another product's reviews, is not.",
+                    requirement.text,
+                );
+                questions.insert(key.clone(), NoulQuestion::new(instructions, None, None).into());
+                asked.insert(key, (index, id));
             }
         }
-        for requirement_id in requirement_ids {
-            if targets.len() > 1 && !matching.contains(requirement_id) {
-                continue;
+        let shown: Vec<Value> = lists
+            .iter()
+            .enumerate()
+            .map(|(index, list)| json!({"id": format!("l{index}"), "heading": list.title, "under": list.heading_path}))
+            .collect();
+        let state = json!({"page": {"url": capture.url, "title": capture.title}, "lists": shown});
+        if !questions.is_empty()
+            && let Some(answered) = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await?
+        {
+            cost = answered.cost;
+            for (key, pair) in asked {
+                if answered.answers.get(&key).and_then(Answer::probability).is_some_and(|p| p >= READ_CONFIDENCE) {
+                    covered.insert(pair);
+                }
             }
-            let scope = format!("{}: {title}", capture.title);
+        }
+    }
+    let mut collections = Vec::new();
+    for (index, list) in lists.into_iter().enumerate() {
+        let keys: Vec<String> = list.sources.iter().map(fact_id).collect();
+        collections.extend(list.sources);
+        for requirement_id in requirement_ids.iter().filter(|id| covered.contains(&(index, *id))) {
+            let scope = format!("{}: {}", capture.title, list.title);
             collections.push(Fact {
                 requirement_id: None,
                 tally: None,
@@ -818,18 +845,21 @@ pub(crate) fn counted_collections(
             });
         }
     }
-    collections
+    Ok((collections, cost))
 }
 
-/// `_counted_collections(capture, ...)`, for callers holding only the capture.
-pub fn counted_collections_for(
+/// [`counted_collections`] for callers holding only the capture.
+#[allow(clippy::too_many_arguments)]
+pub async fn counted_collections_for(
     capture: &Capture,
     requirement_ids: &[String],
     read_end: i64,
-    requirements: &[Requirement],
-    targets: Option<&[Requirement]>,
-) -> Vec<Fact> {
-    counted_collections(&Page::new(capture), requirement_ids, read_end, requirements, targets)
+    targets: &[Requirement],
+    jev: Option<&dyn DecisionClient>,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<(Vec<Fact>, Vec<CostLine>)> {
+    counted_collections(&Page::new(capture), requirement_ids, read_end, targets, jev, tokens, ledger).await
 }
 
 /// `read_tallies`: a later page of a list counted by the field the reader set up, without asking the reader again.
@@ -1476,12 +1506,7 @@ async fn read_inner(
                 let cites = record_cites(&page, &part, &group.records, counted_kind);
                 let mut missing = 0;
                 for cite in &cites {
-                    let span = cited(&page, &part, cite);
-                    let matches_key = |span: &Evidence| match &group.key {
-                        None => true,
-                        Some(key) => !text::strip(key).is_empty() && loose_search(key, &span.quote),
-                    };
-                    let Some(mut span) = span.filter(|span| matches_key(span)) else {
+                    let Some(mut span) = cited(&page, &part, cite) else {
                         missing += 1;
                         continue;
                     };
@@ -1750,8 +1775,10 @@ async fn read_inner(
         facts.insert((fact_id(&collection), None), collection);
     }
     let open: Vec<String> = requirement_ids.iter().filter(|key| !blocked.contains(*key)).cloned().collect();
-    let collection_facts =
-        counted_collections(&page, &open, part.end, &options.requirements, options.targets.as_deref());
+    let targets = options.targets.as_deref().unwrap_or(&options.requirements);
+    let (collection_facts, spent) =
+        counted_collections(&page, &open, part.end, targets, options.jev, tokens, ledger).await?;
+    costs.extend(spent);
     if options.field_outputs {
         for fact in &collection_facts {
             notes.add(fact.clone());
