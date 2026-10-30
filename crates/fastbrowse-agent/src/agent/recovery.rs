@@ -1,25 +1,28 @@
-//! Recovery: when Jev is unsure or the run is going round, the LLM diagnoses why and names one next action.
+//! Recovery: when Jev is unsure or the run is going round, Jev is asked again with what went wrong, and only when it
+//! stays unsure does the LLM diagnose why and name one next action.
 
 use std::collections::HashSet;
 
+use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{
     Bytes, Decider, LLMPurpose, Operation, Status, StepOutcome, StepResult, UNTRUSTED, background_section,
 };
-use fastbrowse_core::navigation::{navigation_urls, same_address};
+use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::Observation;
+use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{origin_of, starts_download};
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::helpers::{
-    controls_text, describe, field_corrections, lookup, partition_proof, recovery_memory, recovery_routes,
-    recovery_text, unread, unread_output_section, without_failed_links,
+    controls_text, decision_label, describe, field_corrections, partition_proof, recovery_memory, recovery_text,
 };
 use super::state::{FieldText, RunState, Step, Stop};
 use super::{Agent, dumps_strings};
 use crate::planner::RequirementKind;
+use crate::policy::{Decision, decide};
 use crate::support::generate;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,9 +72,7 @@ impl Schema for Recovery {
     }
 }
 
-const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. When the notes answer every open requirement and no unverified outputs remain, the next subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. For a fill correction, return its exact non-secret task value in text, bound to the chosen control. Use field semantics rather than a validation message as its identity. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. Failed links are withheld on unchanged source pages; use another observed route or stop. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
-
-const SECTIONS: &str = "\n\nUse the unverified field and target to choose its unread source section. Observed links list exact destinations, source titles and whether they were read. navigate may also open one of those observed destinations. Prefer the relevant unread section to rereading or scrolling a section already captured. When the missing field is a link destination, read the section containing actual links. Follow the target's observed section link even when another field is already evidenced.";
+const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. When the notes answer every open requirement and no unverified outputs remain, the next subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. For a fill correction, return its exact non-secret task value in text, bound to the chosen control. Use field semantics rather than a validation message as its identity. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
 
 /// Whether `text` occurs in `source` as a whole value: not inside a longer word, address or number.
 fn stated_in(text: &str, source: &str) -> bool {
@@ -99,6 +100,19 @@ fn stated_in(text: &str, source: &str) -> bool {
     false
 }
 
+/// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
+pub(super) type Withheld = Option<(Operation, Option<String>)>;
+
+/// A read that found nothing new, withheld from the ask that follows it.
+pub(super) const READ: Withheld = Some((Operation::Read, None));
+/// A refused DONE, withheld from the ask that follows it.
+pub(super) const DONE: Withheld = Some((Operation::Done, None));
+
+/// `decision`'s action, withheld from the ask that follows it.
+pub(super) fn withheld(decision: &Decision) -> Withheld {
+    Some((decision.operation, decision_label(decision)))
+}
+
 impl Agent {
     pub(super) async fn recover(
         &self,
@@ -106,8 +120,9 @@ impl Agent {
         observation: &Observation,
         reason: &str,
         gives_up_as: Status,
+        withheld: Withheld,
     ) -> Step {
-        self.ask_recovery(state, observation, reason, gives_up_as, true).await
+        self.ask_recovery(state, observation, reason, gives_up_as, withheld, true).await
     }
 
     /// Recovery asked for the next step on a page the run is not stuck on: Jev was unsure, not stalled. Being stuck
@@ -115,7 +130,7 @@ impl Agent {
     /// budget nor clears that rule's evidence. On The Pi Hut Jev was unsure on most steps of a cart walk, and the
     /// consults on pages revisited between items spent the budget and ended five of eleven runs stuck mid-cart.
     pub(super) async fn consult(&self, state: &mut RunState, observation: &Observation, reason: &str) -> Step {
-        self.ask_recovery(state, observation, reason, Status::Stuck, false).await
+        self.ask_recovery(state, observation, reason, Status::Stuck, None, false).await
     }
 
     async fn ask_recovery(
@@ -124,24 +139,11 @@ impl Agent {
         observation: &Observation,
         reason: &str,
         gives_up_as: Status,
+        withheld: Withheld,
         stalled: bool,
     ) -> Step {
         state.form_values.clear();
         let reason = self.redact(reason);
-        if observation.dialog.is_none()
-            && let Some(section) = unread_output_section(state)
-        {
-            state.recovery_sections.insert(section.clone());
-            state.directed = Some((Operation::Navigate, Some(section)));
-            state.section_read = true;
-            state.hint = Some(format!(
-                "Read the observed section for the unverified output: {}",
-                state.open_answer_outputs.join("; ")
-            ));
-            state.unchanged = 0;
-            state.recovered_at = state.history.len();
-            return Ok(());
-        }
         let remaining = state.ready_plan.as_ref().map(|plan| state.notes.unresolved(plan)).unwrap_or_default();
         let evidenced: HashSet<String> = match &state.ready_plan {
             Some(plan) => plan
@@ -227,42 +229,9 @@ impl Agent {
             } else {
                 format!("{reason}\nStill to find:\n{open_requirements}")
             };
-            return Err(Stop::new(self.walled(state, observation, gives_up_as, false), detail).into());
+            return Err(Stop::new(self.walled(state, observation, gives_up_as, false).await?, detail).into());
         }
-        if let Some(start) = state.caller_start.clone()
-            && observation.dialog.is_none()
-            && !remaining.is_empty()
-            && state.invented.contains(&observation.url)
-            && !same_address(&observation.url, &start)
-            && !state.left_guesses.contains(&observation.url)
-            && state.read_here
-            // A list being paged, or a task with something to do on the page, can still be on the right page.
-            && state.continuing.is_empty()
-            && !state.through_end
-            && !state
-                .ready_plan
-                .as_ref()
-                .is_some_and(|plan| plan.requirements.iter().any(|r| r.kind == RequirementKind::Action))
-            // Context a read kept from the page, a biography beside the quotes it lacked, answers nothing.
-            && !state.notes.facts().iter().any(|fact| {
-                fact.requirement_id.is_some() && fact.evidence.as_ref().is_some_and(|e| e.url == observation.url)
-            })
-        {
-            // A guessed opening page that was read and gave nothing: the way on is the caller's start page, which is
-            // what the recovery model chose there every time, after 3 to 4 seconds and a screenshot.
-            state.left_guesses.insert(observation.url.clone());
-            state.directed = Some((Operation::Navigate, Some(start)));
-            state.section_read = true;
-            state.hint = Some(
-                "The guessed opening page held nothing the task needs; continue from the caller's start page.".into(),
-            );
-            self.event("recover", || {
-                Map::from_iter([
-                    ("reader".into(), "code".into()),
-                    ("reason".into(), "guessed_page_gave_nothing".into()),
-                    ("reason_detail".into(), reason.clone().into()),
-                ])
-            });
+        if self.ask_jev_again(state, observation, &reason, withheld).await? {
             return Ok(());
         }
         let caller_destinations = navigation_urls(
@@ -272,15 +241,6 @@ impl Agent {
             state.start_landing_url.as_deref(),
             true,
         );
-        let routes = recovery_routes(state);
-        let mut destinations = caller_destinations.clone();
-        if !state.open_answer_outputs.is_empty() {
-            for link in state.observed_links.keys() {
-                if !destinations.contains(link) {
-                    destinations.push(link.clone());
-                }
-            }
-        }
         let steps = state
             .history
             .iter()
@@ -299,23 +259,17 @@ impl Agent {
         } else {
             format!("\n\n## Stored secrets\n{}. Filling a field with one types its hidden value.", stored.join(", "))
         };
-        let mut system = format!("{RECOVERY}{UNTRUSTED}");
-        if !state.open_answer_outputs.is_empty() {
-            system += SECTIONS;
-        }
+        let system = format!("{RECOVERY}{UNTRUSTED}");
         let notes = state.notes.render_for_navigation(false);
         let started = self.redact(state.started_url.as_deref().or(state.first_url.as_deref()).unwrap_or_default());
         let status = observation.response_status.map_or("None".to_string(), |s| s.to_string());
         let mut content = format!(
             "## Controls\n{}\n\n## Page\n{}\nHTTP status: {status}\n{}{secrets}\n\n## Caller start page\n{started}\n\n## Caller-supplied addresses\n{}\n\n",
-            controls_text(&without_failed_links(state, observation)),
+            controls_text(observation),
             observation.url,
             observation.viewport_text,
             dumps_strings(&caller_destinations),
         );
-        if !state.open_answer_outputs.is_empty() {
-            content += &format!("## Observed section links\n{routes}\n\n");
-        }
         let proposed = if state.invented.contains(&observation.url) { "True" } else { "False" };
         content += &format!(
             "## Current address was proposed\n{proposed}\n\n## HTTP failure\n{}\n\n## Notes read so far\n{}\n\n## Recent steps\n{steps}\n\n## Recovery memory\n{}\n\n## Current date\n{}\n\n## Still to find\n{}\n\n## Unverified answer outputs\n{}\n\n",
@@ -341,30 +295,7 @@ impl Agent {
             // must answer in, not a ceiling that could cut a reply mid-JSON.
             generate::<Recovery>(&*self.llm, LLMPurpose::Recover, &messages, 0, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
-        let mut data = generation.data;
-        if data.give_up
-            && !data.needs_input
-            && state.http_failure.is_none()
-            && gives_up_as == Status::Stuck
-            && !state.terminal_verification_attempted
-            && state
-                .ready_plan
-                .as_ref()
-                .is_some_and(|plan| !plan.requirements.is_empty() && !unread(plan, &state.notes))
-            && state.open_answer_outputs.is_empty()
-            && state
-                .history
-                .iter()
-                .any(|e| e.operation.is_some() && e.outcome == StepOutcome::Executed && e.page_changed)
-        {
-            // Recovery can find no further action after a goal is reached. The completion verifier, rather than that
-            // diagnosis, decides whether the changed page actually satisfies the requested outcomes.
-            state.terminal_verification_attempted = true;
-            data.give_up = false;
-            data.operation = Some(Operation::Done);
-            data.control = None;
-            data.next_subgoal = "Verify the requested outcomes against the current page.".into();
-        }
+        let data = generation.data;
         if data.give_up {
             // Asked of the model rather than carried from the step that raised it: a missing value can surface
             // recoveries later, after an attempt to go on without it has failed for its absence.
@@ -373,7 +304,7 @@ impl Agent {
             } else if gives_up_as == Status::Unverified {
                 Status::Unverified
             } else {
-                self.walled(state, observation, Status::Stuck, data.needs_login)
+                self.walled(state, observation, Status::Stuck, data.needs_login).await?
             };
             if let Some(failure) = &state.http_failure
                 && status != Status::NeedsInput
@@ -383,35 +314,6 @@ impl Agent {
             return Err(Stop::new(status, data.diagnosis).into());
         }
         let diagnosis = self.redact(&data.diagnosis);
-        // An unread page is still read before a finish is judged, so only a page already read is exhausted.
-        let exhausted = data.operation == Some(Operation::Done) && state.ready_plan.is_some() && state.read_here;
-        if exhausted
-            && unread(state.plan(), &state.notes)
-            && !(state.oversized_answer && lookup(state.plan()) && !state.notes.current_evidence(None).is_empty())
-        {
-            // The done check refuses any finish with information nobody has read, so this subgoal cannot succeed.
-            if let Some(failure) = &state.http_failure
-                && gives_up_as != Status::NeedsInput
-            {
-                return Err(failure.stop().into());
-            }
-            // Once per step: a later step of the same single-page app can repeat the reader's mistake, but the same
-            // step asked twice answers the same way.
-            let page_read =
-                state.read_step.clone().unwrap_or_else(|| format!("{}\n{}", observation.url, observation.document_key));
-            if state.unread_rereads.contains(&page_read) || gives_up_as != Status::Stuck {
-                return Err(Stop::new(gives_up_as, diagnosis).into());
-            }
-            // A reader filed a date picker's selected date as context rather than as the requested value, and three
-            // runs stopped stuck on the first recovery with the date on screen. The reader is asked once more; the
-            // done check and the claim check still judge whatever it binds.
-            state.unread_rereads.insert(page_read);
-            state.reads.retain(|key| key.0 != observation.document_key);
-            state.barren.retain(|key, _| key.0 != observation.document_key);
-            data.operation = Some(Operation::Read);
-            data.control = None;
-            data.next_subgoal = "Read the page again for the requirements still open.".into();
-        }
         let hint = self.redact(&data.next_subgoal);
         state.hint = Some(hint.clone());
         state.log_recovery(format!(
@@ -428,17 +330,18 @@ impl Agent {
                 ("control".into(), json!(data.control)),
             ])
         });
-        let usable = without_failed_links(state, observation);
         state.directed = None;
         match (data.operation, data.control) {
-            (Some(Operation::Navigate), _) if data.url.as_ref().is_some_and(|url| destinations.contains(url)) => {
+            (Some(Operation::Navigate), _)
+                if data.url.as_ref().is_some_and(|url| caller_destinations.contains(url)) =>
+            {
                 state.directed = Some((Operation::Navigate, data.url.clone()));
             }
             (Some(operation), _) if super::helpers::page_operation(operation) => {
                 state.directed = Some((operation, None));
             }
-            (Some(operation), Some(chosen)) if chosen >= 0 && (chosen as usize) < usable.controls.len() => {
-                let named = &usable.controls[chosen as usize];
+            (Some(operation), Some(chosen)) if chosen >= 0 && (chosen as usize) < observation.controls.len() => {
+                let named = &observation.controls[chosen as usize];
                 state.directed = Some((operation, Some(named.id.clone())));
                 if operation == Operation::Fill
                     && named.operations.contains(&Operation::Fill)
@@ -451,11 +354,11 @@ impl Agent {
                         .any(|source| stated_in(text, source))
                 {
                     state.form_values.insert(
-                        (usable.document_key.clone(), named.id.clone()),
+                        (observation.document_key.clone(), named.id.clone()),
                         (named.clone(), FieldText { missing: false, text: text.clone(), values: Vec::new() }),
                     );
                 }
-                let commit = (operation, Some(named.id.clone()), describe(named), usable.url.clone());
+                let commit = (operation, Some(named.id.clone()), describe(named), observation.url.clone());
                 if state.unsure_commit.as_ref() == Some(&commit) {
                     state.confirmed_commit = state.unsure_commit.clone();
                 }
@@ -469,7 +372,7 @@ impl Agent {
             operation: Operation::Escalate,
             decided_by: Decider::Llm,
             outcome: StepOutcome::Executed,
-            url: usable.url.clone(),
+            url: observation.url.clone(),
             target: None,
             confidence: None,
             note: Some(note),
@@ -478,6 +381,76 @@ impl Agent {
             duration_ms: 0,
         };
         self.record_step(state, step, true, None).await
+    }
+
+    /// Jev asked again on this page, told what went wrong, with the action that changed nothing left out of its
+    /// options and the caller's start page offered beside back, scroll and escape. Whether it was sure enough of a pick
+    /// to take it as the next decision, which spares the LLM recovery.
+    async fn ask_jev_again(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        reason: &str,
+        withheld: Withheld,
+    ) -> Step<bool> {
+        let secrets = self.secret_names(&origin_of(&observation.url));
+        let mut context = self.context(state, secrets, false, false)?;
+        let mut offered = observation.clone();
+        let mut problem = reason.to_string();
+        if let Some((operation, label)) = withheld {
+            let mut left_out = false;
+            match &label {
+                Some(label) => {
+                    for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
+                        left_out |= control.operations.remove(&operation);
+                    }
+                    offered.controls.retain(|control| !control.operations.is_empty());
+                }
+                None => {
+                    context.withheld.push(operation);
+                    left_out = true;
+                }
+            }
+            if left_out {
+                let what =
+                    label.map_or_else(|| operation.to_string(), |label| format!("{operation} {}", text::repr(&label)));
+                problem +=
+                    &format!("\n{what} did not move the task on from this page, so it is not offered this time.");
+            }
+        }
+        context.problem = Some(problem);
+        context.screenshot = self.viewport().await?;
+        let decision = decide(
+            &*self.jev,
+            &offered,
+            &context,
+            &self.config,
+            Some(&state.ledger),
+            Some(&state.relevance_cache),
+            &self.trace,
+        )
+        .await?;
+        if decision.operation == Operation::Escalate || decision.confidence() < self.config.thresholds.recover_below {
+            return Ok(false);
+        }
+        let label = decision_label(&decision).map(|label| self.redact(&label));
+        state.log_recovery(format!(
+            "- Reason: {}. Jev chose: {} {}.",
+            recovery_text(reason),
+            decision.operation,
+            label.as_deref().unwrap_or_default()
+        ));
+        self.event("recover", || {
+            Map::from_iter([
+                ("reader".into(), "jev".into()),
+                ("reason".into(), reason.into()),
+                ("operation".into(), json!(decision.operation)),
+                ("target".into(), json!(label)),
+            ])
+        });
+        state.directed = None;
+        state.picked = Some((state_key(observation), decision));
+        Ok(true)
     }
 }
 

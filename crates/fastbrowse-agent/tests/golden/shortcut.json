@@ -304,12 +304,6 @@
       "none": "Nothing",
       "secret:token": "The token"
      }
-    },
-    "complete": {
-     "type": "noul",
-     "instructions": "?",
-     "true": null,
-     "false": null
     }
    },
    "evaluation": {
@@ -343,10 +337,6 @@
        "secret:token": 0.0
       },
       "confidence": 1.0
-     },
-     "complete": {
-      "type": "noul",
-      "probability": 1.0
      }
     },
     "input_tokens": 0,
@@ -537,12 +527,6 @@
        "role": "button"
       }
      }
-    },
-    "complete": {
-     "type": "noul",
-     "instructions": "?",
-     "true": null,
-     "false": null
     }
    },
    "evaluation": {
@@ -567,10 +551,6 @@
        "c3": 0.0
       },
       "confidence": 1.0
-     },
-     "complete": {
-      "type": "noul",
-      "probability": 1.0
      }
     },
     "input_tokens": 0,

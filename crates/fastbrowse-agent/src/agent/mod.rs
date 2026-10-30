@@ -16,12 +16,13 @@ mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
-mod sign_in;
+mod seeing;
 pub(crate) mod state;
 
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -37,15 +38,14 @@ use fastbrowse_core::models::{
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::py::json::dumps;
-use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-pub use helpers::{next_page_control, next_page_notice, read_question};
+pub use helpers::{next_page_control, read_question};
 use helpers::{partition_proof, recovery_memory};
-use state::{Flow, RunState, Spawned};
+use state::{Flow, RunState, Spawned, Step};
 
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
@@ -455,11 +455,10 @@ impl Agent {
             None => (Vec::new(), Default::default()),
             Some(opening) => self.open(task, opening, &ledger, head.proposing.clone()).await?,
         };
-        let mut fell_back = false;
         if let (None, Some(opening)) = (start, &opening) {
             // The caller gave a goal and no page, so this address was worked out from the task too.
             invented.insert(opening.clone());
-            fell_back = self.front_page_if_blank(opening).await?;
+            self.front_page_if_blank(opening).await?;
         }
         let mut state = RunState::new(
             task.to_string(),
@@ -477,10 +476,6 @@ impl Agent {
             state.start_landing_url = Some(self.page.address().await?);
         }
         state.history.extend(opened);
-        // The run begins on the guess only if the guess is still the page open: a guessed path that opened nothing was
-        // left for the site's front page, and a form there led back to the same path with every read of it held
-        // guessed.
-        state.guessing = !invented.is_empty() && !fell_back;
         state.invented = invented;
         if let Some(opening) = &opening {
             // A shortcut leaves the start page before the loop observes anything.
@@ -551,7 +546,7 @@ impl Agent {
     }
 
     fn failed(&self, message: String, unavailable: bool, state: Option<&RunState>, ledger: &Ledger) -> RunResult {
-        let message = text::prefix(&self.redact(&message), 500).to_string();
+        let message = self.redact(&message);
         let status = if unavailable { Status::Unavailable } else { Status::Error };
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
         self.partial_result(&notes, state, ledger, status, Some(message), None)
@@ -621,6 +616,7 @@ impl Agent {
             transaction_evidence_ids: transactions,
             preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
             background: state.context.clone(),
+            trace: self.trace.clone(),
             ..ComposeOptions::new()
         };
         let generated = compose(&*self.llm, &state.task, &plan, &state.notes, &options).await.ok()?;
@@ -925,6 +921,16 @@ impl Agent {
             recovery_memory: recovery_memory(state, self.config.stall.max_recoveries, |value| self.redact(value)),
             background: state.context.clone(),
             omitted_actions: 0,
+            problem: None,
+            withheld: Vec::new(),
+            no_value_fields: state
+                .missing
+                .iter()
+                .map(|(label, _)| label.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            screenshot: None,
         })
     }
 
@@ -941,25 +947,45 @@ impl Agent {
 
     /// Stuck becomes needs_login when a sign-in is what the run stopped at: a caller told "stuck" narrows the task
     /// rather than signing in.
-    fn walled(&self, state: &RunState, observation: &Observation, status: Status, said: bool) -> Status {
+    async fn walled(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        status: Status,
+        said: bool,
+    ) -> Step<Status> {
         if status != Status::Stuck {
-            return status;
+            return Ok(status);
         }
-        // A model's word alone is not the page's: absent controls do not establish missing authentication, so a run
-        // that stopped saying it was signed out ends needs_login only when the page itself shows a sign-in to act on,
-        // or the run is standing on a wall it actually observed. A page offering neither is stuck, not signed out.
-        let walled = (said && sign_in::shows_sign_in(observation))
-            || state
-                .passed_wall
-                .as_deref()
-                .is_some_and(|wall| fastbrowse_core::navigation::same_address(wall, &observation.url));
         // A held secret makes the sign-in work the run can do, so a run holding one did not stop for want of it.
         let origin = origin_of(&observation.url);
-        if walled && !(!origin.is_empty() && !self.secret_names(&origin).is_empty()) {
-            Status::NeedsLogin
-        } else {
-            status
+        if !origin.is_empty() && !self.secret_names(&origin).is_empty() {
+            return Ok(status);
         }
+        let standing = state
+            .passed_wall
+            .as_deref()
+            .is_some_and(|wall| fastbrowse_core::navigation::same_address(wall, &observation.url));
+        // A model's word alone is not the page's: a run that stopped saying it was signed out ends needs_login only
+        // when Jev, shown the page, agrees a sign-in blocks the task.
+        let walled = standing || (said && self.sees_wall(state, observation).await?);
+        Ok(if walled { Status::NeedsLogin } else { status })
+    }
+
+    /// Whether Jev, asked about this page as at any step, judges it a sign-in wall that blocks the task.
+    async fn sees_wall(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let context = self.context(state, Vec::new(), true, false)?;
+        let decision = crate::policy::decide(
+            &*self.jev,
+            observation,
+            &context,
+            &self.config,
+            Some(&state.ledger),
+            Some(&state.relevance_cache),
+            &self.trace,
+        )
+        .await?;
+        Ok(decision.login_required.is_some_and(|p| p > self.config.thresholds.login_required_above))
     }
 }
 

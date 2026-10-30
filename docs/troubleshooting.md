@@ -262,8 +262,8 @@ Configuration refusals also exit 1.
 
 **Common causes.**
 
-- A model or browser call failed in a way retries do not cover. `error` holds the failure, cut to 500
-  characters with any secret redacted.
+- A model or browser call failed in a way retries do not cover. `error` holds the whole failure, with any
+  secret redacted.
 - The browser could not be reached as configured, for example `no DevTools endpoint at
   http://127.0.0.1:<port>/json/version (<cause>)` from `--cdp-port`, or a pair of browser options that
   cannot go together, such as `cdp_url and cdp_port both name a browser to attach to; pass one`.

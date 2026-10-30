@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use fastbrowse_core::decision::DecisionClient;
-use fastbrowse_core::effects::{state_key, step_key};
+use fastbrowse_core::decision::{DecisionClient, NoulQuestion, Question};
+use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::LLMClient;
-use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult};
+use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult, UNTRUSTED};
 use fastbrowse_core::page::{BlockKind, Capture, Control, Observation};
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::origin_of;
@@ -15,10 +15,7 @@ use serde_json::{Map, json};
 
 use super::Agent;
 use super::driving::StepOptions;
-use super::helpers::{
-    answer_evidence, code_decision, describe, lookup, next_page_control, next_page_notice, read_question, sources,
-    without_failed_links,
-};
+use super::helpers::{answer_evidence, code_decision, describe, lookup, next_page_control, read_question};
 use super::state::{Flow, ReadKey, RunState, Spawned, Step};
 use crate::comparison::complete_comparison;
 use crate::error::AgentError;
@@ -73,6 +70,9 @@ fn sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
 /// Read `capture`'s records for `wanted` alone, as a page in a run of pages is read: from a counted field when the
 /// reader set one up, else by Jev's record filter, else by the reader, retried once on a saved capture that lost a
 /// record.
+///
+/// On the `last` page, the one with no next-page control, a list code counted ends there: the readers exist only for a
+/// list whose every page is needed.
 #[allow(clippy::too_many_arguments)]
 async fn page_records(
     jev: Arc<dyn DecisionClient>,
@@ -83,18 +83,19 @@ async fn page_records(
     wanted: Vec<Requirement>,
     question: String,
     tokens: fastbrowse_core::config::TokenBudget,
-    tally_readers: Option<Vec<TallyReader>>,
+    tally_readers: Vec<TallyReader>,
+    last: bool,
 ) -> Result<ReadOutcome, AgentError> {
     let ids: Vec<String> = wanted.iter().map(|r| r.id.clone()).collect();
-    if let Some(readers) = &tally_readers
-        && let Some(counted) = read_tallies(&capture, readers, &ids)?
-    {
-        return Ok(counted);
+    let mut counted = None;
+    if !tally_readers.is_empty() {
+        counted = read_tallies(&capture, &tally_readers, &ids)?;
     }
-    if let Some(readers) = &tally_readers
-        && let Some(matched) = filter_tallies(&*jev, &capture, readers, &ids, &tokens, Some(&ledger), &trace).await?
-    {
-        return Ok(matched);
+    if counted.is_none() {
+        counted = filter_tallies(&*jev, &*llm, &capture, &tally_readers, &ids, &tokens, Some(&ledger), &trace).await?;
+    }
+    if let Some(counted) = counted {
+        return Ok(if last { ReadOutcome { ended: ids, ..counted } } else { counted });
     }
     let mut costs: Vec<CostLine> = Vec::new();
     let mut retried = false;
@@ -118,6 +119,24 @@ async fn page_records(
     }
 }
 
+/// Jev's yes or no on whether a page shows a value one of the task's actions must carry to another page. Jev can settle
+/// every requirement a page is read for and still leave such a value unquoted: a sign-in read on the Phone page found
+/// nothing for the orders it was asked about, so the code it showed never reached the notes, and the run went back for
+/// it three times. On 16 labelled pages (codes, a discount, a reference, an address and a key, against sign-in forms,
+/// listings and unrelated pages) every page holding such a value scored 0.92 or more and every other 0.21 or less.
+fn context_question(task: &str, actions: &[&str]) -> Question {
+    let listed: Vec<String> = actions.iter().map(|action| format!("- {action}")).collect();
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\n\n# Task\n{task}\n\n# Actions still to take\n{}\n\nDoes this page show a value one of these actions needs, such as a code, reference, address or key, that the agent must carry to another page?",
+            listed.join("\n")
+        ),
+        Some("Yes: the page shows a value an action needs."),
+        Some("No: no value on this page is needed by these actions."),
+    )
+    .into()
+}
+
 impl Agent {
     /// Return (added evidence, skipped duplicate), since only new evidence makes a read progress.
     pub(super) async fn read(
@@ -131,7 +150,6 @@ impl Agent {
             Some(capture) => capture,
             None => self.capture().await?,
         };
-        state.lineage.read(&capture.sha256, &sources(&capture), state.guessing);
         let plan = state.await_plan().await?;
         if lookup(&plan) {
             // Reader-selected excerpts cannot decide whether the full sources fit together in one prompt.
@@ -142,7 +160,7 @@ impl Agent {
         let information = |r: &&Requirement| r.kind == RequirementKind::Information;
         let mut wanted: Vec<Requirement> =
             state.notes.unresolved(&plan).into_iter().filter(|r| information(&r)).collect();
-        let transaction_pending = super::helpers::unread_transaction(state);
+        let transaction_pending = self.unread_receipt(state).await?;
         let owed = transaction_pending || (wanted.is_empty() && state.owes_read && plan.page_answer_expected());
         if owed || (wanted.is_empty() && !state.open_answer_outputs.is_empty()) {
             // Every requirement was evidenced off the page before the last interaction redrew it, so they are asked
@@ -247,11 +265,11 @@ impl Agent {
                 &format!("\nStill missing or unsupported answer outputs: {}", state.open_answer_outputs.join("; "));
         }
         question += &super::helpers::field_corrections(state);
-        let needs_context = plan.requirements.iter().any(|r| r.kind == RequirementKind::Action);
-        if needs_context {
+        let actions: Vec<&str> =
+            plan.requirements.iter().filter(|r| r.kind == RequirementKind::Action).map(|r| r.text.as_str()).collect();
+        if !actions.is_empty() {
             question += "\nAlso keep quotes containing values needed for the task's remaining actions, even when they do not answer an information requirement. Give these context claims a null requirement_id.";
         }
-        let notice = next_page_notice(following.as_ref());
         let before = state.notes.facts().len();
         let known = answer_evidence(&state.notes, false);
         let evidenced: Vec<String> =
@@ -259,7 +277,9 @@ impl Agent {
         let options = ReadOptions {
             tokens: self.config.tokens.clone(),
             ledger: Some(&state.ledger),
-            jev: if needs_context { None } else { Some(&*self.jev) },
+            // What Jev cannot quote, and the context the remaining actions need, still go to the LLM reader.
+            jev: Some(&*self.jev),
+            context_question: (!actions.is_empty()).then(|| context_question(&state.task, &actions)),
             requirements: wanted.clone(),
             targets: Some(plan.requirements.iter().filter(information).cloned().collect()),
             // Rebinding old quotes during output recovery does not make revisiting their page a fresh source.
@@ -270,7 +290,6 @@ impl Agent {
                 || !state.finish_partitions.is_empty()
                 || !state.open_answer_outputs.is_empty(),
             field_outputs: state.oversized_answer && !state.finish_partitions.is_empty(),
-            notice,
             continuing: sorted(state.continuing.iter().cloned()),
             incomplete: state.incomplete.iter().cloned().collect(),
             require_all_evidence: require_all_evidence || (state.through_end && state.pages > 0),
@@ -325,9 +344,6 @@ impl Agent {
         for candidate in &mut state.transaction_candidates {
             candidate.outcome_read = true;
         }
-        if let Some(observation) = observation {
-            state.read_step = Some(step_key(observation, &capture));
-        }
         for requirement in &wanted {
             state.notes.supersede(&requirement.id, &capture.url, &capture.sha256, &capture.text);
         }
@@ -367,7 +383,6 @@ impl Agent {
                 ("uncovered".into(), outcome.uncovered.into()),
             ])
         });
-        state.read_urls.insert(capture.url.clone());
         if let Some(observation) = observation {
             let document = &observation.document_key;
             let read = state.read_coverage.entry(document.clone()).or_default();
@@ -403,10 +418,8 @@ impl Agent {
         state: &mut RunState,
         capture: &Capture,
         wanted: &[Requirement],
-        reuse: bool,
+        last: bool,
     ) -> Spawned<ReadOutcome> {
-        // Pages read in a run of pages never pass through `read`, and their readings are judged the same way.
-        state.lineage.read(&capture.sha256, &sources(capture), state.guessing);
         let question = read_question(&state.task, wanted, state.first_url.as_deref());
         Spawned::spawn(page_records(
             self.jev.clone(),
@@ -417,7 +430,8 @@ impl Agent {
             wanted.to_vec(),
             question,
             self.config.tokens.clone(),
-            reuse.then(|| state.tally_readers.clone()),
+            state.tally_readers.clone(),
+            last,
         ))
     }
 
@@ -435,8 +449,7 @@ impl Agent {
             Err(error) if Flow::from(error.clone()).is_llm() => {
                 // The browser has moved on, so retry the saved capture, never the page now on screen.
                 state.paging_failed = true;
-                // The last page is read by the LLM, which closes the list; a retry keeps that.
-                let retry = self.start_page(state, &page.capture, wanted, !last);
+                let retry = self.start_page(state, &page.capture, wanted, last);
                 match retry.wait().await.unwrap_or_else(|| Err(super::state::cancelled())) {
                     Ok(outcome) => outcome,
                     Err(error) if Flow::from(error.clone()).is_llm() => {
@@ -450,7 +463,7 @@ impl Agent {
                         let step = StepResult {
                             index: state.steps.len() as i64,
                             operation: Operation::Read,
-                            decided_by: Decider::Llm,
+                            decided_by: Decider::Code,
                             outcome: StepOutcome::Failed,
                             url: page.capture.url.clone(),
                             target: None,
@@ -485,7 +498,7 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: Operation::Read,
-            decided_by: Decider::Llm,
+            decided_by: Decider::Code,
             outcome: StepOutcome::Executed,
             url: page.capture.url.clone(),
             target: None,
@@ -530,7 +543,7 @@ impl Agent {
         let mut target: Option<Control> = None;
         let walked = async {
             loop {
-                target = next_page_control(&without_failed_links(state, &observation));
+                target = next_page_control(&observation);
                 let Some(next) = target.clone() else { break };
                 if state.pages >= self.config.max_pages {
                     break;
@@ -551,7 +564,7 @@ impl Agent {
                 state.paged_from = Some(state_key(&observation));
                 before_click = state.steps.len();
                 let options = StepOptions { gate: false, follow_pager: true, ..StepOptions::default() };
-                self.step(state, &observation, &code_decision(Operation::Click, Some(next)), Decider::Llm, options)
+                self.step(state, &observation, &code_decision(Operation::Click, Some(next)), Decider::Code, options)
                     .await?;
                 if state.steps.len() == before_click
                     || state
@@ -599,13 +612,15 @@ impl Agent {
                 let mut computable: std::collections::HashSet<String> =
                     state.notes.tallies().into_iter().map(|t| t.requirement_id).collect();
                 computable.extend(state.comparisons.keys().cloned());
+                // A count Jev matches every page of is code's even before a page holds a match.
+                computable.extend(state.tally_readers.iter().map(|reader| reader.requirement_id.clone()));
                 let fallback_room = state.comparisons.is_empty()
                     || (Self::steps_room(state, pending.len(), 2) && Self::calls_room(state, 2));
                 let frames = self.on_event.is_some() && self.config.step_frames;
                 if following.is_none() && wanted.iter().all(|r| computable.contains(&r.id)) && fallback_room {
                     // Rankings and counts merge in code, so the last read need not wait for earlier pages.
                     let frame = if frames { self.frame().await? } else { None };
-                    let task = self.start_page(state, &page, &wanted, false);
+                    let task = self.start_page(state, &page, &wanted, true);
                     pending.push(PageRead {
                         capture: page,
                         observation: observation.clone(),
@@ -626,7 +641,7 @@ impl Agent {
                     break;
                 }
                 let frame = if frames { self.frame().await? } else { None };
-                let task = self.start_page(state, &page, &wanted, true);
+                let task = self.start_page(state, &page, &wanted, false);
                 pending.push(PageRead {
                     capture: page,
                     observation: observation.clone(),
@@ -662,7 +677,7 @@ impl Agent {
                             label,
                             None,
                             None,
-                            Decider::Llm,
+                            Decider::Code,
                         )
                         .await?;
                     }
@@ -726,7 +741,7 @@ impl Agent {
                     state,
                     &observation,
                     &code_decision(Operation::Read, None),
-                    Decider::Llm,
+                    Decider::Code,
                     options,
                 ))
                 .await
@@ -754,7 +769,7 @@ impl Agent {
                             None,
                             None,
                             None,
-                            Decider::Llm,
+                            Decider::Code,
                         )
                         .await?;
                     }

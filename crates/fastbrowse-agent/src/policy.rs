@@ -12,14 +12,15 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, NoulAnswer, NoulQuestion, Question,
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images, NoulAnswer, NoulQuestion,
+    Question,
 };
 use fastbrowse_core::models::{CostComponent, CostLine, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, loads_more, pager_link};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
-use fastbrowse_core::py::{lax, text};
+use fastbrowse_core::py::{lax, sha256_hex, text};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -171,6 +172,18 @@ pub struct StepContext {
     /// The caller's background, which Jev reads beside the task and never as a requirement.
     #[serde(default)]
     pub background: Option<String>,
+    /// Why Jev is asked again on this page: a stall or an unsure pick, and the action withheld for it.
+    #[serde(default)]
+    pub problem: Option<String>,
+    /// Page operations not offered this time, because the problem is that they changed nothing.
+    #[serde(default)]
+    pub withheld: Vec<Operation>,
+    /// Fields the task gives no value for: filling one ends the run needing input.
+    #[serde(default)]
+    pub no_value_fields: Vec<String>,
+    /// The viewport as a PNG, given to a route that takes images.
+    #[serde(skip)]
+    pub screenshot: Option<Vec<u8>>,
     /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_actions: usize,
@@ -199,6 +212,10 @@ impl StepContext {
             recovery_memory: String::new(),
             background: None,
             omitted_actions: 0,
+            problem: None,
+            withheld: Vec::new(),
+            no_value_fields: Vec::new(),
+            screenshot: None,
         }
     }
 }
@@ -249,6 +266,8 @@ impl Decision {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub state: Value,
+    /// The images the state refers to, keyed by the reference written in it.
+    pub images: Images,
     pub questions: IndexMap<String, Question>,
     pub targets: IndexMap<Operation, Vec<Control>>,
     pub groups: IndexMap<Operation, Vec<Vec<Control>>>,
@@ -346,7 +365,7 @@ pub async fn decide(
                         let mut fields = Map::new();
                         fields.insert("offered".into(), controls.len().into());
                         fields.insert("retry_with".into(), smaller.len().into());
-                        fields.insert("reason".into(), text::prefix(&error.message, 300).into());
+                        fields.insert("reason".into(), error.message.clone().into());
                         fields
                     });
                     (controls, reduction) = (smaller, reduced);
@@ -723,6 +742,7 @@ fn offered_operations(
     Operation::ALL
         .iter()
         .copied()
+        .filter(|operation| !context.withheld.contains(operation))
         .filter(|operation| match operation {
             Operation::Navigate => !urls.is_empty(),
             Operation::Click
@@ -762,15 +782,14 @@ pub fn build_request(
     compact: bool,
 ) -> Request {
     let indexed = index_controls(controls);
-    // Back from a form's result can land on a browser error page that asks to resubmit and has nothing to click, and
-    // the caller's start address, held back so a working form is not reopened and emptied, was then reachable only
-    // after recovery proposed it. A page with no controls, offered or omitted, has no form to lose.
+    // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls,
+    // offered or omitted, has no form to lose, and a run asked again because it is stuck may need to start over.
     let urls = navigation_urls(
         &context.task,
         &observation.url,
         context.start_url.as_deref(),
         context.start_landing_url.as_deref(),
-        observation.controls.is_empty() && observation.omitted_controls == 0,
+        (observation.controls.is_empty() && observation.omitted_controls == 0) || context.problem.is_some(),
     );
     let offered = offered_operations(observation, &indexed, context, &urls);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
@@ -862,14 +881,7 @@ pub fn build_request(
         }
     }
     if context.check_login {
-        questions.insert(
-            "login_required".into(),
-            noul(
-                "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. If the task asks to inspect access restrictions, observing the wall advances that task without signing in.",
-                "A sign-in, verification or access wall blocks the task and the task gives no way through it.",
-                "The task can progress without signing in, or the task supplies the credentials to sign in.",
-            ),
-        );
+        questions.insert("login_required".into(), login_question());
     }
     if context.check_bot {
         questions.insert(
@@ -883,6 +895,7 @@ pub fn build_request(
     }
     Request {
         state: state(observation, controls, context, compact),
+        images: context.screenshot.iter().map(|png| (screenshot_reference(png), png.clone())).collect(),
         questions,
         targets,
         groups,
@@ -911,7 +924,7 @@ async fn evaluate(
         if let Some(ledger) = ledger {
             ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         }
-        let answered = jev.evaluate(&request.state, questions).await?;
+        let answered = jev.evaluate_images(&request.state, questions, &request.images).await?;
         if let Some(ledger) = ledger {
             ledger.record([answered.cost.clone()])?;
         }
@@ -1065,6 +1078,12 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     if !context.recovery_memory.is_empty() {
         state.insert("recovery_memory".into(), context.recovery_memory.clone().into());
     }
+    if let Some(problem) = &context.problem {
+        state.insert("problem".into(), problem.clone().into());
+    }
+    if !context.no_value_fields.is_empty() {
+        state.insert("fields_the_task_gives_no_value".into(), json!(context.no_value_fields));
+    }
     if !context.secrets.is_empty() {
         state.insert("stored_secrets".into(), json!(context.secrets));
     }
@@ -1078,7 +1097,16 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     if observation.tabs.len() > 1 {
         state.insert("tabs".into(), Value::Array(observation.tabs.iter().map(Dump::dump_exclude_none).collect()));
     }
+    if let Some(png) = &context.screenshot {
+        state.insert("viewport_screenshot".into(), screenshot_reference(png).into());
+    }
     Value::Object(state)
+}
+
+/// Jev reads an image wherever its reference appears, even inside page text, so the reference is one no page could
+/// contain by chance: the image's own digest.
+pub(crate) fn screenshot_reference(png: &[u8]) -> String {
+    format!("screenshot-{}", sha256_hex(png))
 }
 
 fn sorted_operations(control: &Control) -> Value {
@@ -1198,6 +1226,15 @@ fn target_element(control: &Control, operation: Operation, compact: bool) -> Map
         }
     }
     element
+}
+
+/// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
+pub(crate) fn login_question() -> Question {
+    noul(
+        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. If the task asks to inspect access restrictions, observing the wall advances that task without signing in.",
+        "A sign-in, verification or access wall blocks the task and the task gives no way through it.",
+        "The task can progress without signing in, or the task supplies the credentials to sign in.",
+    )
 }
 
 fn noul(instructions: &str, yes: &str, no: &str) -> Question {
@@ -1324,7 +1361,7 @@ mod tests {
                                 let yes = relevance && question.instructions.contains(&label);
                                 Answer::Noul(NoulAnswer { kind: NoulTag, probability: if yes { 0.9 } else { 0.1 } })
                             }
-                            Question::Score(_) => unreachable!("the policy asks no score"),
+                            Question::Score(_) | Question::Box(_) => unreachable!("the policy asks no score or box"),
                         };
                         (key.clone(), answer)
                     })
@@ -1521,6 +1558,19 @@ mod tests {
             (&state["task"], &state["background"]),
             (&json!("Find the price"), &json!("Asked by email from Ana."))
         );
+    }
+
+    #[test]
+    fn test_the_step_state_refers_to_the_viewport_it_is_sent() {
+        let page = observation(vec![]);
+        let mut context = StepContext::new("Pick the red square");
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false);
+        assert!(request.state.get("viewport_screenshot").is_none() && request.images.is_empty());
+        context.screenshot = Some(b"png".to_vec());
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false);
+        let reference = format!("screenshot-{}", sha256_hex(b"png"));
+        assert_eq!(request.state["viewport_screenshot"], json!(reference));
+        assert_eq!(request.images, Images::from([(reference, b"png".to_vec())]));
     }
 
     #[test]

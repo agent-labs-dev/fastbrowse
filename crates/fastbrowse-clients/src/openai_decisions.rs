@@ -77,6 +77,8 @@ pub fn wire_questions(questions: &IndexMap<String, Question>) -> Value {
                     .collect();
                 json!({"type": "score", "name": name, "instructions": q.instructions, "levels": levels})
             }
+            // The Decisions API documents no box, and refuses the request; only a route sent images is asked one.
+            Question::Box(q) => json!({"type": "box", "name": name, "instructions": q.instructions}),
         })
         .collect();
     Value::Array(wire)

@@ -13,7 +13,7 @@ use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_credentials, downloads_question, irreversible_question, may_be_irreversible,
-    requested_question, resolve_secret, reversible_toggle, sets_new_password, starts_download,
+    requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
@@ -23,10 +23,9 @@ use serde_json::{Map, Value, json};
 use super::driving::{StepOptions, Watched, require};
 use super::helpers::{
     caller_link, code_decision, describe, dialog_question, lookup, misfit, navigation_question, next_value,
-    only_typed_since_read, read_exhausted, seen, unread, unread_transaction,
+    only_typed_since_read, read_exhausted, seen, unread,
 };
 use super::reading::covered;
-use super::sign_in::shows_sign_in;
 use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
 use super::{Agent, GENERATE};
 use crate::memory::shows;
@@ -125,22 +124,23 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
+        decided_by: Decider,
         gate: bool,
     ) -> Step<Action> {
         let target = decision.target.as_ref();
         match decision.operation {
             Operation::Navigate => {
-                let observed = decision.directed
-                    && decision.url.as_ref().is_some_and(|url| state.observed_links.contains_key(url));
-                let Some(url) = decision.url.clone().filter(|url| {
-                    task_urls(&state.task, state.caller_start.as_deref(), true).contains(url) || observed
-                }) else {
+                let Some(url) = decision
+                    .url
+                    .clone()
+                    .filter(|url| task_urls(&state.task, state.caller_start.as_deref(), true).contains(url))
+                else {
                     return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
                 };
                 if self.reveals_text(&url) {
                     return Err(Stop::new(Status::NeedsInput, "navigation address contains a resolved secret").into());
                 }
-                if gate && !observed {
+                if gate {
                     state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
                     let question = NoulQuestion::new(
                         "Does the caller ask the browser to open this address for the task?",
@@ -158,11 +158,9 @@ impl Agent {
                             Unsure::new("the supplied address is not confidently a browsing destination").into()
                         );
                     }
-                }
-                if gate {
-                    self.gate_download(state, observation, decision, &caller_link(&url)).await?;
+                    self.gate_download(state, observation, decision, decided_by, &caller_link(&url)).await?;
                     let question = navigation_question(&state.task, &url);
-                    self.gate_question(state, observation, decision, &url, question, false).await?;
+                    self.gate_question(state, observation, decision, decided_by, &url, question, false).await?;
                 }
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
@@ -170,7 +168,7 @@ impl Agent {
                 // Only a pager link to another address goes ungated: it opens a page and commits nothing, so asking Jev
                 // would buy a call per page and nothing else.
                 if gate {
-                    self.gate_irreversible(state, observation, decision).await?;
+                    self.gate_irreversible(state, observation, decision, decided_by).await?;
                 }
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
             }
@@ -178,7 +176,7 @@ impl Agent {
                 let Some(destination) = &decision.destination else {
                     return Err(Stop::new(Status::NeedsInput, "the page offers no drop target for the drag").into());
                 };
-                self.gate_irreversible(state, observation, decision).await?;
+                self.gate_irreversible(state, observation, decision, decided_by).await?;
                 Ok(Action {
                     target_id: Some(require(target)?.id.clone()),
                     destination_id: Some(destination.id.clone()),
@@ -221,7 +219,8 @@ impl Agent {
                     && let Some(dialog) = &observation.dialog
                     && let Some(question) = dialog_question(&state.task, Some(dialog))
                 {
-                    self.gate_question(state, observation, decision, &dialog.message, question, false).await?;
+                    self.gate_question(state, observation, decision, decided_by, &dialog.message, question, false)
+                        .await?;
                 }
                 Ok(Action { accept_dialog: Some(accept), ..Action::new(Operation::Dialog) })
             }
@@ -238,17 +237,17 @@ impl Agent {
         }
     }
 
-    async fn gate_irreversible(&self, state: &mut RunState, observation: &Observation, decision: &Decision) -> Step {
+    async fn gate_irreversible(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        decided_by: Decider,
+    ) -> Step {
         let Some(target) = decision.target.as_ref().filter(|t| may_be_irreversible(decision.operation, Some(t))) else {
             return Ok(());
         };
-        self.gate_download(state, observation, decision, target).await?;
-        if decision.operation == Operation::Click && reversible_toggle(target) {
-            // A media pause, play or mute is undone by the same control and commits nothing off the page, so it is
-            // not a commit to confirm.
-            self.event("reversible_toggle", || Map::from_iter([("target".into(), describe(target).into())]));
-            return Ok(());
-        }
+        self.gate_download(state, observation, decision, decided_by, target).await?;
         let mut label = describe(target);
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
@@ -256,7 +255,7 @@ impl Agent {
         let question = irreversible_question(&state.task, decision.operation, target, decision.destination.as_ref());
         let force = matches!(decision.operation, Operation::Click | Operation::Enter)
             && changes_credentials(&observation.controls, target, decision.operation);
-        self.gate_question(state, observation, decision, &label, question, force).await
+        self.gate_question(state, observation, decision, decided_by, &label, question, force).await
     }
 
     /// Refuse a control the page says downloads a file when the task rules downloading out.
@@ -268,6 +267,7 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
+        decided_by: Decider,
         control: &Control,
     ) -> Step {
         if !starts_download(control) || !self.downloads_forbidden(state).await? {
@@ -279,8 +279,7 @@ impl Agent {
             decision.operation,
             text::repr(&label)
         );
-        let decided_by = if decision.directed { Decider::Llm } else { Decider::Jev };
-        let confidence = (!decision.directed).then(|| decision.confidence());
+        let confidence = (decided_by == Decider::Jev).then(|| decision.confidence());
         let redacted = self.redact(&reason);
         self.record_failure(
             state,
@@ -313,11 +312,13 @@ impl Agent {
         Ok(forbidden)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn gate_question(
         &self,
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
+        decided_by: Decider,
         label: &str,
         question: NoulQuestion,
         force: bool,
@@ -344,6 +345,7 @@ impl Agent {
             return Ok(());
         }
         let what = format!("{} {}", decision.operation, text::repr(label));
+        let mut requested = None;
         if !force {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
             // Only the address goes with the question: the page's own text is what would argue a harmful action is
@@ -363,7 +365,8 @@ impl Agent {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
                 _ => None,
             };
-            let (probability, requested) = (noul("irreversible"), noul("requested"));
+            let probability = noul("irreversible");
+            requested = noul("requested");
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
@@ -375,7 +378,7 @@ impl Agent {
             if probability.is_some_and(|p| p <= thresholds.irreversible_above) {
                 return Ok(());
             }
-            if requested.is_some_and(|p| p >= thresholds.sensitive_act_from)
+            if requested.is_some_and(|p| p > thresholds.requested_above)
                 && decision.confidence() >= thresholds.recover_below
             {
                 return Ok(());
@@ -383,13 +386,16 @@ impl Agent {
         }
         // An unsure pick that may commit something is more likely the wrong pick than the step to confirm.
         let unsure = authorized || decision.confidence() < thresholds.recover_below;
+        let requested = requested.map_or_else(|| "not asked".to_string(), |p| format!("{p:.2}"));
         let reason = if unsure {
-            format!("unsure {what} is the irreversible action the task means ({:.2})", decision.confidence())
+            format!(
+                "unsure {what} is the irreversible action the task means (pick {:.2}, requested {requested})",
+                decision.confidence()
+            )
         } else {
             format!("{what} needs confirmation")
         };
-        let decided_by = if decision.directed { Decider::Llm } else { Decider::Jev };
-        let confidence = (!decision.directed).then(|| decision.confidence());
+        let confidence = (decided_by == Decider::Jev).then(|| decision.confidence());
         self.record_failure(
             state,
             observation,
@@ -721,7 +727,7 @@ impl Agent {
             let (step_decision, decided_by) = if index == 0 {
                 (decision.clone(), Decider::Jev)
             } else {
-                (code_decision(Operation::Fill, Some(control.clone())), Decider::Llm)
+                (code_decision(Operation::Fill, Some(control.clone())), Decider::Code)
             };
             let options = StepOptions { prepared_action: Some(action), ..StepOptions::default() };
             Box::pin(self.step(state, &observation, &step_decision, decided_by, options)).await?;
@@ -887,18 +893,14 @@ impl Agent {
         Ok(self.ask_choice(state, observation, &question, criteria).await? == "accept")
     }
 
-    /// Stop at a sign-in wall Jev saw only on the page's evidence for it; return once the page proved readable.
-    ///
-    /// Returns whether the run should look at this page again: true after a read changed the notes, false when the
-    /// page shows no sign-in at all. Absent controls do not establish missing authentication, so a page with neither a
-    /// credential field nor a sign-in to act on is not a wall, and the run acts on its decision.
+    /// Stop at a sign-in wall Jev judged blocks the task; return once a read proved the page readable.
     pub(super) async fn meet_wall(
         &self,
         state: &mut RunState,
         observation: &Observation,
         raw: &Observation,
         plan: &Plan,
-    ) -> Step<bool> {
+    ) -> Step {
         let origin = fastbrowse_core::safety::origin_of(&observation.url);
         // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
         // echo a typed secret into its title or a field's label.
@@ -925,9 +927,6 @@ impl Agent {
             let asked = if asked.is_empty() { "a password".to_string() } else { asked.join(", ") };
             return Err(wall(format!("the page asks for {asked}")));
         }
-        if !shows_sign_in(observation) {
-            return Ok(false);
-        }
         if !unread(plan, &state.notes) {
             return Err(wall(format!("{page} offers only sign-in")));
         }
@@ -935,11 +934,11 @@ impl Agent {
         // before any credential is: what the page shows decides whether the wall stands between them.
         let facts = state.notes.facts().len();
         let read = code_decision(Operation::Read, None);
-        Box::pin(self.step(state, observation, &read, Decider::Jev, StepOptions::default())).await?;
+        Box::pin(self.step(state, observation, &read, Decider::Code, StepOptions::default())).await?;
         if state.notes.facts().len() == facts {
             return Err(wall(format!("reading {page} found none of the requested information")));
         }
-        Ok(true)
+        Ok(())
     }
 
     pub(super) async fn read_before_interaction(
@@ -947,7 +946,6 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
-        decided_by: Decider,
     ) -> Step<bool> {
         // A native dialog pauses JavaScript, so capture cannot run until the dialog has been handled.
         if observation.dialog.is_some() {
@@ -962,7 +960,7 @@ impl Agent {
             // Recovery selected this source to repair missing fields. Uncertainty about the next click cannot spend
             // another recovery before its evidence is read.
             let read = code_decision(Operation::Read, None);
-            return Ok(!Box::pin(self.step(state, observation, &read, Decider::Llm, StepOptions::default())).await?);
+            return Ok(!Box::pin(self.step(state, observation, &read, Decider::Code, StepOptions::default())).await?);
         }
         if decision.operation == Operation::Back
             && !state.record_read_documents.contains(&observation.document_key)
@@ -974,7 +972,7 @@ impl Agent {
                 // information requirement is answered.
                 let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
                 return Ok(
-                    !Box::pin(self.step(state, observation, &reading, decided_by, StepOptions::default())).await?
+                    !Box::pin(self.step(state, observation, &reading, Decider::Code, StepOptions::default())).await?
                 );
             }
         }
@@ -984,11 +982,11 @@ impl Agent {
         // A read takes in the whole page, so a scroll over one never read only spends steps.
         let unread_scroll =
             decision.operation.is_scrolling() && !state.reads.iter().any(|key| key.0 == observation.document_key);
-        let transaction_pending = unread_transaction(state);
-        if matches!(decision.operation, Operation::Read | Operation::Done)
-            || (decision.read_assessment != crate::policy::ReadAssessment::Evidence
-                && !unread_scroll
-                && !transaction_pending)
+        if matches!(decision.operation, Operation::Read | Operation::Done) {
+            return Ok(false);
+        }
+        let transaction_pending = self.unread_receipt(state).await?;
+        if decision.read_assessment != crate::policy::ReadAssessment::Evidence && !unread_scroll && !transaction_pending
         {
             return Ok(false);
         }
@@ -1019,6 +1017,14 @@ impl Agent {
             return Ok(false);
         }
         let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
+        // Jev's read is the one it judged the page evidence for; a scroll over an unread page or a pending receipt is
+        // read by rule.
+        let decided_by = if decision.read_assessment == crate::policy::ReadAssessment::Evidence && !transaction_pending
+        {
+            Decider::Jev
+        } else {
+            Decider::Code
+        };
         let options = StepOptions { capture: Some(capture), ..StepOptions::default() };
         let skipped = Box::pin(self.step(state, observation, &reading, decided_by, options)).await?;
         Ok(transaction_pending || !skipped)
@@ -1069,9 +1075,9 @@ impl Agent {
         state.barren.retain(|k, _| !(k.0 == observation.document_key && k.1 == key));
         let reading = code_decision(Operation::Read, None);
         let options = StepOptions { capture: Some(capture), ..StepOptions::default() };
-        if Box::pin(self.step(state, observation, &reading, Decider::Llm, options)).await? {
+        if Box::pin(self.step(state, observation, &reading, Decider::Code, options)).await? {
             let reason = read_exhausted(state);
-            Box::pin(self.recover(state, observation, &reason, Status::Stuck)).await?;
+            Box::pin(self.recover(state, observation, &reason, Status::Stuck, super::recovery::READ)).await?;
         }
         Ok(true)
     }

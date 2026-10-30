@@ -21,16 +21,10 @@ pub struct Thresholds {
     pub bot_check_above: f64,
     #[serde(deserialize_with = "lax::float")]
     pub irreversible_above: f64,
+    /// Jev's agreement that the task asks for an authorized commit, above which it proceeds under `sensitive_act_from`.
     #[serde(deserialize_with = "lax::float")]
-    pub done_accept_from: f64,
-    /// With every action requirement confirmed, the holistic done answer that accepts without the LLM verifier.
-    /// Jev scores a right page 0.49 to 0.91 as done and a near miss 0.04 or less.
-    #[serde(deserialize_with = "lax::float")]
-    pub done_confirmed_from: f64,
-    /// A requirement's "not satisfied" answer under which it counts as confirmed; near misses scored 0.65 or more.
-    #[serde(deserialize_with = "lax::float")]
-    pub requirement_confirmed_below: f64,
-    /// Any "yes = something is wrong" answer check above this rejects the claim.
+    pub requested_above: f64,
+    /// An action requirement's "not satisfied" answer above this keeps the run working.
     #[serde(deserialize_with = "lax::float")]
     pub claim_problem_above: f64,
     /// Jev's agreement that the task or notes hold a field's value, under which a NEEDS_INPUT stop stands.
@@ -49,9 +43,7 @@ impl Default for Thresholds {
             login_required_above: 0.70,
             bot_check_above: 0.70,
             irreversible_above: 0.50,
-            done_accept_from: 0.85,
-            done_confirmed_from: 0.50,
-            requirement_confirmed_below: 0.30,
+            requested_above: 0.50,
             claim_problem_above: 0.70,
             value_stated_above: 0.50,
             rewrite_from: 0.30,
@@ -101,6 +93,11 @@ pub struct TokenBudget {
     /// The composer's output ceiling; 0 sends none, so a long answer citing every claim is never cut short.
     #[serde(deserialize_with = "lax::int_ge0")]
     pub compose_output_tokens: i64,
+    /// Characters a decision request may spend on its state plus largest question and on its state plus every
+    /// question, set by `DecisionProfile::fit` from the budget above and the route's limits. Jev with long context
+    /// takes a state far past what the budget allows an LLM prompt.
+    #[serde(skip)]
+    pub decision_chars: Option<(i64, i64)>,
 }
 
 impl Default for TokenBudget {
@@ -114,6 +111,7 @@ impl Default for TokenBudget {
             // maximum and the answer schema are the only bounds.
             read_output_tokens: 0,
             compose_output_tokens: 0,
+            decision_chars: None,
         }
     }
 }
@@ -122,9 +120,13 @@ impl TokenBudget {
     /// Characters of state that fit beside `questions`, measured as Python measures them, in code points.
     pub fn input_chars<S: AsRef<str>>(&self, questions: &[S], jev: bool) -> i64 {
         let sizes: Vec<f64> = questions.iter().map(|q| text::len(q.as_ref()) as f64).collect();
-        let ratio = if jev { JSON_CHARS_PER_TOKEN } else { self.chars_per_token };
-        let largest = self.state_plus_largest_question as f64 * ratio;
-        let total = self.state_plus_all_questions as f64 * ratio;
+        let (largest, total) = match (jev, self.decision_chars) {
+            (true, Some((most, all))) => (most as f64, all as f64),
+            _ => {
+                let ratio = if jev { JSON_CHARS_PER_TOKEN } else { self.chars_per_token };
+                (self.state_plus_largest_question as f64 * ratio, self.state_plus_all_questions as f64 * ratio)
+            }
+        };
         let biggest = sizes.iter().copied().fold(0.0_f64, f64::max);
         let room = (largest - biggest).min(total - crate::py::sum(sizes.iter().copied()));
         // `int()` truncates toward zero before the floor at zero.

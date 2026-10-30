@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -82,6 +83,16 @@ def test_screenshots_are_placeholders() -> None:
 
     assert request_key(LLM, message("iVBORw0KGgoAAA")) == request_key(LLM, message("iVBORw0KGgoBBB"))
     assert "<image>" in canonical_json(message("x"))
+
+
+def test_a_screenshot_jev_is_sent_as_an_asset_is_a_placeholder() -> None:
+    # Jev names an image asset by its pixels' digest, so a frame painted a pixel differently missed in CI.
+    def state(png: str) -> dict[str, object]:
+        name = f"screenshot-{hashlib.sha256(png.encode()).hexdigest()}"
+        asset = {"type": "image", "format": "png", "data_base64": png}
+        return {"state": {"viewport_screenshot": name}, "assets": {name: asset}}
+
+    assert request_key(JEV, state("iVBORw0KGgoAAA")) == request_key(JEV, state("iVBORw0KGgoBBB"))
 
 
 def test_a_date_the_task_names_is_kept() -> None:

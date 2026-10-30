@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use fastbrowse_core::decision::jev_takes_png;
 use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
 use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult, WallKind};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
@@ -16,14 +17,14 @@ use serde_json::Map;
 use super::helpers::{
     STALE_LINK_FAILURES, access_inspection, answer_evidence, answered, caller_link, code_decision, decision_label,
     describe, dialog_question, drew_something, follow_recovery, join, link_key, lookup, navigation_question, netloc_of,
-    not_acting, paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, site_action, stale_link_key,
-    try_unsure, unread, without_failed_links, without_missing,
+    not_acting, paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, stale_link_key, unread,
 };
 use super::reading::covered;
+use super::recovery::{READ, withheld};
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, SHORTCUT_WAIT_SECONDS};
 use crate::planner::RequirementKind;
-use crate::policy::{Decision, HistoryEntry, decide};
+use crate::policy::{Decision, HistoryEntry, StepContext, decide};
 use crate::retrieval::page_quotes;
 use crate::shortcut::{accept, accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -78,45 +79,9 @@ impl Agent {
                     state.next_page = false;
                     state.await_plan().await?;
                     let reason = HttpFailure { url: observation.url.clone(), status }.message();
-                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
+                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, None)).await?;
                     continue;
                 }
-            }
-            if state.section_read && observation.dialog.is_none() {
-                let directed = state.directed.take();
-                if let Some((Operation::Navigate, url)) = directed {
-                    let decision = Decision { url, directed: true, ..code_decision(Operation::Navigate, None) };
-                    match Box::pin(self.step(state, &observation, &decision, Decider::Llm, StepOptions::default()))
-                        .await
-                    {
-                        Err(Flow::Unsure(unsure)) => {
-                            state.section_read = false;
-                            Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as)).await?;
-                        }
-                        other => {
-                            other?;
-                        }
-                    }
-                } else {
-                    state.section_read = false;
-                    let read = code_decision(Operation::Read, None);
-                    Box::pin(self.step(state, &observation, &read, Decider::Llm, StepOptions::default())).await?;
-                    if !state.section_read && state.directed.is_none() && state.oversized_answer {
-                        state.directed = Some((Operation::Done, None));
-                    }
-                }
-                continue;
-            }
-            if state.directed == Some((Operation::Done, None))
-                && state.oversized_answer
-                && state.read_here
-                && lookup(state.plan())
-            {
-                state.directed = None;
-                if let Some(result) = Box::pin(self.finish(state, output_schema, until)).await? {
-                    return Ok(result);
-                }
-                continue;
             }
             self.settle(state, &observation);
             // Walking a list is dispatched before Jev is asked, because not asking is the point: the reader asked for
@@ -152,12 +117,11 @@ impl Agent {
                 }
                 continue;
             }
-            let usable = without_failed_links(state, &observation);
-            if let Some(decision) = paging(state, &usable) {
+            if let Some(decision) = paging(state, &observation) {
                 let options = StepOptions { gate: false, ..StepOptions::default() };
-                if Box::pin(self.step(state, &observation, &decision, Decider::Llm, options)).await? {
+                if Box::pin(self.step(state, &observation, &decision, Decider::Code, options)).await? {
                     let reason = read_exhausted(state);
-                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
+                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
                 }
                 continue;
             }
@@ -175,30 +139,34 @@ impl Agent {
             // is asked on every page a secret covers too.
             let fresh = state.last_page.as_ref() != Some(&page);
             let check_login = fresh && secrets.is_empty();
-            let context = self.context(state, secrets, check_login, fresh)?;
-            let offered = without_missing(without_failed_links(state, &observation), &state.missing);
-            let redecided = state.redecided;
-            let deciding = decide(
-                &*self.jev,
-                &offered,
-                &context,
-                &self.config,
-                Some(&state.ledger),
-                Some(&state.relevance_cache),
-                &self.trace,
-            );
-            let mut decision = match self
-                .unless_redrawn(redecided, async { deciding.await.map_err(Flow::from) }, &observation, None)
-                .await?
-            {
-                Watched::Done(decision) => decision,
-                Watched::Redrawn => {
-                    self.redecide(state, &observation);
-                    continue;
+            // Jev's pick when it was asked again on this page is the decision here: asking once more would only ask
+            // the same question without what went wrong.
+            let picked = state
+                .picked
+                .take()
+                .filter(|(key, _)| *key == state_key(&observation))
+                .map(|(_, picked)| picked)
+                .filter(|picked| {
+                    picked.target.as_ref().is_none_or(|target| observation.controls.iter().any(|c| c.id == target.id))
+                });
+            let mut decision = match picked {
+                Some(picked) => picked,
+                None => {
+                    let context = self.context(state, secrets, check_login, fresh)?;
+                    let redecided = state.redecided;
+                    let deciding = self.decide_looking(state, &observation, &context);
+                    let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
+                    let Watched::Done(decision) = decided else {
+                        self.redecide(state, &observation);
+                        continue;
+                    };
+                    // Only an answered decision has asked the page's sign-in and bot questions; a dropped one asked
+                    // nothing.
+                    state.last_page = Some(page);
+                    decision
                 }
             };
-            // Only an answered decision has asked the page's sign-in and bot questions; a dropped one asked nothing.
-            state.last_page = Some(page);
+            let mut decided_by = Decider::Jev;
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
             if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
@@ -229,25 +197,22 @@ impl Agent {
                     .into());
                 }
                 let plan = state.await_plan().await?;
+                state.passed_wall = Some(raw.url.clone());
                 if !access_inspection(&plan) {
-                    if Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await? {
-                        continue;
-                    }
-                } else {
-                    state.passed_wall = Some(raw.url.clone());
-                    // A task inspecting an access boundary needs its observed wall read and verified, not passed.
-                    decision = code_decision(Operation::Read, None);
+                    Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await?;
+                    continue;
                 }
+                // A task inspecting an access boundary needs its observed wall read and verified, not passed.
+                decision = code_decision(Operation::Read, None);
+                decided_by = Decider::Code;
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
-            let mut decided_by = Decider::Jev;
-            if !state.open_answer_outputs.is_empty() || uncertain || !not_acting(decision.operation) {
-                let usable = without_failed_links(state, &observation);
-                if let Some(directed) = follow_recovery(state, &usable, &decision, uncertain) {
-                    (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
-                }
+            if (!state.open_answer_outputs.is_empty() || uncertain || !not_acting(decision.operation))
+                && let Some(directed) = follow_recovery(state, &observation, &decision, uncertain)
+            {
+                (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
             }
-            if Box::pin(self.read_before_interaction(state, &observation, &decision, decided_by)).await? {
+            if Box::pin(self.read_before_interaction(state, &observation, &decision)).await? {
                 let done = state.ready_plan.as_ref().is_some_and(|plan| {
                     lookup(plan) && state.open_answer_outputs.is_empty() && answered(plan, &state.notes)
                 });
@@ -256,7 +221,7 @@ impl Agent {
                 }
                 // The read answered a lookup, and deciding again on the same page only arrived at DONE: a shortlist and
                 // a decision, 1 to 2s, in 11 of 138 0.5.7 runs. `finish` still judges whether DONE holds.
-                (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Llm);
+                (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Code);
             }
             let pager = decision.operation == Operation::Click
                 && decision.target.as_ref().is_some_and(fastbrowse_core::page::pager_link);
@@ -265,21 +230,15 @@ impl Agent {
             if decision.operation == Operation::Click
                 && let Some(plan) = &plan
             {
-                // A lookup has nothing left to do once it is answered: with the cheapest flight read, Jev went on to
-                // click "Select flight", which the page covered. A click recovery directed stands, so a DONE the
-                // verifier refused is not asked again.
-                if (pager || (lookup(plan) && decided_by == Decider::Jev))
-                    && state.open_answer_outputs.is_empty()
-                    && answered(plan, &state.notes)
-                {
+                if pager && state.open_answer_outputs.is_empty() && answered(plan, &state.notes) {
                     // Everything asked to be found is evidenced, so another page is wandering. DONE is judged again by
                     // `finish`, which carries on if it does not hold.
-                    (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Llm);
+                    (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Code);
                 } else if pager && !state.read_here && unread(plan, &state.notes) {
                     // Turning the page of a list nobody has read loses that page. Read here first, which also tells
                     // code whether the list goes on.
                     decision = Decision { operation: Operation::Read, target: None, ..decision };
-                    uncertain = false;
+                    (uncertain, decided_by) = (false, Decider::Code);
                 }
             }
             if uncertain && state.ready_plan.is_none() {
@@ -319,7 +278,9 @@ impl Agent {
                     let held = state.directed.take();
                     let recoveries = state.recoveries;
                     let options = StepOptions { capture, ..StepOptions::default() };
-                    if !Box::pin(self.step(state, &observation, &reading, decided_by, options)).await? {
+                    // A DONE that still owes a read is read by rule; a READ is its decider's.
+                    let by = if decision.operation == Operation::Read { decided_by } else { Decider::Code };
+                    if !Box::pin(self.step(state, &observation, &reading, by, options)).await? {
                         if !(lookup(&plan)
                             && state.open_answer_outputs.is_empty()
                             && answered(&plan, &state.notes)
@@ -344,7 +305,7 @@ impl Agent {
                         };
                         let Some(directed) = directed else {
                             let reason = read_exhausted(state);
-                            Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
+                            Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
                             continue;
                         };
                         (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
@@ -356,11 +317,22 @@ impl Agent {
             }
             // The confidence gate exists to stop the agent acting on a page it does not understand. READ and DONE do
             // not act: a read changes nothing, and DONE is judged again by `finish`.
-            if decision.operation == Operation::Escalate
-                || (uncertain && !not_acting(decision.operation) && !try_unsure(state, &observation, &decision))
-            {
+            if decision.operation == Operation::Escalate || (uncertain && !not_acting(decision.operation)) {
                 let reason = format!("uncertain next step ({:.2})", decision.confidence());
                 Box::pin(self.consult(state, &observation, &reason)).await?;
+                continue;
+            }
+            // An action that changed nothing from this page goes to recovery before it is taken again.
+            if !not_acting(decision.operation)
+                && !decision.directed
+                && state.idle.contains(&signature(&decision, &observation))
+            {
+                let what = decision_label(&decision).map_or_else(
+                    || decision.operation.to_string(),
+                    |label| format!("{} {}", decision.operation, text::repr(&label)),
+                );
+                let reason = self.redact(&format!("{what} changed nothing the last time it was taken from this page"));
+                Box::pin(self.recover(state, &observation, &reason, Status::Stuck, withheld(&decision))).await?;
                 continue;
             }
             if decision.operation == Operation::Done {
@@ -375,13 +347,14 @@ impl Agent {
                 }
                 if Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await? {
                     let reason = read_exhausted(state);
-                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck)).await?;
+                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
                 }
                 Ok(())
             };
             match acted.await {
                 Err(Flow::Unsure(unsure)) => {
-                    Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as)).await?;
+                    let left_out = withheld(&decision);
+                    Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as, left_out)).await?;
                 }
                 other => other?,
             }
@@ -621,7 +594,9 @@ impl Agent {
             && let Some(link) = link_key(observation, target)
             && let Some(failure) = state.failed_links.get(&link)
         {
-            return Err(failure.stop().into());
+            return Err(
+                Unsure::new(format!("{} failed before: {}", text::repr(&target.label), failure.message())).into()
+            );
         }
         let stale_link = decision.target.as_ref().and_then(|target| stale_link_key(observation, target));
         if decision.operation == Operation::Click
@@ -691,7 +666,7 @@ impl Agent {
                 None => {
                     let redecided = state.redecided;
                     let target = decision.target.as_ref().map(|target| target.id.clone());
-                    let building = self.action(state, observation, decision, options.gate);
+                    let building = self.action(state, observation, decision, decided_by, options.gate);
                     match self.unless_redrawn(redecided, building, observation, target.as_deref()).await? {
                         Watched::Done(action) => action,
                         Watched::Redrawn => {
@@ -733,6 +708,13 @@ impl Agent {
                 && let Some(retried) = self.act_on_twin(&action, observation, target).await?
             {
                 result = retried;
+            }
+            if result.outcome == StepOutcome::Covered
+                && action.operation == Operation::Click
+                && let Some(target) = &decision.target
+                && let Some(clicked) = self.click_where_seen(state, &raw, target).await?
+            {
+                result = clicked;
             }
             if action.operation == Operation::Click
                 && let Some(stale) = &stale_link
@@ -780,7 +762,6 @@ impl Agent {
                 typed = Some(if action.secret { "<secret>".to_string() } else { self.mask(text) });
             }
             changed = result.page_changed;
-            state.moved_by_action = result.outcome == StepOutcome::Executed && result.moved;
             if result.outcome == StepOutcome::Executed {
                 let typing = matches!(decision.operation, Operation::Fill | Operation::Select) && !changed;
                 let here = seen(observation);
@@ -904,12 +885,16 @@ impl Agent {
         if progressed {
             state.unchanged = 0;
             state.hint = None;
+            state.idle.clear();
         } else {
             state.unchanged += 1;
+            if decision.operation != Operation::Read && act.outcome != StepOutcome::Stale {
+                state.idle.insert(signature(decision, observation));
+            }
         }
         if state.unchanged >= self.config.stall.unchanged_actions {
             let reason = format!("no_progress ({})", state.unchanged);
-            Box::pin(self.recover(state, observation, &reason, Status::Stuck)).await?;
+            Box::pin(self.recover(state, observation, &reason, Status::Stuck, withheld(decision))).await?;
             state.form_continues = false;
         }
         Ok(false)
@@ -1023,47 +1008,6 @@ impl Agent {
         }
     }
 
-    /// Set whether the run is on the guess from the history entry the page is.
-    ///
-    /// Only an address the run built is a guess, and a page leaves it only by a move the run can show it made. See the
-    /// table on `Agent._note_lineage` in `agent.py`.
-    pub(super) fn note_lineage(state: &mut RunState, observation: &Observation) {
-        let last = state.history.last();
-        let executed = last.is_some_and(|entry| entry.outcome == StepOutcome::Executed);
-        let address = fastbrowse_core::addresses::search_address(&observation.url);
-        let built: HashSet<String> =
-            state.invented.iter().map(|url| fastbrowse_core::addresses::search_address(url)).collect();
-        // Only a move the action itself made is the site's answer. The same address again, reached through the site's
-        // controls, is the guess resubmitted, not a new search.
-        let caused = std::mem::take(&mut state.moved_by_action);
-        let last_operation = last.and_then(|entry| entry.operation);
-        let site = executed && last_operation.is_some_and(site_action) && caused && !built.contains(&address);
-        let entry = observation.history_entry.clone();
-        match entry.as_ref().and_then(|entry| state.lineage.entries.get(entry).copied()) {
-            Some(lineage) => {
-                let moved = state.lineage.entry_addresses.get(entry.as_ref().expect("matched")) != Some(&address);
-                state.guessing = if site && moved { false } else { lineage };
-            }
-            None => {
-                if executed && last_operation == Some(Operation::Navigate) {
-                    // A redirect is the same navigation: what the run asked for decides, as well as where it landed.
-                    let asked = last.and_then(|entry| entry.target.clone()).unwrap_or_default();
-                    state.guessing =
-                        built.contains(&address) || built.contains(&fastbrowse_core::addresses::search_address(&asked));
-                } else if executed && last_operation == Some(Operation::Back) {
-                    state.guessing = built.contains(&address);
-                } else if site {
-                    state.guessing = false;
-                }
-            }
-        }
-        if let Some(entry) = entry {
-            state.lineage.entries.insert(entry.clone(), state.guessing);
-            state.lineage.entry_addresses.insert(entry, address.clone());
-        }
-        state.lineage.set_address(address, state.guessing);
-    }
-
     /// Record on the last action what it did, which the next choice and recovery both read.
     pub(super) fn note_effect(&self, state: &mut RunState, observation: &Observation) {
         if let Some(candidate) = state.transaction_candidates.last_mut()
@@ -1072,35 +1016,11 @@ impl Agent {
             candidate.landed_url = Some(observation.url.clone());
             candidate.landed_status = observation.response_status;
         }
-        Agent::note_lineage(state, observation);
         // An error document has the requested address too, but never proves the destination loaded.
         if observation.response_status.is_some_and(|status| status >= 400) {
             state.visited.shift_remove(&observation.url);
         } else {
             state.visited.insert(observation.url.clone(), ());
-            for control in &observation.controls {
-                // External display hrefs omit their scheme and query, so they cannot be replayed as destinations.
-                let Some(href) = &control.href else { continue };
-                if control.role == "link"
-                    && control.frame_id.is_none()
-                    && !href.is_empty()
-                    && (href.starts_with('/') || href.starts_with("http://") || href.starts_with("https://"))
-                    && control.operations.contains(&Operation::Click)
-                {
-                    let Some(url) = join(&observation.url, href) else { continue };
-                    if matches!(scheme_of(&url).as_str(), "http" | "https") {
-                        state.observed_links.insert(
-                            url.clone(),
-                            super::state::ObservedLink {
-                                source: observation.url.clone(),
-                                title: observation.title.clone(),
-                                label: control.label.clone(),
-                                url,
-                            },
-                        );
-                    }
-                }
-            }
         }
         let link = state.pending_link.take();
         if let Some(status) = observation.response_status {
@@ -1215,6 +1135,36 @@ impl Agent {
             blocks,
             ..capture.clone()
         })
+    }
+
+    /// The viewport for Jev's action decision, on a route that takes images and only within the sizes it accepts.
+    /// Jev reads the page as text first, and sees it only when that leaves its pick under the bar an action is held
+    /// to: a second look costs less than the LLM recovery the unsure pick would go to.
+    pub(super) async fn decide_looking(
+        &self,
+        state: &RunState,
+        observation: &Observation,
+        context: &StepContext,
+    ) -> Step<Decision> {
+        let (ledger, cache, trace) = (Some(&*state.ledger), Some(&state.relevance_cache), &self.trace);
+        let read = decide(&*self.jev, observation, context, &self.config, ledger, cache, trace).await?;
+        if read.confidence() >= self.config.thresholds.recover_below {
+            return Ok(read);
+        }
+        let Some(png) = self.viewport().await? else { return Ok(read) };
+        let mut seen = context.clone();
+        seen.screenshot = Some(png);
+        let mut looked = decide(&*self.jev, observation, &seen, &self.config, ledger, cache, trace).await?;
+        looked.cost = read.cost.into_iter().chain(looked.cost).collect();
+        looked.input_tokens += read.input_tokens;
+        Ok(looked)
+    }
+
+    pub(super) async fn viewport(&self) -> Step<Option<Vec<u8>>> {
+        if !self.jev.profile().images {
+            return Ok(None);
+        }
+        Ok(self.screenshots().await?.into_iter().find(|png| jev_takes_png(png)))
     }
 
     /// No image while a secret shows as page text: pixels cannot be masked like text. Typed fields are masked by the

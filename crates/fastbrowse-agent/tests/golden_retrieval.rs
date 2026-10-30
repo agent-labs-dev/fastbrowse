@@ -147,7 +147,7 @@ fn replay(case: &Value) -> Result<(), String> {
         "filter_tallies" => {
             let readers: Vec<TallyReader> = parse(&args["readers"]);
             let ids = strings(&args["requirement_ids"]);
-            match block_on(filter_tallies(&jev, &capture(), &readers, &ids, &tokens, ledger.as_ref(), &trace)) {
+            match block_on(filter_tallies(&jev, &llm, &capture(), &readers, &ids, &tokens, ledger.as_ref(), &trace)) {
                 Ok(found) => json!({"result": found.as_ref().map(read_outcome)}),
                 Err(error) => error_outcome(&error),
             }
@@ -176,18 +176,6 @@ fn replay(case: &Value) -> Result<(), String> {
         "draft_answer" => {
             let plan: Plan = parse(&args["plan"]);
             json!({"result": draft_answer(&plan, notes.as_ref().unwrap()).map(|a| a.dump())})
-        }
-        "transaction_check_question" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let question =
-                transaction_check_question(&composed, notes.as_ref().unwrap(), &strings(&args["ids"]), &tokens);
-            json!({"result": question.map(|q| q.dump())})
-        }
-        "claim_check_questions" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let check = args.get("check_omission").and_then(Value::as_bool).unwrap_or(true);
-            let checks = strings(args.get("answer_checks").unwrap_or(&Value::Null));
-            outcome(claim_check_questions(&composed, notes.as_ref().unwrap(), &tokens, check, &checks))
         }
         "field_question" => {
             let candidates: Vec<Candidate> = parse(&args["candidates"]);
@@ -246,7 +234,7 @@ fn replay(case: &Value) -> Result<(), String> {
                 args["task"].as_str().unwrap(),
                 &capture(),
                 &fields(&args["fields"]),
-                args.get("max_chars").and_then(Value::as_i64).unwrap_or(retrieval::READ_CHUNK_CHARS),
+                args.get("max_chars").and_then(Value::as_i64),
                 &tokens,
                 ledger.as_ref(),
             ));
@@ -298,8 +286,8 @@ fn replay(case: &Value) -> Result<(), String> {
                     .get("jev")
                     .filter(|j| !j.is_null())
                     .map(|_| &jev as &dyn fastbrowse_core::decision::DecisionClient),
+                context_question: None,
                 requirements: opt(args, "requirements").unwrap_or_default(),
-                notice: args.get("notice").and_then(Value::as_str).unwrap_or("").to_string(),
                 continuing: strings(args.get("continuing").unwrap_or(&Value::Null)),
                 incomplete: strings(args.get("incomplete").unwrap_or(&Value::Null)),
                 records_only: flag(args, "records_only"),
@@ -309,7 +297,6 @@ fn replay(case: &Value) -> Result<(), String> {
                 preserve_collections: flag(args, "preserve_collections"),
                 field_outputs: flag(args, "field_outputs"),
                 targets: opt(args, "targets"),
-                skip_order_shortcuts: strings(args.get("_skip_order_shortcuts").unwrap_or(&Value::Null)),
                 trace: trace.clone(),
             };
             let capture = capture();
