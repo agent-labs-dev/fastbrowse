@@ -18,6 +18,10 @@ Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser agai
 browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
+`internal-hosted` covers the 52 tasks both agents run, the navigation tasks included, read on the hosted agent's
+final page through its browser; figures approved at 46 or 47 tasks still read. The official suites accept any
+positive repeat count: every task and repeat is one row with its upstream score kept as the upstream defines it,
+and a task's figure is the mean of its repeats' scores.
 
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose

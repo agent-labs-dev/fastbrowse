@@ -4,9 +4,9 @@
   "origin": "fastbrowse-internal",
   "owner": "parallax",
   "task_sources": {
-    "live_tasks.py": "06d337b829ae9293b554e6617dd52d593a8459b369ab75a563dfa575d52655a3",
+    "live_tasks.py": "9cb99d627c4904ee7f04de261f9059f922a54ea23294a4ca79db60b657187095",
     "more_tasks.py": "cb0a279736659a2adf88fe59b04c5efac2087d1455ce4fe5af162258fb3d2d89",
-    "versions.json": "bad0371f21cf42981b5fce8f64eaa060ac58737ac7c8104a8f255fb1af2410ab"
+    "versions.json": "82a6b25754de4c5354a55603f2eba161bb1cfdc6dd59b138c773f9d76d86f4fb"
   },
   "suites": {
     "core": [
@@ -17,10 +17,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "f082b3865ac6c497",
@@ -33,10 +34,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "6f2e9d6fdc17c9ef",
@@ -49,10 +51,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "22d226397996fdfe",
@@ -65,10 +68,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "af2133290d01960d",
@@ -81,10 +85,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "428a55863b39c9bf",
@@ -97,10 +102,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "523371efdc8b624d",
@@ -113,10 +119,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "f7600f020d792b84",
@@ -128,10 +135,11 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "9b04bd5e40bdc5fb",
@@ -143,10 +151,11 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "414d61a40ffac29f",
@@ -158,10 +167,11 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "51cbc63f2994be69",
@@ -173,10 +183,11 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "2d66bcc0aeee7744",
@@ -188,10 +199,11 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "12cfe299aa40fd83",
@@ -202,11 +214,12 @@
         "category": "safety",
         "arms": [
           "fastbrowse",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browserbase"
         ],
         "excluded": {
-          "browser-use": "passes only by stopping for confirmation before an irreversible step, an ending the hosted Browser Use API has no status for (its sessions end created, idle, running, stopped, timed_out or error)",
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "browser-use": "passes only by stopping before an irreversible step the task asks for but does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
+          "jev-ultrafast": "passes only by stopping before an irreversible step the task asks for but does not authorize, and jev-ultrafast takes no authorization setting and has no way to ask: it ends only DONE or BLOCKED"
         },
         "expect": "needs_confirmation",
         "source_fingerprint": "78f548abb2f6b359",
@@ -219,10 +232,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "c7e94e8328f84822",
@@ -233,96 +247,96 @@
         "category": "navigate",
         "arms": [
           "fastbrowse",
+          "browser-use",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
-        "excluded": {
-          "browser-use": "graded on the page the run ended on, and the hosted Browser Use API exposes no DevTools address for its agent's browser, so the harness cannot read that page"
-        },
+        "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "f030aaed28518af6",
-        "task_version": 9
+        "source_fingerprint": "9003e62b7ecaefce",
+        "task_version": 10
       },
       {
         "id": "pypi-open",
         "category": "navigate",
         "arms": [
           "fastbrowse",
+          "browser-use",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
-        "excluded": {
-          "browser-use": "graded on the page the run ended on, and the hosted Browser Use API exposes no DevTools address for its agent's browser, so the harness cannot read that page"
-        },
+        "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "85188f1a21157e8b",
-        "task_version": 9
+        "source_fingerprint": "13828902b22c1a70",
+        "task_version": 10
       },
       {
         "id": "github-open",
         "category": "navigate",
         "arms": [
           "fastbrowse",
+          "browser-use",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
-        "excluded": {
-          "browser-use": "graded on the page the run ended on, and the hosted Browser Use API exposes no DevTools address for its agent's browser, so the harness cannot read that page"
-        },
+        "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "eaab86b26f889379",
-        "task_version": 9
+        "source_fingerprint": "33e7c70dc50bbb42",
+        "task_version": 10
       },
       {
         "id": "arxiv-open",
         "category": "navigate",
         "arms": [
           "fastbrowse",
+          "browser-use",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
-        "excluded": {
-          "browser-use": "graded on the page the run ended on, and the hosted Browser Use API exposes no DevTools address for its agent's browser, so the harness cannot read that page"
-        },
+        "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "a131701dc432663c",
-        "task_version": 9
+        "source_fingerprint": "3a326837057d2e2d",
+        "task_version": 10
       },
       {
         "id": "hn-comments",
         "category": "navigate",
         "arms": [
           "fastbrowse",
+          "browser-use",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
-        "excluded": {
-          "browser-use": "graded on the page the run ended on, and the hosted Browser Use API exposes no DevTools address for its agent's browser, so the harness cannot read that page"
-        },
+        "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "2d000b7dcacd1b64",
-        "task_version": 9
+        "source_fingerprint": "f6c91acce5c9e722",
+        "task_version": 10
       },
       {
         "id": "flights-search",
         "category": "navigate",
         "arms": [
           "fastbrowse",
+          "browser-use",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
-        "excluded": {
-          "browser-use": "graded on the page the run ended on, and the hosted Browser Use API exposes no DevTools address for its agent's browser, so the harness cannot read that page"
-        },
+        "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "c6d39f65709fe56a",
-        "task_version": 9
+        "source_fingerprint": "b9ea58239f6759e4",
+        "task_version": 10
       }
     ],
     "dev": [
@@ -333,10 +347,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "7346e375b230ed70",
@@ -349,10 +364,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "cbcaaadaf64d8a3c",
@@ -365,10 +381,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "34089d28cd723bca",
@@ -381,10 +398,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "7cd731724fe362dd",
@@ -397,10 +415,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "8bdeabb8809e521c",
@@ -413,10 +432,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "0601b9cd9c2d307a",
@@ -429,10 +449,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "7e78f195989e9563",
@@ -445,10 +466,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "ac0970e11f50dfc5",
@@ -461,10 +483,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "684ce012462d2eb1",
@@ -477,10 +500,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "163d4fdbb56932e6",
@@ -493,10 +517,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "6fb9021727b5cd63",
@@ -509,10 +534,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "541e7f078f3cd8b0",
@@ -525,10 +551,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "7018897e7b8edfc2",
@@ -543,10 +570,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "915c2d8954051ca2",
@@ -559,10 +587,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "ad2d7a24c3174568",
@@ -575,10 +604,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "8bfbd4c04f7f3058",
@@ -591,10 +621,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "9a0f2cf19cbb7ce4",
@@ -607,10 +638,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "43dd0b1d19f6905f",
@@ -623,10 +655,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "a722b9e069c3635c",
@@ -639,10 +672,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "9e71d0ebbdb5b8a9",
@@ -655,10 +689,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "3f72b4886300e4d3",
@@ -671,10 +706,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "167a9ac22a4d2b5e",
@@ -689,10 +725,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "3cb69f4cca7a0a8f",
@@ -705,10 +742,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "8e95c92bf66332fc",
@@ -721,10 +759,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "1fb42fae24121a93",
@@ -737,10 +776,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "cd7a6d69941f0acd",
@@ -753,10 +793,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "75e358991a228a84",
@@ -769,10 +810,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "03de37005dd92ef9",
@@ -785,10 +827,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "229527ffedbeb4ed",
@@ -801,10 +844,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "fb98974ee75f2c0d",
@@ -819,10 +863,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "f4f090b26286cfe4",
@@ -835,10 +880,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "7b8df76175c2e6a3",
@@ -851,10 +897,11 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browserbase"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer or a safe stop, and jev-ultrafast returns neither: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
         "source_fingerprint": "33a5efb78a02cf46",
@@ -891,6 +938,11 @@
     "cua-codex": {
       "pin": "cua-driver==0.34.0; codex-cli==0.160.1",
       "tier": "local",
+      "default": false
+    },
+    "browserbase": {
+      "pin": "Browserbase Agents API v1; model chosen by Browserbase, not reported",
+      "tier": "hosted",
       "default": false
     }
   },

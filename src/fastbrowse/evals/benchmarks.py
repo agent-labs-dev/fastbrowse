@@ -72,7 +72,9 @@ class Row(PublicModel):
 
 class Coverage(NamedTuple):
     counts: frozenset[int]
-    repeats: int
+    repeats: int | None
+    """The approved repeat count, or None where any positive count is approved: an official suite's figure per task
+    is the mean of its repeats' upstream scores, each kept as the upstream defines it."""
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
     arms: tuple[Arm, ...]
     """The measured arms, the Fastbrowse arm first: it is the one whose figures the regression check guards."""
@@ -80,14 +82,15 @@ class Coverage(NamedTuple):
 
 # Each count the approved protocol has had. Retiring stretch-wizard-correction, whose site left DNS, took one task
 # from the internal catalog; figures approved before then keep their count. A new candidate is held to the exact
-# current catalog by `check_catalog`.
+# current catalog by `check_catalog`. The hosted group grew to 52 when the hosted agent's final page became readable,
+# so it runs the six navigation tasks too.
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
-    "internal-hosted": Coverage(frozenset({46, 47}), 3, "task-success", ("fastbrowse", "browser-use")),
+    "internal-hosted": Coverage(frozenset({46, 47, 52}), 3, "task-success", ("fastbrowse", "browser-use")),
     "internal-ultrafast": Coverage(frozenset({6}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
-    "bu-bench": Coverage(frozenset({200}), 1, "weighted-rubric", ("fastbrowse",)),
-    "online-mind2web": Coverage(frozenset({300}), 1, "full-task-success", ("fastbrowse",)),
+    "bu-bench": Coverage(frozenset({200}), None, "weighted-rubric", ("fastbrowse",)),
+    "online-mind2web": Coverage(frozenset({300}), None, "full-task-success", ("fastbrowse",)),
 }
 POOL_ULTRAFAST_SCHEMA = 5
 """From this schema the Ultrafast comparison is fastbrowse with its own browser pool against `jev-ultrafast`: the
@@ -117,7 +120,7 @@ class Group(PublicModel):
         spec = COVERAGE[self.id]
         if len(self.task_ids) not in spec.counts or len(set(self.task_ids)) != len(self.task_ids):
             raise ValueError("task coverage differs from the approved full protocol")
-        if self.repeats != spec.repeats or self.metric != spec.metric or not self.limits:
+        if spec.repeats not in (None, self.repeats) or self.metric != spec.metric or not self.limits:
             raise ValueError("repeats, metric and recorded limits are required")
         if self.metric != "weighted-rubric" and any(r.score not in {0, 1} for r in self.rows):
             raise ValueError("binary source grades cannot contain partial scores")
