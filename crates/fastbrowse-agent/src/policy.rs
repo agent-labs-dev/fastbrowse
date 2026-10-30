@@ -183,6 +183,9 @@ pub struct StepContext {
     /// What code knows about this page that bears on reading it, such as that it changed after it was read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub page_facts: Vec<String>,
+    /// The page's own address when a site failure that can clear stands on it, offered to navigate to as a reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reload: Option<String>,
     /// The viewport as a PNG, given to a route that takes images.
     #[serde(skip)]
     pub screenshot: Option<Vec<u8>>,
@@ -218,6 +221,7 @@ impl StepContext {
             withheld: Vec::new(),
             no_value_fields: Vec::new(),
             page_facts: Vec::new(),
+            reload: None,
             screenshot: None,
         }
     }
@@ -240,6 +244,9 @@ pub struct Decision {
     pub input_tokens: i64,
     #[serde(default)]
     pub bot_check: Option<f64>,
+    /// Jev's probability that the page reports the site failed to deliver what was asked.
+    #[serde(default)]
+    pub site_failure: Option<f64>,
     #[serde(default = "absent")]
     pub read_assessment: ReadAssessment,
     /// Recovery's action on this decision's page. Its confidence scores the action Jev chose instead, so it says
@@ -786,13 +793,16 @@ pub fn build_request(
     let indexed = index_controls(controls);
     // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls
     // has no form to lose, and a run asked again because it is stuck may need to start over.
-    let urls = navigation_urls(
+    let mut urls = navigation_urls(
         &context.task,
         &observation.url,
         context.start_url.as_deref(),
         context.start_landing_url.as_deref(),
         observation.controls.is_empty() || context.problem.is_some(),
     );
+    if let Some(reload) = context.reload.as_ref().filter(|url| !urls.contains(url)) {
+        urls.push(reload.clone());
+    }
     let offered = offered_operations(observation, &indexed, context, &urls);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     questions.insert(
@@ -874,7 +884,7 @@ pub fn build_request(
     let mut navigation_groups: Vec<Vec<String>> = Vec::new();
     if offered.contains(&Operation::Navigate) {
         let instructions = format!(
-            "{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
+            "{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement, or this page's own address to reload it after a site failure. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
         );
         if urls.len() > limit {
             navigation_groups = chunks(&urls, size);
@@ -889,6 +899,14 @@ pub fn build_request(
     if context.check_login {
         questions.insert("login_required".into(), login_question());
     }
+    questions.insert(
+        "site_failure".into(),
+        noul(
+            "Does this page report that the site failed to deliver what was asked, instead of showing it? An error message in place of results, a request the site says went wrong, a temporary outage, rate limit or maintenance notice, a browser error page, or a load that has not finished across steps are failures, even when the page also shows an empty result such as no matches. An ordinary empty result the site reports as an answer, a form, or a page still showing its content is not.",
+            "The page reports that the site failed or has not finished delivering the content.",
+            "The page shows the site's content or its ordinary answer, empty or not.",
+        ),
+    );
     if context.check_bot {
         questions.insert(
             "bot_check".into(),
@@ -1045,6 +1063,7 @@ async fn evaluate(
         cost,
         input_tokens: tokens,
         bot_check: noul_probability(&evaluation, "bot_check"),
+        site_failure: noul_probability(&evaluation, "site_failure"),
         read_assessment,
         directed: false,
         destination,

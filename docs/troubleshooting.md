@@ -90,6 +90,11 @@ be fine, and the same run later may pass.
 - Before the first step, the start page never loaded, or Chrome reported a dropped, refused or empty
   connection. A name that does not resolve is not counted here, since it can be a mistyped address.
 - The site answered HTTP 408, 419, 429 or a 5xx status, and recovery found no way on.
+- Mid-run, the browser could not open an address the run chose, after its own retries:
+  `Could not complete the task after opening <url> failed in this browser session: <error>.`
+- Jev judged that the page reports the site failed, such as an error shown in place of search results, a
+  maintenance notice or a load that never finished, and reloading and recovery found no way past it:
+  `Could not complete the task after the page at <url> reported that the site failed to deliver what was asked.`
 - A browser command went unanswered. One that stays unanswered for 120 seconds ends the run, even if the
   browser still answers health checks, and the error says the page did not answer or the browser stopped
   answering.

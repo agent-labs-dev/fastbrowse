@@ -283,7 +283,7 @@ fn nth(script: &Value, n: usize) -> Option<&Value> {
 }
 
 /// Jev's answer from a case's `jev` script: `pick` names a choice per question key (a list is taken in turn), `pick`
-/// under `pick` any other choice, `nouls` a probability per noul and `noul` the rest, `confidence` the pick's. Asked
+/// under `pick` any other choice, `nouls` a probability per noul (a list is taken in turn) and `noul` the rest, `confidence` the pick's. Asked
 /// again with a problem, Jev escalates; the wall questions default to no.
 fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value]) -> Value {
     let asked_again = state.get("problem").is_some();
@@ -299,12 +299,12 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
     let mut answers = serde_json::Map::new();
     for (key, question) in questions.as_object().unwrap() {
         if question["type"] == "noul" {
-            let default = if matches!(key.as_str(), "login_required" | "bot_check") {
+            let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure") {
                 0.0
             } else {
                 script["noul"].as_f64().unwrap_or(0.0)
             };
-            let probability = script["nouls"][key].as_f64().unwrap_or(default);
+            let probability = nth(&script["nouls"][key], answered(key)).and_then(Value::as_f64).unwrap_or(default);
             answers.insert(key.clone(), serde_json::json!({"type": "noul", "probability": probability}));
             continue;
         }
@@ -529,4 +529,48 @@ async fn whole_loops_match_python() {
         out.push(b'\n');
         fs::write(path, out).unwrap();
     }
+}
+
+/// Transient site failures, each a scripted site run from its script alone and checked against what it must do: the
+/// status it ends with, the steps it must take in order, the address it ends on and the words its error must carry.
+#[tokio::test(start_paused = true)]
+async fn transient_site_failures_are_retried_and_never_answer() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/site_failures.json");
+    let cases: Vec<Value> = serde_json::from_str(&fs::read_to_string(path).expect("site_failures.json")).expect("JSON");
+    let mut failures = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().unwrap().to_string();
+        let expect = case["expect"].clone();
+        let ran = replay(case, Some(Arc::default())).await;
+        let outcome = &ran["outcome"];
+        let steps: Vec<String> = outcome["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| format!("{} {}", step["operation"].as_str().unwrap(), step["target"].as_str().unwrap_or("")))
+            .map(|step| step.trim().to_string())
+            .collect();
+        let ran = format!("{name}: {} after {steps:?}, error {}", outcome["status"], outcome["error"]);
+        if outcome["status"] != expect["status"] {
+            failures.push(format!("{ran}: expected {}", expect["status"]));
+        }
+        let mut taken = steps.iter();
+        for wanted in expect["steps"].as_array().into_iter().flatten() {
+            let wanted = wanted.as_str().unwrap();
+            if !taken.any(|step| step == wanted) {
+                failures.push(format!("{ran}: no {wanted:?} in order"));
+            }
+        }
+        if let Some(url) = expect["final_url"].as_str()
+            && outcome["final_url"] != url
+        {
+            failures.push(format!("{ran}: ended on {}, expected {url}", outcome["final_url"]));
+        }
+        if let Some(words) = expect["error"].as_str()
+            && !outcome["error"].as_str().unwrap_or_default().contains(words)
+        {
+            failures.push(format!("{ran}: error lacks {words:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }

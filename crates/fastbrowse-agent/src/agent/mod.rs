@@ -942,6 +942,7 @@ impl Agent {
                 .into_iter()
                 .collect(),
             page_facts,
+            reload: state.reload_target(&observation.url),
             screenshot: None,
         })
     }
@@ -970,6 +971,17 @@ impl Agent {
         }
         if helpers::unread_transaction(state) {
             facts.push("An action that may have committed a change has not had the page it led to read.".into());
+        }
+        if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.transient()) {
+            let stood = state.steps.len().saturating_sub(failure.since);
+            let mut fact = format!(
+                "The site failed: {} It has stood for {stood} steps. A failure is not the task's answer, and neither is an empty result shown beside it.",
+                failure.message()
+            );
+            if failure.url == observation.url {
+                fact += " This page's own address is offered to navigate to, which reloads it; a retry control the page offers, or another route, may also get past the failure.";
+            }
+            facts.push(fact);
         }
         facts
     }
