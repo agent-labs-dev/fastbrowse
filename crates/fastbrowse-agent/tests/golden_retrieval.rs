@@ -351,9 +351,11 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
     if let (Some(key), Some(ledger)) = (&ledger_param, &ledger) {
         let expected = &case["ledger_after"][key];
         let expected = expected.get("$ledger").unwrap_or(expected);
-        let actual = ledger_json(ledger);
-        if !expected.is_null() && actual != *expected {
-            problems.push(format!("ledger\n  rust:   {}\n  python: {}", clip(&actual), clip(expected)));
+        // Calls sent side by side bill in whichever order they finish, so the lines are compared as a multiset.
+        let actual = unordered_lines(ledger_json(ledger));
+        let expected = unordered_lines(expected.clone());
+        if !expected.is_null() && actual != expected {
+            problems.push(format!("ledger\n  rust:   {}\n  python: {}", clip(&actual), clip(&expected)));
         }
     }
     let events = trace.events();
@@ -379,15 +381,6 @@ fn sorted(mut state: Value) -> Value {
         owners.sort_by_key(|pair| pair[0].as_str().unwrap_or_default().to_string());
     }
     state
-}
-
-fn clip(value: &Value) -> String {
-    let text = value.to_string();
-    if text.len() > 3000 {
-        format!("{}...", &text[..text.char_indices().nth(3000).map_or(text.len(), |(i, _)| i)])
-    } else {
-        text
-    }
 }
 
 /// Cases whose Python outcome changes from one process to the next, so no fixed answer can match it.
