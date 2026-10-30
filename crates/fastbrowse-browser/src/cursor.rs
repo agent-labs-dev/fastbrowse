@@ -1,4 +1,4 @@
-//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver (`browser/cursor.py`).
+//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver.
 //!
 //! Cua Driver's `move_cursor` moves a synthetic overlay and leaves the user's pointer, focus and the browser alone
 //! (only `scope=desktop` would move the real pointer, which is never sent here). It is purely visual: the click
