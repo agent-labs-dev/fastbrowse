@@ -576,10 +576,11 @@ fn executable(path: &Path) -> bool {
 }
 
 fn session_name() -> Result<String, Failure> {
+    use data_encoding::HEXLOWER;
     use ring::rand::{SecureRandom, SystemRandom};
     let mut bytes = [0u8; 4];
     SystemRandom::new().fill(&mut bytes).map_err(|_| Failure::Random)?;
-    Ok(format!("fastbrowse-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+    Ok(format!("fastbrowse-{}", HEXLOWER.encode(&bytes)))
 }
 
 async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
