@@ -17,7 +17,7 @@ _SCHEMA = Path(__file__).parents[1] / "protocol" / "schema.json"
 
 
 class _AsWritten(GenerateJsonSchema):
-    """A model the server writes has every field in its JSON, a default included, unless `exclude_if` can leave it out."""
+    """A model the server writes has every field in its JSON, a default included, unless `exclude_if` leaves it out."""
 
     def field_is_required(
         self,
