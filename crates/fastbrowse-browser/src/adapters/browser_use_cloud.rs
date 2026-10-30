@@ -23,7 +23,6 @@ use tokio::task::JoinHandle;
 
 use crate::adapters::http::{self, Response};
 
-pub const API_V3: &str = "https://api.browser-use.com/api/v3";
 pub const API_V4: &str = "https://api.browser-use.com/api/v4";
 const API_ORIGIN: &str = "https://api.browser-use.com";
 /// https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
@@ -161,9 +160,6 @@ impl BrowserUseCloudBrowser {
         clock: Clock,
         sleep: Sleep,
     ) -> Result<Self, BrowserUseCloudError> {
-        // Only the V4 create call takes extensions, so a run that asks for none stays on the V3 path it was built
-        // on.
-        let root = if options.extensions.is_empty() { API_V3 } else { API_V4 };
         let mut body: Vec<(&str, Value)> = vec![("timeout", json!(options.timeout_minutes))];
         if !options.extensions.is_empty() {
             body.push(("extensionIds", json!(extension_ids(&options.extensions)?)));
@@ -174,6 +170,8 @@ impl BrowserUseCloudBrowser {
         if let Some(country) = &options.proxy_country {
             body.push(("proxyCountryCode", json!(country)));
         }
+        // The service's own CAPTCHA solver: its documented default, stated so a run never depends on that default.
+        body.push(("solveCaptchas", json!(true)));
         // A cloud profile is the remote counterpart of `LocalChrome.profile`: the browser starts with the cookies
         // the profile already holds, so a site signed into once stays signed in. Whoever runs the task never sees
         // those cookies, which is the point of naming a profile rather than typing a secret.
@@ -187,7 +185,7 @@ impl BrowserUseCloudBrowser {
             body.push(("browserScreenHeight", json!(height)));
         }
         let api = Api {
-            root: root.replacen(API_ORIGIN, origin, 1),
+            root: API_V4.replacen(API_ORIGIN, origin, 1),
             api_key: api_key.to_owned(),
             http_timeout: options.http_timeout,
             timeout_minutes: options.timeout_minutes,
@@ -780,7 +778,7 @@ mod tests {
         assert!(cloud.connection().is_err());
         let requests = server.requests();
         let paths: Vec<_> = requests.iter().map(|r| format!("{} {}", r.method, r.path)).collect();
-        assert_eq!(paths, ["POST /api/v3/browsers", "GET /json/version", "PATCH /api/v3/browsers/created"]);
+        assert_eq!(paths, ["POST /api/v4/browsers", "GET /json/version", "PATCH /api/v4/browsers/created"]);
         let keyed = |r: &Recorded| r.headers.iter().any(|(n, v)| n == "X-Browser-Use-API-Key" && v == "key");
         assert!(keyed(&requests[0]) && !keyed(&requests[1]) && keyed(&requests[2]));
         assert_eq!(requests[2].body, br#"{"action":"stop"}"#);
@@ -985,43 +983,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cloud_extensions_pick_the_api_version() {
-        for extensions in [vec![], vec![EXTENSION_A.to_owned(), EXTENSION_B.to_owned()]] {
-            let v4 = !extensions.is_empty();
-            let server = FakeServer::start(move |_, base| {
-                let cdp = if v4 { "wss://cdp.test/browser/created" } else { base };
-                reply(200, serde_json::json!({"id": "created", "cdpUrl": cdp, "webSocketDebuggerUrl": "ws://cdp.test"}))
-            })
-            .await;
-            let options = BrowserUseCloudOptions { extensions: extensions.clone(), ..Default::default() };
-            let mut cloud = cloud(&server, options, &Waits::default());
-            let connection = cloud.start().await.unwrap();
-            cloud.stop().await.unwrap();
-            assert_eq!(connection.cdp_url, if v4 { "wss://cdp.test/browser/created" } else { "ws://cdp.test" });
-            let requests = server.requests();
-            let version = if v4 { "/api/v4/" } else { "/api/v3/" };
-            assert!(requests.iter().filter(|r| r.method != "GET").all(|r| r.path.starts_with(version)));
-            let sent = requests[0].json();
-            assert_eq!(sent.get("extensionIds"), v4.then(|| serde_json::json!(extensions)).as_ref());
-            assert_eq!(methods(&server), if v4 { vec!["POST", "PATCH"] } else { vec!["POST", "GET", "PATCH"] });
-        }
+    async fn cloud_extensions_go_on_the_create_call() {
+        let server = FakeServer::start(move |_, _| {
+            reply(200, serde_json::json!({"id": "created", "cdpUrl": "wss://cdp.test/browser/created"}))
+        })
+        .await;
+        let extensions = vec![EXTENSION_A.to_owned(), EXTENSION_B.to_owned()];
+        let options = BrowserUseCloudOptions { extensions: extensions.clone(), ..Default::default() };
+        let mut cloud = cloud(&server, options, &Waits::default());
+        let connection = cloud.start().await.unwrap();
+        cloud.stop().await.unwrap();
+        assert_eq!(connection.cdp_url, "wss://cdp.test/browser/created");
+        assert_eq!(server.requests()[0].json().get("extensionIds"), Some(&serde_json::json!(extensions)));
+        assert_eq!(methods(&server), ["POST", "PATCH"]);
     }
 
     #[tokio::test]
     async fn the_create_body_keeps_pythons_key_order() {
         let cases = [
-            (BrowserUseCloudOptions::default(), r#"{"timeout":15,"proxyCountryCode":"us"}"#),
+            (BrowserUseCloudOptions::default(), r#"{"timeout":15,"proxyCountryCode":"us","solveCaptchas":true}"#),
             (
                 BrowserUseCloudOptions {
                     timeout_minutes: 240,
                     profile: Some("profile-42".into()),
                     ..Default::default()
                 },
-                r#"{"timeout":240,"proxyCountryCode":"us","profileId":"profile-42"}"#,
+                r#"{"timeout":240,"proxyCountryCode":"us","solveCaptchas":true,"profileId":"profile-42"}"#,
             ),
             (
                 BrowserUseCloudOptions { allow_resizing: true, ..Default::default() },
-                r#"{"timeout":15,"allowResizing":true,"proxyCountryCode":"us"}"#,
+                r#"{"timeout":15,"allowResizing":true,"proxyCountryCode":"us","solveCaptchas":true}"#,
             ),
             (
                 BrowserUseCloudOptions {
@@ -1032,7 +1023,7 @@ mod tests {
                 },
                 concat!(
                     r#"{"timeout":15,"extensionIds":["6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"],"#,
-                    r#""browserScreenWidth":1280,"browserScreenHeight":900}"#,
+                    r#""solveCaptchas":true,"browserScreenWidth":1280,"browserScreenHeight":900}"#,
                 ),
             ),
         ];
