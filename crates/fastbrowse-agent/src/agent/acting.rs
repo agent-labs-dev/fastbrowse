@@ -118,7 +118,6 @@ impl Agent {
         observation: &Observation,
         decision: &Decision,
         decided_by: Decider,
-        gate: bool,
     ) -> Step<Action> {
         let target = decision.target.as_ref();
         match decision.operation {
@@ -132,21 +131,15 @@ impl Agent {
                 if self.reveals_text(&url) {
                     return Err(Stop::new(Status::NeedsInput, "navigation address contains a resolved secret").into());
                 }
-                if gate {
-                    self.gate_download(state, observation, decision, decided_by, &caller_link(&url)).await?;
-                    let irreversible = navigation_question(&state.task, &url);
-                    let requested = requested_question(&state.task, &format!("open the address {url}.\n"));
-                    self.gate_question(state, observation, decision, decided_by, &url, Some(irreversible), requested)
-                        .await?;
-                }
+                self.gate_download(state, observation, decision, decided_by, &caller_link(&url)).await?;
+                let irreversible = navigation_question(&state.task, &url);
+                let requested = requested_question(&state.task, &format!("open the address {url}.\n"));
+                self.gate_question(state, observation, decision, decided_by, &url, Some(irreversible), requested)
+                    .await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
-                // Only a pager link to another address goes ungated: it opens a page and commits nothing, so asking Jev
-                // would buy a call per page and nothing else.
-                if gate {
-                    self.gate_irreversible(state, observation, decision, decided_by).await?;
-                }
+                self.gate_irreversible(state, observation, decision, decided_by).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
             }
             Operation::Drag => {

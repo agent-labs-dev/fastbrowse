@@ -1820,10 +1820,10 @@ fn percent_decode(encoded: &str, charset: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&encoded[index + 1..index + 3], 16)
+            && let [high, low, ..] = bytes[index + 1..]
+            && let (Some(high), Some(low)) = (char::from(high).to_digit(16), char::from(low).to_digit(16))
         {
-            out.push(byte);
+            out.push((high * 16 + low) as u8);
             index += 3;
             continue;
         }
@@ -1995,6 +1995,12 @@ fn empty_window(target: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_percent_before_a_multibyte_character_is_kept() {
+        assert_eq!(percent_decode("100%\u{e9}t\u{e9}.pdf", "utf-8"), "100%\u{e9}t\u{e9}.pdf");
+        assert_eq!(percent_decode("a%20b%", "utf-8"), "a b%");
+    }
 
     #[test]
     fn downloads_are_told_by_disposition_or_type() {

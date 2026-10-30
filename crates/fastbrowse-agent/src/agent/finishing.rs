@@ -288,6 +288,7 @@ impl Agent {
         self.event("done_check", || {
             Map::from_iter([("verdict".into(), check.verdict.as_str().into()), ("unmet".into(), json!(check.unmet))])
         });
+        let mut until_failed = false;
         if check.verdict == DoneVerdict::Accept {
             let prepared = check.answer.clone();
             let result = Box::pin(self.conclude(state, output_schema, prepared, !partition)).await?;
@@ -299,6 +300,7 @@ impl Agent {
             if reached {
                 return Ok(Some(result));
             }
+            until_failed = true;
         }
         if partition {
             return Ok(Some(self.result(Some(state), &state.ledger.clone(), Status::Unverified, Outcome::default())));
@@ -310,9 +312,10 @@ impl Agent {
         let mut unmet: Vec<String> = check.unmet.iter().map(named).collect();
         unmet.extend(check.unanswered.iter().map(|key| format!("{} (Jev gave no answer)", named(key))));
         let joined = if unmet.is_empty() { "completion not confirmed".to_string() } else { unmet.join("; ") };
-        let reason = self.redact(&format!("DONE rejected: {joined}"));
+        let (reason, decided_by) = done_refusal(until_failed, &joined);
+        let reason = self.redact(&reason);
         rejected(state, &reason);
-        self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Jev).await?;
+        self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, decided_by).await?;
         Box::pin(self.count_progress(state, false, &fresh, DONE, Status::Stuck)).await?;
         Ok(None)
     }
@@ -578,6 +581,19 @@ impl Agent {
 }
 
 /// Record a rejected DONE in the history the next decision reads, so Jev sees what is still unmet.
+/// Why a DONE did not end the run, and who refused it: Jev's completion check, or the caller's `until`, which code ran
+/// after Jev accepted.
+fn done_refusal(until_failed: bool, unmet: &str) -> (String, Decider) {
+    if until_failed {
+        (
+            "The task's completion check passed, but the caller's until condition failed on this page.".into(),
+            Decider::Code,
+        )
+    } else {
+        (format!("DONE rejected: {unmet}"), Decider::Jev)
+    }
+}
+
 fn rejected(state: &mut RunState, reason: &str) {
     state.history.push(crate::policy::HistoryEntry {
         effect: Some(reason.to_string()),
@@ -608,5 +624,18 @@ impl Child {
         swap(&mut state.open_answer_outputs, &mut child.open_answer_outputs);
         swap(&mut state.rejected_answer_evidence, &mut child.rejected_answer_evidence);
         child
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a_failed_until_is_not_told_as_jevs_refusal() {
+        let (reason, decided_by) = done_refusal(true, "completion not confirmed");
+        assert!(reason.contains("until condition failed") && !reason.contains("DONE rejected"));
+        assert_eq!(decided_by, Decider::Code);
+        assert_eq!(done_refusal(false, "r1: x"), ("DONE rejected: r1: x".to_string(), Decider::Jev));
     }
 }

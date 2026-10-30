@@ -26,7 +26,8 @@ use serde_json::json;
 
 use super::Agent;
 use super::driving::edit_progress;
-use super::helpers::{answer_evidence, code_decision, follow_recovery, next_page_control, next_value, unread, visited};
+use super::helpers::{answer_evidence, follow_recovery, next_value, unread, visited};
+use super::reading::{ListRead, leaves_unread_page, list_links};
 use super::state::{Flow, RunState, Spawned, TransactionCandidate};
 use crate::memory::{Fact, Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
@@ -148,6 +149,27 @@ fn link(key: &str, label: &str, href: &str) -> Control {
     let mut control = Control::new(key, "link", label, [Operation::Click]);
     control.href = Some(href.into());
     control
+}
+
+fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
+    Decision {
+        operation,
+        url: None,
+        target_confidence: target.as_ref().map(|_| 1.0),
+        target,
+        tab_id: None,
+        operation_confidence: 1.0,
+        login_required: None,
+        offered_controls: 0,
+        reduction: crate::policy::Reduction::None,
+        cost: Vec::new(),
+        input_tokens: 0,
+        bot_check: None,
+        site_failure: None,
+        read_assessment: crate::policy::ReadAssessment::Absent,
+        directed: false,
+        destination: None,
+    }
 }
 
 /// A link the page marks `rel="next"`.
@@ -277,33 +299,6 @@ fn test_every_visited_address_is_shown_redacted() {
     assert_eq!(shown[1..], (0..5).map(|i| format!("https://a.test/{i}")).collect::<Vec<_>>());
 }
 
-#[test]
-fn test_the_next_page_of_a_list_is_one_link_to_another_address() {
-    for (controls, found) in [
-        (vec![pager("n", "Next \u{2192}", "/page/2/")], Some("n")),
-        (vec![pager("n", "next", "/c/mystery/page-2.html"), link("m", "Mystery", "/c/mystery/index.html")], Some("n")),
-        // A pager above and below the list is one next page.
-        (vec![pager("top", "\u{bb}", "/page/2/"), pager("bottom", "\u{bb}", "/page/2/")], Some("top")),
-        // Two different next pages is doubt, left to Jev.
-        (vec![pager("a", "Next", "/page/2/"), pager("b", "Next", "/other/2/")], None),
-        // A load-more button keeps the earlier records on the page, so reading again would count them twice.
-        (vec![button("Next")], None),
-        (vec![pager("n", "Next", "/list/")], None),
-        // A label alone is never read as a pager: Jev picks one the page does not mark.
-        (vec![link("n", "Next", "/page/2/")], None),
-    ] {
-        let control = next_page_control(&at("https://example.test/list/", &controls));
-        assert_eq!(control.as_ref().map(|c| c.id.as_str()), found, "{controls:?}");
-    }
-}
-
-#[test]
-fn test_a_pager_the_page_marks_rel_next_is_followed_whatever_its_label() {
-    // A pager drawn as an icon, or in another language, says so only in the markup.
-    let found = next_page_control(&at("https://example.test/list/", &[pager("n", "Weiter", "/page/2/")]));
-    assert_eq!(found.map(|c| c.id), Some("n".to_string()));
-}
-
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
 fn edit(value: &str, holds: Option<&str>, secret: bool, operation: Operation) -> (Decision, Action) {
     let target = Control { value: holds.map(String::from), ..Control::new("f", "textbox", "Name", [Operation::Fill]) };
@@ -338,19 +333,6 @@ fn test_a_secret_is_compared_by_the_length_the_page_reveals() {
 #[test]
 fn test_an_upload_is_judged_by_the_page_not_by_a_value() {
     assert_eq!(progress("a.pdf", None, false, Operation::Upload, &[]), None);
-}
-
-#[test]
-fn test_code_pager_never_follows_another_site_or_same_page() {
-    for href in ["https://other.test/list/2", "//other.test/list/2", "other.test/list/2", "#next"] {
-        assert!(next_page_control(&at("https://example.test/list/1", &[pager("n", "Next", href)])).is_none(), "{href}");
-    }
-}
-
-#[test]
-fn test_disabled_pager_is_not_followed() {
-    let disabled = Control { operations: Default::default(), ..pager("next", "Next", "/list/2") };
-    assert!(next_page_control(&at("https://example.test/list/1", &[disabled])).is_none());
 }
 
 #[test]
@@ -462,102 +444,7 @@ fn test_answer_evidence_tracks_promoted_context_without_turning_paraphrases_into
     assert!(notes.fact_requirements(&fact_id(&fact)).is_empty());
 }
 
-#[test]
-fn test_numeric_next_page_preserves_the_current_filters() {
-    for parameter in ["page", "pageno", "page_number"] {
-        let controls = [
-            link("previous", "1", &format!("/list?{parameter}=1&sort=weight")),
-            link("next", "3", &format!("/list?{parameter}=3&sort=weight")),
-            link("later", "4", &format!("/list?{parameter}=4&sort=weight")),
-            link("other_filter", "3", &format!("/list?{parameter}=3&sort=name")),
-        ];
-        let found = next_page_control(&at(&format!("https://example.test/list?{parameter}=2&sort=weight"), &controls));
-        assert_eq!(found.map(|c| c.id), Some("next".to_string()), "{parameter}");
-    }
-}
-
-#[test]
-fn test_numeric_next_page_rejects_ambiguous_or_changed_scope() {
-    let huge = format!("/list?page={}", "9".repeat(5000));
-    for (current, target, label) in [
-        ("/list?page=2", "/list?page=4", "4"),
-        ("/list?page=2", "/list?page=3", "4"),
-        ("/list", "/list?page=3", "3"),
-        ("/list?page=2", "/other?page=3", "3"),
-        ("/list?page=2", "https://other.test/list?page=3", "3"),
-        ("/list?page=2&filter=", "/list?page=3", "3"),
-        ("/list?page=2&page=8", "/list?page=3", "3"),
-        ("/list?page=2", "/list?page=3", "\u{b2}"),
-        (huge.as_str(), "/list?page=3", "3"),
-    ] {
-        let page = at(&format!("https://example.test{current}"), &[link("candidate", label, target)]);
-        assert!(next_page_control(&page).is_none(), "{target} {label}");
-    }
-}
-
-#[test]
-fn test_next_page_deduplicates_absolute_and_relative_destinations() {
-    for fragment in ["", "#results"] {
-        let controls = [
-            pager("next", "Next", &format!("https://example.test/list?page=3&sort=weight{fragment}")),
-            link("number", "3", "/list?page=3&sort=weight"),
-        ];
-        let found = next_page_control(&at("https://example.test/list?page=2&sort=weight", &controls));
-        assert_eq!(found.map(|c| c.id), Some("next".to_string()), "{fragment}");
-    }
-}
-
-#[test]
-fn test_next_page_deduplicates_reordered_unique_query_pairs() {
-    let controls = [pager("next", "Next", "/list?page=3&sort=weight"), link("number", "3", "/list?sort=weight&page=3")];
-    let found = next_page_control(&at("https://example.test/list?page=2&sort=weight", &controls));
-    assert_eq!(found.map(|c| c.id), Some("next".to_string()));
-}
-
-#[test]
-fn test_numeric_next_page_preserves_repeated_filter_value_order() {
-    let page = at(
-        "https://example.test/list?page=2&filter=first&filter=last",
-        &[link("next", "3", "/list?page=3&filter=last&filter=first")],
-    );
-    assert!(next_page_control(&page).is_none());
-}
-
-#[test]
-fn test_next_page_keeps_reordered_repeated_parameters_ambiguous() {
-    let controls = [
-        pager("next", "Next", "/list?page=3&filter=first&filter=last"),
-        pager("other", "Next", "/list?page=3&filter=last&filter=first"),
-    ];
-    assert!(next_page_control(&at("https://example.test/list?page=2", &controls)).is_none());
-}
-
-#[test]
-fn test_numeric_next_page_accepts_implicit_first_page() {
-    for parameter in ["page", "pageno", "page_number"] {
-        let page = at(
-            "https://example.test/list?sort=weight",
-            &[
-                link("next", "2", &format!("/list?{parameter}=2&sort=weight")),
-                link("later", "3", &format!("/list?{parameter}=3&sort=weight")),
-                link("other", "2", &format!("/list?{parameter}=2&sort=name")),
-            ],
-        );
-        assert_eq!(next_page_control(&page).map(|c| c.id), Some("next".to_string()), "{parameter}");
-    }
-}
-
 // tests/test_download_gate.py
-
-#[test]
-fn test_a_link_that_saves_a_file_is_not_a_next_page() {
-    // Paging clicks without the per-step gate, so a "next" link to an export must never be taken for a pager.
-    let at_page_one =
-        |control: Control| Observation { url: "https://addons.test/list/page-1".into(), ..observation(&[control]) };
-    assert!(next_page_control(&at_page_one(pager("next", "Next", "/list/page-2.csv"))).is_none());
-    let next = pager("next", "Next", "/list/page-2");
-    assert_eq!(next_page_control(&at_page_one(next.clone())), Some(next));
-}
 
 // -- The one stall rule and the one budget-renewal rule -------------------------------------------------------------
 
@@ -927,10 +814,7 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         state.authorization = Authorization { irreversible_actions: authorized };
         let finish = button("Finish");
         let observation = observation(std::slice::from_ref(&finish));
-        let decision = Decision {
-            operation_confidence: 0.86,
-            ..super::helpers::code_decision(Operation::Click, Some(finish.clone()))
-        };
+        let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(finish.clone())) };
         let question = (!credential).then(|| irreversible_question(&state.task, Operation::Click, &finish, None));
         let asked = requested_question(&state.task, &control_action(Operation::Click, &finish, &[]));
         let gated =
@@ -1184,7 +1068,7 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
         (BlockKind::Paragraph, "Date Picker 1: 01/01/2026"),
         (BlockKind::Paragraph, field),
     ]);
-    let added = agent.read(&mut state, Some(page), None, false).await.expect("a read");
+    let added = agent.read(&mut state, Some(page), None).await.expect("a read");
     assert!(added);
     let fact = state.notes.facts().into_iter().find(|f| f.requirement_id.as_deref() == Some("shown")).expect("a fact");
     assert_eq!(fact.reader, FactReader::JevChoice);
@@ -1293,7 +1177,7 @@ impl fastbrowse_core::decision::DecisionClient for Unsure {
 
 /// An LLM that answers every recovery with a scroll and counts the times it was asked.
 #[derive(Default)]
-struct Recoverer(std::sync::atomic::AtomicUsize);
+struct Recoverer(std::sync::atomic::AtomicUsize, bool);
 
 impl fastbrowse_core::llm::LLMClient for Recoverer {
     fn generate_value<'a>(
@@ -1307,7 +1191,7 @@ impl fastbrowse_core::llm::LLMClient for Recoverer {
             assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Recover);
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let reply =
-                json!({"diagnosis": "Stuck", "next_subgoal": "Scroll on", "give_up": false, "operation": "scroll"});
+                json!({"diagnosis": "Stuck", "next_subgoal": "Scroll on", "give_up": self.1, "operation": "scroll"});
             let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
         })
@@ -1327,6 +1211,22 @@ async fn stalled_on_apply(confidence: f64) -> (RunState, Arc<Unsure>, Arc<Recove
     let withheld = super::recovery::withheld(&decision);
     agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.expect("recovered");
     (state, jev, llm)
+}
+
+#[tokio::test]
+async fn test_giving_up_ends_the_run_with_the_diagnosis() {
+    let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
+    let jev = Arc::new(Unsure(ScriptedJev::new(script), 0.1, Default::default()));
+    let llm = Arc::new(Recoverer(Default::default(), true));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
+    let mut state = run_state().await;
+    let apply = button("Apply");
+    let page = observation(&[apply.clone(), button("Next")]);
+    let decision = code_decision(Operation::Click, Some(apply));
+    let withheld = super::recovery::withheld(&decision);
+    let error = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
+    assert!(matches!(error, Some(Flow::Stop(stop)) if stop.error.as_deref() == Some("Stuck")));
+    assert_eq!(state.hint, None);
 }
 
 #[tokio::test]
@@ -1535,7 +1435,7 @@ async fn test_a_code_jev_finds_no_requirement_in_is_still_kept_for_the_sign_in()
         true,
     ));
     let page = capture(&[(BlockKind::Heading, "Authenticator"), (BlockKind::Paragraph, "ada@example.com: 587373")]);
-    agent.read(&mut state, Some(page), None, false).await.expect("a read");
+    agent.read(&mut state, Some(page), None).await.expect("a read");
     let fact = state.notes.facts().into_iter().find(|f| f.text.contains("587373")).expect("the code");
     assert_eq!(fact.requirement_id, None);
 }
@@ -1696,6 +1596,87 @@ impl fastbrowse_core::decision::DecisionClient for SameList {
     }
 }
 
+/// Jev's word places a later page, and it is given the page's links with the one the page marks as next.
+#[tokio::test]
+async fn test_jev_places_a_later_page_of_a_list_from_its_links() {
+    let mut state = run_state().await;
+    state.list_url = Some("https://site.test/page/1".into());
+    let capture = crate::retrieval::testing::capture(&[]);
+    let page = at("https://site.test/page/2", &[link("n", "3", "/page/3"), pager("m", "Weiter", "/page/3")]);
+    for (probability, place) in [(0.06, (false, false)), (0.97, (true, true))] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(probability)), Arc::new(ScriptedLLM));
+        let placed = agent.place_in_list(&state, &capture, &page).await.ok().flatten().expect("placed");
+        assert_eq!((placed.same_list, placed.goes_on), place);
+    }
+    let links = list_links(&page);
+    assert_eq!(links[0], json!({"label": "3", "href": "/page/3"}));
+    assert_eq!(links[1], json!({"label": "Weiter", "href": "/page/3", "next_page": true}));
+}
+
+#[tokio::test]
+async fn test_a_page_jev_puts_off_the_list_leaves_the_list_open() {
+    let mut state = run_state().await;
+    state.through_end = true;
+    state.list_url = Some("https://site.test/page/1".into());
+    let capture = crate::retrieval::testing::capture(&[]);
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(0.06)), Arc::new(ScriptedLLM));
+    let page = at("https://site.test/item/4", &[]);
+    assert_eq!(agent.read_list_page(&mut state, &capture, &page, &[]).await.ok(), Some(ListRead::OffList));
+    assert!(state.through_end);
+}
+
+#[tokio::test]
+async fn test_moving_on_from_an_unread_page_of_an_open_list_is_put_to_jev() {
+    let mut state = run_state().await;
+    state.ready_plan = Some(Plan::new(vec![Requirement::new("count", "Count the quotes", INFO)], true));
+    let page = at("https://site.test/page/5", &[]);
+    let click = code_decision(Operation::Click, None);
+    assert!(!leaves_unread_page(&state, &page, &click));
+    state.continuing.insert("count".into());
+    assert!(leaves_unread_page(&state, &page, &click));
+    assert!(!leaves_unread_page(&state, &page, &code_decision(Operation::Scroll, None)));
+    state.read_documents.insert(page.document_key.clone(), false);
+    assert!(!leaves_unread_page(&state, &page, &click));
+}
+
+/// An LLM reader that finds nothing on the page.
+struct EmptyReader;
+
+impl fastbrowse_core::llm::LLMClient for EmptyReader {
+    fn generate_value<'a>(
+        &'a self,
+        _: fastbrowse_core::models::LLMPurpose,
+        _: &'a [fastbrowse_core::llm::Message],
+        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            let data = schema
+                .validate_json(&json!({"claims": [], "answered": false}).to_string())
+                .map_err(fastbrowse_core::llm::LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
+        })
+    }
+}
+
+/// A detour to an item's own page, read in full, leaves the list to be read whole when the run comes back to it.
+#[tokio::test]
+async fn test_reading_a_page_off_the_list_keeps_the_list_read_whole() {
+    let mut state = run_state().await;
+    state.ready_plan = Some(Plan::new(vec![Requirement::new("count", "Count the quotes", INFO)], true));
+    state.through_end = true;
+    state.continuing.insert("count".into());
+    state.list_url = Some("https://site.test/page/1".into());
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(0.06)), Arc::new(EmptyReader));
+    let mut capture = crate::retrieval::testing::capture(&[(BlockKind::Paragraph, "An author's biography")]);
+    capture.url = "https://site.test/item/4".into();
+    let page = at("https://site.test/item/4", &[]);
+    agent.read(&mut state, Some(capture), Some(&page)).await.expect("a read");
+    assert!(state.through_end);
+    assert_eq!(state.list_url.as_deref(), Some("https://site.test/page/1"));
+    assert!(state.continuing.contains("count"));
+}
+
 #[tokio::test]
 async fn test_a_page_off_the_list_leaves_it_open_and_a_later_page_ends_it() {
     let mut state = run_state().await;
@@ -1705,6 +1686,6 @@ async fn test_a_page_off_the_list_leaves_it_open_and_a_later_page_ends_it() {
     capture.url = "https://site.test/author".into();
     for (probability, ended) in [(0.06, false), (0.97, true)] {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(probability)), Arc::new(ScriptedLLM));
-        assert_eq!(agent.list_ended(&mut state, &capture).await.ok(), Some(ended));
+        assert_eq!(agent.on_open_list(&mut state, &capture).await.ok(), Some(ended));
     }
 }

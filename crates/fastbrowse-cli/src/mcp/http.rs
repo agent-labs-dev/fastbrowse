@@ -20,6 +20,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use super::is_loopback;
 use super::{HEALTH_PATH, McpServer, Outbox, Session};
 
 /// A response body: one buffer, or the events of a stream as they come.
@@ -104,15 +105,11 @@ fn same(supplied: &[u8], expected: &[u8]) -> bool {
 }
 
 fn allowed_host(host: &str) -> bool {
-    ["127.0.0.1", "localhost", "[::1]"]
-        .iter()
-        .any(|base| host.strip_prefix(base).is_some_and(|rest| rest.starts_with(':')))
+    host.rsplit_once(':').is_some_and(|(name, _)| is_loopback(name))
 }
 
 fn allowed_origin(origin: &str) -> bool {
-    ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-        .iter()
-        .any(|base| origin.strip_prefix(base).is_some_and(|rest| rest.starts_with(':')))
+    origin.strip_prefix("http://").is_some_and(allowed_host)
 }
 
 fn event(message: &Value) -> Bytes {
@@ -133,7 +130,7 @@ fn events(receiver: mpsc::UnboundedReceiver<Bytes>, session: &str) -> Reply {
 impl Http {
     pub fn new(server: Arc<McpServer>, host: &str) -> Arc<Http> {
         let token = server.config.mcp_token.clone();
-        let loopback_only = matches!(host, "127.0.0.1" | "localhost" | "::1");
+        let loopback_only = is_loopback(host);
         Arc::new(Http { server, token, loopback_only, sessions: Mutex::default() })
     }
 

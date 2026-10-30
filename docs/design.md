@@ -54,6 +54,11 @@ the tally, ranking and paging guidance only when the capture holds records, the 
 is in play. Identical relevance questions share one score within a pass, while controls remain separate action
 targets.
 
+Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
+so choosing the next page is an ordinary step. When a run that reads a whole list lands on a later page, Jev decides
+whether the page belongs to that list and whether the list goes on; the page's records join the notes when it does,
+and a page off the list gets an ordinary read.
+
 For a bounded set of short quoted spans, Jev chooses a scalar fact, requests synthesis, or judges the
 requirement absent from the page. Identical values from the same page and frame share one choice with all
 their source contexts. A selected repeated value retains every span through `Fact.basis`. Uncertain choices,
@@ -122,9 +127,8 @@ which are the page's controls plus back, scroll, escape and the caller's start p
 `recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover. Its
 subgoal reaches Jev with the next step on that page, asked with the same problem and with the stalled action
 still left out, so a refused DONE cannot undo it; the action recovery names is taken only when Jev is unsure
-again or escalates. When the LLM gives up, that counts as one more recovery: its diagnosis becomes the run's status
-once `max_recoveries` is spent, and a sign-in it names ends `needs_login` only when Jev agrees the page is a
-wall. An HTTP error page goes to Jev like any other, with its status among the step's page facts, so Jev
+again or escalates. When the LLM gives up, the run stops with its diagnosis as the status, and a sign-in it names
+ends `needs_login` only when Jev agrees the page is a wall. An HTTP error page goes to Jev like any other, with its status among the step's page facts, so Jev
 reloads it when the status can clear, goes back, picks another link or escalates; code only waits out a 403,
 429 or 503 once per document.
 

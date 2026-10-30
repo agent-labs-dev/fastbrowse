@@ -67,7 +67,8 @@ fn plain(text: &str) -> String {
     text::casefold(&text::squash(text))
 }
 
-/// Whether a field now shows `choice`, whole or as the start of it ("London" for "London, United Kingdom").
+/// Whether a field now shows `choice`, whole or as its first comma-separated part ("London" for "London, United
+/// Kingdom"). A fragment of the choice is only what was typed on the way to it.
 fn shows(control: &Control, choice: &str) -> bool {
     let mut shown = Vec::new();
     if let Some(value) = control.value.as_deref().filter(|v| !v.is_empty()) {
@@ -76,7 +77,8 @@ fn shows(control: &Control, choice: &str) -> bool {
     if control.role == "combobox" {
         shown.push(plain(&control.label));
     }
-    shown.iter().filter(|t| !t.is_empty()).any(|t| choice.contains(t.as_str()) || choice.starts_with(t.as_str()))
+    let first = choice.split(',').next().unwrap_or(choice).trim();
+    shown.iter().filter(|t| !t.is_empty()).any(|t| t.contains(choice) || t == first)
 }
 
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as
@@ -164,6 +166,17 @@ mod tests {
     use super::*;
     use crate::models::Operation;
     use crate::py::datetime::DateTime;
+
+    #[test]
+    fn test_a_fragment_of_the_choice_does_not_count_as_showing_it() {
+        let mut field = Control::new("f", "combobox", "City", [Operation::Fill]);
+        field.value = Some("Lon".into());
+        assert!(!shows(&field, "london, united kingdom"));
+        field.value = Some("London".into());
+        assert!(shows(&field, "london, united kingdom"));
+        field.value = Some("London, United Kingdom".into());
+        assert!(shows(&field, "london"));
+    }
 
     fn observation(controls: Vec<Control>) -> Observation {
         Observation {

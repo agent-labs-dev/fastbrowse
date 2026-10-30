@@ -3,14 +3,14 @@
 use std::collections::{BTreeSet, HashSet};
 
 use fastbrowse_core::decision::NoulQuestion;
-use fastbrowse_core::effects::state_key;
+
 use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
-use fastbrowse_core::page::{Control, Dialog, Observation, pager_link};
+use fastbrowse_core::page::{Control, Dialog, Observation};
 use fastbrowse_core::py::dump::{Dump, include, to_value};
 use fastbrowse_core::py::json::{Style, dumps, write};
 use fastbrowse_core::py::{sha256_hex, text};
-use fastbrowse_core::safety::{irreversible_question, origin_of, starts_download};
+use fastbrowse_core::safety::{irreversible_question, origin_of};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use url::Url;
@@ -18,7 +18,7 @@ use url::Url;
 use super::state::RunState;
 use crate::memory::{Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
-use crate::policy::{Decision, HistoryEntry, Reduction};
+use crate::policy::{Decision, HistoryEntry};
 
 /// Operations that do not act on the page: a read changes nothing, and DONE is judged again by the finish.
 pub(crate) fn not_acting(operation: Operation) -> bool {
@@ -40,11 +40,6 @@ pub(crate) fn page_operation(operation: Operation) -> bool {
 
 pub(crate) fn parse(url: &str) -> Option<Url> {
     Url::parse(url).ok()
-}
-
-/// `urljoin(base, href)`, or None when either cannot be read as an address.
-pub(crate) fn join(base: &str, href: &str) -> Option<String> {
-    parse(base)?.join(href).ok().map(String::from)
 }
 
 pub(crate) fn path_of(url: &str) -> String {
@@ -286,116 +281,6 @@ pub fn read_question(task: &str, wanted: &[Requirement], began_at: Option<&str>)
     }
 }
 
-/// Where a pager link goes: its origin, path and query.
-type PagerTarget = (String, String, Vec<(String, String)>);
-
-fn query_pairs(url: &Url) -> Vec<(String, String)> {
-    url.query().map_or_else(Vec::new, |query| {
-        url::form_urlencoded::parse(query.as_bytes()).map(|(k, v)| (k.into_owned(), v.into_owned())).collect()
-    })
-}
-
-fn pager_query(pairs: &[(String, String)]) -> Vec<(String, String)> {
-    // A server can use the first repeated value, so only unique keys may be reordered.
-    let keys: HashSet<&String> = pairs.iter().map(|(key, _)| key).collect();
-    if keys.len() == pairs.len() {
-        let mut sorted = pairs.to_vec();
-        sorted.sort();
-        sorted
-    } else {
-        pairs.to_vec()
-    }
-}
-
-fn digits(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(|c| c.is_ascii_digit())
-}
-
-fn numbered_next_page(here: &Url, there: &Url, label: &str) -> bool {
-    let label = text::strip(label);
-    if here.path() != there.path() || !digits(label) {
-        return false;
-    }
-    let (before, after) = (query_pairs(here), query_pairs(there));
-    for parameter in ["page", "pageno", "page_number"] {
-        // Canonical first-page URLs omit the page parameter; an observed 2 is the only consecutive target.
-        let mut old: Vec<&String> = before.iter().filter(|(k, _)| k == parameter).map(|(_, v)| v).collect();
-        let one = "1".to_string();
-        if old.is_empty() {
-            old.push(&one);
-        }
-        let new: Vec<&String> = after.iter().filter(|(k, _)| k == parameter).map(|(_, v)| v).collect();
-        if old.len() != 1 || new.len() != 1 || !digits(old[0]) || !digits(new[0]) {
-            continue;
-        }
-        let (Ok(previous), Ok(following), Ok(displayed)) =
-            (old[0].parse::<u64>(), new[0].parse::<u64>(), label.parse::<u64>())
-        else {
-            continue;
-        };
-        let rest = |pairs: &[(String, String)]| {
-            pager_query(&pairs.iter().filter(|(k, _)| k != parameter).cloned().collect::<Vec<_>>())
-        };
-        if following == previous + 1 && displayed == following && rest(&before) == rest(&after) {
-            return true;
-        }
-    }
-    false
-}
-
-/// The one control that opens the next page of a list on this page, or None when there is none or doubt.
-pub fn next_page_control(observation: &Observation) -> Option<Control> {
-    let here = parse(&observation.url)?;
-    let current = pager_query(&query_pairs(&here));
-    let mut found: IndexMap<PagerTarget, Control> = IndexMap::new();
-    for control in &observation.controls {
-        let Some(href) = &control.href else { continue };
-        if control.role != "link" || !control.operations.contains(&Operation::Click) {
-            continue;
-        }
-        // Paging clicks without the step's gates, so a link that saves a file is never taken for the next page.
-        if starts_download(control) {
-            continue;
-        }
-        // The snapshot gives a same-origin link as a path; a bare host/path denotes another site.
-        if !(href.starts_with('/') || href.starts_with("http://") || href.starts_with("https://")) {
-            continue;
-        }
-        let Ok(target) = here.join(href) else { continue };
-        if origin_of(target.as_str()) != origin_of(&observation.url) {
-            continue;
-        }
-        // A numbered pager may omit Next; only an observed consecutive page with the same filters qualifies.
-        if !pager_link(control) && !numbered_next_page(&here, &target, &control.label) {
-            continue;
-        }
-        let query = pager_query(&query_pairs(&target));
-        if (target.path(), &query) == (here.path(), &current) {
-            continue;
-        }
-        found.entry((origin_of(target.as_str()), target.path().to_string(), query)).or_insert_with(|| control.clone());
-    }
-    if found.len() == 1 { found.into_values().next() } else { None }
-}
-
-/// The step code takes to walk a list the reader needs whole: open its next page, then read what that opened.
-pub(crate) fn paging(state: &mut RunState, observation: &Observation) -> Option<Decision> {
-    if state.next_page {
-        state.next_page = false;
-        let target = next_page_control(observation)?;
-        state.pages += 1;
-        state.paged_from = Some(state_key(observation));
-        return Some(code_decision(Operation::Click, Some(target)));
-    }
-    if let Some(left) = state.paged_from.take() {
-        // A click that did not open anything new leaves nothing to read; Jev decides from here.
-        if state_key(observation) != left {
-            return Some(code_decision(Operation::Read, None));
-        }
-    }
-    None
-}
-
 pub(crate) fn dialog_question(task: &str, dialog: Option<&Dialog>) -> Option<NoulQuestion> {
     let dialog = dialog?;
     if !["confirm", "prompt", "beforeunload"].contains(&dialog.kind.as_str()) {
@@ -416,27 +301,6 @@ pub(crate) fn unread_transaction(state: &RunState) -> bool {
     // Possible submissions also include searches and filters. Only a requested state change needs a receipt read.
     state.ready_plan.as_ref().is_some_and(|plan| plan.requirements.iter().any(|r| r.kind == RequirementKind::Action))
         && state.transaction_candidates.iter().any(|c| !c.outcome_read && c.committing != Some(false))
-}
-
-pub(crate) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
-    Decision {
-        operation,
-        url: None,
-        target_confidence: target.as_ref().map(|_| 1.0),
-        target,
-        tab_id: None,
-        operation_confidence: 1.0,
-        login_required: None,
-        offered_controls: 0,
-        reduction: Reduction::None,
-        cost: Vec::new(),
-        input_tokens: 0,
-        bot_check: None,
-        site_failure: None,
-        read_assessment: crate::policy::ReadAssessment::Absent,
-        directed: false,
-        destination: None,
-    }
 }
 
 /// The action recovery named, taken only when Jev is unsure or escalates and the control still offers it. Jev sees

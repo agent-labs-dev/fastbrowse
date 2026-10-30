@@ -415,6 +415,31 @@ fn test_loopback_hosts() {
     }
 }
 
+/// Every loopback address runs without a token, so each needs the Host and Origin checks that stop DNS rebinding.
+#[tokio::test]
+async fn test_every_loopback_address_checks_host_and_origin() {
+    let server = McpServer::new(ServerConfig::default(), Recorder::new(answered(Status::Complete)).runner());
+    let listener = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { mcp::http::serve_on(listener, server, "127.0.0.2").await });
+    let post = async |headers: &str| {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.2", port)).await.unwrap();
+        let request = format!(
+            "POST /mcp HTTP/1.1\r\n{headers}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\
+             Connection: close\r\n\r\n{{}}"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response
+    };
+    assert!(post("Host: evil.test:80").await.starts_with("HTTP/1.1 421"));
+    let origin = format!("Host: 127.0.0.2:{port}\r\nOrigin: http://evil.test:80");
+    assert!(post(&origin).await.starts_with("HTTP/1.1 403"));
+    let own = post(&format!("Host: 127.0.0.2:{port}")).await;
+    assert!(own.starts_with("HTTP/1.1 406"), "{own}");
+}
+
 async fn http(port: u16, request: &str) -> String {
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();

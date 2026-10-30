@@ -33,14 +33,14 @@ use fastbrowse_core::models::{
     Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact, StepOutcome, UntilCheck, Wall,
     WallKind,
 };
-use fastbrowse_core::page::{BrowserError, Observation, Page};
+use fastbrowse_core::page::{BrowserError, Observation, Page, pager_link};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-pub use helpers::{next_page_control, read_question};
+pub use helpers::read_question;
 use helpers::{partition_proof, recovery_memory};
 use state::{Flow, RunState, Spawned, Step};
 
@@ -980,10 +980,13 @@ impl Agent {
         }
         if !document.is_empty()
             && read.is_none()
-            && helpers::next_page_control(observation).is_some()
+            && (!state.continuing.is_empty() || observation.controls.iter().any(pager_link))
             && state.ready_plan.as_ref().is_some_and(|plan| helpers::unread(plan, &state.notes))
         {
             facts.push("This list page has not been read: turning to another page leaves its records unread.".into());
+        }
+        if !state.continuing.is_empty() {
+            facts.push("The list being read goes on: the notes hold only the pages read so far.".into());
         }
         if helpers::unread_transaction(state) {
             facts.push("An action that may have committed a change has not had the page it led to read.".into());

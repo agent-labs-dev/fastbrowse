@@ -162,11 +162,6 @@ pub struct Config {
     /// Downloads arrive whole over the DevTools socket, so this bounds a run's memory as much as a file's size.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub max_download_bytes: i64,
-    /// Next pages of a list code opens and reads by itself in one run; further pages are left to Jev's choice.
-    /// Walking a list is the one thing the loop does without asking a model each time, so a catalogue of fifty pages
-    /// would otherwise spend the caller's paging allowance before anything noticed.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub max_pages: i64,
 }
 
 impl Default for Config {
@@ -180,7 +175,6 @@ impl Default for Config {
             step_frames: false,
             max_upload_bytes: 25 * 1024 * 1024,
             max_download_bytes: 512 * 1024 * 1024,
-            max_pages: 12,
         }
     }
 }
@@ -205,10 +199,9 @@ mod tests {
 
     #[test]
     fn a_partial_config_keeps_every_other_default() {
-        let config: Config = serde_json::from_str(r#"{"stall": {"max_recoveries": 4}, "max_pages": "3"}"#).unwrap();
+        let config: Config = serde_json::from_str(r#"{"stall": {"max_recoveries": 4}}"#).unwrap();
         assert_eq!(config.stall.max_recoveries, 4);
         assert_eq!(config.stall.unchanged_actions, 3);
-        assert_eq!(config.max_pages, 3);
         assert!(serde_json::from_str::<Config>(r#"{"observation": {"group_size": 1}}"#).is_err());
     }
 }

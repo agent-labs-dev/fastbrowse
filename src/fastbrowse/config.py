@@ -63,11 +63,3 @@ class Config(Frozen):
     A caller that knows the size of the file it asked for, such as a workspace export, sets it deliberately;
     the run reports the size it saw and the limit it hit rather than losing the file without a word.
     """
-    max_pages: int = Field(default=12, ge=0)
-    """Next pages of a list code opens and reads by itself in one run; further pages are left to Jev's choice.
-
-    Caller supplied ceilings bound steps, calls and dollars, so this is not there to keep a run inside its budget.
-    It is there because walking a list is the one thing the loop does without asking a model each time: a catalogue
-    of fifty pages would otherwise spend the caller's paging allowance before anything noticed, and an explicitly
-    capped run would end budget_exceeded rather than saying it could not read the list.
-    """
