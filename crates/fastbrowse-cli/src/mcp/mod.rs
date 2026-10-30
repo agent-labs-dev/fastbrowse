@@ -444,6 +444,10 @@ pub fn parse(argv: &[String]) -> Result<McpArgs, Exit> {
         "--port" | "--max-steps" | "--max-concurrent" => py_int(value).map(drop).ok_or_else(|| invalid("int", value)),
         "--max-dollars" | "--max-seconds" => py_float(value).map(drop).ok_or_else(|| invalid("float", value)),
         "--secret" => secret_flag(value).map(drop),
+        #[cfg(feature = "scripted")]
+        "--run-task" if crate::scripted::named(value, Default::default()).is_none() => {
+            Err(format!("{} names nothing to call: no stand-in run of that name", repr(value)))
+        }
         _ => Ok(()),
     })?;
     Ok(McpArgs {

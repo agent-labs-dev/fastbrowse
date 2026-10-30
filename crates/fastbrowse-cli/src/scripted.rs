@@ -343,10 +343,15 @@ pub fn setup(run_task: Option<&str>, transport: Arc<dyn Transport>) -> (Arc<dyn 
         Some(TestServer::OutlivesShutdown) | None => {}
     }
     let requests: Requests = Arc::default();
-    match run_task.and_then(|name| named(&name, requests.clone())) {
-        Some(runner) => (runner, protocol, Arc::new(Noting { inner: transport, requests })),
+    match run_task {
+        Some(name) => (known(&name, requests.clone()), protocol, Arc::new(Noting { inner: transport, requests })),
         None => (crate::runner::default_runner(), protocol, transport),
     }
+}
+
+/// The stand-in `name` names. A typo here must not fall through to the real runner, a real browser and a paid model.
+pub fn known(name: &str, requests: Requests) -> Arc<dyn Runner> {
+    named(name, requests).unwrap_or_else(|| panic!("no stand-in run named {name:?}"))
 }
 
 /// After `serve` returns: `outlives_shutdown` never exits, and shrugs off a polite signal.
@@ -363,4 +368,15 @@ pub async fn linger() {
     // Windows sends no polite signal to shrug off, so there it only never exits.
     #[cfg(not(unix))]
     std::future::pending::<()>().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "no stand-in run named")]
+    fn a_stand_in_name_that_names_nothing_stops_rather_than_starting_the_real_runner() {
+        known("scripted_run:nope", Requests::default());
+    }
 }
