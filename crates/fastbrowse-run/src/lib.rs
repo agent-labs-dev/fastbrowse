@@ -531,7 +531,17 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         // No thresholds were measured on this model, so the run starts from Jev's: an eval reads its result with that.
         http.trace.event("decision_unvalidated", Map::new);
     }
-    let config = profile.fit(options.config.clone());
+    let mut config = profile.fit(options.config.clone());
+    // Experiment only: FASTBROWSE_THRESHOLDS='{"recover_below":0.4}' overrides any named bar.
+    if let Ok(raw) = std::env::var("FASTBROWSE_THRESHOLDS") {
+        let mut merged = serde_json::to_value(&config.thresholds).expect("thresholds serialize");
+        for (key, value) in serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
+            .expect("FASTBROWSE_THRESHOLDS is a JSON object")
+        {
+            merged[key] = value;
+        }
+        config.thresholds = serde_json::from_value(merged).expect("FASTBROWSE_THRESHOLDS names known thresholds");
+    }
     let llm: Arc<dyn LLMClient> = match options.llm.take() {
         Some(llm) => llm,
         None => Arc::from(settings.llm(&http)?),

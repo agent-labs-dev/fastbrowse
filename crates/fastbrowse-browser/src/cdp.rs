@@ -298,7 +298,20 @@ impl Cdp {
         if self.0.out.send(Outgoing::Text(message.to_string())).is_err() {
             return Err(self.0.closed_error());
         }
-        rx.await.unwrap_or_else(|_| Err(self.0.closed_error()))
+        let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        let reply = rx.await.unwrap_or_else(|_| Err(self.0.closed_error()));
+        if let Ok(path) = std::env::var("FASTBROWSE_CDP_LOG") {
+            use std::io::Write;
+            let ended = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(
+                    file,
+                    "{}",
+                    json!({"m": method, "b": began, "e": ended, "x": message["params"]["expression"].as_str().map(|x| x.chars().take(70).collect::<String>())})
+                );
+            }
+        }
+        reply
     }
 
     /// `_BrowserClient.send_raw`: a command under the reply, liveness and command deadlines, its failure mapped to

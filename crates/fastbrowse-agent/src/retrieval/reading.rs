@@ -449,6 +449,11 @@ fn push_unique(basis: &mut Vec<String>, key: String) {
 
 /// `_remember`: the claim as a fact whose quote code copied from the blocks it cites, or None when it cites them
 /// wrongly.
+/// Experiment only: FASTBROWSE_GROUNDING=off keeps a reader's claim whose quote or cited records code cannot find.
+pub(crate) fn trusting() -> bool {
+    std::env::var("FASTBROWSE_GROUNDING").is_ok_and(|value| value == "off")
+}
+
 fn remember(
     page: &Page<'_>,
     part: &Chunk,
@@ -475,7 +480,9 @@ fn remember(
         }
     }
     let mut quote = claim.cite.as_ref().and_then(|cite| cited(page, part, cite));
-    if let Some(raw) = &claim.excerpt {
+    if let Some(raw) = &claim.excerpt
+        && !(trusting() && quote.is_none())
+    {
         let Some(span) = quote.clone() else { return Ok(None) };
         if text::strip(raw).is_empty() {
             return Ok(None);
@@ -500,6 +507,9 @@ fn remember(
             matches = loose_matches(&excerpt, &span.quote);
         }
         let Some((offset, stop)) = excerpt_match(page, &span, &matches) else {
+            if trusting() {
+                return Ok(Some(trusted(claim, Some(span), basis, notes)));
+            }
             return Ok(None);
         };
         let (mut start, end) = (span.start + offset as i64, span.start + stop as i64);
@@ -528,6 +538,9 @@ fn remember(
     }
     // A derived claim cites nothing and rests on its basis; one that cites blocks must cite them correctly.
     if quote.is_none() && (claim.cite.is_some() || basis.is_empty()) {
+        if trusting() {
+            return Ok(Some(trusted(claim, None, basis, notes)));
+        }
         return Ok(None);
     }
     if let Some(span) = &quote {
@@ -563,6 +576,21 @@ fn remember(
     };
     notes.add(fact.clone());
     Ok(Some(fact))
+}
+
+fn trusted(claim: &ReadClaim, quote: Option<Evidence>, basis: Vec<String>, notes: &mut Notes) -> Fact {
+    let fact = Fact {
+        requirement_id: claim.requirement_id.clone(),
+        tally: None,
+        comparison: None,
+        text: claim.text.clone(),
+        evidence: quote,
+        basis,
+        reader: FactReader::Llm,
+        scope: None,
+    };
+    notes.add(fact.clone());
+    fact
 }
 
 /// `_block_context`: the whole block a narrowed quote was cut from, kept beside it as context.
