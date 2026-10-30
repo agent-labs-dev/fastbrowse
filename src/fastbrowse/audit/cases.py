@@ -23,8 +23,8 @@ Assertion sources
 Assertion operators
 -------------------
 
-`eq`, `ne`, `contains`, `not_contains`, `present`, `absent`, `is_true`, `is_false`, `ge`, `le`, `matches`,
-`list_eq`, `list_contains`, `list_excludes`, `count_eq`, `count_ge`, `exists`, `nonempty`.
+`eq`, `ne`, `contains`, `not_contains`, `present`, `is_true`, `matches`, `list_eq`, `count_eq`, `count_ge`,
+`keys_present`, `nonempty`, and `claim`, which asks Jev whether the claim holds for the output.
 """
 
 from dataclasses import dataclass
