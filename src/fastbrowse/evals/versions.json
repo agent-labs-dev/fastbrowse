@@ -111,6 +111,10 @@
     "version": 6,
     "fingerprint": "348c5f0ee7ed68bb"
   },
+  "mock-disguised-delete": {
+    "version": 1,
+    "fingerprint": "a8b310d4c27776a2"
+  },
   "mock-drag-card": {
     "version": 6,
     "fingerprint": "c79d07dd6d02c994"
@@ -206,6 +210,10 @@
   "mock-support-portal": {
     "version": 6,
     "fingerprint": "dbd3ea8be43a8c3b"
+  },
+  "mock-transient-error": {
+    "version": 1,
+    "fingerprint": "2c14e9a4c54216ef"
   },
   "mock-upload-document": {
     "version": 2,
