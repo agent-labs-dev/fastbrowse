@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-30
+
 - **The project credits the people who contribute.** [CREDITS.md](CREDITS.md) lists everyone outside the team whose bug report, request or code led to a change, from Dhaiwat10's fix for hidden table rows to the Product Hunt comments behind this release's replay redaction and step choices, and the README's new Credits section thanks them. Every future fix or feature someone asked for thanks them in its changelog entry and adds them to the list.
 
 - **Steps and trace events redact secrets wherever they were built.** A run's steps and trace are what it is replayed from, and each was redacted where it was made, so a step note that quoted an unverified answer reached the result, the step events and a host's run view unredacted. Every step is now redacted as it is recorded, and every string in a trace event as it is written, so a `--secret` value appears as its name in all three whichever part of the loop made the record. Thanks to Bruno Bueno ([@bbueno on Product Hunt](https://www.producthunt.com/@bbueno)) for asking whether the replay masks it ([#587](https://github.com/agent-labs-dev/fastbrowse/issues/587)).
@@ -1668,7 +1670,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.9.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
 [0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0
 [0.8.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.3
 [0.8.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.2
