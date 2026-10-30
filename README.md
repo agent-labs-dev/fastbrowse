@@ -35,10 +35,8 @@ credentials, irreversible actions and spending under the control of code.
 
 ![fastbrowse shopping a live store, adding a Raspberry Pi Pico 2 W and an in-stock BME280 sensor to the basket, filling in checkout without paying, and answering with every price cited](docs/assets/demo.gif)
 
-Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.29 in model calls. It finds a
-Raspberry Pi Pico 2 W, meets a BME280 that is sold out and takes one that is in stock instead, fills in checkout to
-SW1A 1AA and stops before paying, then answers with each price, the delivery cost and the total, each cited. Playback
-is sped up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
+Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.29 in model calls. Playback is sped
+up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
 On 46 tasks run three times each against the hosted Browser Use agent, under the same limits on Browser Use
 Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. It was
