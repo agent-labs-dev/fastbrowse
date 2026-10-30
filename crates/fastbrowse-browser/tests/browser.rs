@@ -54,11 +54,6 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-/// `capture.text[start:end]`: block offsets count code points, as Python indexes a `str`.
-fn slice(capture: &Capture, start: i64, end: i64) -> String {
-    capture.text.chars().skip(start.max(0) as usize).take((end - start).max(0) as usize).collect()
-}
-
 fn sha256_hex(content: &[u8]) -> String {
     HEXLOWER.encode(ring::digest::digest(&ring::digest::SHA256, content).as_ref())
 }
@@ -758,13 +753,13 @@ async fn test_capture_offsets_slice_exactly_to_each_block() {
     let capture = h.page.capture().await.expect("capture");
     assert!(!capture.blocks.is_empty(), "expected at least one block");
     for block in &capture.blocks {
-        assert!(!slice(&capture, block.start, block.end).is_empty(), "block {} sliced to empty text", block.source_id);
+        assert!(!capture.block_text(block).is_empty(), "block {} sliced to empty text", block.source_id);
     }
     let headings: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Heading).collect();
-    assert!(headings.iter().any(|h| slice(&capture, h.start, h.end) == "Table"));
+    assert!(headings.iter().any(|h| capture.block_text(h) == "Table"));
     let tables: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Table).collect();
     assert!(!tables.is_empty());
-    assert!(slice(&capture, tables[0].start, tables[0].end).contains("Ada"));
+    assert!(capture.block_text(&tables[0]).contains("Ada"));
     let mut links = capture.blocks.iter().filter(|b| b.kind == BlockKind::Link);
     assert!(links.any(|link| link.href.as_deref() == Some("https://example.com/docs")));
     h.close().await;
@@ -1063,7 +1058,7 @@ async fn test_content_shown_only_under_the_pointer_is_reached_by_hovering() {
     let revealed = captured
         .blocks
         .iter()
-        .find(|b| slice(&captured, b.start, b.end).contains("name: grace"))
+        .find(|b| captured.block_text(b).contains("name: grace"))
         .expect("revealed block");
     let context = revealed.control_context.as_ref().expect("control context");
     assert_eq!(context.label, "User Avatar");
@@ -1072,7 +1067,7 @@ async fn test_content_shown_only_under_the_pointer_is_reached_by_hovering() {
         captured
             .blocks
             .iter()
-            .filter(|b| slice(&captured, b.start, b.end) == "Team")
+            .filter(|b| captured.block_text(b) == "Team")
             .all(|b| b.control_context.is_none())
     );
     let after_controls: Vec<&Control> = after.controls.iter().collect();
@@ -1465,9 +1460,9 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
             assert_eq!(block.kind, BlockKind::Table, "{path}");
             assert!(!block.complete_source, "{path}");
             assert_eq!(block.source_url.as_deref(), Some(format!("{}{path}", sites().main).as_str()));
-            assert!(slice(&capture, block.start, block.end).starts_with("name,total\n"), "{path}");
+            assert!(capture.block_text(block).starts_with("name,total\n"), "{path}");
         }
-        assert_eq!(slice(&capture, rows[0].start, rows[0].end), "name,total\nReport,139.79", "{path}");
+        assert_eq!(capture.block_text(&rows[0]), "name,total\nReport,139.79", "{path}");
         let partial = rows[0].heading_path[0].contains("only part");
         assert_eq!(partial, path == "/report.csv?partial", "{path}");
         h.close().await;
@@ -1710,7 +1705,7 @@ async fn test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_cont
             let outside = captured
                 .blocks
                 .iter()
-                .find(|b| slice(&captured, b.start, b.end) == "Outside name")
+                .find(|b| captured.block_text(b) == "Outside name")
                 .expect("outside block");
             assert!(outside.control_context.is_none(), "{mutation}");
         } else {

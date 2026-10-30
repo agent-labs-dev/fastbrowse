@@ -49,11 +49,6 @@ fn fill(target_id: &str, text: &str) -> Action {
     Action { text: Some(text.to_owned()), ..targeted(Operation::Fill, target_id) }
 }
 
-/// `text[start:end]` with Python's code point offsets, as `Block` carries them.
-fn slice(text: &str, start: i64, end: i64) -> String {
-    text.chars().skip(start.max(0) as usize).take((end - start).max(0) as usize).collect()
-}
-
 fn session_of(session: &BrowserSession, frame_id: Option<&str>) -> String {
     match frame_id {
         Some(frame_id) => session
@@ -225,14 +220,14 @@ async fn test_iframe_focus_hit_testing_and_capture_scope() {
         capture
             .blocks
             .iter()
-            .filter(|b| slice(&capture.text, b.start, b.end).contains("evidence"))
+            .filter(|b| capture.block_text(b).contains("evidence"))
             .all(|b| b.frame_id == field.frame_id)
     );
     assert!(
         capture
             .blocks
             .iter()
-            .filter(|b| slice(&capture.text, b.start, b.end).contains("Shadow evidence"))
+            .filter(|b| capture.block_text(b).contains("Shadow evidence"))
             .any(|b| b.source_id.contains("shadow:"))
     );
 
