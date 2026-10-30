@@ -2,7 +2,7 @@
 // Unlike snapshot.js (the viewport, for Jev's action choice) this reads the whole rendered document, on screen or not,
 // so the reading path and answer-evidence quotes see everything a user could scroll to.
 // Adjacent inline content (text, <strong>, <a>, <span>...) is one block, so a value inside markup stays with its label.
-// biome-ignore format: Python embeds this function inside an expression, where a semicolon is invalid.
+// biome-ignore format: CdpPage embeds this function inside an expression, where a semicolon is invalid.
 ((allowedOrigins = null) => {
   if (!document.body) return null;
   const HEADINGS = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };

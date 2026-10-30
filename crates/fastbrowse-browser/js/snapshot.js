@@ -1,8 +1,8 @@
 // Ported from jev-ultrafast (MIT): jev_ultrafast/snapshot.js.
 // Atomic single-evaluate observation of one frame's controls, viewport text, and a freshness fingerprint.
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
-// open shadow roots. Runs once per frame session (main frame or an OOPIF); the Python side merges frames.
-// biome-ignore format: Python appends mode arguments to this parenthesized expression.
+// open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
+// biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
 ((mode, allowedOrigins = null) => {
   const granted = doc => {
     if (allowedOrigins === null) return true;
@@ -370,7 +370,7 @@
     }
   }
 
-  // Guards and the page key go to Python as digests: each comparison is equality, and the full guards cost more to
+  // Guards and the page key go to Rust as digests: each comparison is equality, and the full guards cost more to
   // send than the snapshot takes to compute. Not cryptographic, and it needs not be: a page that wants a guard to
   // hold can simply leave its DOM alone.
   const digest = text => {
