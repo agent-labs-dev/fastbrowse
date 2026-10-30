@@ -242,10 +242,6 @@ impl CdpProxy {
             .collect()
     }
 
-    pub fn sent(&self, method: &str) -> Vec<Value> {
-        self.sent_since(0, method)
-    }
-
     /// Events the browser sent with `method`, from the log's `start`.
     pub fn events_since(&self, start: usize, method: &str) -> Vec<Value> {
         self.log.lock().unwrap()[start..]
