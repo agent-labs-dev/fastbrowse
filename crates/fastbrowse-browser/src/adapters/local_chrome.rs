@@ -52,10 +52,6 @@ impl From<std::io::Error> for LocalChromeError {
     }
 }
 
-pub fn free_port() -> std::io::Result<u16> {
-    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
-}
-
 /// `override_` is `Settings.chrome`, a name or path that replaces discovery rather than joining it.
 pub fn find_chrome(override_: Option<&str>) -> Option<String> {
     find_with(override_, &which, &|name| std::env::var(name).ok())
@@ -460,10 +456,8 @@ mod tests {
     /// A directory of this test's own.
     ///
     /// `temp_dir()` itself is shared by every test in this module, several of which write a stand-in `chrome`
-    /// into it and then run it. Two tests running at once then trip over each other twice: a script is
-    /// truncated under a test that is already executing it, and a child forked by the other test inherits the
-    /// open-for-write descriptor, so this test's own `spawn` fails with `ETXTBSY` ("Text file busy"). One test
-    /// also deletes the directory when it finishes, taking the others' scripts with it.
+    /// into it and then run it. Two tests sharing it truncate a script under a test that is already executing it,
+    /// and one test deletes the directory when it finishes, taking the others' scripts with it.
     fn scratch() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = temp_dir().unwrap().join(format!(
@@ -475,12 +469,22 @@ mod tests {
         dir
     }
 
+    /// A stand-in executable, written by a child shell rather than by this process.
+    ///
+    /// A descriptor closes on `exec`, not on `fork`, so a child another test forks while this process holds the
+    /// script open for writing keeps that descriptor until it execs, and running the script then fails with
+    /// `ETXTBSY` ("Text file busy"). A directory of the test's own does not help, since the descriptor is the
+    /// process's. The shell's descriptor is gone once it exits, and no other test forks from it.
     #[cfg(unix)]
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", "printf %s \"$1\" > \"$2\" && chmod 755 \"$2\"", "sh"])
+            .arg(format!("#!/bin/sh\n{body}"))
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "writing {} failed: {status}", path.display());
         path
     }
 
@@ -668,18 +672,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(chrome.child.is_none());
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn free_ports_are_bindable() {
-        // Another test binding port 0 can take a released port before this one binds it again, so one taken port is
-        // a race between tests; three in a row is a broken `free_port`.
-        let bound = (0..3).any(|_| {
-            let port = free_port().unwrap();
-            assert!(port > 0);
-            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-        });
-        assert!(bound, "three free ports in a row could not be bound");
     }
 
     #[test]
