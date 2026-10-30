@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::helpers::{
-    EvidenceKey, answer_evidence, lookup, partition_proof, path_of, unread, unread_transaction, visited,
+    EvidenceKey, answer_evidence, lookup, partition_proof, path_of, unread, unread_transaction, unsent_fact, visited,
 };
 use super::recovery::DONE;
 use super::state::{Flow, RunState, SiteFailure, Step, Stop, TransactionCandidate};
@@ -260,6 +260,7 @@ impl Agent {
             visited: &shown,
             changed_since_read: state.read_documents.get(&fresh.document_key).copied().unwrap_or(false),
             page_read: Self::page_read(state, &fresh),
+            unsent: unsent_fact(&state.history, &fresh),
             site_failure: state.site_failure.as_ref().filter(|failure| failure.transient()).map(|f| f.message()),
             continuing: state.continuing.clone(),
             ledger: Some(&state.ledger),

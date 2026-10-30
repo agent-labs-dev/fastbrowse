@@ -986,6 +986,7 @@ impl Agent {
         {
             facts.push("This list page has not been read: turning to another page leaves its records unread.".into());
         }
+        facts.extend(helpers::unsent_fact(&state.history, observation));
         if !state.continuing.is_empty() {
             facts.push("The list being read goes on: the notes hold only the pages read so far.".into());
         }

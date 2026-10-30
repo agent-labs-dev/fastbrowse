@@ -26,7 +26,7 @@ use serde_json::json;
 
 use super::Agent;
 use super::driving::edit_progress;
-use super::helpers::{answer_evidence, follow_recovery, next_value, unread, visited};
+use super::helpers::{answer_evidence, follow_recovery, next_value, unread, unsent_fact, visited};
 use super::reading::{ListRead, leaves_unread_page, list_links};
 use super::state::{Flow, RunState, Spawned, TransactionCandidate};
 use crate::memory::{Fact, Notes, fact_id};
@@ -451,6 +451,37 @@ fn test_answer_evidence_tracks_promoted_context_without_turning_paraphrases_into
 
 const FILES: &str = "https://addons.example.test/project/files";
 const DOWNLOAD: &str = "https://addons.example.test/project/download/1";
+
+fn typed_into(label: &str) -> HistoryEntry {
+    HistoryEntry::new(Some(Operation::Fill), Some(label), StepOutcome::Executed, false)
+}
+
+fn holding(label: &str, value: &str) -> Control {
+    Control { value: Some(value.into()), ..Control::new("f", "textbox", label, [Operation::Fill]) }
+}
+
+#[test]
+fn test_a_typed_value_stays_unsent_through_reads_and_settings() {
+    let page = observation(&[holding("Reference", "REF-1"), holding("Note", "")]);
+    let read = HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, false);
+    let tick = HistoryEntry {
+        setting: Some(true),
+        ..HistoryEntry::new(Some(Operation::Click), Some("Urgent"), StepOutcome::Executed, true)
+    };
+    let refused = HistoryEntry::new(Some(Operation::Done), None, StepOutcome::Failed, false);
+    let history = [typed_into("Reference"), typed_into("Note"), tick, read, refused];
+    let fact = unsent_fact(&history, &page).expect("a fact");
+    assert!(fact.contains("into Reference:"), "{fact}");
+}
+
+#[test]
+fn test_an_action_after_the_typing_may_have_sent_it() {
+    let page = observation(&[holding("Reference", "REF-1")]);
+    let pressed = HistoryEntry::new(Some(Operation::Click), Some("Send"), StepOutcome::Executed, false);
+    assert_eq!(unsent_fact(&[typed_into("Reference"), pressed.clone()], &page), None);
+    let failed = HistoryEntry { outcome: StepOutcome::Failed, ..pressed };
+    assert!(unsent_fact(&[typed_into("Reference"), failed], &page).is_some());
+}
 
 fn buttons_at(url: &str, labels: &[&str]) -> Observation {
     Observation { url: url.into(), ..observation(&labels.iter().map(|label| button(label)).collect::<Vec<_>>()) }
