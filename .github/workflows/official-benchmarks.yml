@@ -13,6 +13,8 @@ name: Official benchmarks
 # public rows (`parallax browser official-rows`): opaque task ids, scores, seconds, dollars and protocol facts, and
 # nothing else. Pass this run's id to benchmark-campaign.yml as `official_runs`, with the same `fastbrowse_ref` and
 # `parallax_sha`, to publish them: the site reads one candidate, so every group in it must come from one build.
+# `campaign_id` does that itself: when every suite and arm has passed, this workflow dispatches the campaign with this
+# run's id, which is how a release publishes every group from one candidate. A failed run dispatches nothing.
 #
 # No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
 # approved `budget` only decides whether the next task may start (`start-gate-v1`).
@@ -105,6 +107,11 @@ on:
         description: Task workers per suite and arm, sharing one start-gate ledger
         required: true
         default: "8"
+      campaign_id:
+        description: When set, dispatch the benchmark campaign of this name with these rows once every job has passed
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -447,3 +454,22 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.suite }}-${{ matrix.arm }}.tar.gz.age
           if-no-files-found: warn
           retention-days: 30
+
+  campaign:
+    name: Dispatch the campaign with these rows
+    needs: official
+    if: ${{ inputs.campaign_id != '' }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {actions: write}
+    steps:
+      - name: Dispatch the benchmark campaign
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id }}
+          FASTBROWSE_REF: ${{ inputs.fastbrowse_ref }}
+          PARALLAX_SHA: ${{ inputs.parallax_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          gh workflow run benchmark-campaign.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f campaign_id="$CAMPAIGN_ID" -f fastbrowse_ref="$FASTBROWSE_REF" -f parallax_sha="$PARALLAX_SHA" \
+            -f groups=all -f official_runs="$RUN_ID"
