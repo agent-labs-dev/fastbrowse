@@ -33,7 +33,7 @@ def test_the_live_suite_names_the_head_to_head_group_and_its_exact_rows() -> Non
         "judge": "anthropic/claude-opus-5.5",
         "systems": {"fastbrowse": "fastbrowse", "browser-use": "browser-use"},
         "cost_not_reported": [],
-        "not_measured": ["browser-use-ultrafast", "browserbase"],
+        "not_measured": ["browser-use-ultrafast", "browserbase", "browser-harness"],
     }
 
 
@@ -48,7 +48,7 @@ def test_a_vendor_without_a_cost_or_without_rows_has_its_own_state() -> None:
     live = json.loads(group_files(content, FACTS, CURRENT)["data/benchmarks/live-suite.json"])["measured"]
     assert live["systems"] == {"fastbrowse": "fastbrowse", "browserbase": "browserbase"}
     assert live["cost_not_reported"] == ["browserbase"]
-    assert live["not_measured"] == ["browser-use", "browser-use-ultrafast"]
+    assert live["not_measured"] == ["browser-use", "browser-use-ultrafast", "browser-harness"]
 
 
 def test_a_fastbrowse_only_campaign_shows_fastbrowse_alone() -> None:
