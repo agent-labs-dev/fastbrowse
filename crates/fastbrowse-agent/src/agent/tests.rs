@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
-    Answer, BoxAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images, NoulAnswer, Question,
+    Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
+    NoulAnswer, Question,
 };
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
@@ -1047,6 +1048,57 @@ impl fastbrowse_core::decision::DecisionClient for FieldReader {
     fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
         ScriptedJev::new(Vec::new()).profile()
     }
+}
+
+/// Answers every question with `pick`, or leaves them unanswered when there is none.
+struct Answers(Option<&'static str>);
+
+impl DecisionClient for Answers {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = self
+            .0
+            .iter()
+            .flat_map(|pick| {
+                let answer = ChoiceAnswer {
+                    kind: Default::default(),
+                    choice: (*pick).into(),
+                    probabilities: IndexMap::new(),
+                    confidence: 1.0,
+                };
+                questions.keys().map(move |key| (key.clone(), Answer::Choice(answer.clone())))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_choice_jev_was_not_offered_is_a_failed_decision_and_not_an_empty_value() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("input:nope"))), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    state.inputs.insert("name".into(), "Ada".into());
+    let page = observation(&[]);
+    let error = agent.text(&mut state, &page, &field("Name")).await.expect_err("an unusable pick");
+    assert!(format!("{error:?}").contains("which was not offered"), "{error:?}");
+}
+
+#[tokio::test]
+async fn test_no_answer_on_a_value_is_not_a_finding_that_it_is_absent() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    let page = observation(&[]);
+    let error = agent.value_absent(&mut state, &page, &field("Name")).await.expect_err("no answer");
+    assert!(format!("{error:?}").contains("expected a noul answer"), "{error:?}");
 }
 
 #[tokio::test]
