@@ -127,7 +127,10 @@ The page point becomes a screen point from what the page reports: `screenX/Y`, `
 `innerWidth/Height` and the zoom from `Page.getLayoutMetrics`. The top inset is `outerHeight - innerHeight * zoom`.
 The cursor is drawn only when exactly one driver window matches the page's reported frame (which also shows the
 two share a scale, so a scaled display is skipped), that window is in front of every other, the tab is visible and
-the point is inside the viewport. Otherwise it is hidden. Any driver failure turns the feature off for the run.
+the point is inside the viewport. Otherwise it is hidden. Once drawn it stays for the whole run, with the driver's
+idle fade off: a navigation, a scroll or a point outside the viewport leaves it at its last position, and a watcher
+hides it as soon as the tab stops showing, the frame can no longer be placed, or another window comes in front. Any
+driver failure turns the feature off for the run.
 
 The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
 one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the

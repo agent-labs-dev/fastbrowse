@@ -51,7 +51,6 @@ const MAX_SIDE_INSET: f64 = 40.0;
 const OVERLAY_TITLE: &str = "Cua.AgentCursorOverlay";
 // asyncio's `limit=2**20`: a reply line longer than this is a broken driver, not a list of windows.
 const LINE_LIMIT: usize = 1 << 20;
-const WATCH_POLLS: usize = 80;
 const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// What the page itself reports about where its viewport sits in its window, in device-independent pixels.
@@ -71,6 +70,9 @@ pub struct Geometry {
     pub zoom: f64,
     pub pinch_scale: f64,
     pub visible: bool,
+    /// Whether this is the tab and document that supplied the action point. Any other page still says whether the
+    /// browser is showing and in front, but a point taken from the old one means nothing on it.
+    pub same_page: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -94,6 +96,16 @@ pub type GeometryFn = Arc<dyn Fn() -> BoxFuture<'static, Option<Geometry>> + Sen
 /// the width evenly. Both insets come from the page's own report (`outerHeight - innerHeight`), so nothing here is
 /// a guess about a particular browser's chrome; a result that looks wrong draws nothing.
 pub fn viewport_point(geometry: &Geometry, x: f64, y: f64) -> Option<(f64, f64)> {
+    let (side, top) = viewport_inset(geometry)?;
+    if !((0.0..=geometry.inner_width).contains(&x) && (0.0..=geometry.inner_height).contains(&y)) {
+        return None;
+    }
+    Some((geometry.screen_x + side + x * geometry.zoom, geometry.screen_y + top + y * geometry.zoom))
+}
+
+/// Where the viewport starts inside the window frame, or None when this frame cannot place any point: a hidden tab,
+/// a pinch zoom, or an inset too large to be the browser's own chrome (a docked DevTools panel).
+fn viewport_inset(geometry: &Geometry) -> Option<(f64, f64)> {
     if !geometry.visible || (geometry.pinch_scale - 1.0).abs() > 0.01 || geometry.zoom <= 0.0 {
         return None;
     }
@@ -104,10 +116,7 @@ pub fn viewport_point(geometry: &Geometry, x: f64, y: f64) -> Option<(f64, f64)>
     if !((-1.0..=MAX_SIDE_INSET).contains(&side) && (-1.0..=MAX_TOP_INSET).contains(&top)) {
         return None;
     }
-    if !((0.0..=geometry.inner_width).contains(&x) && (0.0..=geometry.inner_height).contains(&y)) {
-        return None;
-    }
-    Some((geometry.screen_x + side.max(0.0) + x * geometry.zoom, geometry.screen_y + top.max(0.0) + y * geometry.zoom))
+    Some((side.max(0.0), top.max(0.0)))
 }
 
 /// The browser's own window, when it is the one frontmost, else None.
@@ -444,25 +453,28 @@ impl CursorFeedback {
 
 impl Inner {
     async fn follow(self: Arc<Self>, geometry: GeometryFn, point: (f64, f64), generation: u64) {
-        let moved =
-            timeout(MOVE_SECONDS + CALL_SECONDS * 3, Arc::clone(&self).glide(geometry, point, generation)).await;
+        let moved = timeout(MOVE_SECONDS + CALL_SECONDS * 3, Arc::clone(&self).glide(&geometry, point)).await;
         if let Err(failure) = moved.unwrap_or(Err(Failure::Timeout)) {
-            self.fail(failure).await;
+            return self.fail(failure).await;
+        }
+        // Watched even when this move drew nothing: the previous drawing is still on screen and still needs hiding.
+        let mut tasks = lock(&self.tasks);
+        if tasks.generation == generation {
+            tasks.watching = Some(tokio::spawn(Arc::clone(&self).watch(geometry)));
         }
     }
 
-    async fn glide(self: Arc<Self>, geometry: GeometryFn, point: (f64, f64), generation: u64) -> Result<(), Failure> {
+    async fn glide(self: Arc<Self>, geometry: &GeometryFn, point: (f64, f64)) -> Result<(), Failure> {
         let Some(reading) = geometry().await else {
             // A page that has not reported its frame yet is not a reason to take the cursor away: it stays where
-            // the last step left it, which is the only place it could still be.
+            // the last step left it, the only place it could still be, and the watcher hides it if the page goes.
             return Ok(());
         };
-        let Some(target) = viewport_point(&reading, point.0, point.1) else {
-            // A point this frame cannot place (hidden tab, zoom, a docked panel) leaves the cursor at its last
-            // position; only a tab that is not showing at all takes it away.
-            if !reading.visible {
-                self.show(false).await?;
-            }
+        if viewport_inset(&reading).is_none() {
+            return self.show(false).await;
+        }
+        // A page that has already moved on, or a point outside the viewport, leaves the cursor at its last position.
+        let Some(target) = viewport_point(&reading, point.0, point.1).filter(|_| reading.same_page) else {
             return Ok(());
         };
         if *lock(&self.last_call) + KEEPALIVE_SECONDS < Instant::now() {
@@ -475,18 +487,13 @@ impl Inner {
             self.driver.tool_within("move_cursor", arguments, MOVE_SECONDS).await?;
         }
         *lock(&self.last_call) = Instant::now();
-        if window.is_some() {
-            let mut tasks = lock(&self.tasks);
-            if tasks.generation == generation {
-                tasks.watching = Some(tokio::spawn(Arc::clone(&self).watch(geometry)));
-            }
-        }
         Ok(())
     }
 
-    /// Hide a previous drawing when its page or foreground window changes.
+    /// Hide a drawing once its browser stops showing a page it can be placed on, for as long as it is on screen: the
+    /// driver keeps it indefinitely, so nothing else takes it off a window that covers the browser later.
     async fn watch(self: Arc<Self>, geometry: GeometryFn) {
-        for _ in 0..WATCH_POLLS {
+        loop {
             sleep(WATCH_INTERVAL).await;
             match timeout(CALL_SECONDS, self.still_shown(&geometry)).await.unwrap_or(Err(Failure::Timeout)) {
                 Ok(true) => {}
@@ -496,12 +503,16 @@ impl Inner {
         }
     }
 
-    /// Take a drawing away only when the page stops showing or the browser stops being the front window. A frame
-    /// that merely differs (a navigation, a scroll, a zoom) leaves the cursor at its last position.
+    /// Take a drawing away only when the page stops showing, can no longer be placed, or the browser stops being the
+    /// front window. A navigation or a scroll leaves the cursor at its last position.
     async fn still_shown(&self, geometry: &GeometryFn) -> Result<bool, Failure> {
+        if *lock(&self.shown) == Some(false) {
+            return Ok(false);
+        }
         match geometry().await {
+            // A read that failed mid-navigation; the next poll reads the page that replaced it.
             None => Ok(true),
-            Some(reading) if !reading.visible => {
+            Some(reading) if viewport_inset(&reading).is_none() => {
                 self.show(false).await?;
                 Ok(false)
             }
@@ -748,6 +759,7 @@ if mode == "linger":
         zoom: 1.0,
         pinch_scale: 1.0,
         visible: true,
+        same_page: true,
     };
 
     fn raw_window(z_index: Option<i64>, x: f64) -> Value {
@@ -1102,22 +1114,27 @@ if mode == "linger":
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_page_that_stops_showing_hides_the_previous_cursor() {
-        let fake = Fake::new("ok", None);
-        let changed = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&changed);
-        let geometry: GeometryFn = Arc::new(move || {
-            let hidden = flag.load(Ordering::SeqCst);
-            Box::pin(async move { Some(Geometry { visible: !hidden, ..GEOMETRY }) })
-        });
-        let feedback = fake.open().await.unwrap();
-        feedback.follow(geometry, (10.0, 20.0));
-        feedback.settled().await;
-        changed.store(true, Ordering::SeqCst);
-        let watching = lock(&feedback.inner.tasks).watching.take().expect("a drawn cursor is watched");
-        timeout(Duration::from_secs(3), watching).await.unwrap().unwrap();
-        feedback.close().await;
-        assert_eq!(fake.enabled(), [false]);
-        assert_eq!(fake.calls().iter().filter(|name| *name == "move_cursor").count(), 1);
+        // The page after the change: hidden, or still showing but pinch-zoomed, so the drawing no longer marks what
+        // it was put on.
+        let after = [Geometry { visible: false, ..GEOMETRY }, Geometry { pinch_scale: 2.0, ..GEOMETRY }];
+        for after in after {
+            let fake = Fake::new("ok", None);
+            let changed = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&changed);
+            let geometry: GeometryFn = Arc::new(move || {
+                let reading = if flag.load(Ordering::SeqCst) { after } else { GEOMETRY };
+                Box::pin(async move { Some(reading) })
+            });
+            let feedback = fake.open().await.unwrap();
+            feedback.follow(geometry, (10.0, 20.0));
+            feedback.settled().await;
+            changed.store(true, Ordering::SeqCst);
+            let watching = lock(&feedback.inner.tasks).watching.take().expect("a drawn cursor is watched");
+            timeout(Duration::from_secs(3), watching).await.unwrap().unwrap();
+            feedback.close().await;
+            assert_eq!(fake.enabled(), [false], "{after:?}");
+            assert_eq!(fake.calls().iter().filter(|name| *name == "move_cursor").count(), 1);
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
