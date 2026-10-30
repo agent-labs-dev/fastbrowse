@@ -592,6 +592,11 @@ impl Agent {
                 effect_now = Some(done.summary);
             }
             progressed = judged;
+            // What the browser saw the action do (a download, a new tab, why it failed) is stated to Jev beside the
+            // page change the next observation finds: a download leaves the page as it was.
+            if effect_now.is_none() {
+                effect_now = result.detail.as_deref().map(|detail| self.redact(detail));
+            }
             act = result;
         }
         state.history.push(HistoryEntry {
@@ -763,10 +768,11 @@ impl Agent {
         }
         let Some(before) = state.acted_from.take() else { return };
         let Some(last) = state.history.last_mut() else { return };
-        if last.effect.is_some() {
-            return;
-        }
-        last.effect = Some(effect(&before, observation, None).summary);
+        let summary = effect(&before, observation, None).summary;
+        last.effect = Some(match last.effect.take() {
+            Some(detail) => format!("{detail}; {summary}"),
+            None => summary,
+        });
     }
 
     /// Every observation models see has resolved secret values blanked, wherever the page echoes them.

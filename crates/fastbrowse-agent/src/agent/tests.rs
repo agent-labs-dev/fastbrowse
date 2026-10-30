@@ -222,6 +222,22 @@ async fn test_the_next_observation_records_what_an_action_did() {
 }
 
 #[tokio::test]
+async fn test_what_the_browser_saw_an_action_do_stays_beside_the_page_change() {
+    let field_before = field("Search elsewhere");
+    let mut state = run_state().await;
+    state.acted_from = Some(observation(std::slice::from_ref(&field_before)));
+    state.history.push(HistoryEntry {
+        effect: Some("downloaded the file the link points at".into()),
+        ..executed(Some(Operation::Click), Some("export"), true)
+    });
+    agent().note_effect(&mut state, &observation(&[field_before]));
+    assert_eq!(
+        state.history.last().unwrap().effect.as_deref(),
+        Some("downloaded the file the link points at; nothing visible changed")
+    );
+}
+
+#[tokio::test]
 async fn test_a_drag_named_by_recovery_is_not_built_from_a_choice_with_no_drop_target() {
     let (source, destination) = (draggable(), button("Done"));
     let page = observation(&[source.clone(), destination.clone()]);
