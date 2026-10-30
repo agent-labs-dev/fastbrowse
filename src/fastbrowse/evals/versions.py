@@ -258,13 +258,10 @@ def publish(release: str, source: Path) -> Path:
     Each live task needs three distinct measured repeats, and each fastbrowse task is compared at the task version
     it ran against the newest published release that ran the same protocol and model route with three attempts.
     """
-    from fastbrowse.evals.publication import gate, ledger_path
-
-    def read(file: Path) -> list[dict[str, Any]]:
-        return [json.loads(line) for line in file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    from fastbrowse.evals.publication import gate, ledger_path, read_jsonl
 
     if release == "auto":
-        rows = read(source)
+        rows = read_jsonl(source)
         releases = {(row.get("run") or {}).get("fastbrowse_version") for row in rows}
         if len(releases) != 1 or None in releases:
             raise ValueError("rows must identify one fastbrowse release")
@@ -274,9 +271,9 @@ def publish(release: str, source: Path) -> Path:
     target = RESULTS / f"{release}.jsonl"
     if target.exists() or ledger_path(target).exists() or any(name == release for name, _ in published()):
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
-    rows = read(source)
+    rows = read_jsonl(source)
     ledger_file = ledger_path(source)
-    ledger = read(ledger_file) if ledger_file.exists() else None
+    ledger = read_jsonl(ledger_file) if ledger_file.exists() else None
     report = gate(
         rows,
         release=release,
