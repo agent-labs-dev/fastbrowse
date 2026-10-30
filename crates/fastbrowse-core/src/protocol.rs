@@ -257,9 +257,10 @@ pub struct RunTask {
     pub downloads: Option<PathBuf>,
     #[serde(default)]
     pub record: Option<PathBuf>,
-    /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver.
-    #[serde(default)]
-    pub cursor: bool,
+    /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. Unset draws it wherever
+    /// it can be placed, true also brings the window to the front for it, false turns it off.
+    #[serde(default, deserialize_with = "lax::opt_boolean")]
+    pub cursor: Option<bool>,
     /// Local Chrome instead of a Browser Use Cloud browser.
     #[serde(default)]
     pub local: bool,
@@ -569,7 +570,7 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("output_schema", Ty::optional(Ty::map(Ty::Any)), none()),
         Field::default("downloads", path(), none()),
         Field::default("record", path(), none()),
-        Field::default("cursor", Ty::Bool, false),
+        Field::default("cursor", Ty::optional(Ty::Bool), none()),
         Field::default("local", Ty::Bool, false),
         Field::default("chrome", Ty::optional(LocalChrome::ty()), none()),
         Field::default("cloud_profile", text(), none()),

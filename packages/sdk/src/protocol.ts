@@ -291,13 +291,13 @@ export interface StepResult {
   page_changed: boolean | null;
   duration_ms: number;
   /**
-   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
-   */
-  choices?: StepChoice[];
-  /**
    * The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
    */
   fallback?: StepFallback | null;
+  /**
+   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+   */
+  choices?: StepChoice[];
 }
 export interface StepFact {
   text: string;
@@ -310,7 +310,6 @@ export interface StepFact {
   reader: FactReader;
   deep_link: string | null;
 }
-/** Why a step acted on a recovery rather than on Jev's pick: the fallback that fired, and the pick it set aside. */
 export interface StepFallback {
   /**
    * The reason the run stopped following Jev, as recovery was told it.
@@ -374,7 +373,7 @@ export interface RunParams {
   } | null;
   downloads?: string | null;
   record?: string | null;
-  cursor?: boolean;
+  cursor?: boolean | null;
   local?: boolean;
   chrome?: LocalChrome | null;
   cloud_profile?: string | null;

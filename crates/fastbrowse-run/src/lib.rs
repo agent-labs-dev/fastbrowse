@@ -190,7 +190,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("proxy_country", task.proxy_country.is_some()),
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
             ("record", task.record.is_some()),
-            ("cursor", task.cursor),
+            ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
         ]);
         if !browser.is_empty() {
@@ -524,7 +524,7 @@ async fn browser(
     http: &Http,
 ) -> Result<(BrowserConnection, Owned), Refused> {
     let key = host.browser_api_key.as_deref();
-    let foreground = task.foreground || task.cursor;
+    let foreground = task.foreground || task.cursor == Some(true);
     let handed = match (&task.cdp_url, task.cdp_port) {
         (Some(url), _) => Some(url.clone()),
         (None, Some(port)) => Some(resolve_cdp_port(port, "127.0.0.1", http).await?),
@@ -690,7 +690,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         session = Some(opened.clone());
         opened.open().await?;
         // A cloud or headless browser has no window on this machine to draw over.
-        let shown = task.cursor
+        let shown = task.cursor != Some(false)
             && host.browser_api_key.is_none()
             && is_loopback(&opened.connection().cdp_url)
             && (task.cdp_url.is_some() || task.cdp_port.is_some() || chrome.headed);

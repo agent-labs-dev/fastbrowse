@@ -298,7 +298,7 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Until = options.Until is not null ? true : null,
         Downloads = options.Downloads,
         Record = options.Record,
-        Cursor = options.Cursor ? true : null,
+        Cursor = options.Cursor,
         Local = browser.Local ? true : null,
         Chrome = browser.Chrome,
         CloudProfile = browser.CloudProfile,

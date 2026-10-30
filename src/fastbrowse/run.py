@@ -95,7 +95,7 @@ async def run_task(
     config: Config | None = None,
     http: httpx.AsyncClient | None = None,
     record: Path | None = None,
-    cursor: bool = False,
+    cursor: bool | None = None,
     fetch: bool = False,
     fetch_first: bool = False,
     settings: Mapping[str, str] | None = None,
@@ -155,17 +155,18 @@ async def run_task(
     Live frames and recordings are held back while a resolved secret shows on the page, as PNG step frames are.
     No handler means no live capture.
 
-    `cursor` draws the agent's cursor over a visible local or attached Chrome through the Cua Driver, on Linux
-    with X11; it never moves the real pointer or changes focus, and does nothing where it cannot place the cursor
-    exactly, including with no `cua-driver` installed, no display, a headless or cloud browser. It implies
-    `foreground`, since the cursor lies over the window's front tab.
+    The agent's cursor is drawn by default over a visible local or attached Chrome through the Cua Driver, on
+    Linux with X11, whenever that window is in front; it never moves the real pointer or changes focus, and does
+    nothing where it cannot place the cursor exactly, including with no `cua-driver` installed, no display, a
+    headless or cloud browser. `cursor=True` also implies `foreground`, so the window is brought to the front and
+    the cursor is always drawn; `cursor=False` turns it off.
 
     `fetch` reads every page over HTTP and starts no browser at all, for a task that only has to read: the
     document becomes the same `Capture` blocks a browser capture produces, so reads, quotes and citations
     are unchanged. A step that would click, fill, download or look at pixels has nothing to act on, so the
     run ends `blocked` with the reason instead of failing a step or answering from a page it never saw. What
     a page builds with scripts is not there either: a document with no readable text in its markup is refused
-    as needing a browser. Browser, recording, download and cursor options mean nothing here and are an error
+    as needing a browser. Browser, recording, download and `cursor=True` options mean nothing here and are an error
     rather than ignored.
 
     `fetch_first` reads the same way, and when the fetched run ends `blocked` because the page refused

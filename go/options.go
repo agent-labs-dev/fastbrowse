@@ -82,8 +82,9 @@ type RunOptions struct {
 	Downloads string
 	// Record is where to write a video of the run. The server needs ffmpeg for it.
 	Record string
-	// Cursor draws visual cursor feedback for visible local Chrome on Linux X11 with the Cua Driver.
-	Cursor  bool
+	// Cursor is the agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: nil draws it
+	// wherever it can be placed, true also brings the window to the front for it, false turns it off.
+	Cursor  *bool
 	Secrets *Secrets
 	// Until is called with the address the run ended on. False keeps the run from StatusComplete, and an error
 	// ends it with StatusError.

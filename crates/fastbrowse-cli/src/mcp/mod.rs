@@ -68,7 +68,7 @@ pub struct ServerConfig {
     pub bitwarden: Vec<String>,
     pub downloads: Option<PathBuf>,
     pub max_concurrent: usize,
-    pub cursor: bool,
+    pub cursor: Option<bool>,
     /// Bearer token every HTTP request but `/healthz` must carry. `None` is allowed only on loopback.
     pub mcp_token: Option<String>,
     /// [`OVERRUN_GRACE_SECONDS`], which a test shortens.
@@ -88,7 +88,7 @@ impl Default for ServerConfig {
             bitwarden: Vec::new(),
             downloads: None,
             max_concurrent: 1,
-            cursor: false,
+            cursor: None,
             mcp_token: None,
             grace_seconds: OVERRUN_GRACE_SECONDS,
         }
@@ -397,7 +397,7 @@ pub struct McpArgs {
     pub max_seconds: Option<f64>,
     pub max_concurrent: i64,
     pub downloads: Option<PathBuf>,
-    pub cursor: bool,
+    pub cursor: Option<bool>,
     /// A stand-in run by name, as `serve --run-task` takes one, for tests that start this command.
     pub run_task: Option<String>,
 }
@@ -425,9 +425,10 @@ pub fn parser() -> Parser {
             Opt::value("--max-concurrent"),
             Opt::value("--downloads"),
             Opt::flag("--cursor"),
+            Opt::flag("--no-cursor"),
         ],
         positional: None,
-        exclusive: Vec::new(),
+        exclusive: vec![("--cursor", "--no-cursor")],
     };
     if cfg!(feature = "scripted") {
         parser.options.push(Opt::value("--run-task"));
@@ -467,7 +468,7 @@ pub fn parse(argv: &[String]) -> Result<McpArgs, Exit> {
         max_seconds: parsed.value("--max-seconds").and_then(py_float),
         max_concurrent: parsed.value("--max-concurrent").and_then(py_int).unwrap_or(1),
         downloads: parsed.value("--downloads").map(PathBuf::from),
-        cursor: parsed.flag("--cursor"),
+        cursor: crate::cli::cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
         run_task: parsed.value("--run-task").map(str::to_string),
     })
 }
