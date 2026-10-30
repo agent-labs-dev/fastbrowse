@@ -322,7 +322,20 @@ pub async fn decide(
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
                     decision.input_tokens += tokens;
                     if config.step_choices {
-                        decision.offered = controls;
+                        // Recorded as Jev read them: a compact request cut labels and contexts, and a choice that
+                        // showed the full text would claim Jev had what told the right element apart.
+                        decision.offered = if compact {
+                            controls
+                                .into_iter()
+                                .map(|control| Control {
+                                    label: shortened(&control.label, COMPACT_CHARS),
+                                    context: control.context.as_deref().map(|c| shortened(c, COMPACT_CHARS)),
+                                    ..control
+                                })
+                                .collect()
+                        } else {
+                            controls
+                        };
                     }
                     return Ok(decision);
                 }
