@@ -4,7 +4,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use fastbrowse_core::decision::NoulQuestion;
-use fastbrowse_core::effects::{SETTING_ROLES, state_key};
+use fastbrowse_core::effects::state_key;
 use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Dialog, Observation, pager_link};
@@ -16,12 +16,10 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 use url::Url;
 
-use super::state::{RunState, Signature};
+use super::state::RunState;
 use crate::memory::{Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry, Reduction};
-
-pub(crate) const STALE_LINK_FAILURES: i64 = 2;
 
 /// Operations that do not act on the page: a read changes nothing, and DONE is judged again by the finish.
 pub(crate) fn not_acting(operation: Operation) -> bool {
@@ -205,46 +203,6 @@ pub(crate) fn next_value(values: &[String], entries: &[HistoryEntry], label: Opt
     values[done.min(values.len() - 1)].clone()
 }
 
-/// A page state with its visible text, which a state key leaves out: a review step keeps its controls when the
-/// values it shows change.
-pub(crate) fn seen(observation: &Observation) -> String {
-    format!("{}:{}", state_key(observation), sha256_hex(observation.viewport_text.as_bytes()))
-}
-
-/// Whether every action since the last read typed into a field and changed nothing else on the page.
-pub(crate) fn only_typed_since_read(entries: &[HistoryEntry]) -> bool {
-    for entry in entries.iter().rev() {
-        if entry.operation == Some(Operation::Read) {
-            return entry.outcome == StepOutcome::Executed;
-        }
-        if entry.operation != Some(Operation::Fill) || entry.page_changed {
-            return false;
-        }
-    }
-    false
-}
-
-/// Whether a page state is a redraw of an address already read, reached with no read paying out since the last
-/// recovery.
-pub(crate) fn redrawn_read(state: &mut RunState, observation: &Observation) -> bool {
-    let form: HashSet<String> = observation
-        .controls
-        .iter()
-        .filter(|c| {
-            c.operations.contains(&Operation::Fill)
-                || SETTING_ROLES.contains(&c.role.as_str())
-                || c.submit_semantics.is_some()
-        })
-        .map(|c| dumps(&json!([c.role, c.label, c.context])))
-        .collect();
-    let seen = state.form_controls_at.entry(observation.url.clone()).or_default();
-    let new_step = form.iter().any(|item| !seen.contains(item));
-    seen.extend(form);
-    !new_step
-        && state.notes.read_address(&observation.url)
-        && !state.history[state.recovered_at.min(state.history.len())..].iter().any(|entry| entry.read_progress)
-}
-
 /// Where the run began, then every address it has been on since, each once.
 pub(crate) fn visited(addresses: &IndexMap<String, ()>, redact: impl Fn(&str) -> String) -> Vec<String> {
     let mut urls: Vec<String> = Vec::new();
@@ -336,10 +294,6 @@ pub(crate) fn navigation_question(task: &str, url: &str) -> NoulQuestion {
     irreversible_question(task, Operation::Click, &caller_link(url), None)
 }
 
-pub(crate) fn signature(decision: &Decision, observation: &Observation) -> Signature {
-    (decision.operation, decision_label(decision), decision.destination.as_ref().map(describe), state_key(observation))
-}
-
 pub(crate) fn decision_label(decision: &Decision) -> Option<String> {
     match &decision.target {
         Some(target) => Some(describe(target)),
@@ -358,47 +312,6 @@ pub fn read_question(task: &str, wanted: &[Requirement], began_at: Option<&str>)
             "{question}\n\nThe task's \"this page\" is {began}, where the run began, and \"the next page\" is the one after it. A task that names how many pages it covers ends at the last one it names."
         ),
     }
-}
-
-pub(crate) type LinkKey = (String, String);
-
-pub(crate) fn link_key(observation: &Observation, control: &Control) -> Option<LinkKey> {
-    // Use the observed link, including cross-origin display hrefs, so redirects retain their source attempt.
-    if control.role != "link" {
-        return None;
-    }
-    let href = control.href.as_ref()?;
-    Some((state_key(observation), dumps(&json!([href, control.label, control.context]))))
-}
-
-fn without_fragment(url: &Url) -> Url {
-    let mut url = url.clone();
-    url.set_fragment(None);
-    url
-}
-
-pub(crate) fn stale_link_key(observation: &Observation, control: &Control) -> Option<LinkKey> {
-    if observation.document_key.is_empty() || control.role != "link" {
-        return None;
-    }
-    let href = control.href.as_ref()?;
-    let mut identity = vec![json!(observation.url), json!(control.frame_id), json!(control.frame_origin), json!(href)];
-    let navigation = match (parse(&observation.url), parse(&observation.url).and_then(|base| base.join(href).ok())) {
-        (Some(here), Some(target)) => {
-            control.frame_id.is_none()
-                && !href.is_empty()
-                && matches!(target.scheme(), "http" | "https")
-                && without_fragment(&target) != without_fragment(&here)
-        }
-        _ => false,
-    };
-    // Related-product cards can change their captions while the same destination keeps failing freshness.
-    // Same-page links and frames without a known document address still need their separate action identity.
-    if !navigation {
-        identity.push(json!(control.label));
-        identity.push(json!(control.context));
-    }
-    Some((observation.document_key.clone(), dumps(&Value::Array(identity))))
 }
 
 /// Where a pager link goes: its origin, path and query.
@@ -504,7 +417,7 @@ pub(crate) fn paging(state: &mut RunState, observation: &Observation) -> Option<
     }
     if let Some(left) = state.paged_from.take() {
         // A click that did not open anything new leaves nothing to read; Jev decides from here.
-        if state_key(observation) != left && !state.read_here {
+        if state_key(observation) != left {
             return Some(code_decision(Operation::Read, None));
         }
     }

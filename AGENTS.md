@@ -182,9 +182,11 @@ These are the things a change must not quietly break.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code
   refuses actions classified as irreversible without authorization. Code-selected pagination and authorized,
   confident actions skip classification. The classifier is not a guarantee against missed changes.
-- **An action that changed nothing is not progress.** An idle action from the same state goes to recovery
-  before a retry, and recovery asks Jev again without it; rewriting a field's current value cannot count as
-  progress even if the page changes.
+- **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE and a return to a
+  page state already seen with nothing read since are each no progress. `unchanged_actions` of them in a row
+  go to recovery, which asks Jev again without the stalled action. A page state not seen before or new evidence
+  renews the recovery budget. Rewriting a field's current value cannot count as progress even if the page
+  changes.
 
 ## Prompts and models
 

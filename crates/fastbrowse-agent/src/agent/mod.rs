@@ -65,9 +65,6 @@ const ENDING_FRAME_SECONDS: f64 = 6.0;
 const SHORTCUT_WAIT_SECONDS: f64 = 2.0;
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
-/// Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page takes
-/// many scrolls, each of which shows something new.
-const REPEATS_BEFORE_CYCLE: i64 = 2;
 /// The choice a field's text is written for when no input or secret is the answer.
 const GENERATE: &str = "generate";
 
@@ -899,10 +896,12 @@ impl Agent {
     fn context(
         &self,
         state: &RunState,
+        observation: &Observation,
         secrets: Vec<String>,
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
+        let page_facts = Self::page_facts(state, observation);
         let mut unread = None;
         if let Some(plan) = &state.ready_plan {
             let mut wanted: Vec<String> = state
@@ -945,8 +944,30 @@ impl Agent {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect(),
+            page_facts,
             screenshot: None,
         })
+    }
+
+    /// What code knows about this page that bears on reading it. Jev's read assessment decides whether to read.
+    fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
+        let mut facts = Vec::new();
+        let document = &observation.document_key;
+        let read = state.read_documents.get(document).copied();
+        if !document.is_empty() && read == Some(true) {
+            facts.push("This page changed after it was last read, so the notes taken from it predate the change.");
+        }
+        if !document.is_empty()
+            && read.is_none()
+            && observation.controls.iter().any(fastbrowse_core::page::pager_link)
+            && state.ready_plan.as_ref().is_some_and(|plan| helpers::unread(plan, &state.notes))
+        {
+            facts.push("This list page has not been read: turning to another page leaves its records unread.");
+        }
+        if helpers::unread_transaction(state) {
+            facts.push("An action that may have committed a change has not had the page it led to read.");
+        }
+        facts.into_iter().map(String::from).collect()
     }
 
     /// Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop.
@@ -989,7 +1010,7 @@ impl Agent {
 
     /// Whether Jev, asked about this page as at any step, judges it a sign-in wall that blocks the task.
     async fn sees_wall(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
-        let context = self.context(state, Vec::new(), true, false)?;
+        let context = self.context(state, observation, Vec::new(), true, false)?;
         let decision = crate::policy::decide(
             &*self.jev,
             observation,

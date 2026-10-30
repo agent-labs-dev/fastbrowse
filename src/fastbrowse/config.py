@@ -49,10 +49,6 @@ class TokenBudget(Frozen):
 class StallRules(Frozen):
     unchanged_actions: int = Field(default=3, gt=0)
     max_recoveries: int = Field(default=2, ge=0)
-    barren_reads: int = Field(default=2, gt=0)
-    """Reads of one page state, for one set of open requirements, that may add no fact before the run has to act
-    instead. A page that rewrites its own text on every observation (a ticker, rotating ads, a live counter)
-    otherwise mints a read key it has never seen each time, and can be read until the step budget runs out."""
 
 
 class Config(Frozen):

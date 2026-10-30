@@ -1,9 +1,8 @@
-//! Turning a decision into an action: the gates code owns, the text a field gets, and the reads an interaction owes.
+//! Turning a decision into an action: the gates code owns and the text a field gets.
 
 use std::collections::HashSet;
 
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, NoulQuestion, Question};
-use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{CostComponent, Decider, LLMPurpose, Operation, Status, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
@@ -22,13 +21,10 @@ use serde_json::{Map, Value, json};
 
 use super::driving::{StepOptions, Watched, require};
 use super::helpers::{
-    caller_link, code_decision, describe, dialog_question, lookup, misfit, navigation_question, next_value,
-    only_typed_since_read, read_exhausted, seen, unread,
+    caller_link, code_decision, describe, dialog_question, misfit, navigation_question, next_value, unread,
 };
-use super::reading::covered;
 use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
 use super::{Agent, GENERATE};
-use crate::memory::shows;
 use crate::planner::Plan;
 use crate::policy::Decision;
 use crate::support::generate;
@@ -746,7 +742,7 @@ impl Agent {
                 ..observation
             };
             self.note_effect(state, &observation);
-            self.settle(state, &observation);
+            self.settle(state, &observation).await?;
         }
         if completed {
             state.form_rejected.remove(&form_key);
@@ -939,146 +935,5 @@ impl Agent {
             return Err(wall(format!("reading {page} found none of the requested information")));
         }
         Ok(())
-    }
-
-    pub(super) async fn read_before_interaction(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-    ) -> Step<bool> {
-        // A native dialog pauses JavaScript, so capture cannot run until the dialog has been handled.
-        if observation.dialog.is_some() {
-            return Ok(false);
-        }
-        if state.oversized_answer
-            && !state.open_answer_outputs.is_empty()
-            && state.owes_read
-            && state.ready_plan.as_ref().is_some_and(lookup)
-            && !state.reads.iter().any(|key| key.0 == observation.document_key && key.3 == state.open_answer_outputs)
-        {
-            // Recovery selected this source to repair missing fields. Uncertainty about the next click cannot spend
-            // another recovery before its evidence is read.
-            let read = code_decision(Operation::Read, None);
-            return Ok(!Box::pin(self.step(state, observation, &read, Decider::Code, StepOptions::default())).await?);
-        }
-        if decision.operation == Operation::Back
-            && !state.record_read_documents.contains(&observation.document_key)
-            && !state.reads.iter().any(|key| key.0 == observation.document_key)
-        {
-            let plan = state.await_plan().await?;
-            if !state.notes.unresolved(&plan).is_empty() {
-                // Backing out of an unread document can lose a value needed by a pending action, even after every
-                // information requirement is answered.
-                let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
-                return Ok(
-                    !Box::pin(self.step(state, observation, &reading, Decider::Code, StepOptions::default())).await?
-                );
-            }
-        }
-        if state.ready_plan.is_none() && state.transaction_candidates.iter().any(|c| !c.outcome_read) {
-            state.await_plan().await?;
-        }
-        // A read takes in the whole page, so a scroll over one never read only spends steps.
-        let unread_scroll =
-            decision.operation.is_scrolling() && !state.reads.iter().any(|key| key.0 == observation.document_key);
-        if matches!(decision.operation, Operation::Read | Operation::Done) {
-            return Ok(false);
-        }
-        let transaction_pending = self.unread_receipt(state).await?;
-        if decision.read_assessment != crate::policy::ReadAssessment::Evidence && !unread_scroll && !transaction_pending
-        {
-            return Ok(false);
-        }
-        if !transaction_pending && state.read_here && only_typed_since_read(&state.history) {
-            // The page was read, and since then only a field's own text changed, which is the run's own writing.
-            return Ok(false);
-        }
-        let here = seen(observation);
-        if !transaction_pending
-            && ((state.passed.contains(&here) && state.acted_on.as_ref() != Some(&here)) || state.typed_on_passed)
-        {
-            // Back on a page exactly as the run left it unread, perhaps with its own typing added: Jev judged it had
-            // nothing to read then, and nothing it holds has changed.
-            return Ok(false);
-        }
-        let plan = state.await_plan().await?;
-        if !transaction_pending && !unread(&plan, &state.notes) {
-            return Ok(false);
-        }
-        // An interaction can remove evidence, so read first and reconsider before authorizing the next action. But an
-        // interaction that only redrew what the notes hold, such as a tab opened on text already read or a row
-        // expanded over it, leaves nothing to preserve, and reading it again spends a model call on nothing.
-        let capture = self.capture().await?;
-        if !transaction_pending && covered(state, observation, &capture) {
-            self.event("read_not_owed", || Map::from_iter([("url".into(), self.redact(&observation.url).into())]));
-            state.owes_read = false;
-            state.read_here = true;
-            return Ok(false);
-        }
-        let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
-        // Jev's read is the one it judged the page evidence for; a scroll over an unread page or a pending receipt is
-        // read by rule.
-        let decided_by = if decision.read_assessment == crate::policy::ReadAssessment::Evidence && !transaction_pending
-        {
-            Decider::Jev
-        } else {
-            Decider::Code
-        };
-        let options = StepOptions { capture: Some(capture), ..StepOptions::default() };
-        let skipped = Box::pin(self.step(state, observation, &reading, decided_by, options)).await?;
-        Ok(transaction_pending || !skipped)
-    }
-
-    /// Read a page state again when what an earlier read of it evidenced is no longer on it; whether it read.
-    pub(super) async fn reread_if_changed(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
-        if !state.history.last().is_some_and(|entry| entry.page_changed) {
-            return Ok(false);
-        }
-        let key = state_key(observation);
-        let read: IndexMap<String, String> = state.evidenced_at.get(&key).cloned().unwrap_or_default();
-        let ids: IndexMap<String, String> = read.into_iter().filter(|(r, _)| state.notes.evidenced(r)).collect();
-        let last = state.read_at.get(&key).cloned();
-        if ids.is_empty() && last.is_none() {
-            return Ok(false);
-        }
-        let capture = self.capture().await?;
-        if Some(&capture.sha256) == last.as_ref() {
-            return Ok(false);
-        }
-        // A read of this state is checked even once a read of another state of the same address superseded it.
-        let mut stale: Vec<String> = ids
-            .iter()
-            .filter(|(r, sha)| {
-                state.notes.read_for(r).iter().any(|e| &e.capture_sha256 == *sha && !shows(&capture.text, &e.quote))
-            })
-            .map(|(r, _)| r.clone())
-            .collect();
-        stale.sort();
-        // A read that evidenced nothing yet still left facts the answer can draw on once another page completes it.
-        let drew = state.notes.facts().iter().any(|fact| {
-            fact.evidence
-                .as_ref()
-                .is_some_and(|e| Some(&e.capture_sha256) == last.as_ref() && !shows(&capture.text, &e.quote))
-        });
-        if stale.is_empty() && !drew {
-            return Ok(false);
-        }
-        self.event("reread", || Map::from_iter([("requirements".into(), json!(stale))]));
-        state.notes.unevidence(stale.iter().map(String::as_str));
-        if let Some(read) = state.evidenced_at.get_mut(&key) {
-            for r in &stale {
-                read.shift_remove(r);
-            }
-        }
-        // What the page paid out before was read off content it no longer shows.
-        state.barren.retain(|k, _| !(k.0 == observation.document_key && k.1 == key));
-        let reading = code_decision(Operation::Read, None);
-        let options = StepOptions { capture: Some(capture), ..StepOptions::default() };
-        if Box::pin(self.step(state, observation, &reading, Decider::Code, options)).await? {
-            let reason = read_exhausted(state);
-            Box::pin(self.recover(state, observation, &reason, Status::Stuck, super::recovery::READ)).await?;
-        }
-        Ok(true)
     }
 }

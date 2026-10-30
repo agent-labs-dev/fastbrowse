@@ -1,8 +1,6 @@
 //! Recovery: when Jev is unsure or the run is going round, Jev is asked again with what went wrong, and only when it
 //! stays unsure does the LLM diagnose why and name one next action.
 
-use std::collections::HashSet;
-
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{
@@ -16,12 +14,9 @@ use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use super::helpers::{
-    controls_text, decision_label, describe, field_corrections, partition_proof, recovery_memory, recovery_text,
-};
+use super::helpers::{controls_text, decision_label, describe, field_corrections, recovery_memory, recovery_text};
 use super::state::{FieldText, RunState, Step, Stop};
 use super::{Agent, dumps_strings};
-use crate::planner::RequirementKind;
 use crate::policy::{Decision, decide};
 use crate::support::generate;
 
@@ -103,8 +98,6 @@ fn stated_in(text: &str, source: &str) -> bool {
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
 pub(super) type Withheld = Option<(Operation, Option<String>)>;
 
-/// A read that found nothing new, withheld from the ask that follows it.
-pub(super) const READ: Withheld = Some((Operation::Read, None));
 /// A refused DONE, withheld from the ask that follows it.
 pub(super) const DONE: Withheld = Some((Operation::Done, None));
 
@@ -145,56 +138,6 @@ impl Agent {
         state.form_values.clear();
         let reason = self.redact(reason);
         let remaining = state.ready_plan.as_ref().map(|plan| state.notes.unresolved(plan)).unwrap_or_default();
-        let evidenced: HashSet<String> = match &state.ready_plan {
-            Some(plan) => plan
-                .requirements
-                .iter()
-                .filter(|r| r.kind == RequirementKind::Information && !remaining.iter().any(|left| left.id == r.id))
-                .map(|r| r.id.clone())
-                .collect(),
-            None => HashSet::new(),
-        };
-        // Reading another target advances a comparison even when its next route is a previously visited list.
-        // Reopening the same requirement after a failed answer check cannot restore recovery repeatedly.
-        let mut verified_outputs: HashSet<String> = HashSet::new();
-        if state.oversized_answer {
-            for plan in &state.finish_partitions {
-                let ids: Vec<&str> = plan.requirements.iter().map(|r| r.id.as_str()).collect();
-                let proof = partition_proof(plan, &state.notes.for_requirements(ids, None), &state.invented);
-                if state.partition_answers.contains_key(&proof) {
-                    verified_outputs.extend(plan.answer_checks.iter().cloned());
-                } else if let Some(partial) = state.partial_answers.get(&proof) {
-                    verified_outputs.extend(partial.output_claims.iter().flat_map(|outputs| outputs.keys().cloned()));
-                }
-            }
-        }
-        let current = if state.oversized_answer { state.notes.current_evidence(None) } else { Default::default() };
-        let sources: HashSet<String> = current.values().map(|source| source.url.clone()).collect();
-        let mut collections: HashSet<(String, Option<String>)> = HashSet::new();
-        if state.oversized_answer {
-            for fact in state.notes.facts() {
-                if fact.is_collection() && fact.comparison.as_ref().is_some_and(|c| c.complete) {
-                    for key in &fact.basis {
-                        if let Some(source) = current.get(key) {
-                            collections.insert((source.url.clone(), fact.scope.clone()));
-                        }
-                    }
-                }
-            }
-        }
-        if (evidenced.iter().any(|id| !state.recovered_requirements.contains(id))
-            && state.open_answer_outputs.is_empty())
-            || verified_outputs.iter().any(|o| !state.recovered_outputs.contains(o))
-            || sources.iter().any(|s| !state.recovered_sources.contains(s))
-            || collections.iter().any(|c| !state.recovered_collections.contains(c))
-        {
-            state.recoveries = 0;
-            state.recovery_log.clear();
-        }
-        state.recovered_requirements.extend(evidenced);
-        state.recovered_outputs.extend(verified_outputs);
-        state.recovered_sources.extend(sources);
-        state.recovered_collections.extend(collections);
         let open_requirements = remaining
             .iter()
             .map(|r| {
@@ -394,7 +337,7 @@ impl Agent {
         withheld: Withheld,
     ) -> Step<bool> {
         let secrets = self.secret_names(&origin_of(&observation.url));
-        let mut context = self.context(state, secrets, false, false)?;
+        let mut context = self.context(state, observation, secrets, false, false)?;
         let mut offered = observation.clone();
         let mut problem = reason.to_string();
         if let Some((operation, label)) = withheld {

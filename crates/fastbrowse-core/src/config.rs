@@ -146,15 +146,11 @@ pub struct StallRules {
     pub unchanged_actions: i64,
     #[serde(deserialize_with = "lax::int_ge0")]
     pub max_recoveries: i64,
-    /// Reads of one page state, for one set of open requirements, that may add no fact before the run has to act
-    /// instead. A page that rewrites its own text on every observation otherwise mints a new read key each time.
-    #[serde(deserialize_with = "lax::int_gt0")]
-    pub barren_reads: i64,
 }
 
 impl Default for StallRules {
     fn default() -> Self {
-        StallRules { unchanged_actions: 3, max_recoveries: 2, barren_reads: 2 }
+        StallRules { unchanged_actions: 3, max_recoveries: 2 }
     }
 }
 

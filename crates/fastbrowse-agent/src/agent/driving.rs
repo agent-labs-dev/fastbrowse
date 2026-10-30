@@ -1,6 +1,6 @@
 //! The loop and its step: observe, judge what the last action did, decide, gate and act.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
@@ -15,14 +15,13 @@ use fastbrowse_core::safety::{origin_of, starts_download};
 use serde_json::Map;
 
 use super::helpers::{
-    STALE_LINK_FAILURES, access_inspection, answer_evidence, caller_link, code_decision, decision_label, describe,
-    dialog_question, drew_something, follow_recovery, join, link_key, navigation_question, netloc_of, not_acting,
-    paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, stale_link_key, unread,
+    access_inspection, caller_link, code_decision, decision_label, describe, dialog_question, drew_something,
+    follow_recovery, join, navigation_question, netloc_of, not_acting, paging, path_of, read_exhausted, scheme_of,
+    unread,
 };
-use super::recovery::{READ, withheld};
+use super::recovery::{Withheld, withheld};
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
-use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, SHORTCUT_WAIT_SECONDS};
-use crate::planner::RequirementKind;
+use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, SHORTCUT_WAIT_SECONDS};
 use crate::policy::{Decision, HistoryEntry, StepContext, decide};
 use crate::retrieval::page_quotes;
 use crate::shortcut::{accept, accept_start, propose_start};
@@ -82,7 +81,7 @@ impl Agent {
                     continue;
                 }
             }
-            self.settle(state, &observation);
+            self.settle(state, &observation).await?;
             // Walking a list is dispatched before Jev is asked, because not asking is the point: the reader asked for
             // the rest of the list and the link is already found, so a decision would buy nothing. It therefore passes
             // none of the gates below, which is safe only because of what it can be: a pager link to another address.
@@ -90,15 +89,9 @@ impl Agent {
                 Box::pin(self.pipeline_pages(state, &observation)).await?;
                 continue;
             }
-            if Box::pin(self.reread_if_changed(state, &observation)).await? {
-                continue;
-            }
             if let Some(decision) = paging(state, &observation) {
                 let options = StepOptions { gate: false, ..StepOptions::default() };
-                if Box::pin(self.step(state, &observation, &decision, Decider::Code, options)).await? {
-                    let reason = read_exhausted(state);
-                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
-                }
+                Box::pin(self.step(state, &observation, &decision, Decider::Code, options)).await?;
                 continue;
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
@@ -128,7 +121,7 @@ impl Agent {
             let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
-                    let context = self.context(state, secrets, check_login, fresh)?;
+                    let context = self.context(state, &observation, secrets, check_login, fresh)?;
                     let redecided = state.redecided;
                     let deciding = self.decide_looking(state, &observation, &context);
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
@@ -188,18 +181,6 @@ impl Agent {
             {
                 (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
             }
-            if Box::pin(self.read_before_interaction(state, &observation, &decision)).await? {
-                continue;
-            }
-            let pager = decision.operation == Operation::Click
-                && decision.target.as_ref().is_some_and(fastbrowse_core::page::pager_link);
-            // Only a pager waits for the plan: the clicks that set a search up run while it is still being written.
-            if pager && !state.read_here && unread(&state.await_plan().await?, &state.notes) {
-                // Turning the page of a list nobody has read loses that page. Read here first, which also tells code
-                // whether the list goes on.
-                decision = Decision { operation: Operation::Read, target: None, ..decision };
-                (uncertain, decided_by) = (false, Decider::Code);
-            }
             if uncertain && state.ready_plan.is_none() {
                 // Unsure without the requirements: the plan is already in flight and costs less than recovery.
                 state.await_plan().await?;
@@ -209,43 +190,16 @@ impl Agent {
                 state.directed = None;
             } else if decision.operation == Operation::Read {
                 state.await_plan().await?;
-                // A read that ran spends the direction it was sent on, but may leave one of its own. A skipped read
-                // spends nothing.
-                let held = state.directed.take();
-                if !Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await? {
-                    continue;
-                }
-                state.directed = held;
-                let directed = if decision.directed {
-                    Some(decision.clone())
-                } else {
-                    follow_recovery(state, &observation, &decision, true)
-                };
-                let Some(directed) = directed else {
-                    let reason = read_exhausted(state);
-                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
-                    continue;
-                };
-                (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
+                // A read spends the direction it was sent on, but may leave one of its own.
+                state.directed = None;
+                Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await?;
+                continue;
             }
             // The confidence gate exists to stop the agent acting on a page it does not understand. READ and DONE do
             // not act: a read changes nothing, and DONE is judged again by `finish`.
             if decision.operation == Operation::Escalate || (uncertain && !not_acting(decision.operation)) {
                 let reason = format!("uncertain next step ({:.2})", decision.confidence());
                 Box::pin(self.consult(state, &observation, &reason)).await?;
-                continue;
-            }
-            // An action that changed nothing from this page goes to recovery before it is taken again.
-            if !not_acting(decision.operation)
-                && !decision.directed
-                && state.idle.contains(&signature(&decision, &observation))
-            {
-                let what = decision_label(&decision).map_or_else(
-                    || decision.operation.to_string(),
-                    |label| format!("{} {}", decision.operation, text::repr(&label)),
-                );
-                let reason = self.redact(&format!("{what} changed nothing the last time it was taken from this page"));
-                Box::pin(self.recover(state, &observation, &reason, Status::Stuck, withheld(&decision))).await?;
                 continue;
             }
             if decision.operation == Operation::Done {
@@ -258,11 +212,7 @@ impl Agent {
                 if !uncertain && !decision.directed && Box::pin(self.fill_form(state, &observation, &decision)).await? {
                     return Ok(());
                 }
-                if Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await? {
-                    let reason = read_exhausted(state);
-                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
-                }
-                Ok(())
+                Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await
             };
             match acted.await {
                 Err(Flow::Unsure(unsure)) => {
@@ -493,7 +443,7 @@ impl Agent {
         Ok(true)
     }
 
-    /// Take one step; whether a duplicate read was skipped, so callers can recover or continue the interaction.
+    /// Take one step and judge whether it moved the run on, which the one stall rule counts.
     pub(super) async fn step(
         &self,
         state: &mut RunState,
@@ -501,26 +451,7 @@ impl Agent {
         decision: &Decision,
         decided_by: Decider,
         options: StepOptions,
-    ) -> Step<bool> {
-        if decision.operation == Operation::Click
-            && let Some(target) = &decision.target
-            && let Some(link) = link_key(observation, target)
-            && let Some(failure) = state.failed_links.get(&link)
-        {
-            return Err(
-                Unsure::new(format!("{} failed before: {}", text::repr(&target.label), failure.message())).into()
-            );
-        }
-        let stale_link = decision.target.as_ref().and_then(|target| stale_link_key(observation, target));
-        if decision.operation == Operation::Click
-            && let Some(stale) = &stale_link
-            && state.stale_links.get(stale).copied().unwrap_or(0) >= STALE_LINK_FAILURES
-        {
-            return Err(Unsure::new(
-                "This link repeatedly became stale before input. Use another route to the requested page.",
-            )
-            .into());
-        }
+    ) -> Step {
         let started = Instant::now();
         state.form_continues = false;
         if !matches!(decision.operation, Operation::Fill | Operation::Read) && !decision.operation.is_scrolling() {
@@ -535,7 +466,8 @@ impl Agent {
         let frames = self.on_event.is_some() && self.config.step_frames;
         let act: ActResult;
         let changed: bool;
-        let mut progressed: bool;
+        // None for a page change, which the next observation judges by the page state it lands on.
+        let progressed: Option<bool>;
         let frame: Option<Vec<u8>>;
         if decision.operation == Operation::Read {
             frame = if frames { self.frame().await? } else { None };
@@ -545,29 +477,22 @@ impl Agent {
             };
             let (read_progress, skipped) =
                 Box::pin(self.read(state, Some(capture), Some(observation), options.require_all_evidence)).await?;
-            progressed = read_progress;
-            state.read_here = true;
-            state.typed_on_passed = false;
-            if skipped {
-                // Silent cache hits made recovery repeatedly ask to read a page whose content was already read.
-                let effect_text = self.redact(&format!(
-                    "This content was already read; duplicate read skipped. {}",
-                    read_exhausted(state)
-                ));
-                state.history.push(HistoryEntry {
-                    effect: Some(effect_text),
-                    ..HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Failed, false)
-                });
-                return Ok(true);
+            progressed = Some(read_progress);
+            if read_progress {
+                renew(state);
             }
             changed = false;
-            let mut text = String::from("Read this content.");
-            if unread(state.plan(), &state.notes) {
-                text += &format!(" {}", read_exhausted(state));
-            }
+            let text = if skipped {
+                format!("This content was already read; duplicate read skipped. {}", read_exhausted(state))
+            } else if unread(state.plan(), &state.notes) {
+                format!("Read this content. {}", read_exhausted(state))
+            } else {
+                "Read this content.".to_string()
+            };
+            let text = self.redact(&text);
             effect_now = Some(text.clone());
             act = ActResult {
-                outcome: StepOutcome::Executed,
+                outcome: if skipped { StepOutcome::Failed } else { StepOutcome::Executed },
                 page_changed: false,
                 detail: Some(text),
                 form_unchanged: false,
@@ -584,7 +509,7 @@ impl Agent {
                         Watched::Done(action) => action,
                         Watched::Redrawn => {
                             self.redecide(state, observation);
-                            return Ok(false);
+                            return Ok(());
                         }
                     }
                 }
@@ -629,18 +554,8 @@ impl Agent {
             {
                 result = clicked;
             }
-            if action.operation == Operation::Click
-                && let Some(stale) = &stale_link
-            {
-                match result.outcome {
-                    StepOutcome::Stale => *state.stale_links.entry(stale.clone()).or_insert(0) += 1,
-                    StepOutcome::Executed => {
-                        state.stale_links.remove(stale);
-                    }
-                    _ => {}
-                }
-            }
-            if result.outcome == StepOutcome::Executed && state.authorization.irreversible_actions {
+            let executed = result.outcome == StepOutcome::Executed;
+            if executed && state.authorization.irreversible_actions {
                 let question = match &decision.target {
                     Some(target) if fastbrowse_core::safety::may_be_irreversible(decision.operation, Some(target)) => {
                         Some(fastbrowse_core::safety::irreversible_question(
@@ -669,35 +584,33 @@ impl Agent {
                     });
                 }
             }
-            if result.outcome == StepOutcome::Executed
-                && let Some(text) = &action.text
-            {
+            if executed && let Some(text) = &action.text {
                 typed = Some(if action.secret { "<secret>".to_string() } else { self.mask(text) });
             }
             changed = result.page_changed;
-            if result.outcome == StepOutcome::Executed {
-                let typing = matches!(decision.operation, Operation::Fill | Operation::Select) && !changed;
-                let here = seen(observation);
-                state.typed_on_passed = typing && (state.passed.contains(&here) || state.typed_on_passed);
-                if !state.read_here {
-                    state.passed.insert(here.clone());
-                }
-                state.acted_on = Some(here);
+            if executed
+                && changed
+                && let Some(read) = state.read_documents.get_mut(&observation.document_key)
+            {
+                *read = true;
             }
-            state.owes_read = state.owes_read || (result.outcome == StepOutcome::Executed && changed);
             // A value edit answers "was this progress" itself, and its answer beats `changed`: the popup a fill draws
             // IS a page change, so `changed` alone kept crediting the identical re-fill. `changed` decides every other
-            // operation.
+            // operation, by the page state it lands on.
             let written = state.written.entry(observation.document_key.clone()).or_default();
             let edit = edit_progress(decision, &action, written);
-            if result.outcome == StepOutcome::Executed
+            if executed
                 && edit.is_some()
                 && let Some(target) = &decision.target
             {
                 written.insert(target.id.clone());
             }
-            progressed = result.outcome == StepOutcome::Executed && edit.unwrap_or(changed);
-            if edit == Some(false) && result.outcome == StepOutcome::Executed {
+            let mut judged = match edit {
+                _ if !executed => Some(false),
+                Some(edited) => Some(edited),
+                None => (!changed).then_some(false),
+            };
+            if edit == Some(false) && executed {
                 // The field already held the value, so this step moved nothing and cannot count: three of them trip
                 // the stall budget. A run that went back to a credentials form re-entered the password it already had
                 // exactly this way, and nothing told it the form was ready to submit instead.
@@ -707,45 +620,8 @@ impl Agent {
                     "{named} already holds that value: submit the form, or read the page, instead of typing it again."
                 )));
             }
-            if progressed
-                && decision.operation.is_scrolling()
-                && !state.open_answer_outputs.is_empty()
-                && state.ready_plan.as_ref().is_some_and(super::helpers::lookup)
-                && state.reads.iter().any(|key| key.0 == observation.document_key)
-            {
-                // A full-page read includes offscreen text, so moving its viewport adds no evidence unless the scroll
-                // loads content that the reader has not seen.
-                let scrolled = self.capture().await?;
-                let read_key = scrolled.read_key();
-                if state.reads.iter().any(|key| key.0 == observation.document_key && key.1 == read_key) {
-                    progressed = false;
-                    effect_now = Some(
-                        "Scroll moved the viewport over content already read in full; no new source content.".into(),
-                    );
-                }
-            }
-            // Moving between two pages changes the page every time, and a run went round "open the author, back to
-            // the list" to its step limit with its stall budget reset at every hop. The same action from the same page
-            // a third time is going round, not forward.
-            let key = signature(decision, observation);
-            let count = {
-                let attempt = state.attempts.entry(key.clone()).or_default();
-                attempt.count += 1;
-                attempt.count
-            };
-            if !decision.operation.is_scrolling() && count > REPEATS_BEFORE_CYCLE {
-                progressed = false;
-            }
             state.acted_from = Some(observation.clone());
-            state.pending_link = match &decision.target {
-                Some(target)
-                    if changed && result.outcome == StepOutcome::Executed && decision.operation == Operation::Click =>
-                {
-                    link_key(observation, target)
-                }
-                _ => None,
-            };
-            if result.outcome == StepOutcome::Executed
+            if executed
                 && let Some(target) = &decision.target
                 && SETTING_ROLES.contains(&target.role.as_str())
             {
@@ -755,22 +631,20 @@ impl Agent {
                 let done = effect(observation, &landed, Some(target));
                 state.acted_from = None;
                 setting = done.set_something;
+                judged = Some(done.set_something);
                 if !done.set_something {
-                    progressed = false;
                     result.detail = Some(format!("no effect: {}", done.summary));
                 }
                 effect_now = Some(done.summary);
             }
+            progressed = judged;
             act = result;
-        }
-        if changed {
-            state.read_here = false;
         }
         state.history.push(HistoryEntry {
             text: typed,
             effect: effect_now,
             setting: setting.then_some(true),
-            read_progress: decision.operation == Operation::Read && progressed,
+            read_progress: decision.operation == Operation::Read && progressed == Some(true),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
         let note: Vec<&str> =
@@ -794,23 +668,40 @@ impl Agent {
             duration_ms: started.elapsed().as_millis() as i64,
         };
         self.record_step(state, step, false, frame).await?;
-        // The one stall rule: a run is stuck when its page has not changed for `unchanged_actions` steps.
+        match progressed {
+            Some(progressed) => {
+                self.count_progress(state, progressed, observation, withheld(decision), Status::Stuck).await
+            }
+            None => {
+                state.landing = Some(withheld(decision));
+                Ok(())
+            }
+        }
+    }
+
+    /// The one stall rule: `stall.unchanged_actions` steps in a row that moved nothing ask Jev again with the stalled
+    /// action left out. A step moves the run on when it gathers evidence, writes a new value, or reaches a page state
+    /// not seen since the last evidence.
+    pub(super) async fn count_progress(
+        &self,
+        state: &mut RunState,
+        progressed: bool,
+        observation: &Observation,
+        stalled: Withheld,
+        gives_up_as: Status,
+    ) -> Step {
         if progressed {
             state.unchanged = 0;
             state.hint = None;
-            state.idle.clear();
-        } else {
-            state.unchanged += 1;
-            if decision.operation != Operation::Read && act.outcome != StepOutcome::Stale {
-                state.idle.insert(signature(decision, observation));
-            }
+            return Ok(());
         }
+        state.unchanged += 1;
         if state.unchanged >= self.config.stall.unchanged_actions {
             let reason = format!("no_progress ({})", state.unchanged);
-            Box::pin(self.recover(state, observation, &reason, Status::Stuck, withheld(decision))).await?;
+            Box::pin(self.recover(state, observation, &reason, gives_up_as, stalled)).await?;
             state.form_continues = false;
         }
-        Ok(false)
+        Ok(())
     }
 
     pub(super) async fn follow_pager(&self, action: &Action, observation: &Observation) -> Step<ActResult> {
@@ -881,44 +772,25 @@ impl Agent {
         Ok(Some(self.page.act(&retargeted, &raw).await?))
     }
 
-    /// Note the page state reached, renewing the recovery budget when it is new.
-    ///
-    /// Recoveries are spent on being stuck, not on the whole run, so a page state never seen before restores the
-    /// budget.
-    pub(super) fn settle(&self, state: &mut RunState, observation: &Observation) {
-        let renews = !redrawn_read(state, observation);
-        let key = state_key(observation);
-        let first = state.reached.get(&key).copied();
-        let evidence = if state
-            .ready_plan
-            .as_ref()
-            .is_some_and(|plan| plan.requirements.iter().any(|r| r.kind == RequirementKind::Action))
-        {
-            answer_evidence(&state.notes, false)
-        } else {
-            BTreeSet::new()
-        };
-        let prior = state.reached_with_evidence.get(&key).cloned().unwrap_or_else(|| evidence.clone());
-        let new_context = evidence.iter().any(|item| !prior.contains(item));
-        state.reached_with_evidence.insert(key.clone(), prior.union(&evidence).cloned().collect());
-        if first.is_none() {
+    /// Note the page state reached and judge the last page change by it: a state never seen, or one seen before the
+    /// last evidence was gathered, is progress. A state never seen renews the recovery budget, which is spent on being
+    /// stuck, not on the whole run.
+    pub(super) async fn settle(&self, state: &mut RunState, observation: &Observation) -> Step {
+        let last = state.reached.insert(state_key(observation), state.evidence_reads);
+        if last.is_none() {
             if let Some(failure) = &state.http_failure
                 && ((observation.response_status.is_none() && observation.url != failure.url)
                     || observation.response_status.is_some_and(|status| (200..400).contains(&status)))
             {
                 state.http_failure = None;
             }
-            state.reached.insert(key, state.history.len());
+            renew(state);
         }
-        // Returning to a form with a newly read prerequisite is progress once for that state and those sources.
-        if (first.is_none() || new_context)
-            && renews
-            && (state.open_answer_outputs.is_empty()
-                || Some(answer_evidence(&state.notes, true)) != state.rejected_answer_evidence)
-        {
-            state.recoveries = 0;
-            state.recovery_log.clear();
+        if let Some(stalled) = state.landing.take() {
+            let progressed = last.is_none_or(|seen_at| seen_at < state.evidence_reads);
+            Box::pin(self.count_progress(state, progressed, observation, stalled, Status::Stuck)).await?;
         }
+        Ok(())
     }
 
     /// Record on the last action what it did, which the next choice and recovery both read.
@@ -935,19 +807,12 @@ impl Agent {
         } else {
             state.visited.insert(observation.url.clone(), ());
         }
-        let link = state.pending_link.take();
         if let Some(status) = observation.response_status {
             if status >= 400 {
-                let failure = HttpFailure { url: observation.url.clone(), status };
-                state.http_failure = Some(failure.clone());
-                if let Some(link) = link {
-                    state.failed_links.insert(link, failure);
-                }
-            } else if status >= 200 {
-                state.failed_links.retain(|_, failure| failure.url != observation.url);
-                if state.http_failure.as_ref().is_some_and(|failure| failure.url == observation.url) {
-                    state.http_failure = None;
-                }
+                state.http_failure = Some(HttpFailure { url: observation.url.clone(), status });
+            } else if status >= 200 && state.http_failure.as_ref().is_some_and(|failure| failure.url == observation.url)
+            {
+                state.http_failure = None;
             }
         }
         let Some(before) = state.acted_from.take() else { return };
@@ -1162,6 +1027,12 @@ impl Agent {
         self.page.withhold_frames(revealed);
         revealed
     }
+}
+
+/// A new page state or new evidence restores the recovery budget.
+fn renew(state: &mut RunState) {
+    state.recoveries = 0;
+    state.recovery_log.clear();
 }
 
 /// `_step`'s keyword arguments.

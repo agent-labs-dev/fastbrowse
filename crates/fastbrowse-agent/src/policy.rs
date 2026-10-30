@@ -181,6 +181,9 @@ pub struct StepContext {
     /// Fields the task gives no value for: filling one ends the run needing input.
     #[serde(default)]
     pub no_value_fields: Vec<String>,
+    /// What code knows about this page that bears on reading it, such as that it changed after it was read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_facts: Vec<String>,
     /// The viewport as a PNG, given to a route that takes images.
     #[serde(skip)]
     pub screenshot: Option<Vec<u8>>,
@@ -215,6 +218,7 @@ impl StepContext {
             problem: None,
             withheld: Vec::new(),
             no_value_fields: Vec::new(),
+            page_facts: Vec::new(),
             screenshot: None,
         }
     }
@@ -801,7 +805,11 @@ pub fn build_request(
         )
         .into(),
     );
-    if context.unread_requirements.as_ref().is_none_or(|unread| !unread.is_empty()) {
+    let reading = observation.dialog.is_none() && !context.withheld.contains(&Operation::Read);
+    if reading
+        && (context.unread_requirements.as_ref().is_none_or(|unread| !unread.is_empty())
+            || !context.page_facts.is_empty())
+    {
         let listing = if observation.controls.iter().any(pager_link) {
             "Matching records in a paginated list are evidence for a count or comparison even when this page cannot supply the final answer. Read those records before opening a record's detail link or leaving the list. "
         } else {
@@ -935,9 +943,10 @@ async fn evaluate(
 
     let evaluation = ask(&request.questions).await?;
     let operation_answer = choice_answer(&evaluation, "operation")?;
-    let operation = Operation::parse(&operation_answer.choice).ok_or_else(|| {
+    let mut operation = Operation::parse(&operation_answer.choice).ok_or_else(|| {
         AgentError::Invalid(format!("{} is not a valid Operation", text::repr(&operation_answer.choice)))
     })?;
+    let mut operation_confidence = operation_answer.confidence;
     let mut target: Option<Control> = None;
     let mut tab_id: Option<String> = None;
     let mut url: Option<String> = None;
@@ -1009,20 +1018,28 @@ async fn evaluate(
         // A drag is only as certain as the weaker of its two ends.
         target_confidence = Some(target_confidence.map_or(destination_confidence, |t| t.min(destination_confidence)));
     }
-    let read_assessment = if request.questions.contains_key("read_assessment") {
+    let (read_assessment, read_confidence) = if request.questions.contains_key("read_assessment") {
         let answer = choice_answer(&evaluation, "read_assessment")?;
-        ReadAssessment::parse(&answer.choice).ok_or_else(|| {
+        let assessment = ReadAssessment::parse(&answer.choice).ok_or_else(|| {
             AgentError::Invalid(format!("{} is not a valid ReadAssessment", text::repr(&answer.choice)))
-        })?
+        })?;
+        (assessment, answer.confidence)
     } else {
-        ReadAssessment::Absent
+        (ReadAssessment::Absent, 0.0)
     };
+    // Jev judging the page evidence to read before interacting again is its decision to READ. DONE and ESCALATE do
+    // not interact, so they stand: the done check is told the page changed after it was read.
+    if read_assessment == ReadAssessment::Evidence && !matches!(operation, Operation::Done | Operation::Escalate) {
+        (operation, target, url, tab_id, target_confidence, destination) =
+            (Operation::Read, None, None, None, None, None);
+        operation_confidence = read_confidence;
+    }
     Ok(Decision {
         operation,
         url,
         target,
         tab_id,
-        operation_confidence: operation_answer.confidence,
+        operation_confidence,
         target_confidence,
         login_required: noul_probability(&evaluation, "login_required"),
         offered_controls: controls.len() as i64,
@@ -1083,6 +1100,9 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     }
     if !context.no_value_fields.is_empty() {
         state.insert("fields_the_task_gives_no_value".into(), json!(context.no_value_fields));
+    }
+    if !context.page_facts.is_empty() {
+        state.insert("page_facts".into(), json!(context.page_facts));
     }
     if !context.secrets.is_empty() {
         state.insert("stored_secrets".into(), json!(context.secrets));

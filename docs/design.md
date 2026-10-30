@@ -31,19 +31,16 @@ focusing the field does not enter a query.
 
 ## Reading and citations
 
-The policy's read assessment distinguishes useful evidence from editable query previews and irrelevant
-content. Navigation notes write each source URL once and refer to it from later claims. Evidence is read
-before another interaction can remove it. Reads are deduplicated by document,
-capture hash and unresolved information requirements, so changed content can be read again. An interaction
-that redraws the page owes a read only when the page shows a block the run has not read from that document, or
-no longer shows a value the notes quote; otherwise the notes still describe it and no read is sent. A pending
-transaction and a control the reader named are always read. The reader is sent the tally, ranking and paging
-guidance only when the capture holds records, the plan counts them, or a pager is in play. A paraphrase
-of a collected quote does not restore the read budget; new source quotes and newly evidenced requirements
-do. Identical relevance questions share one score within a pass, while controls remain separate action
-targets. Top-page navigation links that fail freshness twice are excluded by document and destination, even
-when card labels change or intervening reads add facts. Same-page actions and framed controls keep their label
-and context identity. A new document permits another attempt; input freshness and authorization checks still apply.
+Jev's read assessment is the READ decision: when Jev judges the page evidence the notes do not yet preserve,
+the step reads it, unless Jev picked DONE or ESCALATE. Code does not force a read. It tells Jev, in the step
+state's `page_facts`, when a page changed after it was last read, when a list page has not been read, and when
+an action that may have committed a change has not had its page read, and Jev is asked the read assessment
+whenever such a fact holds. Navigation notes write each source URL once and refer to it from later claims.
+Reads are deduplicated by document, capture hash and unresolved information requirements, so changed content
+can be read again; a read of content already read is skipped and recorded in the history. The reader is sent
+the tally, ranking and paging guidance only when the capture holds records, the plan counts them, or a pager
+is in play. Identical relevance questions share one score within a pass, while controls remain separate action
+targets.
 
 For a bounded set of short quoted spans, Jev chooses a scalar fact, requests synthesis, or judges the
 requirement absent from the page. Identical values from the same page and frame share one choice with all
@@ -104,12 +101,13 @@ active work; the return also waits for owned requests and browser cleanup. Injec
 cancellation and finish their cleanup. Returning while a paid request still runs would lose its cost receipt.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
-field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a run
-whose page has not changed for `unchanged_actions` steps goes to recovery, and recovery resets the count.
-Recovery asks Jev first: its state names what failed, and the action that changed nothing is left out of
-its options, which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
+field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a step that
+changes nothing, a read that adds nothing, a refused DONE, or a return to a page state already seen with
+nothing read since is no progress, and `unchanged_actions` such steps in a row go to recovery. A page state
+not seen before or a read that adds evidence resets the count and renews the `max_recoveries` budget.
+Recovery asks Jev first: its state names what failed, and the stalled action is left out of its options,
+which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
 `recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover.
-The same action taken a third time from the same page state does not count as a change.
 
 ## Run events and images
 

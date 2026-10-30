@@ -7,7 +7,7 @@ use fastbrowse_core::decision::{DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult, UNTRUSTED};
-use fastbrowse_core::page::{BlockKind, Capture, Control, Observation};
+use fastbrowse_core::page::{Capture, Control, Observation};
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::origin_of;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -16,10 +16,10 @@ use serde_json::{Map, json};
 use super::Agent;
 use super::driving::StepOptions;
 use super::helpers::{answer_evidence, code_decision, describe, lookup, next_page_control, read_question};
-use super::state::{Flow, ReadKey, RunState, Spawned, Step};
+use super::state::{Flow, RunState, Spawned, Step};
 use crate::comparison::complete_comparison;
 use crate::error::AgentError;
-use crate::memory::{Notes, fact_id, shows};
+use crate::memory::{Notes, fact_id};
 use crate::planner::{Requirement, RequirementKind};
 use crate::policy::HistoryEntry;
 use crate::retrieval::{ReadOptions, ReadOutcome, TallyReader, filter_tallies, read, read_tallies};
@@ -31,34 +31,6 @@ struct PageRead {
     task: Spawned<ReadOutcome>,
     started: Instant,
     frame: Option<Vec<u8>>,
-}
-
-/// Whether the notes already describe this capture of a page, so that reading it again adds nothing.
-///
-/// `owes_read` says an interaction changed the page. That is a claim about the DOM, not about the notes: sorting a
-/// list, closing a banner or expanding a row redraws a page without changing one thing the run read from it. So this
-/// capture is compared with what this run has already read of the document. A block it has never read means the page
-/// has something new to say; a value the notes quote that the page no longer shows means they are out of date.
-/// Neither, and the notes still describe the page.
-pub(super) fn covered(state: &RunState, observation: &Observation, capture: &Capture) -> bool {
-    let Some(read) = state.read_coverage.get(&observation.document_key).filter(|read| !read.is_empty()) else {
-        return false;
-    };
-    let unread_block = capture.blocks.iter().any(|block| {
-        let flat = text::squash(capture.block_text(block));
-        block.kind != BlockKind::Observation && !flat.is_empty() && !read.contains(&flat)
-    });
-    if unread_block {
-        return false;
-    }
-    // Coverage without an identity is not a reading this run can attribute a quote to, so the page may have dropped
-    // one: not held.
-    let Some(shas) = state.read_shas.get(&observation.document_key).filter(|shas| !shas.is_empty()) else {
-        return false;
-    };
-    state.notes.facts().iter().all(|fact| {
-        fact.evidence.as_ref().is_none_or(|e| !shas.contains(&e.capture_sha256) || shows(&capture.text, &e.quote))
-    })
 }
 
 fn sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -161,10 +133,12 @@ impl Agent {
         let mut wanted: Vec<Requirement> =
             state.notes.unresolved(&plan).into_iter().filter(|r| information(&r)).collect();
         let transaction_pending = self.unread_receipt(state).await?;
-        let owed = transaction_pending || (wanted.is_empty() && state.owes_read && plan.page_answer_expected());
+        let changed_since_read =
+            observation.is_some_and(|o| state.read_documents.get(&o.document_key).copied().unwrap_or(false));
+        let owed = transaction_pending || (wanted.is_empty() && changed_since_read && plan.page_answer_expected());
         if owed || (wanted.is_empty() && !state.open_answer_outputs.is_empty()) {
-            // Every requirement was evidenced off the page before the last interaction redrew it, so they are asked
-            // again of what it drew.
+            // Every requirement was evidenced off the page before an interaction changed it, so they are asked again
+            // of what it shows now.
             wanted = plan.requirements.iter().filter(information).cloned().collect();
         }
         if !state.open_answer_outputs.is_empty()
@@ -192,29 +166,9 @@ impl Agent {
             wanted = regrouped;
         }
         let wanted_ids: Vec<String> = wanted.iter().map(|r| r.id.clone()).collect();
-        let mut budget: Option<ReadKey> = None;
         if let Some(observation) = observation {
-            // Keyed by address too: a list paged in place keeps its document and its Previous and Next, and only its
-            // URL says the third page is not the two barren ones before it.
-            let key = (
-                observation.document_key.clone(),
-                state_key(observation),
-                wanted_ids.clone(),
-                state.open_answer_outputs.clone(),
-            );
-            // An owed read is exempt: it is owed at most once per interaction, so it cannot read for ever.
-            if !owed && state.barren.get(&key).copied().unwrap_or(0) >= self.config.stall.barren_reads {
-                // The page keeps rewriting its own text, so the exact-content key below never matches. What it can do
-                // here has paid out nothing.
-                self.event("read_skipped", || {
-                    Map::from_iter([("reason".into(), "no_new_facts_from_this_page_state".into())])
-                });
-                return Ok((false, true));
-            }
-            budget = Some(key);
-            // Past the barren budget this exact content is either read now or was read before, so the notes hold what
-            // the last interaction drew. A barren skip read nothing, and leaves the read owed.
-            state.owes_read = false;
+            // This exact content is either read now or was read before, so the notes hold what the page shows.
+            state.read_documents.insert(observation.document_key.clone(), false);
             let content = (
                 observation.document_key.clone(),
                 capture.read_key(),
@@ -229,15 +183,6 @@ impl Agent {
             }
             state.reads.insert(content);
         }
-        // A read that paid out clears the budget, so a page that starts answering again is readable.
-        let spent = |state: &mut RunState, progressed: bool| {
-            let Some(budget) = &budget else { return };
-            if progressed {
-                state.barren.remove(budget);
-            } else {
-                *state.barren.entry(budget.clone()).or_insert(0) += 1;
-            }
-        };
         if text::strip(&capture.text).is_empty() {
             // An empty page may still be rendering; only new content warrants another read.
             if let Some(observation) = observation
@@ -253,7 +198,6 @@ impl Agent {
             for candidate in &mut state.transaction_candidates {
                 candidate.outcome_read = true;
             }
-            spent(state, false);
             return Ok((false, false));
         }
         let following = observation.and_then(next_page_control);
@@ -383,27 +327,8 @@ impl Agent {
                 ("uncovered".into(), outcome.uncovered.into()),
             ])
         });
-        if let Some(observation) = observation {
-            let document = &observation.document_key;
-            let read = state.read_coverage.entry(document.clone()).or_default();
-            read.push(' ');
-            read.push_str(&text::squash(&capture.text));
-            state.read_shas.entry(document.clone()).or_default().insert(capture.sha256.clone());
-        }
-        spent(state, progressed);
-        if let Some(observation) = observation {
-            state.read_at.insert(state_key(observation), capture.sha256.clone());
-            let newly: Vec<String> = wanted
-                .iter()
-                .filter(|r| state.notes.evidenced(&r.id) && !evidenced.contains(&r.id))
-                .map(|r| r.id.clone())
-                .collect();
-            if !newly.is_empty() {
-                let at = state.evidenced_at.entry(state_key(observation)).or_default();
-                for id in newly {
-                    at.insert(id, capture.sha256.clone());
-                }
-            }
+        if progressed {
+            state.evidence_reads += 1;
         }
         state.through_end = !continues.is_empty() && wanted.iter().all(|r| outcome.through_end.contains(&r.id));
         if let Some(observation) = observation {
@@ -487,11 +412,13 @@ impl Agent {
         for requirement_id in collecting {
             state.notes.add_collection_page(requirement_id, &page.capture.url, &page.capture.sha256);
         }
-        state.record_read_documents.insert(page.observation.document_key.clone());
+        state.read_documents.insert(page.observation.document_key.clone(), false);
         state.incomplete.extend(outcome.incomplete.iter().cloned());
+        let progressed = state.notes.facts().len() > before;
+        state.evidence_reads += usize::from(progressed);
         state.history.push(HistoryEntry {
             effect: Some("Read captured pagination records.".into()),
-            read_progress: state.notes.facts().len() > before,
+            read_progress: progressed,
             ..HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, false)
         });
         let facts = state.notes.facts()[before..].iter().map(|fact| self.public_fact(fact)).collect();
@@ -583,7 +510,7 @@ impl Agent {
                     state.paging_failed = true;
                     break;
                 }
-                self.settle(state, &landed);
+                self.settle(state, &landed).await?;
                 state.paged_from = None;
                 if seen.contains(&landed.url) || origin_of(&landed.url) != origin {
                     break;
@@ -719,13 +646,6 @@ impl Agent {
             if wanted.iter().all(|r| state.notes.evidenced(&r.id)) {
                 state.continuing.clear();
                 state.through_end = false;
-                state.owes_read = false;
-                state.read_here = true;
-                state.typed_on_passed = false;
-                let at = state.evidenced_at.entry(state_key(&observation)).or_default();
-                for r in &wanted {
-                    at.insert(r.id.clone(), records.capture.sha256.clone());
-                }
             } else {
                 capture = Some(records.capture.clone());
             }

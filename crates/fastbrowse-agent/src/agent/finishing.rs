@@ -110,7 +110,7 @@ impl Agent {
             let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
             let reason = self.redact(&reason);
             rejected(state, &reason);
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
+            Box::pin(self.count_progress(state, false, &fresh, DONE, Status::Unverified)).await?;
             return Ok(None);
         }
         let mut missing: Vec<String> = Vec::new();
@@ -248,7 +248,7 @@ impl Agent {
             rejected(state, &reason);
             let fresh = self.observe().await?;
             self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Llm).await?;
-            Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
+            Box::pin(self.count_progress(state, false, &fresh, DONE, Status::Unverified)).await?;
             return Ok(None);
         }
         let mut claims: Vec<Claim> = Vec::new();
@@ -273,8 +273,8 @@ impl Agent {
             };
             if !until(url).await {
                 let fresh = self.observe().await?;
-                Box::pin(self.recover(state, &fresh, "Completion condition not satisfied", Status::Stuck, DONE))
-                    .await?;
+                rejected(state, "DONE rejected: completion condition not satisfied");
+                Box::pin(self.count_progress(state, false, &fresh, DONE, Status::Stuck)).await?;
                 return Ok(None);
             }
         }
@@ -308,7 +308,7 @@ impl Agent {
             tokens: self.config.tokens.clone(),
             history: &history,
             visited: &shown,
-            changed_since_read: state.owes_read,
+            changed_since_read: state.read_documents.get(&fresh.document_key).copied().unwrap_or(false),
             ledger: Some(&state.ledger),
             trace: self.trace.clone(),
         };
@@ -345,7 +345,7 @@ impl Agent {
         let reason = self.redact(&format!("DONE rejected: {joined}"));
         rejected(state, &reason);
         self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Jev).await?;
-        Box::pin(self.recover(state, &fresh, &reason, Status::Stuck, DONE)).await?;
+        Box::pin(self.count_progress(state, false, &fresh, DONE, Status::Stuck)).await?;
         Ok(None)
     }
 

@@ -20,7 +20,6 @@ use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::py::text;
 use fastbrowse_core::safety::Redactor;
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
@@ -31,7 +30,6 @@ use super::driving::edit_progress;
 use super::helpers::{
     access_inspection, answer_evidence, code_decision, follow_recovery, next_page_control, next_value, unread, visited,
 };
-use super::reading::covered;
 use super::state::{RunState, Spawned, TransactionCandidate};
 use crate::memory::{Fact, Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
@@ -559,7 +557,7 @@ fn test_a_link_that_saves_a_file_is_not_a_next_page() {
     assert_eq!(next_page_control(&at_page_one(pager.clone())), Some(pager));
 }
 
-// tests/test_redrawn_read_recovery.py
+// -- The one stall rule and the one budget-renewal rule -------------------------------------------------------------
 
 const FILES: &str = "https://addons.example.test/project/files";
 const DOWNLOAD: &str = "https://addons.example.test/project/download/1";
@@ -568,68 +566,40 @@ fn buttons_at(url: &str, labels: &[&str]) -> Observation {
     Observation { url: url.into(), ..observation(&labels.iter().map(|label| button(label)).collect::<Vec<_>>()) }
 }
 
-fn clicked(label: &str) -> HistoryEntry {
-    executed(Some(Operation::Click), Some(label), true)
-}
-
-fn capture_at(parts: &[(BlockKind, &str)], url: &str) -> Capture {
-    Capture { url: url.into(), ..capture(parts) }
-}
-
-/// A run that read the file list, then spent one recovery on it.
-async fn recovered_on_read_list() -> (Agent, RunState) {
+/// A run on the file list that spent one recovery there, then clicked through to the download page.
+async fn left_the_list() -> (Agent, RunState) {
     let mut state = run_state().await;
-    state.authorization = Authorization { irreversible_actions: true };
     let agent = agent();
-    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download"]));
-    state.notes.remember_capture(&capture_at(&[(BlockKind::Record, "v1.14.1 Oct 13")], FILES));
-    state.history.push(executed(Some(Operation::Read), None, false));
+    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1"])).await.expect("settled");
     state.recoveries = 1;
-    state.recovered_at = state.history.len();
-    state.history.push(clicked("v1.14.1"));
+    state.landing = Some(Some((Operation::Click, Some("v1.14.1".into()))));
+    agent.settle(&mut state, &buttons_at(DOWNLOAD, &["Back to files"])).await.expect("settled");
     (agent, state)
 }
 
 #[tokio::test]
-async fn test_a_read_page_redrawn_by_a_repeated_click_does_not_renew_recovery() {
-    let (agent, mut state) = recovered_on_read_list().await;
-    // The version row expanded: one more control at the same address, a state never seen before.
-    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download", "Collapse"]));
-    assert_eq!(state.recoveries, 1);
+async fn test_a_page_state_never_seen_is_progress_and_renews_recovery() {
+    let (_, state) = left_the_list().await;
+    assert_eq!((state.unchanged, state.recoveries), (0, 0));
 }
 
 #[tokio::test]
-async fn test_reaching_an_address_not_yet_read_still_renews_recovery() {
-    let (agent, mut state) = recovered_on_read_list().await;
-    agent.settle(&mut state, &buttons_at(DOWNLOAD, &["try again"]));
-    assert_eq!(state.recoveries, 0);
-}
-
-#[tokio::test]
-async fn test_a_read_page_redrawn_after_a_read_that_paid_out_still_renews_recovery() {
-    let (agent, mut state) = recovered_on_read_list().await;
-    // Loading more of a list keeps its address; a read that found new quotes since recovery is progress.
-    let at = state.history.len() - 1;
-    state.history.insert(at, HistoryEntry { read_progress: true, ..executed(Some(Operation::Read), None, false) });
-    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1", "Download", "v1.14.0"]));
-    assert_eq!(state.recoveries, 0);
-}
-
-#[tokio::test]
-async fn test_a_new_step_at_the_same_address_still_renews_recovery() {
-    let textbox = |label: &str| Control::new(&label.to_lowercase(), "textbox", label, [Operation::Fill]);
-    let mut state = run_state().await;
-    state.authorization = Authorization { irreversible_actions: true };
-    let agent = agent();
-    let first = Observation { url: FILES.into(), ..observation(&[textbox("Name"), button("Next")]) };
-    agent.settle(&mut state, &first);
-    state.notes.remember_capture(&capture_at(&[(BlockKind::Record, "Step 1 of 3")], FILES));
+async fn test_going_back_to_a_page_state_with_nothing_read_since_is_no_progress() {
+    let (agent, mut state) = left_the_list().await;
     state.recoveries = 1;
-    state.recovered_at = state.history.len();
-    state.history.push(clicked("Next"));
-    let second = Observation { url: FILES.into(), ..observation(&[textbox("Email"), button("Next")]) };
-    agent.settle(&mut state, &second);
-    assert_eq!(state.recoveries, 0);
+    state.landing = Some(Some((Operation::Click, Some("Back to files".into()))));
+    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1"])).await.expect("settled");
+    assert_eq!((state.unchanged, state.recoveries), (1, 1));
+}
+
+#[tokio::test]
+async fn test_going_back_to_a_page_state_after_new_evidence_is_progress() {
+    let (agent, mut state) = left_the_list().await;
+    state.unchanged = 1;
+    state.evidence_reads += 1;
+    state.landing = Some(Some((Operation::Click, Some("Back to files".into()))));
+    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1"])).await.expect("settled");
+    assert_eq!(state.unchanged, 0);
 }
 
 // -- tests/test_accuracy_fixes.py: a stopping run commits an answer ------------------------------------------------
@@ -757,35 +727,6 @@ fn test_a_shortcut_is_worth_proposing_only_from_a_sites_entry_point() {
     ] {
         assert_eq!(super::shortcut_worth_proposing(start), worth, "{start}");
     }
-}
-
-/// The comparison an owed read is answered from: a block never read, or a quoted value the page dropped, means the
-/// notes no longer describe the page and a read is worth buying.
-#[tokio::test]
-async fn test_a_page_is_held_only_while_the_notes_still_describe_it() {
-    let read = capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00")]);
-    let here = Observation { document_key: "product".into(), ..observation(&[]) };
-    let mut state = run_state().await;
-    // Nothing of this document has been read, so the first read of it is always paid.
-    assert!(!covered(&state, &here, &read));
-    state.read_coverage.insert("product".into(), format!(" {}", text::squash(&read.text)));
-    state.read_shas.insert("product".into(), HashSet::from([read.sha256.clone()]));
-    state.notes.add(Fact::read(Some("r1"), "The mug costs 29.00", block_evidence(&read, "s0"), FactReader::Llm));
-    assert!(covered(&state, &here, &capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00")])));
-    // A DOM observation is the page reporting its own change, not text the notes could hold.
-    let noted = capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00"), (BlockKind::Observation, "Sorted")]);
-    assert!(covered(&state, &here, &noted));
-    // A block this run has never read is something new the page has to say.
-    let added = capture(&[(BlockKind::Paragraph, "Stoneware Mug 29.00"), (BlockKind::Paragraph, "In stock")]);
-    assert!(!covered(&state, &here, &added));
-    // A value the notes quote that the page no longer shows makes them out of date, even when every block on it
-    // was read before: the page went back to a price an earlier read saw.
-    let repriced = capture(&[(BlockKind::Paragraph, "Stoneware Mug 31.00")]);
-    state.read_coverage.get_mut("product").unwrap().push_str(" Stoneware Mug 31.00");
-    assert!(!covered(&state, &here, &repriced));
-    // Another document's reading says nothing about this one.
-    let elsewhere = Observation { document_key: "basket".into(), ..here };
-    assert!(!covered(&state, &elsewhere, &read));
 }
 
 /// A page with no browser behind it, which cannot open the address it is given.
@@ -1527,7 +1468,7 @@ async fn test_jev_sees_the_page_only_when_its_text_pick_is_unsure() {
         let jev = Arc::new(Looks(ScriptedJev::new(vec![next(), next()]), text, Default::default()));
         let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), Arc::new(Recoverer::default()));
         let state = run_state().await;
-        let context = agent.context(&state, Vec::new(), false, true).expect("a step context");
+        let context = agent.context(&state, &observation(&[button("Next")]), Vec::new(), false, true).expect("context");
         let decision =
             agent.decide_looking(&state, &observation(&[button("Next")]), &context).await.expect("a decision");
         assert_eq!(*jev.2.lock().unwrap(), images, "text pick at {text}");
