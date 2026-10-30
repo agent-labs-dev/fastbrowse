@@ -175,8 +175,10 @@ pub fn downloads_question(task: &str) -> NoulQuestion {
     )
 }
 
-fn is_password(control: &Control) -> bool {
-    control.sensitive || control.input_type.as_deref() == Some("password")
+/// Whether the page declares this a password field. `sensitive` is no evidence: it also marks a text field holding a
+/// secret the agent typed, and a sign-in form whose username took a stored secret read as two password fields.
+pub fn is_password(control: &Control) -> bool {
+    control.input_type.as_deref() == Some("password")
 }
 
 fn autocompletes(control: &Control, token: &str) -> bool {
@@ -248,7 +250,7 @@ pub fn credential_field(control: &Control) -> Option<CredentialField> {
     if tokens.contains(&"one-time-code") {
         return Some(CredentialField::OneTimeCode);
     }
-    if control.sensitive || control.input_type.as_deref() == Some("password") || tokens.contains(&"current-password") {
+    if is_password(control) || tokens.contains(&"current-password") {
         return Some(CredentialField::Password);
     }
     if tokens.contains(&"username") {
@@ -797,6 +799,7 @@ mod tests {
     fn password(id: &str, form: Option<&str>, autocomplete: Option<&str>) -> Control {
         let mut field = Control::new(id, "textbox", "Password", [Operation::Fill]);
         field.sensitive = true;
+        field.input_type = Some("password".into());
         field.form_id = form.map(str::to_string);
         field.autocomplete = autocomplete.map(str::to_string);
         field
@@ -844,6 +847,21 @@ mod tests {
         assert_eq!(sets_new_password(&loose, &loose[1]), None);
         assert_eq!(sets_new_password(&loose[..1], &loose[0]), Some(false));
         assert_eq!(sets_new_password(&loose, &password("c", None, Some("current-password"))), Some(false));
+    }
+
+    /// A username that took a stored secret is masked like a password, and is still not one.
+    #[test]
+    fn a_sign_in_form_whose_username_holds_a_secret_takes_the_current_password() {
+        let mut username = Control::new("u", "textbox", "Username", [Operation::Fill]);
+        (username.sensitive, username.input_type, username.form_id) = (true, Some("text".into()), Some("f".into()));
+        let password = password("p", Some("f"), None);
+        let mut login = button("Login");
+        login.form_id = Some("f".into());
+        let form = [username.clone(), password.clone(), login.clone()];
+        assert_eq!(sets_new_password(&form, &password), Some(false));
+        assert!(!changes_credentials(&form, &login, Operation::Click));
+        assert!(!changes_credentials(&form, &password, Operation::Enter));
+        assert_ne!(credential_field(&username), Some(CredentialField::Password));
     }
 
     #[test]
