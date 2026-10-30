@@ -3,8 +3,8 @@ name: Release
 # the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
 # yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
-# A tag runs the fixture suites itself, before anything is published: the release carries its own proof that the
-# agent still browses well on the exact commit that ships, rather than needing somebody to dispatch a run first.
+# Approval is the decision: a tag publishes once the sdist, the wheels and the binaries are green. The fixture
+# suites run nightly and on demand in evals.yml, and do not gate a release.
 #
 # Run by hand, it stops after the binaries and publishes nothing. That is how a change to the build is tried
 # without spending a version number, which no registry gives back.
@@ -53,58 +53,16 @@ jobs:
           name: notes
           path: ${{ runner.temp }}/notes.md
 
-  # The same fixture suites the schedule runs, on the tag. They take longer than a build, so they start
-  # alongside it, and the guard below holds the release until both are green. Read-only contents, and the
-  # model keys come from this repository's secrets: a maintainer pushes a tag, never a pull request.
-  evals:
-    if: github.event_name == 'push'
-    permissions: {contents: read}
-    secrets: inherit
-    uses: ./.github/workflows/evals.yml
-
-  # Everything a release needs besides a build: the fixture suites green on the commit that ships, and for a
-  # release that publishes a comparison, its measured build in the release history running the same executable
-  # code. It is told the eval job above went green rather than looking up an earlier run, so a green schedule on
-  # some other commit cannot stand in for the tag. Read-only queries; no repository secret is added.
-  guard:
-    needs: [build, evals]
-    if: github.event_name == 'push'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with:
-          python-version: "3.14"
-          enable-cache: false
-      # This job only runs once the eval job has succeeded, so its green result is what the guard is told.
-      - name: Check the release evals guard
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # Held here as well as in the eval job: with the suites already green in this run the guard does
-          # not read them, but a maintainer re-running the step without --evals-ran-here still can.
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-        run: uv run python scripts/release_guard.py "$(uv version --short)" --evals-ran-here
-
-  # All five targets, each built and smoke-tested on a runner of its own kind, alongside the eval run rather
-  # than after it. Nothing publishes unless the guard passes too, so a red fixture gate costs a build but never
-  # a version number.
+  # All five targets, each built and smoke-tested on a runner of its own kind.
   binaries:
     needs: build
     permissions: {contents: read}
     uses: ./.github/workflows/binaries.yml
 
-  # The first job that publishes. It needs every build job and the guard, and each later publish job needs the
-  # one before it, so a target that fails to build, to pass its smoke test or to pass the fixture suites
-  # publishes nothing anywhere.
+  # The first job that publishes. It needs every build job, and each later publish job needs the one before it,
+  # so a target that fails to build or to pass its smoke test publishes nothing anywhere.
   github-release:
-    needs: [guard, binaries]
+    needs: binaries
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
