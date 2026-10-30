@@ -8,7 +8,7 @@ use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use common::{Call, Recorder, binary, result};
+use common::{Call, Recorder, binary, model_settings, result};
 use fastbrowse_cli::cli::{self, Build, Context, Streams};
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
@@ -48,16 +48,6 @@ impl Ran {
     }
 }
 
-/// The model keys and a stand-in Chrome, with no cloud key and nothing read from a checkout's `.env`.
-fn base() -> Settings {
-    Settings {
-        openrouter_api_key: Some(Secret::new("or")),
-        ai_gateway_api_key: Some(Secret::new("gw")),
-        chrome: Some(common::CHROME.into()),
-        ..Settings::default()
-    }
-}
-
 /// Pinned to config-file-free settings, so a checkout's `.env` cannot add a profile the guards would read.
 async fn cli_with(argv: &[&str], settings: Settings, environ: &[(&str, &str)], answer: RunResult) -> Ran {
     cli_built(argv, settings, environ, answer, Build::default()).await
@@ -86,7 +76,7 @@ async fn cli_built(
 }
 
 async fn cli(argv: &[&str]) -> Ran {
-    cli_with(argv, base(), &[], RunResult { answer: Some("ok".into()), ..result(Status::Complete) }).await
+    cli_with(argv, model_settings(), &[], RunResult { answer: Some("ok".into()), ..result(Status::Complete) }).await
 }
 
 #[tokio::test]
@@ -94,9 +84,9 @@ async fn test_the_version_and_the_json_result_name_the_commit_that_ran() {
     let sha = "e1d478b".to_string() + &"0".repeat(33);
     let built = Build { git_sha: Some(sha.clone()), git_dirty: Some(true) };
     let answer = || RunResult { answer: Some("ok".into()), ..result(Status::Complete) };
-    let version = cli_built(&["--version"], base(), &[], answer(), built.clone()).await;
+    let version = cli_built(&["--version"], model_settings(), &[], answer(), built.clone()).await;
     assert_eq!(version.out, format!("fastbrowse {} (e1d478b, dirty)\n", env!("CARGO_PKG_VERSION")));
-    let ran = cli_built(&["t", "--json"], base(), &[], answer(), built).await;
+    let ran = cli_built(&["t", "--json"], model_settings(), &[], answer(), built).await;
     assert_eq!(
         ran.json()["build"],
         serde_json::json!({"fastbrowse_version": env!("CARGO_PKG_VERSION"), "git_sha": sha, "git_dirty": true})
@@ -140,7 +130,7 @@ async fn test_a_limit_argparse_accepts_but_the_run_cannot_use_is_refused_as_a_co
 async fn test_a_credential_without_a_start_page_is_refused_rather_than_dropped() {
     for flag in [["--secret", "p=SET"], ["--bitwarden", "vault-item"]] {
         let argv = ["t", "--json", flag[0], flag[1]];
-        let ran = cli_with(&argv, base(), &[("SET", "value")], result(Status::Complete)).await;
+        let ran = cli_with(&argv, model_settings(), &[("SET", "value")], result(Status::Complete)).await;
         let result = ran.json();
         assert_eq!(result["status"], "error");
         assert!(result["error"].as_str().unwrap().contains("--start") && ran.err.contains("--start"));
@@ -231,7 +221,7 @@ async fn test_proxy_country_refuses_local_chrome() {
 #[tokio::test]
 async fn test_cdp_url_counts_a_profile_from_the_environment() {
     // FASTBROWSE_PROFILE implies --profile; a handed-over browser refuses it just the same.
-    let settings = Settings { profile: Some("/tmp/kept".into()), ..base() };
+    let settings = Settings { profile: Some("/tmp/kept".into()), ..model_settings() };
     let argv = ["t", "--start", "https://example.com", "--json", "--cdp-url", "ws://browser.test/devtools"];
     let ran = cli_with(&argv, settings, &[], result(Status::Complete)).await;
     assert!(ran.json()["error"].as_str().unwrap().contains("chrome.profile"));
@@ -257,7 +247,7 @@ async fn test_explicit_cloud_overrides_environment_profile() {
     let settings = Settings {
         profile: Some("/tmp/profile".into()),
         browser_use_api_key: Some(Secret::new("browser-key")),
-        ..base()
+        ..model_settings()
     };
     let ran = cli_with(&["task", "--cloud"], settings, &[], fastbrowse_cli::options::error_result("test")).await;
     let call = ran.call.unwrap();
@@ -270,7 +260,7 @@ async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
     let mut codes = Vec::new();
     for status in [Status::NeedsLogin, Status::Blocked] {
         let answer = RunResult { status, ..fastbrowse_cli::options::error_result("test") };
-        codes.push(cli_with(&["task", "--local"], base(), &[], answer).await.code);
+        codes.push(cli_with(&["task", "--local"], model_settings(), &[], answer).await.code);
     }
     assert_eq!(codes, [4, 6]);
 }
@@ -278,7 +268,7 @@ async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
 #[tokio::test]
 async fn test_login_advice_is_added_only_to_cli_output() {
     let answer = RunResult { status: Status::NeedsLogin, ..fastbrowse_cli::options::error_result("Sign-in required") };
-    let ran = cli_with(&["task", "--local", "--json"], base(), &[], answer).await;
+    let ran = cli_with(&["task", "--local", "--json"], model_settings(), &[], answer).await;
     assert_eq!(ran.code, 4);
     assert!(ran.json()["error"].as_str().unwrap().contains("--secret NAME=ENV_VAR@https://host"));
 }
@@ -363,7 +353,7 @@ async fn test_the_summary_line_says_when_some_calls_reported_no_cost() {
             CostLine::new(CostComponent::Llm, basis, if basis == CostBasis::Unknown { None } else { Some(0.0) }),
         ];
         let answer = RunResult { cost: CostBreakdown { lines }, ..fastbrowse_cli::options::error_result("test") };
-        let ran = cli_with(&["task", "--local"], base(), &[], answer).await;
+        let ran = cli_with(&["task", "--local"], model_settings(), &[], answer).await;
         assert!(ran.out.contains(expected), "{}", ran.out);
     }
 }
