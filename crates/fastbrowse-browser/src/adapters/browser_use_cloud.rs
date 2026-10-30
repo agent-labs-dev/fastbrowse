@@ -1,4 +1,4 @@
-//! A remote Chrome from Browser Use Cloud, with its metered browser and proxy cost (`adapters/browser_use_cloud.py`).
+//! A remote Chrome from Browser Use Cloud, with its metered browser and proxy cost.
 //!
 //! ```text
 //! let mut cloud = BrowserUseCloudBrowser::new(api_key, BrowserUseCloudOptions::default())?;
@@ -8,8 +8,8 @@
 //! cloud.cost(); // metered lines, available after stop
 //! ```
 //!
-//! Python creates on `__aenter__` and stops on `__aexit__`, shielding both from cancellation. Rust cannot run async
-//! work in a dropped future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
+//! Creating and stopping the browser both have to survive cancellation. Rust cannot run async work in a dropped
+//! future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
 //! behind for `stop` to wait on, and a browser still known when this value drops is stopped by a task spawned then.
 
 use std::fmt;
@@ -93,7 +93,7 @@ pub struct BrowserUseCloudOptions {
     pub viewport: Option<(u32, u32)>,
     pub allow_resizing: bool,
     pub extensions: Vec<String>,
-    /// The longest one request may take; run.py's httpx client allowed 60 seconds.
+    /// The longest one request may take.
     pub http_timeout: Duration,
 }
 
