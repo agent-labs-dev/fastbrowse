@@ -202,6 +202,9 @@ pub struct ChoiceAnswer {
     pub confidence: f64,
 }
 
+/// Jev's own answer to a noul: yes above even odds. A question answered this way has no bar of ours to tune.
+pub const EVEN_ODDS: f64 = 0.5;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoulAnswer {

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use fastbrowse_core::decision::{Answer, ChoiceQuestion, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, EVEN_ODDS, NoulQuestion, Question};
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::{CostComponent, Decider, LLMPurpose, Operation, Status, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
@@ -691,7 +691,8 @@ impl Agent {
             Some(Answer::Noul(answer)) => answer.probability,
             _ => 0.0,
         };
-        Ok(stated <= self.config.thresholds.value_stated_above)
+        // Jev's own answer: a NEEDS_INPUT stop stands unless Jev says the value is given.
+        Ok(stated <= EVEN_ODDS)
     }
 
     async fn choose(

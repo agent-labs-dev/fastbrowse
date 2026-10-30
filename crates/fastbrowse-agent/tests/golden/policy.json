@@ -199,7 +199,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -394,7 +393,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -580,7 +578,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -802,7 +799,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -1024,7 +1020,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -1217,7 +1212,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -1736,7 +1730,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -2311,7 +2304,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -2605,7 +2597,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -2934,7 +2925,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -4137,7 +4127,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -4638,7 +4627,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -4791,7 +4779,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -6008,7 +5995,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -9330,7 +9316,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -10568,7 +10553,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11067,7 +11051,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11227,7 +11210,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11474,7 +11456,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11706,7 +11687,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -11927,7 +11907,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -12155,7 +12134,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -12375,7 +12353,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -13691,7 +13668,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -15215,7 +15191,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -16742,7 +16717,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -18270,7 +18244,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -19607,7 +19580,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -20820,7 +20792,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -21467,7 +21438,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -21763,7 +21733,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -22313,7 +22282,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -22873,7 +22841,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -23396,7 +23363,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -23741,7 +23707,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -24289,7 +24254,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -24494,7 +24458,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -25069,7 +25032,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -25274,7 +25236,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -25849,7 +25810,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -26054,7 +26014,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -26629,7 +26588,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -26836,7 +26794,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -27411,7 +27368,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -27616,7 +27572,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -28181,7 +28136,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -28386,7 +28340,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -28961,7 +28914,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29166,7 +29118,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29613,7 +29564,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29804,7 +29754,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -29997,7 +29946,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30188,7 +30136,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30343,7 +30290,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30527,7 +30473,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -30719,7 +30664,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -31053,7 +30997,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -31366,7 +31309,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -31690,7 +31632,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32048,7 +31989,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32406,7 +32346,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32691,7 +32630,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -32861,7 +32799,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -33029,7 +32966,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -33164,7 +33100,6 @@
        "bot_check_above": 0.7,
        "irreversible_above": 0.5,
                             "claim_problem_above": 0.7,
-       "value_stated_above": 0.5,
        "rewrite_from": 0.3
       },
       "observation": {
@@ -33276,7 +33211,6 @@
      "bot_check_above": 0.7,
      "irreversible_above": 0.5,
                     "claim_problem_above": 0.7,
-     "value_stated_above": 0.5,
      "rewrite_from": 0.3
     },
     "observation": {
@@ -33373,7 +33307,6 @@
      "bot_check_above": 0.7,
      "irreversible_above": 0.5,
                     "claim_problem_above": 0.7,
-     "value_stated_above": 0.5,
      "rewrite_from": 0.3
     },
     "observation": {

@@ -16,8 +16,6 @@ class Thresholds(Frozen):
     """Jev's agreement that the task asks for a commit, above which an authorized run takes it."""
     claim_problem_above: float = 0.70
     """A requirement's "not satisfied" answer above this keeps the run working."""
-    value_stated_above: float = 0.50
-    """Jev's agreement that the task or notes hold a field's value, under which a NEEDS_INPUT stop stands."""
     rewrite_from: float = 0.30
     """Jev's doubt that the read facts already answer the task, from which the LLM composer writes it instead."""
 

@@ -24,9 +24,6 @@ pub struct Thresholds {
     /// A requirement's "not satisfied" answer above this keeps the run working.
     #[serde(deserialize_with = "lax::float")]
     pub claim_problem_above: f64,
-    /// Jev's agreement that the task or notes hold a field's value, under which a NEEDS_INPUT stop stands.
-    #[serde(deserialize_with = "lax::float")]
-    pub value_stated_above: f64,
     /// Jev's doubt that the read facts already answer the task, from which the LLM composer writes it instead.
     #[serde(deserialize_with = "lax::float")]
     pub rewrite_from: f64,
@@ -41,7 +38,6 @@ impl Default for Thresholds {
             irreversible_above: 0.50,
             requested_above: 0.50,
             claim_problem_above: 0.70,
-            value_stated_above: 0.50,
             rewrite_from: 0.30,
         }
     }
