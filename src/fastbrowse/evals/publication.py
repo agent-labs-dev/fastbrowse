@@ -925,7 +925,6 @@ def gate(
     release: str | None = None,
     ledger: Sequence[Mapping[str, Any]] | None = None,
     baselines_: Sequence[Mapping[str, Any]] = (),
-    lock: Mapping[str, Mapping[str, Any]] | None = None,
     require_ledger: bool = False,
     require_coverage: bool | None = None,
     require_clean: bool = True,
@@ -942,7 +941,7 @@ def gate(
             findings=(_finding(REFUSE, "shape", "no rows: a publication with no results is not a publication"),),
             operational=Operational(selected_attempts=0),
         )
-    lock = versions.load_lock() if lock is None else lock
+    lock = versions.load_lock()
     suites = _suite_ids()
     findings: list[Finding] = []
     for row in rows_:
