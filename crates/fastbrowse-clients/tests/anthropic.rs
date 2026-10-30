@@ -128,12 +128,15 @@ async fn test_cost_counts_cached_input_and_stays_unknown_without_a_price() {
 }
 
 #[tokio::test]
-async fn test_a_reply_cut_at_max_tokens_is_reported_as_cut_off() {
-    let cut = reply(json!([{"type": "text", "text": "{\"ans"}]), "max_tokens");
-    let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut, answer(r#"{"answer":"ok"}"#)]).await;
+async fn test_a_reply_cut_at_max_tokens_is_asked_once_more_then_reported_as_cut_off() {
+    let cut = || reply(json!([{"type": "text", "text": "{\"ans"}]), "max_tokens");
+    let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut(), answer(r#"{"answer":"ok"}"#)]).await;
+    assert_eq!(result.unwrap().data["answer"], "ok");
+    assert_eq!(seen.len(), 2);
+    let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut(), cut()]).await;
     let error = result.unwrap_err().to_string();
     assert!(error.contains("cut off before its JSON ended"), "{error}");
-    assert_eq!(seen.len(), 1);
+    assert_eq!(seen.len(), 2);
 }
 
 #[tokio::test]

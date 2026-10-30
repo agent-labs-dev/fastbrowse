@@ -118,8 +118,9 @@ fn truncated(payload: &Map<String, Value>) -> Result<bool, String> {
 
 /// A response the model or provider cut off, named as truncation so it is never read as a bad answer.
 ///
-/// fastbrowse sends no output cap, so this is the model's own output maximum or a provider that dropped the tail, and
-/// the same prompt asked again would end the same way.
+/// fastbrowse sends no output cap, so this is the model's own output maximum or a provider that dropped the tail. A
+/// cut-off reply is asked once more: the runaways measured were a provider's decoder writing whitespace inside the JSON
+/// or one paragraph of reasoning repeated until the maximum, and the same request asked again answered.
 fn truncation(purpose: LLMPurpose) -> LLMError {
     LLMError::Failed(format!("LLM response was cut off before its JSON ended ({purpose})"))
 }
@@ -744,6 +745,9 @@ impl OpenAICompatibleLLM {
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
             if truncated(&payload).map_err(LLMError::Failed)? {
+                if attempt == 0 {
+                    continue;
+                }
                 return Err(truncation(purpose));
             }
             let content = match content(&payload) {
@@ -792,6 +796,9 @@ impl OpenAICompatibleLLM {
             let detail = self.scrubbed(&detail);
             if ends_mid_json {
                 // fastbrowse sets no output cap, so a reply ending mid-JSON was cut off by the model or provider.
+                if attempt == 0 {
+                    continue;
+                }
                 return Err(truncation(purpose));
             }
             if attempt == 1 {

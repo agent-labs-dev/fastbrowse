@@ -219,14 +219,14 @@ async fn test_an_error_status_retry_does_not_add_llm_cost() {
 }
 
 #[tokio::test]
-async fn test_a_response_cut_off_sends_no_cap_and_is_reported_once() {
+async fn test_a_response_cut_off_sends_no_cap_and_is_asked_once_more() {
+    // A provider's decoder can write whitespace inside the JSON until the model's maximum; asked again, it answered.
     let script = Script::new([truncated(r#"{"count":""#), stopped(r#"{"count":5}"#, None)]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Compose, "composer");
-    let error = generate(&llm, LLMPurpose::Compose, &[], None).await.unwrap_err();
-    assert!(error.to_string().contains("cut off before its JSON ended (compose)"), "{error}");
-    assert!(!error.to_string().contains("schema"));
-    assert_eq!(script.requests().len(), 1);
-    assert_eq!(caps(&script), [Value::Null]);
+    let result = generate(&llm, LLMPurpose::Compose, &[], None).await.unwrap();
+    assert_eq!(result.data["count"], 5);
+    assert_eq!(script.requests().len(), 2);
+    assert_eq!(caps(&script), [Value::Null, Value::Null]);
 }
 
 #[tokio::test]
@@ -237,16 +237,18 @@ async fn test_a_response_that_ran_out_of_tokens_before_any_text_is_truncation() 
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
     let error = generate(&llm, LLMPurpose::Read, &[], None).await.unwrap_err();
     assert!(error.to_string().contains("cut off"));
-    assert_eq!(script.requests().len(), 1);
+    assert_eq!(script.requests().len(), 2);
 }
 
 #[tokio::test]
 async fn test_json_that_ends_mid_value_is_truncation_even_when_the_provider_says_it_stopped() {
-    let script = Script::new([stopped(r#"{"count":"cut off mid-str"#, Some(7)), stopped(r#"{"count":2}"#, None)]);
+    let cut = || stopped(r#"{"count":"cut off mid-str"#, Some(7));
+    let script = Script::new([cut(), cut()]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
     let error = generate(&llm, LLMPurpose::Read, &[], None).await.unwrap_err();
     assert!(error.to_string().contains("cut off before its JSON ended (read)"), "{error}");
-    assert_eq!(script.requests().len(), 1);
+    assert!(!error.to_string().contains("schema"));
+    assert_eq!(script.requests().len(), 2);
 }
 
 #[tokio::test]
@@ -255,7 +257,7 @@ async fn test_complete_json_marked_truncated_never_becomes_a_citable_read() {
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
     let error = generate(&llm, LLMPurpose::Read, &[], None).await.unwrap_err().to_string();
     assert!(error.contains("cut off") && error.ends_with("(read)"), "{error}");
-    assert_eq!(script.requests().len(), 1);
+    assert_eq!(script.requests().len(), 2);
 }
 
 #[test]

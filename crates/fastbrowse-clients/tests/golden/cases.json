@@ -1548,9 +1548,24 @@
     "status": 200,
     "headers": {},
     "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":\\\"\"}, \"finish_reason\": \"length\"}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
+   },
+   {
+    "status": 200,
+    "headers": {},
+    "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":\\\"\"}, \"finish_reason\": \"length\"}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
    }
   ],
   "requests": [
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-read\",\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"model-read\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
+   },
    {
     "method": "POST",
     "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -1581,9 +1596,18 @@
       "input_tokens": 20,
       "output_tokens": 5,
       "seconds": null
+     },
+     {
+      "component": "llm",
+      "basis": "metered",
+      "dollars": 0.001,
+      "purpose": "read",
+      "input_tokens": 20,
+      "output_tokens": 5,
+      "seconds": null
      }
     ],
-    "llm_calls": 1,
+    "llm_calls": 2,
     "jev_calls": 0
    }
   ],
@@ -1635,9 +1659,24 @@
     "status": 200,
     "headers": {},
     "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":\\\"cut off\"}}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
+   },
+   {
+    "status": 200,
+    "headers": {},
+    "body": "{\"choices\": [{\"message\": {\"content\": \"{\\\"count\\\":\\\"cut off\"}}], \"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 5, \"cost\": 0.001}}"
    }
   ],
   "requests": [
+   {
+    "method": "POST",
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "headers": {
+     "authorization": "Bearer ***",
+     "content-type": "application/json"
+    },
+    "body": "{\"model\":\"model-read\",\"messages\":[{\"role\":\"system\",\"content\":\"You count things.\"},{\"role\":\"user\",\"content\":\"Count the apples.\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true}},\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"}}",
+    "canonical": "{\"messages\":[{\"content\":\"You count things.\",\"role\":\"system\"},{\"content\":\"Count the apples.\",\"role\":\"user\"}],\"model\":\"model-read\",\"provider\":{\"require_parameters\":true,\"sort\":\"latency\"},\"reasoning\":{\"effort\":\"low\"},\"response_format\":{\"json_schema\":{\"name\":\"Result\",\"schema\":{\"additionalProperties\":false,\"properties\":{\"count\":{\"title\":\"Count\",\"type\":\"integer\"},\"tags\":{\"description\":\"What was counted.\",\"items\":{\"type\":\"string\"},\"title\":\"Tags\",\"type\":\"array\"}},\"required\":[\"count\",\"tags\"],\"title\":\"Result\",\"type\":\"object\"},\"strict\":true},\"type\":\"json_schema\"}}"
+   },
    {
     "method": "POST",
     "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -1668,9 +1707,18 @@
       "input_tokens": 20,
       "output_tokens": 5,
       "seconds": null
+     },
+     {
+      "component": "llm",
+      "basis": "metered",
+      "dollars": 0.001,
+      "purpose": "read",
+      "input_tokens": 20,
+      "output_tokens": 5,
+      "seconds": null
      }
     ],
-    "llm_calls": 1,
+    "llm_calls": 2,
     "jev_calls": 0
    }
   ],
