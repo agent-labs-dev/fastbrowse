@@ -290,6 +290,10 @@ export interface StepResult {
    */
   page_changed: boolean | null;
   duration_ms: number;
+  /**
+   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+   */
+  choices: StepChoice[];
 }
 export interface StepFact {
   text: string;
@@ -301,6 +305,19 @@ export interface StepFact {
   url: string | null;
   reader: FactReader;
   deep_link: string | null;
+}
+export interface StepChoice {
+  id: string;
+  role: string;
+  /**
+   * The label as Jev read it, with resolved secrets masked.
+   */
+  label: string;
+  operations: Operation[];
+  /**
+   * Whether this is the control Jev chose.
+   */
+  chosen: boolean;
 }
 /**
  * The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`.

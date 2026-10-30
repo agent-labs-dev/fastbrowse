@@ -396,6 +396,16 @@ const (
 	StatusError             Status = "error"
 )
 
+type StepChoice struct {
+	ID   string `json:"id"`
+	Role string `json:"role"`
+	// The label as Jev read it, with resolved secrets masked.
+	Label      string      `json:"label"`
+	Operations []Operation `json:"operations"`
+	// Whether this is the control Jev chose.
+	Chosen bool `json:"chosen"`
+}
+
 type StepEvent struct {
 	Type string     `json:"type"`
 	Step StepResult `json:"step"`
@@ -438,6 +448,8 @@ type StepResult struct {
 	// Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
+	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+	Choices []StepChoice `json:"choices"`
 }
 
 // The wall a `needs_login` or `blocked` run stopped at, typed so a caller can route it without parsing `error`.

@@ -1471,6 +1471,7 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         facts: Vec::new(),
         page_changed: None,
         duration_ms: 0,
+        choices: Vec::new(),
     };
     agent.record_step(&mut state, step, false, None).await.unwrap();
     agent.event("read", || serde_json::Map::from_iter([("quotes".into(), json!(["typed hunter2", 3]))]));

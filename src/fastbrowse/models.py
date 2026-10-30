@@ -140,6 +140,16 @@ class StepFact(Frozen):
     deep_link: str | None = None
 
 
+class StepChoice(Frozen):
+    id: str
+    role: str
+    label: str
+    """The label as Jev read it, with resolved secrets masked."""
+    operations: tuple[Operation, ...]
+    chosen: bool = False
+    """Whether this is the control Jev chose."""
+
+
 class ArtifactKind(StrEnum):
     DOWNLOAD = "download"
 
@@ -234,6 +244,8 @@ class StepResult(Frozen):
     page_changed: bool | None = None
     """Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."""
     duration_ms: int = Field(ge=0)
+    choices: tuple[StepChoice, ...] = Field(default=(), exclude_if=lambda choices: not choices)
+    """The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them."""
 
 
 class BudgetStop(Frozen):

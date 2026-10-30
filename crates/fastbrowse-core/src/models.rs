@@ -294,6 +294,37 @@ impl Schema for StepFact {
     }
 }
 
+/// One control Jev was offered on a step, so a run that picked the wrong element, or fell back to the LLM, shows whether
+/// the right one was there to pick.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepChoice {
+    pub id: String,
+    pub role: String,
+    /// The label as Jev read it, with resolved secrets masked.
+    pub label: String,
+    pub operations: Vec<Operation>,
+    /// Whether this is the control Jev chose.
+    #[serde(default, deserialize_with = "lax::boolean")]
+    pub chosen: bool,
+}
+
+impl Schema for StepChoice {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "StepChoice",
+            vec![
+                Field::required("id", Ty::Str),
+                Field::required("role", Ty::Str),
+                Field::required("label", Ty::Str).doc("The label as Jev read it, with resolved secrets masked."),
+                Field::required("operations", Ty::list(Operation::ty())),
+                Field::default("chosen", Ty::Bool, Value::Bool(false)).doc("Whether this is the control Jev chose."),
+            ],
+        )
+        .ty()
+    }
+}
+
 str_enum! {
     pub enum ArtifactKind {
         Download = "download",
@@ -488,6 +519,10 @@ pub struct StepResult {
     pub page_changed: Option<bool>,
     #[serde(deserialize_with = "lax::int_ge0")]
     pub duration_ms: i64,
+    /// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+    // Left out of the output when empty, so a run that did not ask reports what it always has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<StepChoice>,
 }
 
 impl Schema for StepResult {
@@ -509,6 +544,9 @@ impl Schema for StepResult {
                 Field::default("page_changed", Ty::optional(Ty::Bool), Value::Null)
                     .doc("Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."),
                 Field::required("duration_ms", Ty::Int.ge(0)),
+                Field::default("choices", Ty::list(StepChoice::ty()), Value::Array(vec![])).doc(
+                    "The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.",
+                ),
             ],
         )
         .ty()

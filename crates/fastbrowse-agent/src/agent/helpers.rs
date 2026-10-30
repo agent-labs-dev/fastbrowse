@@ -770,6 +770,7 @@ pub(crate) fn code_decision(operation: Operation, target: Option<Control>) -> De
         read_assessment: crate::policy::ReadAssessment::Absent,
         directed: false,
         destination: None,
+        offered: Vec::new(),
     }
 }
 

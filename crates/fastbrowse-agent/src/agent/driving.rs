@@ -5,7 +5,9 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
-use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult, WallKind};
+use fastbrowse_core::models::{
+    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepOutcome, StepResult, WallKind,
+};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
@@ -199,6 +201,7 @@ impl Agent {
                     continue;
                 }
             };
+            state.choices = self.choices(&decision);
             // Only an answered decision has asked the page's sign-in and bot questions; a dropped one asked nothing.
             state.last_page = Some(page);
             let thresholds = &self.config.thresholds;
@@ -386,6 +389,23 @@ impl Agent {
                 other => other?,
             }
         }
+    }
+
+    /// Jev's offered controls as a step reports them. Their labels come from the masked observation already, and are
+    /// masked again so a label that reaches a step can never carry a secret whatever it was read from.
+    fn choices(&self, decision: &Decision) -> Vec<StepChoice> {
+        let chosen = decision.target.as_ref().map(|target| target.id.as_str());
+        decision
+            .offered
+            .iter()
+            .map(|control| StepChoice {
+                id: control.id.clone(),
+                role: control.role.clone(),
+                label: self.mask(&control.label),
+                operations: control.operations.iter().copied().collect(),
+                chosen: chosen == Some(control.id.as_str()),
+            })
+            .collect()
     }
 
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
@@ -898,6 +918,7 @@ impl Agent {
             facts,
             page_changed: (decision.operation != Operation::Read).then_some(changed),
             duration_ms: started.elapsed().as_millis() as i64,
+            choices: Vec::new(),
         };
         self.record_step(state, step, false, frame).await?;
         // The one stall rule: a run is stuck when its page has not changed for `unchanged_actions` steps.
@@ -1243,6 +1264,7 @@ impl Agent {
             url: self.redact(&step.url),
             target: step.target.as_deref().map(|target| self.redact(target)),
             note: step.note.as_deref().map(|note| self.redact(note)),
+            choices: std::mem::take(&mut state.choices),
             ..step
         };
         state.steps.push(step.clone());
@@ -1280,6 +1302,7 @@ impl Agent {
             facts: Vec::new(),
             page_changed,
             duration_ms: 0,
+            choices: Vec::new(),
         };
         self.record_step(state, step, true, None).await
     }

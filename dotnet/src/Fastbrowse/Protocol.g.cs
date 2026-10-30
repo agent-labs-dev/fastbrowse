@@ -633,6 +633,30 @@ public enum Status
     Error,
 }
 
+public sealed record StepChoice
+{
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    [JsonPropertyName("role")]
+    public required string Role { get; init; }
+
+    /// <summary>
+    /// The label as Jev read it, with resolved secrets masked.
+    /// </summary>
+    [JsonPropertyName("label")]
+    public required string Label { get; init; }
+
+    [JsonPropertyName("operations")]
+    public required IReadOnlyList<Operation> Operations { get; init; }
+
+    /// <summary>
+    /// Whether this is the control Jev chose.
+    /// </summary>
+    [JsonPropertyName("chosen")]
+    public required bool Chosen { get; init; }
+}
+
 public sealed record StepEvent
 {
     [JsonPropertyName("type")]
@@ -729,6 +753,12 @@ public sealed record StepResult
 
     [JsonPropertyName("duration_ms")]
     public required long DurationMs { get; init; }
+
+    /// <summary>
+    /// The controls Jev was offered for this step's decision, when <c>Config.step_choices</c> asked for them.
+    /// </summary>
+    [JsonPropertyName("choices")]
+    public required IReadOnlyList<StepChoice> Choices { get; init; }
 }
 
 /// <summary>

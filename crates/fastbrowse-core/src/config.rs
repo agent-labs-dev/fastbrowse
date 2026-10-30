@@ -210,6 +210,10 @@ pub struct Config {
     /// which a caller with nowhere to put the image would pay for nothing.
     #[serde(deserialize_with = "lax::boolean")]
     pub step_frames: bool,
+    /// Record on each step the controls Jev was offered and which it chose. Off by default: a dense page offers
+    /// 160 controls, and a caller that is not debugging a run would carry them on every step for nothing.
+    #[serde(deserialize_with = "lax::boolean")]
+    pub step_choices: bool,
     /// Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub max_upload_bytes: i64,
@@ -233,6 +237,7 @@ impl Default for Config {
             stall: StallRules::default(),
             refuse_cookie_banners: true,
             step_frames: false,
+            step_choices: false,
             max_upload_bytes: 25 * 1024 * 1024,
             max_download_bytes: 512 * 1024 * 1024,
             max_pages: 12,
