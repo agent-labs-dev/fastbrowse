@@ -1293,6 +1293,7 @@
   ]
  },
  "inaccessible_frames": 0,
+ "offscreen_text": 160,
  "title": "Cards",
  "url": "http://fixture/cards.html?n=8",
  "viewport_text": "Product 0\n$0.99\nAdd to cart\nDetails\nOptions\nProduct 1\n$7.99\nAdd to cart\nDetails\nOptions\nProduct 2\n$14.99\nAdd to cart\nDetails\nOptions\nProduct 3\n$21.99\nAdd to cart\nDetails\nOptions",

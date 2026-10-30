@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\nA link's href shows where it leads; use it to tell site navigation from content links.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text counts the characters of page text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode (a trip or ticket type, a tab) is not the one the task needs, the control that sets\nthe mode is the target, not the form's submit. A control that explores or browses broadly does not run the\nsearch the task asked for.\nElements marked offscreen can be targeted directly. A link's href shows where it leads.\nElements that read alike carry a `context`: the card, row or section each one belongs to. When the task\nor subgoal names one of those, choose the element whose context matches it.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
@@ -59,7 +59,9 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Back => "Go back to the previous page.",
         Operation::SwitchTab => "Switch to another open tab.",
         Operation::Dialog => "Respond to the open browser dialog.",
-        Operation::Read => "Read this page's content to extract information the task needs.",
+        Operation::Read => {
+            "Read this page's content, the whole page including text outside the viewport, to extract information the task needs."
+        }
         Operation::Done => "Every requirement is satisfied.",
         Operation::Escalate => "No offered operation can make progress.",
     }
@@ -821,7 +823,7 @@ pub fn build_request(
             ""
         };
         let instructions = format!(
-            "{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information requirement, or a value the task's remaining actions need, that should be read before further interaction? A value shown here and needed elsewhere, such as a code to type on another page, is kept only by reading it: once the page is left, only the notes hold it. Use unread_requirements, the collected notes and recent actions; while planning, judge from the task. Evidence can answer part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total must be preserved even when the page also has an editable form. Field values, suggestions and previews are inputs, unless inspecting their labels, disabled state or layout is requested. Preserve inspection evidence before leaving. Treat prices or availability a picker shows beside its options as inputs (a calendar's fare per day) while a value is still being chosen. A review page before a final submit is evidence: the totals it shows may not appear again once the submit commits. A rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
+            "{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information requirement, or a value the task's remaining actions need, that should be read before further interaction? The page is all of its text, not only the viewport: page.text shows the viewport, and page.offscreen_text counts the characters outside it that a read takes in too. When what page.text shows goes on past the viewport, as a list or table whose rows continue, judge whether the whole page holds the evidence. A value shown here and needed elsewhere, such as a code to type on another page, is kept only by reading it: once the page is left, only the notes hold it. Use unread_requirements, the collected notes and recent actions; while planning, judge from the task. Evidence can answer part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total must be preserved even when the page also has an editable form. Field values, suggestions and previews are inputs, unless inspecting their labels, disabled state or layout is requested. Preserve inspection evidence before leaving. Treat prices or availability a picker shows beside its options as inputs (a calendar's fare per day) while a value is still being chosen. A review page before a final submit is evidence: the totals it shows may not appear again once the submit commits. A rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
         );
         let criteria = [
             (
@@ -1094,6 +1096,7 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
             "url": observation.url,
             "title": observation.title,
             "text": observation.viewport_text,
+            "offscreen_text": observation.offscreen_text,
             "response_status": observation.response_status,
         }),
     );
@@ -1551,6 +1554,19 @@ mod tests {
             block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
         assert_eq!(decision.reduction, Reduction::None);
         assert_eq!(jev.states.lock().unwrap()[0]["page"]["text"], page.viewport_text);
+    }
+
+    /// Shown only the viewport of a long list, Jev scrolled screen by screen and never read the row further down.
+    #[test]
+    fn test_jev_is_told_how_much_page_text_lies_outside_the_viewport() {
+        let jev = fake(&[("operation", "read")], "");
+        let mut page = observation((0..3).map(button).collect());
+        page.offscreen_text = 38_000;
+        let context = StepContext::new("Find the population listed for the last row");
+        block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let states = jev.states.lock().unwrap();
+        assert_eq!(states[0]["page"]["offscreen_text"], 38_000);
+        assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
     }
 
     #[test]

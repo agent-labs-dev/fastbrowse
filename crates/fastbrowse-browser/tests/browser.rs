@@ -859,6 +859,26 @@ async fn test_an_observation_keeps_every_control_and_the_whole_viewport_text() {
     h.close().await;
 }
 
+/// A long list's rows below the viewport are not in its text, so the observation says how much a read would add.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_observation_counts_the_page_text_outside_the_viewport() {
+    let _gate = gate().await;
+    let Some(h) = loaded().await else { return };
+    eval_active(
+        &h,
+        "document.body.replaceChildren(); const first = document.createElement('p'); first.textContent = 'First row'; \
+         const below = document.createElement('p'); below.textContent = 'Mongolia 3086918'; \
+         below.style.cssText = 'position:absolute;top:20000px'; const hidden = document.createElement('p'); \
+         hidden.textContent = 'never shown'; hidden.style.cssText = 'display:none'; document.body.append(first, below, \
+         hidden); scrollTo(0, 0);",
+    )
+    .await;
+    let observation = h.observe().await;
+    assert_eq!(observation.viewport_text, "First row");
+    assert_eq!(observation.offscreen_text, "Mongolia 3086918".len() as i64);
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_page_exception_is_typed_and_does_not_echo_page_text() {
     let _gate = gate().await;

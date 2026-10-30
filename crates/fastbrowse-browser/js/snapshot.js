@@ -889,7 +889,10 @@
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
   // its own at all. Each child is read in its own coordinates, shifted by where its frame sits.
   const words = [];
-  // Geometry, the cheaper test, goes first.
+  // Visible text the viewport does not show, counted in characters: a read takes it in, and a page whose answer
+  // sits further down a long list is not one to scroll through screen by screen.
+  let offscreen_text = 0;
+  // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
@@ -901,19 +904,15 @@
       if (!value || !parent) continue;
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || parent.closest('script,style,noscript,template') || !visible(parent)) {
+        continue;
+      }
       const top = r.top + dy,
         left = r.left + dx;
-      if (
-        r.width > 0 &&
-        r.height > 0 &&
-        top + r.height > 0 &&
-        top < innerHeight &&
-        left + r.width > 0 &&
-        left < innerWidth &&
-        !parent.closest('script,style,noscript,template') &&
-        visible(parent)
-      ) {
+      if (top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth) {
         words.push(value);
+      } else {
+        offscreen_text += value.length;
       }
     }
     for (const frame of doc.querySelectorAll('iframe,frame')) {
@@ -995,6 +994,7 @@
     url: location.href,
     title: document.title,
     viewport_text,
+    offscreen_text,
     visual_content,
     document_key: String(performance.timeOrigin),
     controls: semantics,
