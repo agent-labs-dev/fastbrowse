@@ -8,8 +8,7 @@
 //! click Add one; fill Token = secret:token
 //! ```
 //!
-//! Once the steps are spent the run is called done. Python's `run_task` entry, which hands these clients to the run,
-//! waits for the run loop's port.
+//! Once the steps are spent the run is called done.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;

@@ -688,8 +688,8 @@ impl Agent {
             state.next_page = true;
             return;
         }
-        // "Otherwise finish" was a dead end: the reader withholds a list it has not seen the end of, so the done check
-        // refused every such finish.
+        // Finishing is no way out: the reader withholds a list it has not seen the end of, so the done check refuses
+        // every such finish.
         let mut show = "open the control that loads or pages through more of the list".to_string();
         // The reader saw which control shows the rest. Matched against the page's own labels rather than trusted, so a
         // label the reader invented directs nothing.

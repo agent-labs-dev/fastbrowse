@@ -68,12 +68,12 @@ pub struct ComposedAnswer {
 }
 
 impl ComposedAnswer {
-    /// `isinstance(answer, FieldAnswer)`.
+    /// Whether `output_claims` is set.
     pub fn is_field_answer(&self) -> bool {
         self.output_claims.is_some()
     }
 
-    /// `FieldAnswer(**self.model_dump(), output_claims=outputs)`.
+    /// This answer with `output_claims` set to `outputs`.
     pub fn with_outputs(self, outputs: IndexMap<String, Vec<usize>>) -> ComposedAnswer {
         ComposedAnswer { output_claims: Some(outputs), ..self }
     }
@@ -232,7 +232,7 @@ pub(crate) fn without_citation_markup(value: &str) -> String {
             };
             let end = group_end.unwrap_or(after);
             if citation_label(label) {
-                // Python logs the dropped reference as a warning; the label is gone either way.
+                // Only checked evidence ids create links, so the reference is dropped silently.
             } else if group_end.is_some() {
                 out.extend(label);
             } else {

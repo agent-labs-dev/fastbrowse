@@ -140,8 +140,8 @@ impl Agent {
             } else {
                 None
             };
-            // Python finishes a partition on a shallow copy of the run: the fields below are its own, and everything
-            // else (the steps, the candidates, the caches) is shared with the run. They are swapped in and back.
+            // A partition finishes on the run itself: the fields below are its own and are swapped in and back, and
+            // everything else (the steps, the candidates, the caches) is shared with the run.
             let saved = Child::swap(
                 state,
                 Child {

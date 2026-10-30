@@ -65,7 +65,7 @@ const REDRAW_WATCH_SECONDS: f64 = 10.0;
 /// The choice a field's text is written for when no input or secret is the answer.
 const GENERATE: &str = "generate";
 
-/// What one run is asked to do, beyond its task: Python's keyword arguments to `Agent.run`.
+/// What one run is asked to do, beyond its task.
 #[derive(Default)]
 pub struct RunOptions {
     pub start: Option<String>,
@@ -413,8 +413,8 @@ impl Agent {
         });
         let (mut result, mut loop_returned, needs_browser) = scoped.await;
         if needs_browser {
-            // Python's `NeedsBrowser` leaves `Agent.run` as an exception once the head start is settled, and `run_task`
-            // reports it with what the ledger spent and nothing else: no budget check and no ending frame.
+            // Once the head start is settled, a run that needs a browser reports what the ledger spent and nothing
+            // else: no budget check and no ending frame.
             result.cost = ledger.breakdown();
             return Ok(result);
         }
@@ -606,10 +606,9 @@ impl Agent {
 
     /// Write the answer a stopping run can still support, instead of handing back its notes.
     ///
-    /// A task that stopped without verifying its finish used to arrive as every quote it read, in page order, with
-    /// the value the task asked for somewhere among them: a table lookup ended with its rows dumped and no sentence
-    /// naming the country. The evidence was there; nobody had been asked to answer from it. One composer call over
-    /// the collected notes asks that, and it is spent only on a run that is already stopping.
+    /// A task that stopped without verifying its finish holds the evidence but no sentence answering from it. One
+    /// composer call over the collected notes writes that answer, and it is spent only on a run that is already
+    /// stopping.
     async fn commit(&self, state: &mut RunState) -> Option<ComposedAnswer> {
         if !state.plan().page_answer_expected() || state.notes.evidence().is_empty() {
             return None;

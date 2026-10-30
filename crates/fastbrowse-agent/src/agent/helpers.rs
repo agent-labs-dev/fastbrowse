@@ -532,7 +532,7 @@ pub(crate) fn partition_proof(plan: &Plan, notes: &Notes, invented: &HashSet<Str
     sha256_hex(write(&proof, Style::DUMPS.sorted()).as_bytes())
 }
 
-/// `ANSWER_LINK.split(text)`: the prose between an answer's links, with each link's destination between them.
+/// The prose between an answer's links, with each link's destination between them.
 pub(crate) fn split_answer_links(text: &str) -> Vec<&str> {
     let mut pieces = Vec::new();
     let mut rest = text;
