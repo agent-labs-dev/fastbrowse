@@ -6,9 +6,8 @@ name: Official benchmarks
 # hand or by the release workflow on a minor release: every task drives a real browser and real model calls, so it
 # spends money and is never triggered by a push or a pull request.
 #
-# Nothing here publishes to the site yet. The publication protocol (fastbrowse's `benchmarks.COVERAGE`, Parallax's
-# publish-candidate and the site's feed parser) holds each official group at one repeat, so a three-repeat run
-# cannot become a candidate until all three accept it.
+# Each task runs `repeat` times (at least 1; a release runs 3). A task's figure is the mean of its repeats' upstream
+# scores, and the group records its repeat count. Nothing here publishes to the site yet.
 #
 # No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
 # approved `budget` only decides whether the next task may start (`start-gate-v1`).
@@ -44,8 +43,9 @@ name: Official benchmarks
 # own judge model (BU Bench's default, and Online-Mind2Web's published WebJudge backbone o4-mini), so these results
 # are not directly comparable with the figures upstream publishes for its judges.
 #
-# The official runner measures fastbrowse alone: `parallax browser official` has no arm selection, so the hosted
-# Browser Use, Ultrafast and Browserbase agents are not run on these suites here.
+# This runs the fastbrowse arm, the one the official groups publish. Parallax can also measure the hosted Browser Use
+# and Browserbase agents on these suites (`parallax browser official --arm`) for comparison; their rows are published
+# only where Parallax marks them publishable. Ultrafast returns no answer, so it is not run on them.
 #
 # `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
 # reserve (1 dollar), browser reserve (1, or 0 on local Chrome) and the judge variable's `budget_usd` while in flight.
@@ -77,7 +77,7 @@ on:
         options: [local, cloud]
         default: local
       repeat:
-        description: Runs per task (at least 3)
+        description: Runs per task (at least 1)
         required: true
         default: "3"
       budget:
@@ -132,7 +132,7 @@ jobs:
               ''|*[!0-9]*) echo "::error::${pair%%:*} must be an integer, got '${pair#*:}'"; exit 1 ;;
             esac
           done
-          test "$REPEAT" -ge 3 || { echo "::error::repeat must be at least 3, got $REPEAT"; exit 1; }
+          test "$REPEAT" -ge 1 || { echo "::error::repeat must be at least 1, got $REPEAT"; exit 1; }
           test "$WORKERS" -ge 1 || { echo "::error::concurrency must be at least 1"; exit 1; }
           case "$BUDGET" in
             ''|*[!0-9.]*) echo "::error::budget must be a number, got '$BUDGET'"; exit 1 ;;

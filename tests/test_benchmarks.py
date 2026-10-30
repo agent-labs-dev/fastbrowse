@@ -1134,7 +1134,7 @@ def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
 def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid):
     data = _ultrafast(candidate, schema, arms)
     if not valid:
-        with pytest.raises(ValidationError, match="every scheduled slot"):
+        with pytest.raises(ValidationError, match="internal-ultrafast measures only"):
             Candidate.model_validate(data)
         return
     parsed = Candidate.model_validate(data)
@@ -1188,3 +1188,89 @@ def test_any_collaborator_who_dispatches_publish_evals_publishes_the_approved_fi
     run["actor"] = {"login": "someone-else"}
     with pytest.raises(ValueError, match="dispatch on main is required"):
         benchmarks.check_approval(content, approval)
+
+
+def _head_to_head(candidate: dict, arms: tuple[str, ...]) -> dict:
+    """The current fixture with the head-to-head measured by `arms`: Browserbase without a cost, Ultrafast on the
+    tasks of the set the catalog lists it for."""
+    out = _current(candidate)
+    group = out["groups"][0]
+    template = group["rows"][0]
+    ultrafast = set(out["groups"][1]["task_ids"])
+    group["rows"] = [
+        {**template, "task": task, "repeat": repeat, "arm": arm, "dollars": None if arm == "browserbase" else 0.01}
+        for arm in arms
+        for task in group["task_ids"]
+        if arm != "jev-ultrafast" or task in ultrafast
+        for repeat in range(3)
+    ]
+    return out
+
+
+@pytest.mark.parametrize(
+    "arms",
+    [
+        ("fastbrowse", "browser-use", "jev-ultrafast", "browserbase"),
+        ("fastbrowse", "browser-use"),
+        ("fastbrowse", "browserbase"),
+        ("browser-use", "jev-ultrafast"),
+    ],
+)
+def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
+    parsed = Candidate.model_validate(_head_to_head(candidate, arms))
+    check_catalog(parsed, CATALOG)
+    group = parsed.groups[0]
+    assert group.measured_arms(benchmarks.HEAD_TO_HEAD) == arms
+    assert len(group.task_ids) == 52
+
+
+def test_an_arm_without_a_cost_has_none_on_every_row(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browserbase"))
+    next(r for r in data["groups"][0]["rows"] if r["arm"] == "browserbase")["dollars"] = 0.5
+    with pytest.raises(ValidationError, match="internal-hosted/browserbase reports its cost on every row or on none"):
+        Candidate.model_validate(data)
+
+
+def test_fastbrowse_always_reports_its_cost(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browser-use"))
+    data["groups"][0]["rows"][0]["dollars"] = None
+    with pytest.raises(ValidationError, match="Fastbrowse rows report their cost"):
+        Candidate.model_validate(data)
+
+
+def test_ultrafast_runs_exactly_its_part_of_the_head_to_head(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "jev-ultrafast"))
+    group = data["groups"][0]
+    dropped = next(r["task"] for r in group["rows"] if r["arm"] == "jev-ultrafast")
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "jev-ultrafast" and r["task"] == dropped)]
+    with pytest.raises(ValueError, match="jev-ultrafast must run exactly the tasks of its set"):
+        check_catalog(Candidate.model_validate(data), CATALOG)
+
+
+def test_a_full_arm_cannot_skip_a_task_of_the_set(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browserbase"))
+    group = data["groups"][0]
+    task = group["task_ids"][0]
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "browserbase" and r["task"] == task)]
+    with pytest.raises(ValidationError, match="every scheduled slot"):
+        Candidate.model_validate(data)
+
+
+def test_a_head_to_head_without_fastbrowse_is_not_compared_with_one_that_had_it(candidate):
+    published = Candidate.model_validate(_head_to_head(candidate, ("fastbrowse", "browser-use")))
+    vendors = Candidate.model_validate(_head_to_head(candidate, ("browser-use", "browserbase")))
+    with pytest.raises(ValueError, match="no longer measures fastbrowse"):
+        regressions(vendors, published)
+
+
+@pytest.mark.parametrize("repeats", [1, 3])
+def test_an_official_suite_records_its_repeats_and_requires_fastbrowse(candidate, repeats):
+    group = candidate["groups"][2]
+    group["repeats"] = repeats
+    group["rows"] = [{**group["rows"][0], "task": t, "repeat": r} for t in group["task_ids"] for r in range(repeats)]
+    candidate.update(schema_version=5, groups=[group])
+    assert Candidate.model_validate(candidate).groups[0].repeats == repeats
+    for row in group["rows"]:
+        row["arm"] = "browserbase"
+    with pytest.raises(ValidationError, match="bu-bench must measure fastbrowse"):
+        Candidate.model_validate(candidate)

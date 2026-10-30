@@ -18,10 +18,16 @@ Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser agai
 browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
-`internal-hosted` covers the 52 tasks both agents run, the navigation tasks included, read on the hosted agent's
-final page through its browser; figures approved at 46 or 47 tasks still read. The official suites accept any
-positive repeat count: every task and repeat is one row with its upstream score kept as the upstream defines it,
-and a task's figure is the mean of its repeats' scores.
+`internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse, the hosted Browser
+Use agent and Browserbase's agent all run, the navigation tasks included, read on each hosted agent's final page
+through its browser; figures approved at 46 or 47 tasks still read. It holds rows from whichever of `fastbrowse`,
+`browser-use`, `jev-ultrafast` and `browserbase` ran, each with every repeat of every task it runs. Ultrafast returns
+no answer, so it runs only the tasks of the set graded without one. An arm that did not run has no rows and the site
+shows it as not measured. Browserbase reports neither its model nor its spend, so its rows carry `"dollars": null`
+and the site shows its pass rate and seconds with "cost not reported"; fastbrowse rows always carry a cost. The
+official suites publish the fastbrowse arm, with a vendor arm's rows only where Parallax marks them publishable, and
+accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
+defines it, the group records the repeat count, and a task's figure is the mean of its repeats' scores.
 
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
@@ -52,7 +58,9 @@ uv run python -m fastbrowse.evals.site_groups benchmark-candidate.json run-facts
 ```
 
 A group file holds no figure. It names the candidate group, campaign, build and candidate SHA256, and the site
-computes every figure from the candidate's per-attempt rows. The live suite card shows the head-to-head group
+computes every figure from the candidate's per-attempt rows. Its `systems` maps each site system with rows to its
+arm, `cost_not_reported` lists those of them whose rows carry no cost, and `not_measured` lists the site systems
+with no rows. The live suite card shows the head-to-head group
 (`internal-hosted`) when the campaign ran it, else `internal-fastbrowse`. A card the candidate has no group for
 keeps its file. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
 publish a campaign again, dispatch `publish-evals.yml` with the campaign run's id.

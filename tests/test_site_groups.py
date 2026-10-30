@@ -32,7 +32,23 @@ def test_the_live_suite_names_the_head_to_head_group_and_its_exact_rows() -> Non
         "harness": "Parallax",
         "judge": "anthropic/claude-opus-5.5",
         "systems": {"fastbrowse": "fastbrowse", "browser-use": "browser-use"},
+        "cost_not_reported": [],
+        "not_measured": ["browser-use-ultrafast", "browserbase"],
     }
+
+
+def test_a_vendor_without_a_cost_or_without_rows_has_its_own_state() -> None:
+    candidate = json.loads(STAGED.read_bytes())
+    group = next(g for g in candidate["groups"] if g["id"] == "internal-hosted")
+    group["rows"] = [
+        {**row, "arm": "browserbase", "dollars": None} if row["arm"] == "browser-use" else row for row in group["rows"]
+    ]
+    candidate["groups"] = [group]
+    content = json.dumps(candidate).encode()
+    live = json.loads(group_files(content, FACTS, CURRENT)["data/benchmarks/live-suite.json"])["measured"]
+    assert live["systems"] == {"fastbrowse": "fastbrowse", "browserbase": "browserbase"}
+    assert live["cost_not_reported"] == ["browserbase"]
+    assert live["not_measured"] == ["browser-use", "browser-use-ultrafast"]
 
 
 def test_a_fastbrowse_only_campaign_shows_fastbrowse_alone() -> None:

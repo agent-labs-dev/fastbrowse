@@ -4,6 +4,10 @@ The site (agent-labs-dev/fastbrowse-site) shows three groups, one file each unde
 `src/lib/benchmark-groups.ts`. A measured group file holds no figure: it names the candidate group, campaign, build
 and candidate digest, and the site computes every figure from the candidate's per-attempt rows, which this writes
 beside it as `data/benchmark-<campaign>.json`, byte for byte. A group the candidate does not hold keeps its file.
+
+Every site system has one of three states in a measured group file: `systems` maps it to the arm whose rows it shows,
+`cost_not_reported` lists the shown systems whose rows carry no cost (`"dollars": null`), so the site shows their pass
+rate and seconds with "cost not reported", and `not_measured` lists the systems with no rows, shown as "Not measured".
 """
 
 import argparse
@@ -19,7 +23,12 @@ from fastbrowse.evals.benchmarks import Candidate, GroupId, group_arms
 
 SiteGroup = Literal["live-suite", "online-mind2web", "bu-bench"]
 
-SYSTEMS = {"fastbrowse": "fastbrowse", "browser-use": "browser-use", "jev-ultrafast": "browser-use-ultrafast"}
+SYSTEMS = {
+    "fastbrowse": "fastbrowse",
+    "browser-use": "browser-use",
+    "jev-ultrafast": "browser-use-ultrafast",
+    "browserbase": "browserbase",
+}
 """The site system each candidate arm is shown as (`SYSTEM_ARMS` in the site's benchmark-groups.ts)."""
 
 SOURCES: dict[SiteGroup, tuple[GroupId, ...]] = {
@@ -61,9 +70,10 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
             if current[site_group].get("measured") is not None:
                 raise ValueError(f"{site_group} is bound to an earlier campaign; this candidate has no figures for it")
             continue
-        arms = group_arms(source.id, candidate.schema_version)
+        arms = source.measured_arms(group_arms(source.id, candidate.schema_version))
         if unmapped := [arm for arm in arms if arm not in SYSTEMS]:
             raise ValueError(f"{source.id} has arms the site shows as no system: {', '.join(unmapped)}")
+        unpriced = {r.arm for r in source.rows if r.dollars is None}
         group = {
             "schema_version": 1,
             "id": site_group,
@@ -79,6 +89,8 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
                 "rows": rows,
                 **facts.model_dump(),
                 "systems": {SYSTEMS[arm]: arm for arm in arms},
+                "cost_not_reported": [SYSTEMS[arm] for arm in arms if arm in unpriced],
+                "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms],
             },
             "published": [],
         }

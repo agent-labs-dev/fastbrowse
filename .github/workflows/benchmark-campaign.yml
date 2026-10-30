@@ -14,7 +14,9 @@ name: Benchmark campaign
 #   fastbrowse    fastbrowse alone on every live suite task (internal-fastbrowse).
 #   head-to-head  fastbrowse, the hosted Browser Use agent (browser-use), Browser Use Ultrafast (jev-ultrafast) and
 #                 the Browserbase agent (browserbase) in one Parallax invocation, so every arm runs the same task set
-#                 under one recorded protocol (published as internal-hosted).
+#                 under one recorded protocol (published as internal-hosted). Ultrafast runs only the tasks of that
+#                 set graded without an answer. Without Browserbase credentials the group runs without browserbase,
+#                 and the site shows it as not measured; Browserbase reports no cost, so its rows carry none.
 #   all           both.
 # `browser` picks the fastbrowse arm's browser: headless Chrome on the runner (local) or a Browser Use Cloud browser.
 # The vendor arms always run on their own hosted browsers.
@@ -22,7 +24,7 @@ name: Benchmark campaign
 # Repository configuration this file needs (checked before any paid call):
 #   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY
 #            BROWSER_USE_API_KEY (with `browser: cloud` or the head-to-head group)
-#            BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID (with the head-to-head group)
+#   secrets, optional: BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID (the head-to-head group's browserbase arm)
 #            FASTBROWSE_SITE_TOKEN (publish-evals.yml: opens the site pull request)
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
@@ -132,6 +134,7 @@ jobs:
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
       - name: Check the credentials
+        id: credentials
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
@@ -157,21 +160,27 @@ jobs:
           if test "$BROWSER" = cloud || test "$GROUP_SET" != fastbrowse; then
             need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           fi
-          if test "$GROUP_SET" != fastbrowse; then
-            need BROWSERBASE_API_KEY "$BROWSERBASE_API_KEY"
-            need BROWSERBASE_PROJECT_ID "$BROWSERBASE_PROJECT_ID"
-          fi
           if test -n "$missing"; then
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
+          browserbase=false
+          if test -n "$BROWSERBASE_API_KEY" && test -n "$BROWSERBASE_PROJECT_ID"; then
+            browserbase=true
+          elif test "$GROUP_SET" != fastbrowse; then
+            echo "::warning::no Browserbase credentials: the head-to-head runs without browserbase"
+          fi
+          echo "browserbase=$browserbase" >> "$GITHUB_OUTPUT"
       - name: Build the group matrix
         id: matrix
         env:
           GROUP_SET: ${{ inputs.groups }}
+          BROWSERBASE: ${{ steps.credentials.outputs.browserbase }}
         run: |
+          vendors="browser-use jev-ultrafast"
+          if test "$BROWSERBASE" = true; then vendors="$vendors browserbase"; fi
           fastbrowse='{"label":"fastbrowse","key":"fastbrowse","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}'
-          head_to_head='{"label":"head-to-head","key":"head-to-head","arms":"fastbrowse browser-use jev-ultrafast browserbase","out":"head-to-head.jsonl"}'
+          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"fastbrowse $vendors\",\"out\":\"head-to-head.jsonl\"}"
           case "$GROUP_SET" in
             fastbrowse) include="[$fastbrowse]" ;;
             head-to-head) include="[$head_to_head]" ;;
