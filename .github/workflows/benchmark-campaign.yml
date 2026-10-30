@@ -25,7 +25,8 @@ name: Benchmark campaign
 #   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY
 #            BROWSER_USE_API_KEY (with `browser: cloud` or the head-to-head group)
 #   secrets, optional: BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID (the head-to-head group's browserbase arm)
-#            FASTBROWSE_SITE_TOKEN (publish-evals.yml: opens the site pull request)
+#            FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
+#            a campaign measured without it republishes with publish-evals.yml run_id)
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
 # `budget` is each group's approved total. It only gates whether the next run may start: a run holds its agent,
@@ -145,7 +146,6 @@ jobs:
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           PARALLAX_DEPLOY_KEY: ${{ secrets.PARALLAX_DEPLOY_KEY }}
-          FASTBROWSE_SITE_TOKEN: ${{ secrets.FASTBROWSE_SITE_TOKEN }}
           GROUP_SET: ${{ inputs.groups }}
         run: |
           missing=""
@@ -156,7 +156,6 @@ jobs:
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
-          need FASTBROWSE_SITE_TOKEN "$FASTBROWSE_SITE_TOKEN"
           if test "$BROWSER" = cloud || test "$GROUP_SET" != fastbrowse; then
             need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           fi
