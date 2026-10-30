@@ -61,7 +61,7 @@ fn record_run<'a>(capture: &'a Capture, list: &Shape) -> Option<Vec<&'a Block>> 
 fn record_question(requirement: &str, record: &str) -> Question {
     NoulQuestion::new(
         format!(
-            "{UNTRUSTED}\n\n# Requirement\n{requirement}\n\n# Record\n{record}\n\nDoes this record pass every filter the requirement states, so that it is one of the records the requirement counts or compares? Judge this record alone; do not judge whether it wins."
+            "{UNTRUSTED}\n\n# Requirement\n{requirement}\n\n# Record\n{record}\n\nDoes this record pass every filter the requirement states, so that it is one of the records the requirement counts or compares? Judge this record alone; do not judge whether it wins. A requirement that states no filter counts or compares every record of the list."
         ),
         Some("Yes, this record matches the requirement."),
         Some("No, this record does not match."),
@@ -150,7 +150,7 @@ impl Schema for RecordMatches {
     }
 }
 
-const RECORD_READER: &str = "# Records\nEach record below is one record of a list, after its [source id]. Return the source ids of the records that pass every filter the requirement states, judging each record alone. Code counts or compares the records you return, and ignores an id not shown here.";
+const RECORD_READER: &str = "# Records\nEach record below is one record of a list, after its [source id]. Return the source ids of the records that pass every filter the requirement states, judging each record alone. A requirement that states no filter counts or compares every record of the list. Code counts or compares the records you return, and ignores an id not shown here.";
 
 /// The LLM's reading of the records Jev was unsure of, shown alone rather than with the page around them, in as few
 /// prompts as fit the LLM input budget. Each record is judged alone, so splitting them changes no answer; a record too
