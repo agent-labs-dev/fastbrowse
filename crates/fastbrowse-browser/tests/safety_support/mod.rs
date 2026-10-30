@@ -16,15 +16,6 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep};
 use tokio_tungstenite::tungstenite::Message;
 
-/// Held for a whole test, so a binary's tests run one at a time as Python's suite does. Every tab but one on the
-/// shared Chrome is hidden, which throttles the timers the settling bounds are measured on; a second scoped session
-/// on the browser resumes this one's paused popups; and many sessions connecting at once have had the DevTools
-/// handshake reset.
-pub async fn one_at_a_time() -> tokio::sync::MutexGuard<'static, ()> {
-    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    SERIAL.lock().await
-}
-
 pub fn has(observation: &Observation, label: &str) -> bool {
     observation.controls.iter().any(|c| c.label.contains(label))
 }

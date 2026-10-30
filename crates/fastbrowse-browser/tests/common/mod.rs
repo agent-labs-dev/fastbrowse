@@ -310,8 +310,11 @@ pub struct Harness {
 }
 
 /// One browser test at a time per binary, as pytest runs them: a tab behind another is throttled, so parallel tests
-/// measured settles and scroll waits that no run sees, and Chrome refuses a burst of DevTools handshakes. A test that
-/// opens a second session already holds the turn, so the turn is counted per test thread rather than taken twice.
+/// measured settles and scroll waits that no run sees, and Chrome refuses a burst of DevTools handshakes. With even
+/// two tabs at work a menu shown on the next animation frame was read before it drew and a plain click outlasted its
+/// two-second bound, and a second scoped session on the browser resumes this one's paused popups. A test takes the
+/// turn itself to hold it across sessions, or for sessions it opens by hand. A test that opens a second session
+/// already holds the turn, so the turn is counted per test thread rather than taken twice.
 pub struct Turn(Option<tokio::sync::OwnedSemaphorePermit>);
 
 thread_local! {

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{RecordingArtifactSink, chrome, eval_active, eval_value, find, harness, sites, sites_dir, wait_until};
+use common::{RecordingArtifactSink, chrome, eval_active, eval_value, find, harness, sites, sites_dir, turn, wait_until};
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
@@ -27,7 +27,7 @@ use fastbrowse_core::models::{
     Attachment, BrowserConnection, Bytes, FrameHandler, LocalChrome, Operation, StepOutcome,
 };
 use fastbrowse_core::page::Action;
-use safety_support::{Reply, observe_until, one_at_a_time, query_param, quote, serve_on};
+use safety_support::{Reply, observe_until, query_param, quote, serve_on};
 use serde_json::json;
 use tokio::time::sleep;
 
@@ -63,7 +63,7 @@ fn session_of(session: &BrowserSession, frame_id: Option<&str>) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_window_origin_cannot_spoof_secret_scope() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     for label in ["Username", "Frame field"] {
         let Some(h) = harness().await else { return };
         h.page.navigate(&sites().main, None).await.expect("navigate");
@@ -92,7 +92,7 @@ async fn test_window_origin_cannot_spoof_secret_scope() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_page_rechecks_secret_origin_before_insertion() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     let obs = observe_until(&h.page, "Frame field").await;
@@ -105,7 +105,7 @@ async fn test_page_rechecks_secret_origin_before_insertion() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_enter_uses_form_semantics_and_focuses_verified_target() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     // Only the authorized case is the page's: unauthorized, the agent asks for confirmation before any input.
     let Some(h) = harness().await else { return };
     h.goto("/safety.html").await;
@@ -121,7 +121,7 @@ async fn test_enter_uses_form_semantics_and_focuses_verified_target() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_task_that_asks_for_a_download_still_downloads() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/release.html").await;
     let obs = h.observe().await;
@@ -135,7 +135,7 @@ async fn test_a_task_that_asks_for_a_download_still_downloads() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dialog_acceptance_has_its_own_gate() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     // ("accept", unauthorized) is the agent's gate and is not ported; the other two cases reach the page.
     for choice in ["accept", "dismiss"] {
         let Some(h) = harness().await else { return };
@@ -157,7 +157,7 @@ async fn test_dialog_acceptance_has_its_own_gate() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_covered_controls_are_not_modified() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     for operation in [Operation::Select, Operation::Upload] {
         let Some(h) = harness().await else { return };
         h.goto("/safety.html").await;
@@ -189,7 +189,7 @@ async fn test_covered_controls_are_not_modified() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_iframe_focus_hit_testing_and_capture_scope() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/safety.html").await;
     wait_until(
@@ -250,7 +250,7 @@ async fn test_iframe_focus_hit_testing_and_capture_scope() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fill_does_not_claim_execution_when_page_rejects_value() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/safety.html").await;
     eval_active(
@@ -426,7 +426,7 @@ fn tab_text(session: &BrowserSession) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_navigation_and_redirects_never_reach_a_foreign_origin() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     for route in ["direct", "redirect", "refresh", "script"] {
         let sites = origin_sites();
@@ -464,7 +464,7 @@ async fn test_navigation_and_redirects_never_reach_a_foreign_origin() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_frames_of_a_foreign_origin_never_load() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     // 127.0.0.1 shares the page's process; localhost is put in one of its own.
     for host in ["127.0.0.1", "localhost"] {
@@ -482,7 +482,7 @@ async fn test_frames_of_a_foreign_origin_never_load() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_popups_are_adopted_only_inside_the_grant() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     for opened in ["foreign", "redirect", "granted"] {
         let sites = origin_sites();
@@ -514,7 +514,7 @@ async fn test_popups_are_adopted_only_inside_the_grant() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let Some(h) = harness().await else { return };
     let sites = origin_sites();
@@ -541,7 +541,7 @@ async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_own() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let Some(h) = harness().await else { return };
     let sites = origin_sites();
@@ -566,7 +566,7 @@ async fn test_an_attached_browser_with_no_granted_window_gets_a_window_of_its_ow
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_browser_with_only_an_empty_window_takes_it_over() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let Some(h) = harness().await else { return };
     let sites = origin_sites();
@@ -599,7 +599,7 @@ async fn test_an_attached_browser_with_only_an_empty_window_takes_it_over() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_browser_leaves_a_blank_window_that_was_written_into() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let Some(h) = harness().await else { return };
     let sites = origin_sites();
@@ -629,7 +629,7 @@ async fn test_an_attached_browser_leaves_a_blank_window_that_was_written_into() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_document_the_network_never_saw_is_not_read_or_controlled() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
@@ -654,7 +654,7 @@ async fn test_a_document_the_network_never_saw_is_not_read_or_controlled() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_upload_script_checks_the_origin_it_runs_in() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
@@ -672,7 +672,7 @@ async fn test_an_upload_script_checks_the_origin_it_runs_in() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_service_worker_cannot_answer_a_navigation_past_the_gate() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let sites = origin_sites();
     let foreign = format!("{}/page?{SECRET_QUERY}", sites.foreign("127.0.0.1"));
@@ -700,7 +700,7 @@ async fn test_a_service_worker_cannot_answer_a_navigation_past_the_gate() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_scoped_run_delivers_no_live_frames() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let sites = origin_sites();
     let frames: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
@@ -720,7 +720,7 @@ async fn test_a_scoped_run_delivers_no_live_frames() {
 #[cfg(feature = "recording")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_scoped_session_refuses_to_record() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
@@ -733,7 +733,7 @@ async fn test_a_scoped_session_refuses_to_record() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_check_access_runs_before_every_browser_touch() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     for scope in [false, true] {
         let sites = origin_sites();
@@ -786,7 +786,7 @@ async fn test_check_access_runs_before_every_browser_touch() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_blank_popup_inherits_no_foreign_document_grant() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let Some(h) = harness().await else { return };
     let sites = origin_sites();
@@ -808,7 +808,7 @@ async fn test_a_blank_popup_inherits_no_foreign_document_grant() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_opaque_child_documents_never_enter_a_scoped_read() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     for source in ["blank", "srcdoc", "blob"] {
         let Some(h) = harness().await else { return };
@@ -837,7 +837,7 @@ async fn test_opaque_child_documents_never_enter_a_scoped_read() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_access_is_checked_before_connecting_to_a_browser() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     // Python enters through `run.connect_cdp`; the browser layer's own entry is the session's open, which asks
     // before it connects, so no browser needs to be there.
     let check: CheckAccess = Arc::new(|| Box::pin(async { Err(BoxError::from("private caller detail")) }));
@@ -851,7 +851,7 @@ async fn test_access_is_checked_before_connecting_to_a_browser() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_scoped_screenshots_are_refused_even_on_a_clean_page() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(connection) = chrome() else { return };
     let sites = origin_sites();
     let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
@@ -913,7 +913,7 @@ async fn gone(pids: &[u32]) -> bool {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_one_run_types_a_secret_the_client_holds_and_leaves_no_chrome_behind() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     // The served run's browser part: a Chrome of its own, the secret typed only into the origin it was given for,
     // and no Chrome process left once the session and the browser are closed. The JSON-RPC exchange, the scripted
     // run and the events it reports are `fastbrowse serve`'s.
