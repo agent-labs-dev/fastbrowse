@@ -313,10 +313,6 @@ class Cassette:
         head.pop("cassette")
         return cls(task=task, exchanges=exchanges, meta=head)
 
-    @property
-    def cost(self) -> float:
-        return sum(exchange.cost or 0.0 for exchange in self.exchanges)
-
 
 def response_cost(body: str) -> float | None:
     """The dollars OpenRouter reported for a response, for Jev and the LLM alike."""

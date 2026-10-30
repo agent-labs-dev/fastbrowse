@@ -198,7 +198,7 @@ def test_record_forwards_everything_and_fill_only_misses() -> None:
         _post(base, JEV, {"q": "a"})
         _post(base, JEV, {"q": "a"})
     assert sent == ["a", "a"] and len(cassette.exchanges) == 2
-    assert cassette.cost == pytest.approx(0.02)
+    assert [exchange.cost for exchange in cassette.exchanges] == [0.01, 0.01]
 
     filling = Proxy(cassette, forward=forward)
     with filling as base:
