@@ -25,7 +25,9 @@ name: Benchmark campaign
 #   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the candidate reads the fixture run back)
 #            BROWSER_USE_API_KEY (with `browser: cloud` or the head-to-head group)
-#   secrets, optional: BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID (the head-to-head group's browserbase arm)
+#   secrets, optional: BROWSER_BASE_API_KEY, BROWSERBASE_PROJECT_ID (the head-to-head group's browserbase arm)
+#            (BROWSER_BASE_API_KEY is the spelling this repository uses; the legacy BROWSERBASE_API_KEY is
+#            still read, with a warning, so an arm measured before the rename keeps running)
 #            FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
 #   vars, optional:    BROWSERBASE_PLAN, developer or startup: the account's plan, whose listed rates price its sessions
@@ -140,6 +142,7 @@ jobs:
         id: credentials
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          BROWSER_BASE_API_KEY: ${{ secrets.BROWSER_BASE_API_KEY }}
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
           BROWSERBASE_PLAN: ${{ vars.BROWSERBASE_PLAN }}
@@ -170,14 +173,21 @@ jobs:
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
+          # BROWSER_BASE_API_KEY is the name this repository uses for the arm's key. The legacy BROWSERBASE_API_KEY is
+          # still read so a secret already set under the old spelling keeps the arm measurable, and the warning says
+          # which name to set. Nothing here renames the provider's own variable: parallax still reads BROWSERBASE_API_KEY.
+          browserbase_key="${BROWSER_BASE_API_KEY:-$BROWSERBASE_API_KEY}"
+          if test -z "$BROWSER_BASE_API_KEY" && test -n "$BROWSERBASE_API_KEY"; then
+            echo "::warning title=Browserbase key uses the legacy name::set the repository secret BROWSER_BASE_API_KEY to the value held in BROWSERBASE_API_KEY and delete the old secret"
+          fi
           browserbase=false
-          if test -n "$BROWSERBASE_API_KEY" && test -n "$BROWSERBASE_PROJECT_ID" && test -n "$BROWSERBASE_PLAN"; then
+          if test -n "$browserbase_key" && test -n "$BROWSERBASE_PROJECT_ID" && test -n "$BROWSERBASE_PLAN"; then
             browserbase=true
           elif test "$GROUP_SET" != fastbrowse; then
             # An optional arm that cannot be measured is named here and skipped, never failed: the head-to-head still
             # measures the arms that do have credentials, and the summary says which one was left out and why.
             absent=""
-            test -n "$BROWSERBASE_API_KEY" || absent="$absent BROWSERBASE_API_KEY(secret)"
+            test -n "$browserbase_key" || absent="$absent BROWSER_BASE_API_KEY(secret)"
             test -n "$BROWSERBASE_PROJECT_ID" || absent="$absent BROWSERBASE_PROJECT_ID(secret)"
             test -n "$BROWSERBASE_PLAN" || absent="$absent BROWSERBASE_PLAN(variable)"
             echo "::warning title=Browserbase arm skipped::the head-to-head runs without the browserbase arm; missing:$absent"
@@ -257,6 +267,7 @@ jobs:
       - name: Run the group
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          BROWSER_BASE_API_KEY: ${{ secrets.BROWSER_BASE_API_KEY }}
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -269,6 +280,10 @@ jobs:
           OUT: ${{ github.workspace }}/ledgers/${{ matrix.out }}
         run: |
           cd parallax
+          # The arm's key under this repository's name, falling back to the legacy spelling; parallax reads the
+          # provider's own variable, so the resolved value is exported under that name for the run.
+          browserbase_key="${BROWSER_BASE_API_KEY:-$BROWSERBASE_API_KEY}"
+          export BROWSERBASE_API_KEY="$browserbase_key"
           mkdir -p "$(dirname "$OUT")"
           read -ra arms <<< "$ARMS"
           read -ra suites <<< "$SUITES"
