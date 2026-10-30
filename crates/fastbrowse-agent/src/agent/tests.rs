@@ -27,9 +27,7 @@ use serde_json::json;
 
 use super::Agent;
 use super::driving::edit_progress;
-use super::helpers::{
-    access_inspection, answer_evidence, code_decision, follow_recovery, next_page_control, next_value, unread, visited,
-};
+use super::helpers::{answer_evidence, code_decision, follow_recovery, next_page_control, next_value, unread, visited};
 use super::state::{Flow, RunState, Spawned, TransactionCandidate};
 use crate::memory::{Fact, Notes, fact_id};
 use crate::planner::{Plan, Requirement, RequirementKind};
@@ -377,15 +375,6 @@ async fn test_http_error_visit_cannot_evidence_navigation_completion() {
     assert!(state.history.last().unwrap().effect.as_deref().unwrap_or_default().contains("HTTP 419"));
     agent.note_effect(&mut state, &Observation { response_status: Some(200), ..failed.clone() });
     assert!(state.visited.contains_key(&failed.url));
-}
-
-#[test]
-fn test_access_inspection_does_not_enable_a_protected_action() {
-    let plan = Plan {
-        inspect_access: true,
-        ..Plan::new(vec![Requirement::new("r", "Sign in and export private records", RequirementKind::Action)], true)
-    };
-    assert!(!access_inspection(&plan));
 }
 
 fn capacities() -> (Fact, Fact) {

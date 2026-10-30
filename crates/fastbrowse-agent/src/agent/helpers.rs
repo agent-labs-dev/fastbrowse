@@ -440,13 +440,6 @@ pub(crate) fn dialog_question(task: &str, dialog: Option<&Dialog>) -> Option<Nou
     ))
 }
 
-pub(crate) fn access_inspection(plan: &Plan) -> bool {
-    plan.inspect_access
-        && plan.answer_expected
-        && !plan.requirements.is_empty()
-        && plan.requirements.iter().all(|r| r.kind == RequirementKind::Information)
-}
-
 pub(crate) fn unread_transaction(state: &RunState) -> bool {
     // Possible submissions also include searches and filters. Only a requested state change needs a receipt read.
     state.ready_plan.as_ref().is_some_and(|plan| plan.requirements.iter().any(|r| r.kind == RequirementKind::Action))

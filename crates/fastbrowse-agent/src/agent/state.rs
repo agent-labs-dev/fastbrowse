@@ -279,8 +279,6 @@ pub(crate) struct RunState {
     pub recovery_log: VecDeque<String>,
     pub gave_up: Option<GaveUp>,
     pub last_page: Option<(String, String)>,
-    /// The address of the last page Jev judged a sign-in wall that blocks the task.
-    pub passed_wall: Option<String>,
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
     /// since is going round, not forward.
     pub reached: HashMap<String, usize>,
@@ -395,7 +393,6 @@ impl RunState {
             recovery_log: VecDeque::new(),
             gave_up: None,
             last_page: None,
-            passed_wall: None,
             reached: HashMap::new(),
             evidence_reads: 0,
             landing: None,

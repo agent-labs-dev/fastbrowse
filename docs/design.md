@@ -112,7 +112,8 @@ which are the page's controls plus back, scroll, escape and the caller's start p
 subgoal reaches Jev with the next step, and the action it names is taken only when Jev is unsure again or
 escalates. When the LLM gives up, that counts as one more recovery: its diagnosis becomes the run's status
 once `max_recoveries` is spent, and a sign-in it names ends `needs_login` only when Jev agrees the page is a
-wall.
+wall. An HTTP error page goes to Jev like any other, with its status among the step's page facts, so Jev
+goes back, picks another link or escalates; code only waits out a 403, 429 or 503 once per document.
 
 ## Run events and images
 

@@ -20,12 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::driving::{StepOptions, Watched, require};
-use super::helpers::{
-    caller_link, code_decision, describe, dialog_question, misfit, navigation_question, next_value, unread,
-};
+use super::helpers::{caller_link, code_decision, describe, dialog_question, misfit, navigation_question, next_value};
 use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
 use super::{Agent, GENERATE};
-use crate::planner::Plan;
 use crate::policy::Decision;
 use crate::support::generate;
 use crate::verification::page_state;
@@ -876,51 +873,34 @@ impl Agent {
         Ok(self.ask_choice(state, observation, &question, criteria).await? == "accept")
     }
 
-    /// Stop at a sign-in wall Jev judged blocks the task; return once a read proved the page readable.
-    pub(super) async fn meet_wall(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        raw: &Observation,
-        plan: &Plan,
-    ) -> Step {
+    /// The stop at a sign-in wall Jev judged blocks the task, naming the credentials the page asks for.
+    pub(super) fn meet_wall(&self, observation: &Observation, raw: &Observation) -> Flow {
         let origin = fastbrowse_core::safety::origin_of(&observation.url);
-        // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
-        // echo a typed secret into its title or a field's label.
-        let wall = |evidence: String| -> Flow {
-            Stop::new(Status::NeedsLogin, self.redact(&format!("sign-in required at {origin}: {evidence}"))).into()
-        };
-        let page = if observation.title.is_empty() { observation.url.clone() } else { observation.title.clone() };
         // Which fields ask for credentials is read from the raw page, whose flags masking cannot have changed.
         let credential: HashSet<&String> =
             raw.controls.iter().filter(|c| asks_for_credentials(c)).map(|c| &c.id).collect();
-        if !credential.is_empty() {
-            let asked: Vec<String> = observation
-                .controls
-                .iter()
-                .filter(|c| credential.contains(&c.id))
-                .map(|c| {
-                    if !c.label.is_empty() {
-                        c.label.clone()
-                    } else {
-                        c.input_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "a password".into())
-                    }
-                })
-                .collect();
-            let asked = if asked.is_empty() { "a password".to_string() } else { asked.join(", ") };
-            return Err(wall(format!("the page asks for {asked}")));
-        }
-        if !unread(plan, &state.notes) {
-            return Err(wall(format!("{page} offers only sign-in")));
-        }
-        // A prompt to sign in can gate only writing, such as posting a reply, so a task that reads is asked of the page
-        // before any credential is: what the page shows decides whether the wall stands between them.
-        let facts = state.notes.facts().len();
-        let read = code_decision(Operation::Read, None);
-        Box::pin(self.step(state, observation, &read, Decider::Code, StepOptions::default())).await?;
-        if state.notes.facts().len() == facts {
-            return Err(wall(format!("reading {page} found none of the requested information")));
-        }
-        Ok(())
+        let asked: Vec<String> = observation
+            .controls
+            .iter()
+            .filter(|c| credential.contains(&c.id))
+            .map(|c| {
+                if !c.label.is_empty() {
+                    c.label.clone()
+                } else {
+                    c.input_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "a password".into())
+                }
+            })
+            .collect();
+        let evidence = if !asked.is_empty() {
+            format!("the page asks for {}", asked.join(", "))
+        } else if credential.is_empty() {
+            let page = if observation.title.is_empty() { &observation.url } else { &observation.title };
+            format!("{page} offers only sign-in")
+        } else {
+            "the page asks for a password".to_string()
+        };
+        // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
+        // echo a typed secret into its title or a field's label.
+        Stop::new(Status::NeedsLogin, self.redact(&format!("sign-in required at {origin}: {evidence}"))).into()
     }
 }

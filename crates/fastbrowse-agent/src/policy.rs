@@ -1251,7 +1251,7 @@ fn target_element(control: &Control, operation: Operation, compact: bool) -> Map
 /// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
 pub(crate) fn login_question() -> Question {
     noul(
-        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. If the task asks to inspect access restrictions, observing the wall advances that task without signing in.",
+        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task or unread_requirements ask to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in.",
         "A sign-in, verification or access wall blocks the task and the task gives no way through it.",
         "The task can progress without signing in, or the task supplies the credentials to sign in.",
     )

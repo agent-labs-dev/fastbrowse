@@ -105,8 +105,6 @@ struct PlanFields {
     answer_expected: bool,
     #[serde(default)]
     answer_checks: Vec<String>,
-    #[serde(default, deserialize_with = "lax::boolean")]
-    inspect_access: bool,
     #[serde(default)]
     run_reports: Vec<RunReport>,
 }
@@ -117,7 +115,6 @@ pub struct Plan {
     pub requirements: Vec<Requirement>,
     pub answer_expected: bool,
     pub answer_checks: Vec<String>,
-    pub inspect_access: bool,
     /// Requested reports about this run, copied from browser state rather than read from page text.
     pub run_reports: Vec<RunReport>,
 }
@@ -130,7 +127,6 @@ impl TryFrom<PlanFields> for Plan {
             requirements: fields.requirements,
             answer_expected: fields.answer_expected,
             answer_checks: fields.answer_checks,
-            inspect_access: fields.inspect_access,
             run_reports: fields.run_reports,
         };
         plan.validate_ids()?;
@@ -139,18 +135,11 @@ impl TryFrom<PlanFields> for Plan {
 }
 
 const ANSWER_CHECKS: &str = "Completion-only checks for requested answer outputs, separate from browsing requirements. Write them in full here: nothing normalizes a terse draft afterwards. Split requested fields and components into individual checks for each named or numbered result, and give each numbered result its own field checks for a fixed number of unnamed results. Retain the entity, scope and constraints, and preserve every, each, all and exact-count requirements. For an unbounded set, check each field across all results. Each check must state its entity and scope explicitly, not just a field label. Exclude this run's own reports (run_reports), which code fills from browser state. Do not add outputs, actions or intermediate navigation that the user did not request.";
-const INSPECT_ACCESS: &str = "True only when the user asks to inspect whether access is restricted, rather than to access protected content. A sign-in wall is evidence for that question, not permission to sign in.";
 
 impl Plan {
     /// A plan with every optional field at its default.
     pub fn new(requirements: Vec<Requirement>, answer_expected: bool) -> Plan {
-        Plan {
-            requirements,
-            answer_expected,
-            answer_checks: Vec::new(),
-            inspect_access: false,
-            run_reports: Vec::new(),
-        }
+        Plan { requirements, answer_expected, answer_checks: Vec::new(), run_reports: Vec::new() }
     }
 
     pub fn page_answer_expected(&self) -> bool {
@@ -176,7 +165,6 @@ impl Schema for Plan {
                 Field::required("requirements", Ty::list(Requirement::ty())),
                 Field::required("answer_expected", Ty::Bool),
                 Field::default("answer_checks", Ty::list(Ty::Str), json!([])).doc(ANSWER_CHECKS),
-                Field::default("inspect_access", Ty::Bool, false).doc(INSPECT_ACCESS),
                 Field::default("run_reports", Ty::list(RunReport::ty()), json!([])).doc(
                     "Requested reports about this run, copied from browser state rather than read from page text.",
                 ),
@@ -338,7 +326,6 @@ pub async fn partition_plan(
                 && (plan.requirements.iter().any(|r| r.kind == RequirementKind::Information && group.contains(&r.id))
                     || bindings.values().any(|ids| ids.is_subset(group))),
             run_reports: Vec::new(),
-            ..plan.clone()
         })
         .collect();
     Ok(Partition { plans, targets })
@@ -346,7 +333,7 @@ pub async fn partition_plan(
 
 fn instructions() -> Message {
     Message::system(
-        "# Planner\nList the outcomes the user asked for as individually checkable requirements, each one short sentence. Split compound requests into separate requirements. An information requirement is a fact to find; an action requirement is a change the user asked for (log in, add to cart, submit). Navigating, searching or opening a page is how the work gets done, not a requirement, even when the task names the search to run or the page to open before what it asks: 'search for X, open its page and tell me Y' has one requirement, to find Y. That is only searching and opening pages: a click, entry or submission the task names is still an action requirement. When the user explicitly asks to expand, load or exhaust content until a stopping condition before reporting, reaching that page state is a separate action requirement. A displayed total does not evidence that the requested expansion was performed. Do not absorb that stopping condition into an information requirement. But when reaching a page is all the user asked for, reaching it is the one action requirement. An address the task says to start at or go to before asking for something else is where the work begins, and the browser may already be there: it is not a requirement of its own. A search the user asked only to run is such a page: it is one action requirement, to leave the search showing with the filters the user named applied, and not a fact to find. Except for a task asking only for a run report, every task has at least one requirement. Answering is not a requirement either: say whether the user expects an answer. Requests to report this run's final URL, navigation steps or final page title, or to capture a screenshot of the page, belong in run_reports, not requirements: code reports the observed address, title and recorded actions and captures the final page itself, so a screenshot is never a requirement to confirm. Keep the requested navigation itself as an action requirement when there is no page fact to find. A request only for the current URL, title or a screenshot needs no page requirement. Never classify page facts, image contents, transaction outcomes or a site's navigation instructions as run reports.\n\nEach information requirement must retain the relevant constraints from the task, including dates, filters and comparison criteria, and adds none the task did not state: a total the user wants reported is the order's total as the order summary or review shows it before the order is placed, and it must never be conditioned on the order having been placed or on a confirmation page carrying it. Keep related output fields together when they identify one result. When the task asks for information independently about several named targets, create one information requirement per target, retaining its name and requested fields. Do not combine those targets into one requirement. Keep a comparison or aggregate across targets together when it can only be answered from the whole set. Do not create a separate requirement to find that same result again.\n\nKeep a prerequisite action's actor identity and supplied inputs with that action. They are not requested record identities or answer fields. Retain named entities and identity filters when the user asks for information about those entities.\n\nFor an expected page answer, also fill answer_checks with individually checkable requested output values, and fill them completely in this one call: nothing normalizes a terse draft afterwards, so an entity or field the draft omits is an output the answer is never checked against. Separate components of a requested breakdown. Separate each field or component for each named or numbered result, and give each numbered result its own field checks for a fixed number of unnamed results. Preserve the entity, scope and constraints in every check, and preserve every, each, all and exact-count requirements; for an unbounded result set, check each requested field across all results. Each check must state its entity and scope explicitly, not just a field label. Exclude this run's own reports (run_reports): code fills those from browser state after page-answer verification. These checks validate the final answer, not the discovery plan: do not turn them into extra browsing requirements.\n\nSet count_records for a requested total number of matching entities, including items nested in groups. Preserve the requested entity and filters: group headings are not the entities they contain. Do not turn a record count into a prose estimate. Set inspect_access only for an explicit request to inspect access restrictions; never for a request to retrieve protected content.\n\n# Secrets\nNever write a password, token or other secret value into a requirement.",
+        "# Planner\nList the outcomes the user asked for as individually checkable requirements, each one short sentence. Split compound requests into separate requirements. An information requirement is a fact to find; an action requirement is a change the user asked for (log in, add to cart, submit). Navigating, searching or opening a page is how the work gets done, not a requirement, even when the task names the search to run or the page to open before what it asks: 'search for X, open its page and tell me Y' has one requirement, to find Y. That is only searching and opening pages: a click, entry or submission the task names is still an action requirement. When the user explicitly asks to expand, load or exhaust content until a stopping condition before reporting, reaching that page state is a separate action requirement. A displayed total does not evidence that the requested expansion was performed. Do not absorb that stopping condition into an information requirement. But when reaching a page is all the user asked for, reaching it is the one action requirement. An address the task says to start at or go to before asking for something else is where the work begins, and the browser may already be there: it is not a requirement of its own. A search the user asked only to run is such a page: it is one action requirement, to leave the search showing with the filters the user named applied, and not a fact to find. Except for a task asking only for a run report, every task has at least one requirement. Answering is not a requirement either: say whether the user expects an answer. Requests to report this run's final URL, navigation steps or final page title, or to capture a screenshot of the page, belong in run_reports, not requirements: code reports the observed address, title and recorded actions and captures the final page itself, so a screenshot is never a requirement to confirm. Keep the requested navigation itself as an action requirement when there is no page fact to find. A request only for the current URL, title or a screenshot needs no page requirement. Never classify page facts, image contents, transaction outcomes or a site's navigation instructions as run reports.\n\nEach information requirement must retain the relevant constraints from the task, including dates, filters and comparison criteria, and adds none the task did not state: a total the user wants reported is the order's total as the order summary or review shows it before the order is placed, and it must never be conditioned on the order having been placed or on a confirmation page carrying it. Keep related output fields together when they identify one result. When the task asks for information independently about several named targets, create one information requirement per target, retaining its name and requested fields. Do not combine those targets into one requirement. Keep a comparison or aggregate across targets together when it can only be answered from the whole set. Do not create a separate requirement to find that same result again.\n\nKeep a prerequisite action's actor identity and supplied inputs with that action. They are not requested record identities or answer fields. Retain named entities and identity filters when the user asks for information about those entities.\n\nFor an expected page answer, also fill answer_checks with individually checkable requested output values, and fill them completely in this one call: nothing normalizes a terse draft afterwards, so an entity or field the draft omits is an output the answer is never checked against. Separate components of a requested breakdown. Separate each field or component for each named or numbered result, and give each numbered result its own field checks for a fixed number of unnamed results. Preserve the entity, scope and constraints in every check, and preserve every, each, all and exact-count requirements; for an unbounded result set, check each requested field across all results. Each check must state its entity and scope explicitly, not just a field label. Exclude this run's own reports (run_reports): code fills those from browser state after page-answer verification. These checks validate the final answer, not the discovery plan: do not turn them into extra browsing requirements.\n\nSet count_records for a requested total number of matching entities, including items nested in groups. Preserve the requested entity and filters: group headings are not the entities they contain. Do not turn a record count into a prose estimate.\n\n# Secrets\nNever write a password, token or other secret value into a requirement.",
     )
 }
 

@@ -949,25 +949,32 @@ impl Agent {
         })
     }
 
-    /// What code knows about this page that bears on reading it. Jev's read assessment decides whether to read.
+    /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
     fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
         let mut facts = Vec::new();
+        if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
+            facts.push(format!(
+                "This page answered HTTP {status}: the address did not load successfully in this browser session."
+            ));
+        }
         let document = &observation.document_key;
         let read = state.read_documents.get(document).copied();
         if !document.is_empty() && read == Some(true) {
-            facts.push("This page changed after it was last read, so the notes taken from it predate the change.");
+            facts.push(
+                "This page changed after it was last read, so the notes taken from it predate the change.".into(),
+            );
         }
         if !document.is_empty()
             && read.is_none()
             && observation.controls.iter().any(fastbrowse_core::page::pager_link)
             && state.ready_plan.as_ref().is_some_and(|plan| helpers::unread(plan, &state.notes))
         {
-            facts.push("This list page has not been read: turning to another page leaves its records unread.");
+            facts.push("This list page has not been read: turning to another page leaves its records unread.".into());
         }
         if helpers::unread_transaction(state) {
-            facts.push("An action that may have committed a change has not had the page it led to read.");
+            facts.push("An action that may have committed a change has not had the page it led to read.".into());
         }
-        facts.into_iter().map(String::from).collect()
+        facts
     }
 
     /// Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop.
@@ -998,13 +1005,9 @@ impl Agent {
         if !origin.is_empty() && !self.secret_names(&origin).is_empty() {
             return Ok(status);
         }
-        let standing = state
-            .passed_wall
-            .as_deref()
-            .is_some_and(|wall| fastbrowse_core::navigation::same_address(wall, &observation.url));
         // A model's word alone is not the page's: a run that stopped saying it was signed out ends needs_login only
         // when Jev, shown the page, agrees a sign-in blocks the task.
-        let walled = standing || (said && self.sees_wall(state, observation).await?);
+        let walled = said && self.sees_wall(state, observation).await?;
         Ok(if walled { Status::NeedsLogin } else { status })
     }
 

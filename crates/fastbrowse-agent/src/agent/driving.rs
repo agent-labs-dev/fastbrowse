@@ -15,9 +15,8 @@ use fastbrowse_core::safety::{origin_of, starts_download};
 use serde_json::Map;
 
 use super::helpers::{
-    access_inspection, caller_link, code_decision, decision_label, describe, dialog_question, drew_something,
-    follow_recovery, join, navigation_question, netloc_of, not_acting, paging, path_of, read_exhausted, scheme_of,
-    unread,
+    caller_link, decision_label, describe, dialog_question, drew_something, follow_recovery, join, navigation_question,
+    netloc_of, not_acting, paging, path_of, read_exhausted, scheme_of, unread,
 };
 use super::recovery::{Withheld, withheld};
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
@@ -48,14 +47,10 @@ impl Agent {
                 state.first_url = Some(observation.url.clone());
             }
             self.note_effect(state, &observation);
-            let inspect_wall =
-                matches!(observation.response_status, Some(401 | 403)) && access_inspection(&state.await_plan().await?);
-            if inspect_wall {
-                state.http_failure = None;
-            }
+            // An error page is Jev's to act on, told its status in the step's page facts. Code only waits out a
+            // status that can clear by itself, once per document, and stops a list walk that reached one.
             if let Some(status) = observation.response_status
                 && status >= 400
-                && !inspect_wall
             {
                 let document = (
                     observation.url.clone(),
@@ -66,8 +61,7 @@ impl Agent {
                     },
                     status,
                 );
-                if !state.http_seen.contains(&document) {
-                    state.http_seen.insert(document);
+                if state.http_seen.insert(document) {
                     if matches!(status, 403 | 429 | 503)
                         && self.outwait(&self.raw().unwrap_or_else(|| observation.clone())).await?
                     {
@@ -75,10 +69,6 @@ impl Agent {
                     }
                     state.paging_failed |= state.next_page || state.paged_from.is_some();
                     state.next_page = false;
-                    state.await_plan().await?;
-                    let reason = HttpFailure { url: observation.url.clone(), status }.message();
-                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, None)).await?;
-                    continue;
                 }
             }
             self.settle(state, &observation).await?;
@@ -165,15 +155,7 @@ impl Agent {
                     }
                     .into());
                 }
-                let plan = state.await_plan().await?;
-                state.passed_wall = Some(raw.url.clone());
-                if !access_inspection(&plan) {
-                    Box::pin(self.meet_wall(state, &observation, &raw, &plan)).await?;
-                    continue;
-                }
-                // A task inspecting an access boundary needs its observed wall read and verified, not passed.
-                decision = code_decision(Operation::Read, None);
-                decided_by = Decider::Code;
+                return Err(self.meet_wall(&observation, &raw));
             }
             let mut uncertain = decision.confidence() < self.config.thresholds.recover_below;
             if let Some(directed) = follow_recovery(state, &observation, &decision, uncertain) {
