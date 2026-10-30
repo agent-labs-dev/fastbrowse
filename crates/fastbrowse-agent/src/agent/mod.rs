@@ -230,7 +230,6 @@ fn propose(llm: Arc<dyn LLMClient>, task: &str, start: &str, ledger: Arc<Ledger>
 /// side by side.
 #[derive(Default)]
 struct Seen {
-    redactor: Redactor,
     secret_on_screen: bool,
     raw: Option<Observation>,
     /// The last observation `observe` returned, which the finish judges again only if the page changed since.
@@ -246,12 +245,15 @@ pub struct Agent {
     secrets: Option<Arc<dyn SecretResolver>>,
     on_event: Option<EventHandler>,
     trace: Trace,
+    /// The run's secrets, shared with its trace.
+    redactor: Arc<Mutex<Redactor>>,
     seen: Mutex<Seen>,
 }
 
 impl Agent {
     pub fn new(page: Arc<dyn Page>, jev: Arc<dyn DecisionClient>, llm: Arc<dyn LLMClient>) -> Agent {
         let config = jev.profile().fit(None);
+        let redactor = Arc::default();
         Agent {
             page,
             jev,
@@ -259,7 +261,8 @@ impl Agent {
             config,
             secrets: None,
             on_event: None,
-            trace: Trace::disabled(),
+            trace: Trace::disabled().redacting(Arc::clone(&redactor)),
+            redactor,
             seen: Mutex::new(Seen::default()),
         }
     }
@@ -281,7 +284,7 @@ impl Agent {
     }
 
     pub fn with_trace(mut self, trace: Trace) -> Agent {
-        self.trace = trace;
+        self.trace = trace.redacting(Arc::clone(&self.redactor));
         self
     }
 
@@ -289,16 +292,20 @@ impl Agent {
         self.seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn redactor(&self) -> MutexGuard<'_, Redactor> {
+        self.redactor.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn redact(&self, value: &str) -> String {
-        self.seen().redactor.redact(value)
+        self.redactor().redact(value)
     }
 
     fn mask(&self, value: &str) -> String {
-        self.seen().redactor.mask(value)
+        self.redactor().mask(value)
     }
 
     fn reveals_text(&self, value: &str) -> bool {
-        self.seen().redactor.reveals(value)
+        self.redactor().reveals(value)
     }
 
     fn raw(&self) -> Option<Observation> {
