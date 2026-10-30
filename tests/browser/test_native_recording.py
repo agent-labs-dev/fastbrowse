@@ -1,5 +1,5 @@
-"""`record` and `cursor` on the Rust core: both videos written and reported, and a cursor that cannot be drawn leaves
-the run to go on without it."""
+"""`record`, `cursor` and step frames on the Rust core: both videos written and reported, a cursor that cannot be drawn
+leaves the run to go on without it, and the final frame reaches the caller."""
 
 import asyncio
 import shutil
@@ -10,6 +10,7 @@ import pytest
 from pydantic import JsonValue
 
 from fastbrowse import run_task
+from fastbrowse.config import Config
 from fastbrowse.jev import Evaluation, Question
 from fastbrowse.models import RecordingError, Status
 from tests.scripted import ScriptedJev, ScriptedLLM, steps
@@ -36,6 +37,20 @@ async def test_a_recorded_run_reports_both_videos(
     assert result.status is Status.COMPLETE, result.error
     assert sorted(path.name for path in result.recordings) == ["run.mp4", "run.plain.mp4"]
     assert all(path.stat().st_size > 0 for path in result.recordings)
+
+
+@pytest.mark.timeout(120)
+async def test_a_run_with_step_frames_returns_its_final_frame(cdp_url: str, main_site: str) -> None:
+    result = await run_task(
+        "Open the dispatch page",
+        start=f"{main_site}/dispatch.html",
+        cdp_url=cdp_url,
+        config=Config(step_frames=True),
+        jev=ScriptedJev(steps("")),
+        llm=ScriptedLLM(),
+    )
+    assert result.status is Status.COMPLETE, result.error
+    assert result.final_frame is not None and result.final_frame.startswith(b"\x89PNG")
 
 
 async def test_a_recording_that_cannot_start_raises_recording_error(

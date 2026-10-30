@@ -178,6 +178,11 @@ pub fn totp_at(key: &str, when: f64) -> Result<String, TotpError> {
     Ok(parse_key(key)?.at(when))
 }
 
+/// How many seconds each of `key`'s codes lasts.
+pub fn period_of(key: &str) -> Result<u64, TotpError> {
+    Ok(parse_key(key)?.period)
+}
+
 fn now() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }

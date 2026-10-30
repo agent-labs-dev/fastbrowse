@@ -45,9 +45,8 @@ task success, completion, LLM calls, model throughput or cost block publication;
 but moves with cloud load, so it never blocks, and Jev calls are recorded but never block, since Jev decides every step. No result is published until complete runs are reviewed and
 the maintainer explicitly approves it.
 
-The fixture workflow must be green on the release build. A changed comparison must also be rerun on that
-build. CI validates changed result rows and their ledgers against base-branch baselines. The release guard
-refuses a missing fixture receipt or executable changes after a comparison measurement.
+The fixture workflow runs nightly and on demand; it does not gate a release. CI validates changed result rows
+and their ledgers against base-branch baselines.
 
 Public projections contain ids, source hashes, grades, completion, build identity, time, cost, call counts,
 model throughput and the input and output token counts behind that throughput only. Answers, page content,

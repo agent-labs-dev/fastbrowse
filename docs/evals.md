@@ -44,7 +44,7 @@ uv run python -m fastbrowse.evals.publication --help
 
 Parallax owns internal prompts, truth functions and graders. Its generated metadata export,
 `src/fastbrowse/evals/benchmark-catalog.json`, contains task ids, versions, grader fingerprints, eligible
-agents and source hashes. It deliberately omits task text. Parallax checks the export against its canonical
+agents, the reason each head-to-head agent that skips a task cannot run it, and source hashes. It deliberately omits task text. Parallax checks the export against its canonical
 sources; fastbrowse validates it against the public version lock.
 
 Recorded results name the task catalog digest, Parallax runner, fastbrowse build and provider route.

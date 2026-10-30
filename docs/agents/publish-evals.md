@@ -1,7 +1,7 @@
 # Publish benchmark results
 
 Full browser campaigns run through Parallax. Its exporter validates clean builds, scheduled slots, source
-identity, physical ledgers and private Langfuse read-back before producing `docs/results/benchmark-candidate.json`.
+identity, physical ledgers and private Langfuse read-back before producing the campaign's `benchmark-candidate.json`.
 The file contains sanitized per-run grades, completion, time, cost, LLM and Jev call counts and model
 throughput. Official rubric scores retain their source meaning. Internal hosted and Ultrafast comparisons use
 separate matched task groups.
@@ -17,6 +17,16 @@ own pool with `jev-ultrafast`; figures approved under schema 3 or 4 keep fastbro
 there. Every group records its agent and runner commits, which must match the candidate's build: adding a suite
 must retain the published groups and their regression checks, and results from different builds cannot be
 combined under one build receipt.
+`internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse, the hosted Browser
+Use agent and Browserbase's agent all run, the navigation tasks included, read on each hosted agent's final page
+through its browser; figures approved at 46 or 47 tasks still read. It holds rows from whichever of `fastbrowse`,
+`browser-use`, `jev-ultrafast` and `browserbase` ran, each with every repeat of every task it runs. Ultrafast returns
+no answer, so it runs only the tasks of the set graded without one. An arm that did not run has no rows and the site
+shows it as not measured. Browserbase reports neither its model nor its spend, so its rows carry `"dollars": null`
+and the site shows its pass rate and seconds with "cost not reported"; fastbrowse rows always carry a cost. The
+official suites publish the fastbrowse arm, with a vendor arm's rows only where Parallax marks them publishable, and
+accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
+defines it, the group records the repeat count, and a task's figure is the mean of its repeats' scores.
 
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM calls, model
 throughput and cost with the previous approved candidate, using the release gate's own efficiency comparison; wall time and Jev calls are recorded but not compared. A group whose
@@ -34,18 +44,27 @@ published row. `uv run python -m fastbrowse.evals.benchmarks --status` prints wh
 and the next action. These checks detect recorded regressions; they do not prove that
 every website or grader is free of bugs. Review unexpected outcomes before approving.
 
-To approve reviewed results, dispatch `publish-evals.yml` on `main` with the SHA256 of the exact candidate
-bytes. For the first publication, also approve establishing the initial baseline. Only the maintainer can issue
-this approval. The workflow revalidates coverage and the measurement receipt and returns a `benchmark-approval`
-artifact. Download `benchmark-approval.json` and install it with
+## From a campaign to the site
+
+A minor release (`vX.Y.0`) dispatches `benchmark-campaign.yml` on its tag once it is published; a patch release
+does so only when its annotated tag message has the line `Benchmarks: run`, and anyone with write access can
+dispatch it by hand. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
+which opens a pull request on agent-labs-dev/fastbrowse-site. The pull request carries the candidate byte for
+byte as `data/benchmark-<campaign>.json` and the site's group files under `data/benchmarks/`, written by
 
 ```sh
-uv run python -m fastbrowse.evals.benchmarks --candidate docs/results/benchmark-candidate.json --install benchmark-approval.json
+uv run python -m fastbrowse.evals.site_groups benchmark-candidate.json run-facts.json ../fastbrowse-site
 ```
 
-which copies the reviewed candidate to `docs/results/benchmarks.json` and the receipt to
-`docs/results/benchmark-approval.json`. Include both in the reviewed data PR and wait for green CI before
-merging. An upload to Langfuse does not approve publication.
+A group file holds no figure. It names the candidate group, campaign, build and candidate SHA256, and the site
+computes every figure from the candidate's per-attempt rows. Its `systems` maps each site system with rows to its
+arm, `cost_not_reported` lists those of them whose rows carry no cost, and `not_measured` lists the site systems
+with no rows. The live suite card shows the head-to-head group
+(`internal-hosted`) when the campaign ran it, else `internal-fastbrowse`. A card the candidate has no group for
+keeps its file. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
+publish a campaign again, dispatch `publish-evals.yml` with the campaign run's id.
+
+An upload to Langfuse does not approve publication.
 
 ## Retiring a task or changing the protocol
 
@@ -55,40 +74,9 @@ any agent, such as a site that no longer exists, and its catalog entry records t
 regraded because of how an agent scored on it, and a protocol change never drops or replaces tasks for that
 reason. A protocol change states its cause in its note, such as #356's uncapped runs.
 
-## Changing the protocol
+## Figures in docs/results
 
-A published group is compared only with figures measured under the same protocol: the same catalog digest,
-tasks and limits. Changing a limit note cannot skip regression checks. When the protocol changes on
-purpose (a task or grader version, an arm, a limit, such as the uncapped protocol of #356), the changed groups
-cannot be compared with their published figures and are published as a fresh baseline instead:
-
-1. Stage the candidate as usual. CI reports each staged group whose protocol changed and still compares the
-   others, including a group that differs only by listed retirements. A group both retired from and measured
-   under a new protocol, such as the first uncapped internal-fastbrowse figures, is a protocol change.
-2. Dispatch `publish-evals.yml` with `protocol_change` set and a `protocol_note` saying what changed and why.
-   The workflow refuses the dispatch when no published group changed protocol. Without the flag, a changed group
-   is refused as before. Every published group must still be present, cover the current catalog exactly
-   and pass the fixture receipt; groups whose protocol did not change are still checked for regressions, and a
-   group that differs only by listed retirements is still compared on the tasks it shares and left out of the
-   record.
-3. The approval carries a `protocol_change` record: the note, the digest of the figures it supersedes, and
-   for each changed group its previous and new catalog digest, tasks and limits.
-4. `--install` archives the superseded figures as `docs/results/benchmarks.<campaign>.json` and their
-   approval as `docs/results/benchmark-approval.<campaign>.json` before putting the new figures in place.
-   `<campaign>` is the measuring campaign's id, kept to 64 filename-safe characters, then the first 16 hex
-   characters of the superseded figures' own SHA256, so a reused campaign id with other figures gets its own
-   name and CI can check each archived file against its name. Follow the paths the record stores rather than
-   rebuilding them. The record links both, so each approval leads to the figures
-   it replaced.
-
-CI accepts changed published figures only when their approval's record names exactly the groups whose protocol
-changed, from exactly the figures at the base, and the archive holds those figures and their approval byte for
-byte. A new approval receipt must also be the exact bytes of the `benchmark-approval` artifact its owner run
-produced, so its note and record cannot be edited after download; `--install` copies it unchanged. Archived
-figures are published results: CI refuses any change to them or their removal, and any new archive file other
-than the pair a validated protocol change names.
-
-The website reads the candidate and approval from one resolved fastbrowse commit. It checks the exact-byte
-digest and the completed owner-dispatched workflow receipt before deriving any figure. A changed
-candidate needs a new approval. Raw answers, page content, recordings and private trace links stay in
-Langfuse and ignored local artifacts.
+`docs/results/benchmarks.json` and `docs/results/benchmark-approval.json` hold figures approved before the site
+pull request became the approval. `python -m fastbrowse.evals.benchmarks --check-diff` still refuses any change to
+them, their archives or their protocol-change records that lacks the owner receipt they were approved with. A new
+campaign is not published there.

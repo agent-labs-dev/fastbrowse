@@ -332,6 +332,20 @@ async fn test_a_failed_navigation_is_tried_again() {
     futures_util::future::join_all(runs).await;
 }
 
+/// A run that never reached its first page reports which address failed, not only Chrome's error name.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_failed_navigation_names_the_address() {
+    let fake = FakeChrome::start().await;
+    fake.queue("Page.navigate", (0..4).map(|_| json!({"errorText": "net::ERR_NAME_NOT_RESOLVED"})));
+    let session = fake.session(fake.connection()).await;
+    let error = page(&session).navigate("https://unresolved.example.test/start", None).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Page.navigate failed (net::ERR_NAME_NOT_RESOLVED) for https://unresolved.example.test/start"
+    );
+    session.close().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_page_that_never_loads_is_tried_again() {
     let fake = FakeChrome::start().await;

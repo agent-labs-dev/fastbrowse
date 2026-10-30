@@ -162,7 +162,10 @@ def test_figures_approved_before_a_task_was_retired_still_read() -> None:
 
 def test_a_new_candidate_cannot_keep_a_retired_task(candidate):
     group = candidate["groups"][0]
+    # In place of a current task, so the group keeps an approved count and only the catalog check can refuse it.
+    dropped = group["task_ids"].pop()
     group["task_ids"].append("stretch-wizard-correction")
+    group["rows"] = [r for r in group["rows"] if r["task"] != dropped]
     for repeat in range(3):
         for arm in ("fastbrowse", "browser-use"):
             group["rows"].append(
@@ -627,6 +630,9 @@ GROUP_ARMS = {
     "internal-hosted": ("fastbrowse", "browser-use"),
     "internal-backend": ("fastbrowse", "fastbrowse-pool"),
 }
+# The groups whose current catalog plus the retired task is a count they were approved at. The hosted group's 52
+# tasks came after the retirement, so a 53-task hosted group never existed to retire it from.
+RETIRING = sorted(GROUP_ARMS.keys() - {"internal-hosted"})
 
 
 def _dump(catalog: dict) -> bytes:
@@ -681,20 +687,20 @@ def _transition(candidate: dict, monkeypatch, name: str, before: dict, after: di
     regressions(Candidate.model_validate({**candidate, "schema_version": 4, "groups": [group]}), published, new)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_group_may_drop_exactly_the_listed_retired_tasks(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     assert [r["id"] for r in catalog["retired"]] == [RETIRED]
     _transition(candidate, monkeypatch, name, _before(catalog), catalog)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_the_published_group_ran_the_retired_task(candidate, name):
     published = _published(candidate, name, _dump(_before(json.loads(CATALOG.read_bytes()))))
     assert RETIRED in published.groups[0].task_ids
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_an_unlisted_removal_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     unlisted = {**catalog, "retired": []}
@@ -702,7 +708,7 @@ def test_an_unlisted_removal_is_a_protocol_change(candidate, monkeypatch, name):
         _transition(candidate, monkeypatch, name, _before(catalog), unlisted)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_retirement_with_a_changed_task_version_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     bumped = copy.deepcopy(catalog)
@@ -711,7 +717,7 @@ def test_a_retirement_with_a_changed_task_version_is_a_protocol_change(candidate
         _transition(candidate, monkeypatch, name, _before(catalog), bumped)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_retirement_with_an_added_task_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     added = copy.deepcopy(catalog)
@@ -722,7 +728,7 @@ def test_a_retirement_with_an_added_task_is_a_protocol_change(candidate, monkeyp
         _transition(candidate, monkeypatch, name, _before(catalog), added, ids)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_retirement_without_the_catalog_or_with_new_limits_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     with pytest.raises(ValueError, match="protocol changed"):
@@ -741,7 +747,7 @@ def test_the_shipped_catalog_retires_exactly_from_the_one_before() -> None:
     assert retired_between(CATALOG.read_bytes(), CATALOG.read_bytes()) == set()
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_source_digest_change_that_retires_nothing_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     moved = copy.deepcopy(catalog)
@@ -861,7 +867,7 @@ def test_every_valid_campaign_id_names_one_bounded_archive(candidate, tmp_path, 
 
 
 def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tmp_path, monkeypatch):
-    """internal-hosted changed its limits; internal-fastbrowse only lost a retired task. The flag exempts the first
+    """internal-backend changed its limits; internal-fastbrowse only lost a retired task. The flag exempts the first
     alone: the second is still compared on the tasks it shares, so its regression blocks the publication."""
     import sys
 
@@ -872,9 +878,9 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
     monkeypatch.setattr(
         benchmarks, "catalog_at", lambda d: old_catalog if d == hashlib.sha256(old_catalog).hexdigest() else None
     )
-    groups = [_group(name, old_catalog) for name in ("internal-hosted", "internal-fastbrowse")]
+    groups = [_group(name, old_catalog) for name in ("internal-backend", "internal-fastbrowse")]
     published = Candidate.model_validate({**candidate, "schema_version": 4, "groups": groups})
-    hosted, fastbrowse = (_group(name, CATALOG.read_bytes()) for name in ("internal-hosted", "internal-fastbrowse"))
+    hosted, fastbrowse = (_group(name, CATALOG.read_bytes()) for name in ("internal-backend", "internal-fastbrowse"))
     hosted["limits"] = ["No arm capped"]
     baseline, staged, record = tmp_path / "benchmarks.json", tmp_path / "candidate.json", tmp_path / "record.json"
     baseline.write_text(published.model_dump_json())
@@ -884,7 +890,7 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
 
     staged.write_bytes(_bytes({**candidate, "schema_version": 4, "groups": [hosted, fastbrowse]}))
     benchmarks.main()
-    assert [g["id"] for g in json.loads(record.read_text())["groups"]] == ["internal-hosted"]
+    assert [g["id"] for g in json.loads(record.read_text())["groups"]] == ["internal-backend"]
 
     task = fastbrowse["task_ids"][0]
     for row in fastbrowse["rows"]:
@@ -1119,7 +1125,7 @@ def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
 def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid):
     data = _ultrafast(candidate, schema, arms)
     if not valid:
-        with pytest.raises(ValidationError, match="every scheduled slot"):
+        with pytest.raises(ValidationError, match="internal-ultrafast measures only"):
             Candidate.model_validate(data)
         return
     parsed = Candidate.model_validate(data)
@@ -1152,3 +1158,110 @@ def test_repointing_the_ultrafast_comparison_is_a_protocol_change(candidate):
     with pytest.raises(ValueError, match="protocol changed: internal-ultrafast"):
         regressions(after, before, CATALOG.read_bytes())
     regressions(after, before, CATALOG.read_bytes(), {"internal-ultrafast"})
+
+
+def test_any_collaborator_who_dispatches_publish_evals_publishes_the_approved_figures(monkeypatch):
+    content = b'{"figures": true}\n'
+    approval = benchmarks.Approval.model_validate({**_approval(content), "approved_by": "teammate"})
+    monkeypatch.setattr(benchmarks, "git_file", lambda ref, path: content if ref == HEAD else None)
+    run = {
+        "head_sha": HEAD,
+        "head_branch": "main",
+        "actor": {"login": "teammate"},
+        "triggering_actor": {"login": "teammate"},
+        "event": "workflow_dispatch",
+        "path": ".github/workflows/publish-evals.yml",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    monkeypatch.setattr(benchmarks, "github_run", lambda _: run)
+    benchmarks.check_approval(content, approval)
+    run["actor"] = {"login": "someone-else"}
+    with pytest.raises(ValueError, match="dispatch on main is required"):
+        benchmarks.check_approval(content, approval)
+
+
+def _head_to_head(candidate: dict, arms: tuple[str, ...]) -> dict:
+    """The fixture with the head-to-head measured by `arms`: Browserbase without a cost, Ultrafast on the
+    tasks of the set the catalog lists it for."""
+    out = copy.deepcopy(candidate)
+    group = out["groups"][0]
+    template = group["rows"][0]
+    ultrafast = set(out["groups"][1]["task_ids"])
+    group["rows"] = [
+        {**template, "task": task, "repeat": repeat, "arm": arm, "dollars": None if arm == "browserbase" else 0.01}
+        for arm in arms
+        for task in group["task_ids"]
+        if arm != "jev-ultrafast" or task in ultrafast
+        for repeat in range(3)
+    ]
+    return out
+
+
+@pytest.mark.parametrize(
+    "arms",
+    [
+        ("fastbrowse", "browser-use", "jev-ultrafast", "browserbase"),
+        ("fastbrowse", "browser-use"),
+        ("fastbrowse", "browserbase"),
+        ("browser-use", "jev-ultrafast"),
+    ],
+)
+def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
+    parsed = Candidate.model_validate(_head_to_head(candidate, arms))
+    check_catalog(parsed, CATALOG)
+    group = parsed.groups[0]
+    assert group.measured_arms(benchmarks.HEAD_TO_HEAD) == arms
+    assert len(group.task_ids) == 52
+
+
+def test_an_arm_without_a_cost_has_none_on_every_row(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browserbase"))
+    next(r for r in data["groups"][0]["rows"] if r["arm"] == "browserbase")["dollars"] = 0.5
+    with pytest.raises(ValidationError, match="internal-hosted/browserbase reports its cost on every row or on none"):
+        Candidate.model_validate(data)
+
+
+def test_fastbrowse_always_reports_its_cost(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browser-use"))
+    data["groups"][0]["rows"][0]["dollars"] = None
+    with pytest.raises(ValidationError, match="Fastbrowse rows report their cost"):
+        Candidate.model_validate(data)
+
+
+def test_ultrafast_runs_exactly_its_part_of_the_head_to_head(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "jev-ultrafast"))
+    group = data["groups"][0]
+    dropped = next(r["task"] for r in group["rows"] if r["arm"] == "jev-ultrafast")
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "jev-ultrafast" and r["task"] == dropped)]
+    with pytest.raises(ValueError, match="jev-ultrafast must run exactly the tasks of its set"):
+        check_catalog(Candidate.model_validate(data), CATALOG)
+
+
+def test_a_full_arm_cannot_skip_a_task_of_the_set(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browserbase"))
+    group = data["groups"][0]
+    task = group["task_ids"][0]
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "browserbase" and r["task"] == task)]
+    with pytest.raises(ValidationError, match="every scheduled slot"):
+        Candidate.model_validate(data)
+
+
+def test_a_head_to_head_without_fastbrowse_is_not_compared_with_one_that_had_it(candidate):
+    published = Candidate.model_validate(_head_to_head(candidate, ("fastbrowse", "browser-use")))
+    vendors = Candidate.model_validate(_head_to_head(candidate, ("browser-use", "browserbase")))
+    with pytest.raises(ValueError, match="no longer measures fastbrowse"):
+        regressions(vendors, published)
+
+
+@pytest.mark.parametrize("repeats", [1, 3])
+def test_an_official_suite_records_its_repeats_and_requires_fastbrowse(candidate, repeats):
+    group = candidate["groups"][2]
+    group["repeats"] = repeats
+    group["rows"] = [{**group["rows"][0], "task": t, "repeat": r} for t in group["task_ids"] for r in range(repeats)]
+    candidate.update(schema_version=5, groups=[group])
+    assert Candidate.model_validate(candidate).groups[0].repeats == repeats
+    for row in group["rows"]:
+        row["arm"] = "browserbase"
+    with pytest.raises(ValidationError, match="bu-bench must measure fastbrowse"):
+        Candidate.model_validate(candidate)

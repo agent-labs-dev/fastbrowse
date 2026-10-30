@@ -9,6 +9,7 @@ mod host;
 use std::sync::Arc;
 
 use fastbrowse_cli::embed::{HostCall, HostResolve};
+use fastbrowse_clients::environment::Settings;
 use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::Event;
@@ -16,6 +17,7 @@ use fastbrowse_core::models::SecretRef;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Trace;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask};
+use indexmap::IndexMap;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCFunction, PyTuple};
@@ -65,7 +67,8 @@ fn resolver(event_loop: Arc<Py<PyAny>>, function: Py<PyAny>) -> HostResolve {
     Arc::new(move |name: String, origin: String| call((name, origin)))
 }
 
-/// A run under way. Awaiting it gives the `RunResult` as JSON; cancelling the task that awaits it stops the run.
+/// A run under way. Awaiting it gives the `RunResult` as JSON and its final frame's bytes (or None); cancelling the
+/// task that awaits it stops the run.
 #[pyclass(frozen)]
 struct Run {
     result: Py<PyAny>,
@@ -142,8 +145,9 @@ fn refused(kind: &str, message: String) -> PyErr {
 }
 
 /// Start a run on the running event loop. `task` is the run as JSON, the `RunTask` every entry point shares
-/// (`fastbrowse.native` writes it); `browser_api_key`, `secrets` (the refs the resolver offers, as JSON) and `config`
-/// (JSON) are the host's side. Each callback is a Python function: `on_event` gets each event as JSON, `on_frame` each JPEG as
+/// (`fastbrowse.native` writes it); `browser_api_key`, `secrets` (the refs the resolver offers, as JSON), `config`
+/// (JSON) and `settings` (environment variable names to values, as JSON, read instead of the environment and `.env`)
+/// are the host's side. Each callback is a Python function: `on_event` gets each event as JSON, `on_frame` each JPEG as
 /// bytes, `until` the final URL, `resolve_secret` a name and an origin. `check_access`, `jev`, `llm` and `http` are the
 /// caller's own objects wrapped by `fastbrowse.native` into functions that answer JSON (see `bridge`).
 ///
@@ -151,7 +155,7 @@ fn refused(kind: &str, message: String) -> PyErr {
 /// until or secret callback that raises stops the run, which then refuses with `callback`.
 #[pyfunction]
 #[pyo3(signature = (
-    task, *, browser_api_key=None, secrets=None, config=None, on_event=None, on_frame=None, until=None,
+    task, *, browser_api_key=None, secrets=None, config=None, settings=None, on_event=None, on_frame=None, until=None,
     resolve_secret=None, check_access=None, jev=None, llm=None, http=None, trace=false,
 ))]
 #[allow(clippy::too_many_arguments)]
@@ -161,6 +165,7 @@ fn run_task(
     browser_api_key: Option<String>,
     secrets: Option<&str>,
     config: Option<&str>,
+    settings: Option<&str>,
     on_event: Option<Py<PyAny>>,
     on_frame: Option<Py<PyAny>>,
     until: Option<Py<PyAny>>,
@@ -175,7 +180,15 @@ fn run_task(
     let task: RunTask = serde_json::from_str(task).map_err(invalid)?;
     let refs: Option<Vec<SecretRef>> = secrets.map(serde_json::from_str).transpose().map_err(invalid)?;
     let config: Option<Config> = config.map(serde_json::from_str).transpose().map_err(invalid)?;
-    let mut run = Host { browser_api_key, config, ..Host::default() };
+    let settings: Option<IndexMap<String, String>> = settings.map(serde_json::from_str).transpose().map_err(invalid)?;
+    let settings = settings
+        .map(|settings| {
+            let pairs: Vec<(String, String)> = settings.into_iter().collect();
+            Settings::from_sources(&pairs, None)
+        })
+        .transpose()
+        .map_err(|error| refused("configuration", error.0))?;
+    let mut run = Host { browser_api_key, config, settings, ..Host::default() };
     let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
     let result = event_loop.call_method0("create_future")?;
     let finished = event_loop.call_method0("create_future")?;
@@ -269,7 +282,9 @@ fn run_task(
                         let error = match &outcome {
                             _ if failure.failed() => Some(refused("callback", String::new())),
                             Ok(answered) => {
-                                result.call_method1("set_result", (answered.dump_json(),))?;
+                                // The final frame is left out of the JSON, so it travels beside it as bytes.
+                                let frame = answered.final_frame.as_deref().map(|frame| PyBytes::new(py, frame));
+                                result.call_method1("set_result", ((answered.dump_json(), frame),))?;
                                 None
                             }
                             Err(RunError::Cancelled) => Some(refused("cancelled", "the run was cancelled".into())),
@@ -348,12 +363,55 @@ fn monotonic() -> f64 {
     fastbrowse_core::telemetry::monotonic()
 }
 
+/// `fastbrowse.origins.origin_of`: the origin the document grant compares, or None for no http(s) address.
+#[pyfunction]
+fn origin_of(url: &str) -> Option<String> {
+    fastbrowse_core::origins::origin_of(url)
+}
+
+/// `fastbrowse.origins.parse_origin`: the normalized origin a grant entry names, or `ValueError`.
+#[pyfunction]
+fn parse_origin(value: &str) -> PyResult<String> {
+    fastbrowse_core::origins::parse_origin(value).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// `fastbrowse.safety.origin_of`: the origin a secret is declared for and typed on, `*.` patterns included.
+#[pyfunction]
+fn secret_origin(url: &str) -> String {
+    fastbrowse_core::safety::origin_of(url)
+}
+
+/// `fastbrowse.safety.secret_allowed`, by the rule the run itself applies before it asks for a value.
+#[pyfunction]
+fn secret_allowed(origins: Vec<String>, origin: &str) -> bool {
+    let secret = fastbrowse_core::models::SecretRef { name: String::new(), origins };
+    fastbrowse_core::safety::secret_allowed(&secret, origin)
+}
+
+/// `fastbrowse.totp`: the code an authenticator key gives at unix time `when`, or `ValueError` naming why it cannot.
+#[pyfunction]
+fn totp_at(key: &str, when: f64) -> PyResult<String> {
+    fastbrowse_cli::totp::totp_at(key, when).map_err(|error| PyValueError::new_err(error.0))
+}
+
+/// `fastbrowse.totp`: how many seconds each of the key's codes lasts, or `ValueError`.
+#[pyfunction]
+fn totp_period(key: &str) -> PyResult<u64> {
+    fastbrowse_cli::totp::period_of(key).map_err(|error| PyValueError::new_err(error.0))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;
     m.add_function(wrap_pyfunction!(monotonic, m)?)?;
+    m.add_function(wrap_pyfunction!(origin_of, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
+    m.add_function(wrap_pyfunction!(secret_origin, m)?)?;
+    m.add_function(wrap_pyfunction!(secret_allowed, m)?)?;
+    m.add_function(wrap_pyfunction!(totp_at, m)?)?;
+    m.add_function(wrap_pyfunction!(totp_period, m)?)?;
     m.add_class::<connect::Page>()?;
     m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
     m.add_class::<Run>()?;

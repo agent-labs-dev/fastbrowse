@@ -118,6 +118,7 @@ def test_every_run_task_argument_crosses() -> None:
         "browser_api_key",
         "secrets",
         "config",
+        "settings",
         "on_event",
         "on_frame",
         "until",
@@ -564,3 +565,28 @@ async def test_a_run_names_the_providers_it_calls_in_its_trace(monkeypatch: pyte
     )
     # A caller's own clients are theirs to describe.
     assert providers(own) is None
+
+
+@pytest.mark.usefixtures("rust_core")
+async def test_settings_passed_in_are_read_instead_of_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key the process holds reaches no provider when the caller hands the run its own settings."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "from-the-environment")
+    with pytest.raises(ConfigurationError, match="OPENROUTER_API_KEY"):
+        await run_task("t", start="https://pypi.example/httpx", fetch=True, settings={})
+    seen: list[str] = []
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization", ""))
+        return httpx.Response(401, json={"error": "no"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as http:
+        with traced() as events:
+            await run_task(
+                "Read the release",
+                start="https://pypi.example/httpx",
+                fetch=True,
+                http=http,
+                settings={"AI_GATEWAY_API_KEY": "given"},
+            )
+    assert "Vercel AI Gateway" in (providers(events) or "")
+    assert seen and all("from-the-environment" not in header for header in seen)

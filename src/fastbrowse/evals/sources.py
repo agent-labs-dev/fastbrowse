@@ -24,6 +24,8 @@ SOURCES = {
         upstream="https://huggingface.co/datasets/osunlp/Online-Mind2Web",
         revision=OM2W_REVISION,
         url=f"https://huggingface.co/datasets/osunlp/Online-Mind2Web/resolve/{OM2W_REVISION}/Online_Mind2Web.json",
+        # Not stored in LFS, so Hugging Face lists only the Git blob; the digest is of bytes that matched it.
+        sha256="7dedf381531d423dc0fc48d21dc1d425655dd75f38b10211a880fa09102f257f",
         git_blob="e8a5e5a99f2be9eae14f4e4259bd5af562f80da9",
     ),
     "windtunnel": Source(

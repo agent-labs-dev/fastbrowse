@@ -283,6 +283,19 @@ def test_read_back_accepts_the_observation_namespace_the_index_answers_with(tmp_
     tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
 
 
+def test_a_run_id_langfuse_stored_as_a_number_still_reads_back(tmp_path: Path) -> None:
+    # A 12-hex-digit run id is all decimal digits about once in 280 runs, and Langfuse then returns it as an
+    # integer: the 0.5.0 backfill's `260814399035` uploaded fine and failed every read-back until compared as text.
+    path = rows_file(tmp_path, [row("mock-basket", run=run(run_id="260814399035"))])
+    wanted = tracking.expected(path, tracking.read_rows(path))
+    spec = next(iter(wanted.values()))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{**stored(spec), "metadata": {"run_id": 260814399035}}], "meta": {}})
+
+    tracking.verify(client_for(handler), wanted, since=datetime(2026, 10, 29, tzinfo=UTC), attempts=1, delay=0)
+
+
 def test_a_row_without_the_run_id_does_not_count_as_this_upload(tmp_path: Path) -> None:
     # If the metadata field group were dropped from the request the index would return no run id, and every
     # row would read as a stranger's: the check has to fail closed rather than match on the output alone.
