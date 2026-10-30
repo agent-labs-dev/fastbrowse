@@ -174,7 +174,10 @@ def test_figures_approved_before_a_task_was_retired_still_read() -> None:
 
 def test_a_new_candidate_cannot_keep_a_retired_task(candidate):
     group = candidate["groups"][0]
+    # In place of a current task, so the group keeps an approved count and only the catalog check can refuse it.
+    dropped = group["task_ids"].pop()
     group["task_ids"].append("stretch-wizard-correction")
+    group["rows"] = [r for r in group["rows"] if r["task"] != dropped]
     for repeat in range(3):
         for arm in ("fastbrowse", "browser-use"):
             group["rows"].append(
@@ -645,6 +648,9 @@ GROUP_ARMS = {
     "internal-hosted": ("fastbrowse", "browser-use"),
     "internal-backend": ("fastbrowse", "fastbrowse-pool"),
 }
+# The groups whose current catalog plus the retired task is a count they were approved at. The hosted group's 52
+# tasks came after the retirement, so a 53-task hosted group never existed to retire it from.
+RETIRING = sorted(GROUP_ARMS.keys() - {"internal-hosted"})
 
 
 def _dump(catalog: dict) -> bytes:
@@ -699,20 +705,20 @@ def _transition(candidate: dict, monkeypatch, name: str, before: dict, after: di
     regressions(Candidate.model_validate({**candidate, "schema_version": 4, "groups": [group]}), published, new)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_group_may_drop_exactly_the_listed_retired_tasks(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     assert [r["id"] for r in catalog["retired"]] == [RETIRED]
     _transition(candidate, monkeypatch, name, _before(catalog), catalog)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_the_published_group_ran_the_retired_task(candidate, name):
     published = _published(candidate, name, _dump(_before(json.loads(CATALOG.read_bytes()))))
     assert RETIRED in published.groups[0].task_ids
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_an_unlisted_removal_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     unlisted = {**catalog, "retired": []}
@@ -720,7 +726,7 @@ def test_an_unlisted_removal_is_a_protocol_change(candidate, monkeypatch, name):
         _transition(candidate, monkeypatch, name, _before(catalog), unlisted)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_retirement_with_a_changed_task_version_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     bumped = copy.deepcopy(catalog)
@@ -729,7 +735,7 @@ def test_a_retirement_with_a_changed_task_version_is_a_protocol_change(candidate
         _transition(candidate, monkeypatch, name, _before(catalog), bumped)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_retirement_with_an_added_task_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     added = copy.deepcopy(catalog)
@@ -740,7 +746,7 @@ def test_a_retirement_with_an_added_task_is_a_protocol_change(candidate, monkeyp
         _transition(candidate, monkeypatch, name, _before(catalog), added, ids)
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_retirement_without_the_catalog_or_with_new_limits_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     with pytest.raises(ValueError, match="protocol changed"):
@@ -759,7 +765,7 @@ def test_the_shipped_catalog_retires_exactly_from_the_one_before() -> None:
     assert retired_between(CATALOG.read_bytes(), CATALOG.read_bytes()) == set()
 
 
-@pytest.mark.parametrize("name", sorted(GROUP_ARMS))
+@pytest.mark.parametrize("name", RETIRING)
 def test_a_source_digest_change_that_retires_nothing_is_a_protocol_change(candidate, monkeypatch, name):
     catalog = json.loads(CATALOG.read_bytes())
     moved = copy.deepcopy(catalog)
@@ -879,7 +885,7 @@ def test_every_valid_campaign_id_names_one_bounded_archive(candidate, tmp_path, 
 
 
 def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tmp_path, monkeypatch):
-    """internal-hosted changed its limits; internal-fastbrowse only lost a retired task. The flag exempts the first
+    """internal-backend changed its limits; internal-fastbrowse only lost a retired task. The flag exempts the first
     alone: the second is still compared on the tasks it shares, so its regression blocks the publication."""
     import sys
 
@@ -890,9 +896,9 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
     monkeypatch.setattr(
         benchmarks, "catalog_at", lambda d: old_catalog if d == hashlib.sha256(old_catalog).hexdigest() else None
     )
-    groups = [_group(name, old_catalog) for name in ("internal-hosted", "internal-fastbrowse")]
+    groups = [_group(name, old_catalog) for name in ("internal-backend", "internal-fastbrowse")]
     published = Candidate.model_validate({**candidate, "schema_version": 4, "groups": groups})
-    hosted, fastbrowse = (_group(name, CATALOG.read_bytes()) for name in ("internal-hosted", "internal-fastbrowse"))
+    hosted, fastbrowse = (_group(name, CATALOG.read_bytes()) for name in ("internal-backend", "internal-fastbrowse"))
     hosted["limits"] = ["No arm capped"]
     baseline, staged, record = tmp_path / "benchmarks.json", tmp_path / "candidate.json", tmp_path / "record.json"
     baseline.write_text(published.model_dump_json())
@@ -902,7 +908,7 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
 
     staged.write_bytes(_bytes({**candidate, "schema_version": 4, "groups": [hosted, fastbrowse]}))
     benchmarks.main()
-    assert [g["id"] for g in json.loads(record.read_text())["groups"]] == ["internal-hosted"]
+    assert [g["id"] for g in json.loads(record.read_text())["groups"]] == ["internal-backend"]
 
     task = fastbrowse["task_ids"][0]
     for row in fastbrowse["rows"]:
