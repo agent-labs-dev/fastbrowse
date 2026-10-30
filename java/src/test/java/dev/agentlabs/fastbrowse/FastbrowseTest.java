@@ -53,7 +53,7 @@ class FastbrowseTest {
             return Path.of(named);
         }
         Path built = Path.of("..", "target", "debug", "fastbrowse").toAbsolutePath();
-        assumeTrue(Files.exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli`, or set FASTBROWSE_TEST_BINARY");
+        assumeTrue(Files.exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli --features scripted`, or set FASTBROWSE_TEST_BINARY");
         return built;
     }
 

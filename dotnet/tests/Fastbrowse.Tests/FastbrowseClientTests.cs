@@ -31,7 +31,7 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
             return named;
         }
         string built = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../../target/debug/fastbrowse"));
-        Assert.SkipUnless(File.Exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli`, or set FASTBROWSE_TEST_BINARY");
+        Assert.SkipUnless(File.Exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli --features scripted`, or set FASTBROWSE_TEST_BINARY");
         return built;
     }
 
