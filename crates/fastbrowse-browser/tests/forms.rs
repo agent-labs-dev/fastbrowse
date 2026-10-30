@@ -10,17 +10,10 @@ use std::time::Duration;
 use common::{Harness, harness, harness_on, sites};
 use dispatch_support::{action, eval_active, eval_value, fill, find, observe_until};
 use fastbrowse_browser::session::SessionOptions;
-use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use serde_json::json;
-
-fn form_fill(target: &fastbrowse_core::page::Control, text: &str) -> Action {
-    Action { form_fill: true, ..fill(target, text) }
-}
-
-// test_forms.py: a batch continues only while the original form retains exactly the requested edits.
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_labels_preserve_field_semantics() {
@@ -48,87 +41,15 @@ async fn form(h: &Harness, script: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_two_fills_use_one_observation() {
-    let Some(h) = harness().await else { return };
-    form(&h, "").await;
-    let before = h.observe().await;
-    let (name, email) = (find(&before, "Name"), find(&before, "Email"));
-    assert!(name.form_id == email.form_id && name.form_id.is_some());
-    for (target, text) in [(name, "Ada"), (email, "ada@example.com")] {
-        let result = h.page.act(&form_fill(target, text), &before).await.expect("act");
-        assert_eq!(result.outcome, StepOutcome::Executed);
-        assert!(result.form_unchanged);
-    }
-    let after = h.observe().await;
-    assert_eq!(find(&after, "Name").value.as_deref(), Some("Ada"));
-    assert_eq!(find(&after, "Email").value.as_deref(), Some("ada@example.com"));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_dependent_change_stops_batch() {
-    for change in [
-        "document.querySelector('form').insertAdjacentHTML('beforeend', '<input aria-label=Extra>')",
-        "document.getElementById('email').disabled = true",
-        "document.getElementById('email').value = 'dependency'",
-        "document.getElementById('email').setAttribute('aria-invalid', 'true')",
-        "document.getElementById('name').value = ''",
-        "document.getElementById('email').outerHTML = '<input id=email aria-label=Email>'",
-        "document.querySelector('form').action = '/delete'",
-        "location.hash = 'changed'",
-    ] {
-        let Some(h) = harness().await else { return };
-        form(&h, &format!("document.getElementById('name').oninput = () => {{ {change}; }}")).await;
-        let before = h.observe().await;
-        let result = h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
-        assert!(!result.form_unchanged, "{change}");
-        h.close().await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_change_between_fills_stops_before_typing() {
-    let Some(h) = harness().await else { return };
-    form(&h, "").await;
-    let before = h.observe().await;
-    let result = h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
-    assert!(result.form_unchanged);
-    eval_active(&h.page, "document.querySelector('form').insertAdjacentHTML('beforeend', '<input aria-label=Extra>')")
-        .await;
-    let result = h.page.act(&form_fill(find(&before, "Email"), "ada@example.com"), &before).await.expect("act");
-    assert_eq!(result.outcome, StepOutcome::Stale);
-    assert_eq!(find(&h.observe().await, "Email").value.as_deref(), Some(""));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_dialog_stops_form_fill() {
+async fn test_a_dialog_a_fill_opens_does_not_hang_it() {
     let Some(h) = harness().await else { return };
     form(&h, "document.getElementById('name').oninput = () => alert('Pause')").await;
     let before = h.observe().await;
-    let result =
-        tokio::time::timeout(Duration::from_secs(5), h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before))
-            .await
-            .expect("fill returns")
-            .expect("act");
-    assert!(!result.form_unchanged);
+    tokio::time::timeout(Duration::from_secs(5), h.page.act(&fill(find(&before, "Name"), "Ada"), &before))
+        .await
+        .expect("fill returns")
+        .expect("act");
     assert!(h.session.pending_dialog().is_some());
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_navigation_during_input_stops_batch() {
-    let Some(h) = harness().await else { return };
-    form(&h, "document.getElementById('name').oninput = () => { location.href = '/safety.html'; }").await;
-    let before = h.observe().await;
-    let result =
-        tokio::time::timeout(Duration::from_secs(5), h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before))
-            .await
-            .expect("fill returns")
-            .expect("act");
-    assert!(!result.form_unchanged);
-    let target = (h.session.active_session_id().expect("active session"), "main".to_owned(), 1, None);
-    assert!(!testing::dispatch::form_unchanged(&h.page, target, "Ada").await);
     h.close().await;
 }
 
@@ -145,9 +66,8 @@ async fn test_input_can_announce_suggestions_after_typing() {
     )
     .await;
     let before = h.observe().await;
-    let result = h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
+    let result = h.page.act(&fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
     assert_eq!(result.outcome, StepOutcome::Executed);
-    assert!(!result.form_unchanged);
     find(&h.observe().await, "Suggested person");
     h.close().await;
 }

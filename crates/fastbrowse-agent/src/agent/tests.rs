@@ -1233,13 +1233,7 @@ impl Page for Screenshots {
 
     fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
         self.0.lock().unwrap().push((x, y));
-        let clicked = ActResult {
-            outcome: StepOutcome::Executed,
-            page_changed: true,
-            detail: None,
-            form_unchanged: false,
-            moved: false,
-        };
+        let clicked = ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: false };
         Box::pin(async move { Ok(clicked) })
     }
 

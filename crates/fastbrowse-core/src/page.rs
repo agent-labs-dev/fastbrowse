@@ -410,9 +410,6 @@ pub struct Action {
     pub files: Vec<Attachment>,
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub accept_dialog: Option<bool>,
-    /// Check whether this ordinary fill leaves the observed form safe to continue without another observation.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub form_fill: bool,
 }
 
 impl Action {
@@ -428,7 +425,6 @@ impl Action {
             secret_origin: None,
             files: Vec::new(),
             accept_dialog: None,
-            form_fill: false,
         }
     }
 }
@@ -499,8 +495,6 @@ pub struct ActResult {
     pub page_changed: bool,
     #[serde(default)]
     pub detail: Option<String>,
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub form_unchanged: bool,
     /// The action itself took the page elsewhere: its own input event began a navigation or changed the address, or
     /// it opened a tab. A page that moves on its own time is not.
     #[serde(default, deserialize_with = "lax::boolean")]

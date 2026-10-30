@@ -19,8 +19,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use super::driving::{StepOptions, Watched, require};
-use super::helpers::{caller_link, code_decision, describe, dialog_question, misfit, navigation_question, next_value};
+use super::driving::require;
+use super::helpers::{caller_link, describe, dialog_question, navigation_question, next_value};
 use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
 use super::{Agent, GENERATE};
 use crate::policy::Decision;
@@ -488,23 +488,23 @@ impl Agent {
     }
 
     async fn generate_text(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step<String> {
-        let known = state.form_values.remove(&(observation.document_key.clone(), target.id.clone()));
-        if let Some((control, value)) = known
+        let key = (observation.document_key.clone(), target.id.clone());
+        if !state.form_values.contains_key(&key) {
+            self.write_form(state, observation, target).await?;
+        }
+        // A value is used only while the field's identity, meaning and empty value survive the fresh observation, and
+        // the value due now moves on as fills are typed.
+        if let Some((control, value)) = state.form_values.remove(&key)
             && (Control { offscreen: target.offscreen, ..control }) == *target
         {
-            let text = due(&value, &state.history, &target.label);
-            // The value due now moves on as fills are typed, so a kept one is checked when it is used, not only when
-            // the batch kept it.
-            if misfit(target, &text).is_none() {
-                return Ok(text);
-            }
+            return Ok(due(&value, &state.history, &target.label));
         }
         let context = self.field_context(state, observation, target).await?;
         // Mid-run a task's next item is searched for too, not only an output the answer check found missing: given the
         // task without this rule, the writer called a search box's query missing and ended a six-part cart run.
         let system = format!("{}\n\n{OUTPUT_SEARCH}", field_writer());
         let messages = vec![Message::system(system), Message::user(dumps(&Value::Object(context)))];
-        if let Some(written) = self.write_field(state, &messages, target, true).await? {
+        if let Some(written) = self.write_field(state, &messages, target).await? {
             return Ok(written);
         }
         // A surname can be present inside a full name. Confirm absence before ending the run on one writer's doubt.
@@ -515,7 +515,7 @@ impl Agent {
         insisted.push(Message::user(
             "You reported this value as missing, but the task or notes appear to state it, or to state something it is part of. Look again and write it. Report it missing only if it truly is not there: never invent one.",
         ));
-        match self.write_field(state, &insisted, target, true).await? {
+        match self.write_field(state, &insisted, target).await? {
             Some(written) => Ok(written),
             None => Err(self.missing(state, target)),
         }
@@ -582,141 +582,60 @@ impl Agent {
         Ok(context)
     }
 
-    pub(super) async fn fill_form(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-    ) -> Step<bool> {
-        let Some(target) = decision.target.as_ref() else { return Ok(false) };
-        if decision.operation != Operation::Fill || !state.inputs.is_empty() || observation.dialog.is_some() {
-            return Ok(false);
-        }
-        let Some(form_id) = &target.form_id else { return Ok(false) };
-        if observation.omitted_controls > 0 || observation.inaccessible_frames > 0 {
-            return Ok(false);
-        }
-        let form_key = (observation.document_key.clone(), target.frame_id.clone(), form_id.clone());
-        if state.form_rejected.contains(&form_key) {
-            return Ok(false);
-        }
-        let same_form: Vec<&Control> = observation
+    /// Write every empty field of `target`'s form in one writer call and keep the values, so each fill Jev picks in
+    /// that form types its value without a call of its own. Jev still picks every fill.
+    ///
+    /// Nothing is written while any field of the form still has a kept value. A writer failure leaves the field to
+    /// its own writer.
+    async fn write_form(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step {
+        let Some(form_id) = &target.form_id else { return Ok(()) };
+        let fields: IndexMap<String, Control> = observation
             .controls
             .iter()
-            .filter(|c| c.frame_id == target.frame_id && c.form_id.as_deref() == Some(form_id.as_str()))
-            .collect();
-        if same_form.iter().any(|c| c.sensitive) {
-            return Ok(false);
-        }
-        let fields: IndexMap<String, Control> = same_form
-            .iter()
             .filter(|c| {
-                c.operations.contains(&Operation::Fill)
+                c.frame_id == target.frame_id
+                    && c.form_id.as_deref() == Some(form_id.as_str())
+                    && c.operations.contains(&Operation::Fill)
                     && c.value.as_deref().is_none_or(str::is_empty)
                     && c.role == "textbox"
+                    && !c.sensitive
             })
-            .map(|c| (c.id.clone(), (*c).clone()))
+            .map(|c| (c.id.clone(), c.clone()))
             .collect();
-        if !fields.contains_key(&target.id) || fields.len() < 2 {
-            return Ok(false);
+        let kept =
+            fields.keys().any(|id| state.form_values.contains_key(&(observation.document_key.clone(), id.clone())));
+        if !fields.contains_key(&target.id) || fields.len() < 2 || kept {
+            return Ok(());
         }
-        // A form that cannot be batched gets the ordinary field path on its next decision.
-        state.form_rejected.insert(form_key.clone());
-        let redecided = state.redecided;
-        let ledger = state.ledger.clone();
         let mut context = self.field_context(state, observation, target).await?;
         let field = context.shift_remove("field").unwrap_or(Value::Null);
         context.insert("chosen_field".into(), field);
         context.insert("fields".into(), Value::Array(fields.values().map(Dump::dump_exclude_none).collect()));
         let messages = vec![Message::system(form_writer()), Message::user(dumps(&Value::Object(context)))];
-        let writing = async {
-            let generation =
-                generate::<FormText>(&*self.llm, LLMPurpose::FieldText, &messages, 0, Some(&ledger)).await?;
-            ledger.record([generation.cost.clone()])?;
-            Ok(generation.data)
-        };
-        let written = match self.unless_redrawn(redecided, writing, observation, Some(&target.id)).await {
-            Err(flow) if flow.is_llm() => return Ok(false),
-            Err(flow) => return Err(flow),
-            Ok(Watched::Redrawn) => {
-                self.redecide(state, observation);
-                return Ok(true);
-            }
-            Ok(Watched::Done(written)) => written,
-        };
+        let written =
+            match generate::<FormText>(&*self.llm, LLMPurpose::FieldText, &messages, 0, Some(&state.ledger)).await {
+                Ok(generation) => {
+                    state.ledger.record([generation.cost.clone()])?;
+                    generation.data
+                }
+                Err(error) => {
+                    let flow = Flow::from(error);
+                    return if flow.is_llm() { Ok(()) } else { Err(flow) };
+                }
+            };
         let ids: Vec<&String> = written.fields.iter().map(|f| &f.id).collect();
         self.event("form_values", || {
             Map::from_iter([("chosen".into(), target.id.clone().into()), ("fields".into(), json!(ids))])
         });
-        let unique: HashSet<&&String> = ids.iter().collect();
-        if ids.first() != Some(&&target.id)
-            || unique.len() != ids.len()
-            || ids.iter().any(|id| !fields.contains_key(*id))
-        {
-            return Ok(false);
-        }
-        self.event("form_batch", || Map::from_iter([("fields".into(), json!(ids))]));
-        // Scrolling to the first field ends a batch too. A later Jev choice can reuse its value only while the field's
-        // identity, meaning and empty value survive the fresh observation.
-        for value in &written.fields {
-            let control = &fields[&value.id];
-            let text = due(&value.as_text(), &state.history, &control.label);
-            if !value.missing
-                && !text.is_empty()
-                && misfit(control, &text).is_none()
-                && !self.reveals_text(&value.dump_json())
-            {
+        for value in written.fields {
+            let Some(control) = fields.get(&value.id) else { continue };
+            if !value.missing && !value.text.is_empty() && !self.reveals_text(&value.dump_json()) {
                 state
                     .form_values
                     .insert((observation.document_key.clone(), value.id.clone()), (control.clone(), value.as_text()));
             }
         }
-        let mut observation = observation.clone();
-        let mut completed = true;
-        for (index, value) in written.fields.iter().enumerate() {
-            let control = fields[&value.id].clone();
-            let text = due(&value.as_text(), &state.history, &control.label);
-            // A value that does not fit its field's declared kind ends the batch, so the field's own path can check it
-            // and ask again before typing.
-            if value.missing || text.is_empty() || self.reveals_text(&text) || misfit(&control, &text).is_some() {
-                return Ok(index > 0);
-            }
-            state.ledger.check(0.0)?;
-            state.form_values.remove(&(observation.document_key.clone(), control.id.clone()));
-            let action = Action {
-                target_id: Some(control.id.clone()),
-                text: Some(text.clone()),
-                form_fill: true,
-                ..Action::new(Operation::Fill)
-            };
-            let (step_decision, decided_by) = if index == 0 {
-                (decision.clone(), Decider::Jev)
-            } else {
-                (code_decision(Operation::Fill, Some(control.clone())), Decider::Code)
-            };
-            let options = StepOptions { prepared_action: Some(action), ..StepOptions::default() };
-            Box::pin(self.step(state, &observation, &step_decision, decided_by, options)).await?;
-            if !state.form_continues {
-                completed = false;
-                break;
-            }
-            observation = Observation {
-                controls: observation
-                    .controls
-                    .iter()
-                    .map(|c| {
-                        if c.id == control.id { Control { value: Some(text.clone()), ..c.clone() } } else { c.clone() }
-                    })
-                    .collect(),
-                ..observation
-            };
-            self.note_effect(state, &observation);
-            self.settle(state, &observation).await?;
-        }
-        if completed {
-            state.form_rejected.remove(&form_key);
-        }
-        Ok(true)
+        Ok(())
     }
 
     /// A field the task gives no value for is first a wrong pick, then a missing input.
@@ -744,31 +663,12 @@ impl Agent {
     }
 
     /// The text for one field, or None when the writer says the value was never given.
-    async fn write_field(
-        &self,
-        state: &mut RunState,
-        messages: &[Message],
-        target: &Control,
-        refit: bool,
-    ) -> Step<Option<String>> {
+    async fn write_field(&self, state: &mut RunState, messages: &[Message], target: &Control) -> Step<Option<String>> {
         let generation =
             generate::<FieldText>(&*self.llm, LLMPurpose::FieldText, messages, 0, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
         let written = generation.data;
-        if written.missing {
-            return Ok(None);
-        }
-        let text = due(&written, &state.history, &target.label);
-        // Shown a field declaring input_type email and a code saved in the notes, the writer typed the code into Email
-        // in 7 of 12 two-step sign-ins. The field's own declaration is checked here instead, and the writer is asked
-        // once more before anything is typed.
-        let Some(wanted) = misfit(target, &text).filter(|_| refit) else { return Ok(Some(text)) };
-        let mut corrected = messages.to_vec();
-        corrected.push(Message::user(format!(
-            "The field declares that it takes {wanted}, and {} is not one. Write the {wanted} the task or notes give for this field; a value saved for another field does not belong in it.",
-            text::repr(&self.mask(&text))
-        )));
-        Box::pin(self.write_field(state, &corrected, target, false)).await
+        Ok((!written.missing).then(|| due(&written, &state.history, &target.label)))
     }
 
     async fn value_absent(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step<bool> {

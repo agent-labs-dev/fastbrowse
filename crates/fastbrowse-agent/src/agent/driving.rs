@@ -184,13 +184,7 @@ impl Agent {
                 }
                 continue;
             }
-            let acted = async {
-                if !uncertain && !decision.directed && Box::pin(self.fill_form(state, &observation, &decision)).await? {
-                    return Ok(());
-                }
-                Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await
-            };
-            match acted.await {
+            match Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await {
                 Err(Flow::Unsure(unsure)) => {
                     let left_out = withheld(&decision);
                     Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as, left_out)).await?;
@@ -429,7 +423,6 @@ impl Agent {
         options: StepOptions,
     ) -> Step {
         let started = Instant::now();
-        state.form_continues = false;
         if !matches!(decision.operation, Operation::Fill | Operation::Read) && !decision.operation.is_scrolling() {
             state.form_values.clear();
         }
@@ -471,23 +464,17 @@ impl Agent {
                 outcome: if skipped { StepOutcome::Failed } else { StepOutcome::Executed },
                 page_changed: false,
                 detail: Some(text),
-                form_unchanged: false,
                 moved: false,
             };
         } else {
-            let action = match options.prepared_action {
-                Some(action) => action,
-                None => {
-                    let redecided = state.redecided;
-                    let target = decision.target.as_ref().map(|target| target.id.clone());
-                    let building = self.action(state, observation, decision, decided_by, options.gate);
-                    match self.unless_redrawn(redecided, building, observation, target.as_deref()).await? {
-                        Watched::Done(action) => action,
-                        Watched::Redrawn => {
-                            self.redecide(state, observation);
-                            return Ok(());
-                        }
-                    }
+            let redecided = state.redecided;
+            let target = decision.target.as_ref().map(|target| target.id.clone());
+            let building = self.action(state, observation, decision, decided_by, options.gate);
+            let action = match self.unless_redrawn(redecided, building, observation, target.as_deref()).await? {
+                Watched::Done(action) => action,
+                Watched::Redrawn => {
+                    self.redecide(state, observation);
+                    return Ok(());
                 }
             };
             state.redecided = false;
@@ -512,13 +499,8 @@ impl Agent {
             } else {
                 self.page.act(&action, &raw).await?
             };
-            state.form_continues = action.form_fill
-                && result.form_unchanged
-                && !result.page_changed
-                && result.outcome == StepOutcome::Executed;
             if result.outcome == StepOutcome::Stale
                 && let Some(target) = &decision.target
-                && !action.form_fill
                 && let Some(retried) = self.act_on_twin(&action, observation, target).await?
             {
                 result = retried;
@@ -675,20 +657,13 @@ impl Agent {
         if state.unchanged >= self.config.stall.unchanged_actions {
             let reason = format!("no_progress ({})", state.unchanged);
             Box::pin(self.recover(state, observation, &reason, gives_up_as, stalled)).await?;
-            state.form_continues = false;
         }
         Ok(())
     }
 
     pub(super) async fn follow_pager(&self, action: &Action, observation: &Observation) -> Step<ActResult> {
         let target = super::helpers::next_page_control(observation);
-        let stale = ActResult {
-            outcome: StepOutcome::Stale,
-            page_changed: false,
-            detail: None,
-            form_unchanged: false,
-            moved: false,
-        };
+        let stale = ActResult { outcome: StepOutcome::Stale, page_changed: false, detail: None, moved: false };
         let Some(target) = target else { return Ok(stale) };
         if action.operation != Operation::Click
             || action.target_id.as_deref() != Some(target.id.as_str())
@@ -704,7 +679,6 @@ impl Agent {
             outcome: StepOutcome::Executed,
             page_changed: self.page.address().await? != observation.url,
             detail: Some("Followed next-page link by URL.".into()),
-            form_unchanged: false,
             moved: false,
         })
     }
@@ -1018,18 +992,11 @@ pub(super) struct StepOptions {
     pub gate: bool,
     pub require_all_evidence: bool,
     pub follow_pager: bool,
-    pub prepared_action: Option<Action>,
 }
 
 impl Default for StepOptions {
     fn default() -> Self {
-        StepOptions {
-            capture: None,
-            gate: true,
-            require_all_evidence: false,
-            follow_pager: false,
-            prepared_action: None,
-        }
+        StepOptions { capture: None, gate: true, require_all_evidence: false, follow_pager: false }
     }
 }
 

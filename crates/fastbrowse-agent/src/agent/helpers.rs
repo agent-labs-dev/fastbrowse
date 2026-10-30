@@ -179,14 +179,6 @@ pub(crate) fn place(url: &str) -> (String, String) {
     (origin_of(url), if path.is_empty() { "/".into() } else { path })
 }
 
-/// The kind of value the field declares it takes, when the text cannot be one, else None.
-pub(crate) fn misfit(target: &Control, text: &str) -> Option<&'static str> {
-    let autocomplete = target.autocomplete.as_deref().unwrap_or_default().to_lowercase();
-    let email = target.input_type.as_deref().unwrap_or_default().to_lowercase() == "email"
-        || autocomplete.split_whitespace().any(|token| token == "email");
-    (email && !text.contains('@')).then_some("an email address")
-}
-
 /// The next of a field's values in turn after those its fills have typed so far, in order, else the last.
 pub(crate) fn next_value(values: &[String], entries: &[HistoryEntry], label: Option<&str>) -> String {
     let mut done = 0;

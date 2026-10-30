@@ -174,8 +174,6 @@ class Action(Frozen):
     """Origin authorized by the resolver; the receiving document must still match at insertion."""
     files: tuple[Attachment, ...] = ()
     accept_dialog: bool | None = None
-    form_fill: bool = False
-    """Check whether this ordinary fill leaves the observed form safe to continue without another observation."""
 
 
 class BrowserError(RuntimeError):
@@ -235,7 +233,6 @@ class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool
     detail: str | None = None
-    form_unchanged: bool = False
     moved: bool = False
     """The action itself took the page elsewhere: its own input event began a navigation or changed the address,
     or it opened a tab. A page that moves on its own time, even to a new document just after the action, is not."""

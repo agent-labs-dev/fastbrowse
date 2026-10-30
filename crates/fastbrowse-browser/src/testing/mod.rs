@@ -12,7 +12,6 @@ use crate::page::CdpPage;
 use crate::session::{BrowserSession, Frame, Shared, adopt_popup, deliver_frames};
 
 pub mod browser;
-pub mod dispatch;
 pub mod lifecycle;
 pub mod misc;
 pub mod safety;

@@ -232,17 +232,17 @@
  },
  {
   "type": "Action",
-  "dump_json": "{\"operation\":\"upload\",\"url\":null,\"target_id\":\"f1\",\"destination_id\":null,\"text\":null,\"secret\":false,\"tab_id\":null,\"secret_origin\":null,\"files\":[{\"name\":\"a.txt\",\"mime_type\":\"text/plain\",\"content\":\"hello \u00e9\"}],\"accept_dialog\":false,\"form_fill\":true}",
-  "dumps": "{\"operation\": \"upload\", \"url\": null, \"target_id\": \"f1\", \"destination_id\": null, \"text\": null, \"secret\": false, \"tab_id\": null, \"secret_origin\": null, \"files\": [{\"name\": \"a.txt\", \"mime_type\": \"text/plain\", \"content\": \"hello \\u00e9\"}], \"accept_dialog\": false, \"form_fill\": true}",
-  "exclude_none": "{\"operation\": \"upload\", \"target_id\": \"f1\", \"secret\": false, \"files\": [{\"name\": \"a.txt\", \"mime_type\": \"text/plain\", \"content\": \"hello \\u00e9\"}], \"accept_dialog\": false, \"form_fill\": true}",
-  "httpx": "{\"operation\":\"upload\",\"url\":null,\"target_id\":\"f1\",\"destination_id\":null,\"text\":null,\"secret\":false,\"tab_id\":null,\"secret_origin\":null,\"files\":[{\"name\":\"a.txt\",\"mime_type\":\"text/plain\",\"content\":\"hello \u00e9\"}],\"accept_dialog\":false,\"form_fill\":true}"
+  "dump_json": "{\"operation\":\"upload\",\"url\":null,\"target_id\":\"f1\",\"destination_id\":null,\"text\":null,\"secret\":false,\"tab_id\":null,\"secret_origin\":null,\"files\":[{\"name\":\"a.txt\",\"mime_type\":\"text/plain\",\"content\":\"hello \u00e9\"}],\"accept_dialog\":false}",
+  "dumps": "{\"operation\": \"upload\", \"url\": null, \"target_id\": \"f1\", \"destination_id\": null, \"text\": null, \"secret\": false, \"tab_id\": null, \"secret_origin\": null, \"files\": [{\"name\": \"a.txt\", \"mime_type\": \"text/plain\", \"content\": \"hello \\u00e9\"}], \"accept_dialog\": false}",
+  "exclude_none": "{\"operation\": \"upload\", \"target_id\": \"f1\", \"secret\": false, \"files\": [{\"name\": \"a.txt\", \"mime_type\": \"text/plain\", \"content\": \"hello \\u00e9\"}], \"accept_dialog\": false}",
+  "httpx": "{\"operation\":\"upload\",\"url\":null,\"target_id\":\"f1\",\"destination_id\":null,\"text\":null,\"secret\":false,\"tab_id\":null,\"secret_origin\":null,\"files\":[{\"name\":\"a.txt\",\"mime_type\":\"text/plain\",\"content\":\"hello \u00e9\"}],\"accept_dialog\":false}"
  },
  {
   "type": "ActResult",
-  "dump_json": "{\"outcome\":\"stale\",\"page_changed\":false,\"detail\":\"redrawn\",\"form_unchanged\":false,\"moved\":true}",
-  "dumps": "{\"outcome\": \"stale\", \"page_changed\": false, \"detail\": \"redrawn\", \"form_unchanged\": false, \"moved\": true}",
-  "exclude_none": "{\"outcome\": \"stale\", \"page_changed\": false, \"detail\": \"redrawn\", \"form_unchanged\": false, \"moved\": true}",
-  "httpx": "{\"outcome\":\"stale\",\"page_changed\":false,\"detail\":\"redrawn\",\"form_unchanged\":false,\"moved\":true}"
+  "dump_json": "{\"outcome\":\"stale\",\"page_changed\":false,\"detail\":\"redrawn\",\"moved\":true}",
+  "dumps": "{\"outcome\": \"stale\", \"page_changed\": false, \"detail\": \"redrawn\", \"moved\": true}",
+  "exclude_none": "{\"outcome\": \"stale\", \"page_changed\": false, \"detail\": \"redrawn\", \"moved\": true}",
+  "httpx": "{\"outcome\":\"stale\",\"page_changed\":false,\"detail\":\"redrawn\",\"moved\":true}"
  },
  {
   "type": "Config",

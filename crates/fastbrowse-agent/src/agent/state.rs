@@ -327,8 +327,7 @@ pub(crate) struct RunState {
     pub incomplete: BTreeSet<String>,
     /// Authorized clicks can just navigate, so only candidates with notes are classified when answering.
     pub transaction_candidates: Vec<TransactionCandidate>,
-    pub form_continues: bool,
-    pub form_rejected: HashSet<(String, Option<String>, String)>,
+    /// Values the form writer wrote for a form's fields, by document and field, used by the fills Jev picks there.
     pub form_values: HashMap<(String, String), (Control, FieldText)>,
 }
 
@@ -419,8 +418,6 @@ impl RunState {
             continuing: HashSet::new(),
             incomplete: BTreeSet::new(),
             transaction_candidates: Vec::new(),
-            form_continues: false,
-            form_rejected: HashSet::new(),
             form_values: HashMap::new(),
         }
     }

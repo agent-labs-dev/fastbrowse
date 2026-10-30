@@ -972,26 +972,6 @@
     // document's timeOrigin and form semantics, must survive before an action can follow it.
     retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
   }
-  // A dependent field can appear without changing page text. Compare all controls,
-  // excusing only the value and invalid marker of the field just filled.
-  const formState = controls.map(({ distance, offscreen, ...c }) => {
-    const form = registry.nodes.get(c.id)?.form;
-    return { ...c, form: form ? [form.action, form.method, form.target] : null };
-  });
-  const formPage = JSON.stringify([location.href, performance.timeOrigin, document.title, viewport_text]);
-  if (typeof mode === 'object') {
-    const previous = registry.formObserved;
-    if (!previous || previous.page !== formPage) return false;
-    const expected = previous.controls.map(c => {
-      if (c.id !== mode.id) return c;
-      const { invalid, ...filled } = c;
-      return mode.text ? { ...filled, value: mode.text } : c;
-    });
-    const same = JSON.stringify(expected) === JSON.stringify(formState);
-    if (same) registry.formObserved = { page: formPage, controls: formState };
-    return same;
-  }
-  registry.formObserved = { page: formPage, controls: formState };
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
   registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]

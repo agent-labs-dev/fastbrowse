@@ -142,7 +142,6 @@ impl CdpPage {
             outcome,
             page_changed,
             detail: Some(detail.to_owned()),
-            form_unchanged: false,
             moved: false,
         };
         let Some(last) = self.last().filter(|last| last.page_key == observation.page_key) else {
@@ -153,19 +152,6 @@ impl CdpPage {
             match last.controls.get(target_id) {
                 Some(found) => target = Some(found.clone()),
                 None => return Ok(result(StepOutcome::Stale, false, "unknown control id")),
-            }
-        }
-        if action.form_fill
-            && let Some(target) = &target
-        {
-            let current = observation
-                .controls
-                .iter()
-                .find(|c| Some(&c.id) == action.target_id.as_ref())
-                .and_then(|c| c.value.clone())
-                .unwrap_or_default();
-            if !self.form_unchanged(target, &current).await {
-                return Ok(result(StepOutcome::Stale, false, "form changed before fill"));
             }
         }
         // A pending dialog already blocks the renderer's main thread; evaluating now would hang.
@@ -240,18 +226,12 @@ impl CdpPage {
         let window_opens = self.session.window_opens();
         let requests = self.session.requests_mark();
         let downloads_before = self.session.downloads_settled();
-        let (outcome, mut detail) = match self.dispatch(action, target.as_ref(), point, drawn).await {
-            Ok(dispatched) => dispatched,
-            Err(error) if !action.form_fill => return Err(error),
-            // An input handler can navigate before retention is checked. Its next field needs a fresh decision.
-            Err(_) => return Ok(result(StepOutcome::Failed, true, "form changed during fill")),
-        };
+        let (outcome, mut detail) = self.dispatch(action, target.as_ref(), point, drawn).await?;
         if outcome != StepOutcome::Executed {
             return Ok(ActResult {
                 outcome,
                 page_changed: self.session.pending_dialog().is_some(),
                 detail,
-                form_unchanged: false,
                 moved: false,
             });
         }
@@ -273,7 +253,6 @@ impl CdpPage {
                 outcome: StepOutcome::Executed,
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
-                form_unchanged: false,
                 moved: true,
             });
         }
@@ -292,21 +271,7 @@ impl CdpPage {
                 detail = detail.or_else(|| Some("downloaded the file the link points at".into()));
             }
         }
-        let mut unchanged = false;
-        if action.form_fill
-            && !changed
-            && let Some(target) = &target
-            && !action.secret
-        {
-            unchanged = self.form_unchanged(target, action.text.as_deref().unwrap_or_default()).await;
-        }
-        Ok(ActResult {
-            outcome: StepOutcome::Executed,
-            page_changed: changed,
-            detail,
-            form_unchanged: unchanged,
-            moved,
-        })
+        Ok(ActResult { outcome: StepOutcome::Executed, page_changed: changed, detail, moved })
     }
 
     /// Whether a download landed since `since`, waiting the capture's own task out briefly.
@@ -401,19 +366,6 @@ impl CdpPage {
                 })
             })
         })
-    }
-
-    pub(crate) async fn form_unchanged(&self, target: &Target, text: &str) -> bool {
-        if self.session.pending_dialog().is_some() || Some(&target.0) != self.session.active_session_id().ok().as_ref()
-        {
-            return false;
-        }
-        // Other frame sessions can change independently of this renderer's guard.
-        if !self.session.frame_sessions().is_empty() {
-            return false;
-        }
-        let script = format!("({})({})", self.page_js, py_json(&json!({"id": target.2, "text": text})));
-        matches!(self.until_dialog(self.evaluate(&target.0, &script)).await, Some(Ok(Value::Bool(true))))
     }
 
     async fn dispatch(

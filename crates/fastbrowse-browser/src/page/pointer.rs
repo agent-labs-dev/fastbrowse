@@ -33,7 +33,6 @@ impl CdpPage {
             detail: Some(
                 if opened { "opened a new tab, now active" } else { "clicked where the screenshot shows it" }.into(),
             ),
-            form_unchanged: false,
             moved: opened,
         })
     }
