@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 use super::scripts::{
-    ACTIVATION_KEY_JS, COVER_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, PRESENTED_JS,
-    SELECT_TEXT_JS, UNCOVER_JS, py_float,
+    ACTIVATION_KEY_JS, COVER_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, OWNED_JS, PRESENTED_JS,
+    SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::secs;
@@ -651,8 +651,7 @@ impl CdpPage {
     async fn await_popup(&self, session_id: &str, local_id: i64) {
         let script = format!(
             "new Promise(resolve => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             const owned = () => {{ const id = e.getAttribute('aria-controls') || e.getAttribute('aria-owns'); \
-             return id ? e.ownerDocument.getElementById(id) : null; }}; \
+             const owned = () => {OWNED_JS}(e); \
              const open = () => e.getAttribute('aria-expanded') === 'true' \
              || !!owned()?.checkVisibility({{checkOpacity: true, checkVisibilityCSS: true}}); \
              if (!e || open()) {{ resolve(true); return; }} \
@@ -784,11 +783,8 @@ impl CdpPage {
             // Whether the field asks for suggestions comes back with the check, so an ordinary field's fill does not
             // pay a round trip to learn it has none to wait for.
             let check = format!(
-                "((ok, e) => [!!ok, !!ok && !!e && (e.getAttribute('role') === 'combobox' || \
-                 e.type === 'search' || !!e.getAttribute('aria-autocomplete') || \
-                 !!((id => id && e.ownerDocument.getElementById(id))(\
-                 e.getAttribute('aria-controls') || e.getAttribute('aria-owns'))))])({}, \
-                 window.__fastbrowse?.nodes.get({local_id}))",
+                "((ok, e) => [!!ok, !!ok && !!e && {}(e)])({}, window.__fastbrowse?.nodes.get({local_id}))",
+                *SUGGESTS_JS,
                 landed_js(local_id, text)
             );
             let landed = self.evaluate(session_id, &check).await?;
@@ -857,10 +853,7 @@ impl CdpPage {
         // expansion on its own does not end the wait.
         let script = format!(
             "new Promise(resolve => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             const owned = () => {{ const id = e.getAttribute('aria-controls') || e.getAttribute('aria-owns'); \
-             return id ? e.ownerDocument.getElementById(id) : null; }}; \
-             const expects = !!e && (e.getAttribute('role') === 'combobox' || e.type === 'search' \
-             || !!e.getAttribute('aria-autocomplete') || !!owned()); \
+             const owned = () => {OWNED_JS}(e); const expects = !!e && {suggests}(e); \
              if (!expects) {{ resolve(false); return; }} \
              const listed = () => !!owned()?.querySelector('[role=\"option\"], li, td') \
              || !!e.ownerDocument.querySelector('[role=\"listbox\"] [role=\"option\"]'); \
@@ -870,7 +863,8 @@ impl CdpPage {
              observer.observe(e.ownerDocument.body, {{childList: true, subtree: true, attributes: true, \
              attributeFilter: ['aria-expanded']}}); \
              const timer = setTimeout(() => stop(false), {}); }})",
-            py_float(SUGGESTION_SECONDS * 1000.0)
+            py_float(SUGGESTION_SECONDS * 1000.0),
+            suggests = *SUGGESTS_JS
         );
         let _ = self.evaluate(session_id, &script).await;
     }

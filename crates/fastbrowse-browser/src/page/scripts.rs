@@ -25,6 +25,18 @@ pub fn py_float(value: f64) -> String {
     if text.contains(['.', 'e', 'i', 'N']) { text } else { format!("{text}.0") }
 }
 
+/// The element a control names as its popup, or null.
+pub const OWNED_JS: &str = "(e => { const id = e.getAttribute('aria-controls') || e.getAttribute('aria-owns'); \
+     return id ? e.ownerDocument.getElementById(id) : null; })";
+
+/// Whether a field asks for suggestions.
+pub static SUGGESTS_JS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "(e => e.getAttribute('role') === 'combobox' || e.type === 'search' || \
+         !!e.getAttribute('aria-autocomplete') || !!{OWNED_JS}(e))"
+    )
+});
+
 pub const SELECT_TEXT_JS: &str = concat!(
     "if (typeof e.select === 'function') e.select(); else { const range = e.ownerDocument.createRange(); ",
     "range.selectNodeContents(e); const selection = e.ownerDocument.getSelection(); ",
