@@ -33,6 +33,12 @@ use tokio::time::{sleep, timeout};
 
 const TOOLS: [&str; 5] = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"];
 const CALL_SECONDS: Duration = Duration::from_secs(2);
+// `move_cursor` replies only once its glide has landed, and the driver's own pace takes up to about three seconds
+// across a screen, longer than the half second between quick clicks, so each glide was cut off by the next and the
+// arrow landed nowhere. A fixed glide lands on every click; a shorter one jumps whole inches between drawn frames.
+const GLIDE_MS: f64 = 550.0;
+// A driver that ignores the fixed glide still lands within its own 5s ceiling; waiting that long is not a failure.
+const MOVE_SECONDS: Duration = Duration::from_secs(6);
 const START_SECONDS: Duration = Duration::from_secs(5);
 const STOP_SECONDS: Duration = Duration::from_secs(1);
 // The driver ends an idle session after about five minutes; start_session is idempotent, so it is the keepalive.
@@ -295,8 +301,12 @@ impl Driver {
     }
 
     async fn tool(&self, name: &str, arguments: Value) -> Result<Value, Failure> {
+        self.tool_within(name, arguments, CALL_SECONDS).await
+    }
+
+    async fn tool_within(&self, name: &str, arguments: Value, seconds: Duration) -> Result<Value, Failure> {
         let params = json!({"name": name, "arguments": arguments});
-        let Value::Object(mut result) = self.request("tools/call", Some(params), CALL_SECONDS).await? else {
+        let Value::Object(mut result) = self.request("tools/call", Some(params), seconds).await? else {
             return Err(Failure::BadReply);
         };
         if result.get("isError").is_some_and(truthy) {
@@ -434,7 +444,8 @@ impl CursorFeedback {
 
 impl Inner {
     async fn follow(self: Arc<Self>, geometry: GeometryFn, point: (f64, f64), generation: u64) {
-        let moved = timeout(CALL_SECONDS * 3, Arc::clone(&self).glide(geometry, point, generation)).await;
+        let moved =
+            timeout(MOVE_SECONDS + CALL_SECONDS * 3, Arc::clone(&self).glide(geometry, point, generation)).await;
         if let Err(failure) = moved.unwrap_or(Err(Failure::Timeout)) {
             self.fail(failure).await;
         }
@@ -461,7 +472,7 @@ impl Inner {
         self.show(window.is_some()).await?;
         if window.is_some() {
             let arguments = json!({"session": self.session, "x": target.0, "y": target.1, "scope": "window"});
-            self.driver.tool("move_cursor", arguments).await?;
+            self.driver.tool_within("move_cursor", arguments, MOVE_SECONDS).await?;
         }
         *lock(&self.last_call) = Instant::now();
         if window.is_some() {
@@ -624,9 +635,10 @@ async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
     }
     driver.tool("start_session", json!({"session": session})).await?;
     // The overlay fades out on its own after a short idle by default, and a run spends most of its time between
-    // steps: ask for a cursor that stays where it was left. A driver without this tool keeps its own default.
+    // steps: ask for a cursor that stays where it was left, and glides short enough to keep up with the clicks.
+    // A driver without this tool keeps its own defaults.
     if tools.contains_key("set_agent_cursor_motion") {
-        let arguments = json!({"session": session, "idle_hide_ms": 0});
+        let arguments = json!({"session": session, "idle_hide_ms": 0, "glide_duration_ms": GLIDE_MS});
         if let Err(failure) = driver.tool("set_agent_cursor_motion", arguments).await {
             log_warning(&format!("the cursor may fade while the run is idle ({})", failure.kind()));
         }
@@ -714,6 +726,8 @@ for line in sys.stdin:
             time.sleep(30)
         if mode == "slow_hide" and name == "set_agent_cursor_enabled" and not arguments["enabled"]:
             time.sleep(0.5)
+        if mode == "long_glide" and name == "move_cursor":
+            time.sleep(2.2)
         structured = {"windows": windows} if name == "list_windows" else {}
         result = {"content": [], "structuredContent": structured}
     print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
@@ -1127,6 +1141,19 @@ if mode == "linger":
         // Nothing hid it: the frame went quiet, the page did not.
         assert!(fake.enabled().is_empty());
         assert_eq!(fake.calls().iter().filter(|name| *name == "move_cursor").count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_glide_longer_than_a_call_keeps_the_cursor() {
+        // The driver replies to a move once its glide lands, which its own pace makes take seconds. Waiting that
+        // out is not a driver failure: it turned the cursor off for the rest of a run after its first long move.
+        let fake = Fake::new("long_glide", None);
+        let feedback = fake.open().await.unwrap();
+        feedback.follow(reading(), (10.0, 20.0));
+        feedback.settled().await;
+        assert!(!feedback.inner.disabled.load(Ordering::SeqCst));
+        assert!(feedback.running());
+        feedback.close().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
