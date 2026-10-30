@@ -81,9 +81,6 @@ def mcp_ceilings() -> dict[str, Any]:
     return out
 
 
-# --------------------------------------------------------------------------- tier 2 and 3 helpers
-
-
 def repeat_status() -> dict[str, Any]:
     """T2.7: the same task twice reaches the same status."""
     argv = [
