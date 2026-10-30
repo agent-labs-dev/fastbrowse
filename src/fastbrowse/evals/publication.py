@@ -41,8 +41,7 @@ from typing import Any, Literal, TypeGuard
 
 from pydantic import BaseModel, ConfigDict
 
-from fastbrowse.evals import baseline, versions
-from fastbrowse.evals.catalog import SUITES
+from fastbrowse.evals import baseline, catalog, versions
 from fastbrowse.evals.status import Ending
 from fastbrowse.evals.storage import ArchiveReceipt, read_archive
 from fastbrowse.models import Limits
@@ -68,7 +67,7 @@ REGRESSION_COST_FLOOR_DOLLARS = 0.001
 _LEDGER_SUFFIX = ".attempts.jsonl"
 _HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
-_LIVE_SUITES = tuple(SUITES)
+_LIVE_SUITES = tuple(catalog.SUITES)
 
 
 class Finding(BaseModel):
@@ -322,7 +321,7 @@ def _suite_ids() -> dict[str, tuple[str, ...]]:
     from fastbrowse.evals.mock_tasks import TASKS as MOCK
     from fastbrowse.evals.tasks import TASKS as LOCAL
 
-    known = {name: tuple(task.id for task in tasks) for name, tasks in SUITES.items()}
+    known = {name: tuple(task.id for task in tasks) for name, tasks in catalog.SUITES.items()}
     known["local"] = tuple(task.id for task in LOCAL)
     known["mock"] = tuple(task.id for task in MOCK)
     return known

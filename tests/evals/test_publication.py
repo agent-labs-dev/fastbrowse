@@ -878,3 +878,10 @@ def test_a_navigation_row_at_another_viewport_is_refused(arm: str) -> None:
     sources = [row(arm=arm, category="navigate", final_page=page, repeat=index) for index in range(3)]
     report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
     assert any(f.check == "protocol" and "viewport" in f.detail for f in report.blocking)
+
+
+def test_suite_ids_read_the_catalog_as_it_stands(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A catalog swapped in by a caller such as Parallax is the one a row is checked against."""
+    task = live.SUITES["core"][0]
+    monkeypatch.setattr(live, "SUITES", {"core": (task,)})
+    assert publication._suite_ids()["core"] == (task.id,)
