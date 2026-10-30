@@ -5,10 +5,7 @@ import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 
 import { Fastbrowse, FastbrowseError } from '../src/index.ts';
-import { launcher, scriptedServer, serverBinary } from './server.ts';
-
-const pyproject = readFileSync(new URL('../../../pyproject.toml', import.meta.url), 'utf8');
-const packageVersion = /^version = "(.+)"$/m.exec(pyproject)?.[1];
+import { launcher, packageVersion, scriptedServer, serverBinary } from './server.ts';
 
 afterEach(() => {
   delete process.env.FASTBROWSE_BINARY;
