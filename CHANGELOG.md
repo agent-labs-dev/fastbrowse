@@ -11,9 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- **`--cursor` lands on what was clicked.** The Cua Driver glides at its own pace, one to three seconds across the screen, and a run clicks every half second when the page is quick, so each glide was cut off by the next and the arrow sat mid-arc, nowhere near the click. On older drivers a glide over two seconds also turned the cursor off for the rest of the run. Glides are now fixed at 550 ms, and the arrow reaches each click about half a second after it.
+## [0.9.1] - 2026-10-30
 
-- **`--cursor` stays on screen for the whole run.** The Cua Driver fades its overlay after 15s idle, and a page change or a frame the run could not read also took it away, so the cursor vanished between steps. fastbrowse now asks the driver to keep it (`idle_hide_ms: 0`) and removes it only when the tab stops showing, the page is zoomed or docked out of place, or another window covers the browser, however long the run has been idle.
+- **The project credits the people who contribute.** [CREDITS.md](CREDITS.md) lists everyone outside the team whose bug report, request or code led to a change, from Dhaiwat10's fix for hidden table rows to the Product Hunt comments behind this release's replay redaction and step choices, and the README's new Credits section thanks them. Every future fix or feature someone asked for thanks them in its changelog entry and adds them to the list.
+
+- **Steps and trace events redact secrets wherever they were built.** A run's steps and trace are what it is replayed from, and each was redacted where it was made, so a step note that quoted an unverified answer reached the result, the step events and a host's run view unredacted. Every step is now redacted as it is recorded, and every string in a trace event as it is written, so a `--secret` value appears as its name in all three whichever part of the loop made the record. Thanks to Bruno Bueno ([@bbueno on Product Hunt](https://www.producthunt.com/@bbueno)) for asking whether the replay masks it ([#587](https://github.com/agent-labs-dev/fastbrowse/issues/587)).
+
+- **`Config(step_choices=True)` records the controls Jev was offered on each step.** A step said which element was chosen but not what it was chosen from, so when a run picked the wrong element or fell back to the LLM there was no way to tell whether the right one was ever on the list. Each step Jev decided now carries `choices`: every control offered after any shortlist, with its id, role, masked label and context (the card or row that tells twins apart) and operations, and Jev's pick marked `chosen`, a drag's destination included. Off by default, and a step without them has no `choices` key, so existing JSON output is unchanged. Thanks to Oleksii Sekundant ([@oleksii_sekundant](https://www.producthunt.com/@oleksii_sekundant)) and JC ([@jcbuilds](https://www.producthunt.com/@jcbuilds)), who asked for it on Product Hunt ([#588](https://github.com/agent-labs-dev/fastbrowse/issues/588)).
 
 - **The README is shorter and says only what is published.** The Rust, Go, Java and .NET sections were printed three times, and the page offered `cargo add fastbrowse`, the Maven coordinates, `dotnet add package Fastbrowse` and `paru -S fastbrowse`, none of which resolves: those registries and the AUR do not hold fastbrowse yet. The first run now needs one key, `OPENROUTER_API_KEY`, with `--local`; the benchmark line states that fastbrowse was slower than the hosted Browser Use agent as well as cheaper; `run_task(settings=...)` and the restored rule modules are marked as not in 0.9.0; and every flag, the signed-in, attach and model settings and the status table moved to [the command-line reference](docs/cli.md).
 
@@ -1666,7 +1670,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.9.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
 [0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0
 [0.8.3]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.3
 [0.8.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.8.2

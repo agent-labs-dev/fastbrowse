@@ -217,6 +217,9 @@ pub struct Decision {
     /// Drop target of a drag: the control the element Jev chose to drag is released onto.
     #[serde(default)]
     pub destination: Option<Control>,
+    /// The controls Jev chose among, kept only when `Config.step_choices` asks for them.
+    #[serde(skip)]
+    pub offered: Vec<Control>,
 }
 
 fn absent() -> ReadAssessment {
@@ -318,6 +321,22 @@ pub async fn decide(
                 Ok(mut decision) => {
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
                     decision.input_tokens += tokens;
+                    if config.step_choices {
+                        // Recorded as Jev read them: a compact request cut labels and contexts, and a choice that
+                        // showed the full text would claim Jev had what told the right element apart.
+                        decision.offered = if compact {
+                            controls
+                                .into_iter()
+                                .map(|control| Control {
+                                    label: shortened(&control.label, COMPACT_CHARS),
+                                    context: control.context.as_deref().map(|c| shortened(c, COMPACT_CHARS)),
+                                    ..control
+                                })
+                                .collect()
+                        } else {
+                            controls
+                        };
+                    }
                     return Ok(decision);
                 }
                 Err(AgentError::Jev(DecisionError::InputTooLarge(_))) => {}
@@ -892,6 +911,7 @@ async fn evaluate(
         read_assessment,
         directed: false,
         destination,
+        offered: Vec::new(),
     })
 }
 
