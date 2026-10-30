@@ -699,7 +699,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             }
         }
     };
-    // A run that never began leaves its head start running; one that did has discarded it already.
+    // A run that never began leaves its head start running; one that did has settled it already.
     if let Some(head) = &head {
         head.discard().await;
     }

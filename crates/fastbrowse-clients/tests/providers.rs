@@ -399,11 +399,17 @@ async fn test_an_error_that_echoes_a_key_outside_the_authorization_header_is_scr
 async fn a_refused_openrouter_key_moves_the_run_to_the_gateway_key_beside_it() {
     let refused = || Step::Reply(Response::json(401, &json!({"error": {"message": "User not found."}})));
     let env = [("OPENROUTER_API_KEY", "openrouter-secret"), ("AI_GATEWAY_API_KEY", "gateway-secret")];
-    let script = Script::new(vec![
-        refused(),
-        completion(r#"{"answer":"ok"}"#, "stop"),
-        completion(r#"{"answer":"ok"}"#, "stop"),
-    ]);
+    // The gateway states each call's cost, as it does in production.
+    let costed = || {
+        Step::Reply(Response::json(
+            200,
+            &json!({
+                "choices": [{"message": {"content": r#"{"answer":"ok"}"#}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "cost": 0.0001},
+            }),
+        ))
+    };
+    let script = Script::new(vec![refused(), costed(), costed()]);
     let llm = settings(&env).llm(&script.http()).unwrap();
     for _ in 0..2 {
         let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await;

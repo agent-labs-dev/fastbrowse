@@ -56,8 +56,12 @@ Rules that hold across the table:
   `max_completion_tokens` and `reasoning_effort` where the preset sends them.
 - **Where the schema is in the prompt, it is not enforced.** fastbrowse validates every reply against the schema
   and asks once for a correction, as it does everywhere, so a reply that drifts costs a second call.
-- **Cost comes from what the provider reports.** OpenRouter and the gateway report dollars. The others report
-  tokens, so their calls are recorded with tokens and an unknown cost, never zero, and `--max-dollars` stops the
+- **The gateway does not hold every provider to the schema.** It has no counterpart to OpenRouter's
+  `require_parameters`, so a provider that ignores `response_format` still answers. The reply is validated and
+  repaired once, as everywhere.
+- **Cost comes from what the provider reports.** OpenRouter and the gateway report dollars. A call of theirs that
+  reports none is charged its model's context window at the dearest listed price, a true upper bound. The others
+  report tokens, so their calls are recorded with tokens and an unknown cost, never zero, and `--max-dollars` stops the
   run after the first such call.
 
 ## Claude through the Messages API

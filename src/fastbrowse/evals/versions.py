@@ -27,20 +27,19 @@ import json
 import platform
 import re
 import statistics
-import subprocess
 import sys
 import textwrap
 import tokenize
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 from types import CodeType
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from fastbrowse.build import identity
 from fastbrowse.evals import baseline
 
 LOCK = Path(__file__).with_name("versions.json")
@@ -181,48 +180,13 @@ def suite_version(task_ids: Iterable[str], lock: Mapping[str, Mapping[str, Any]]
     return hashlib.sha256(body.encode()).hexdigest()[:8]
 
 
-def _git(*args: str) -> str | None:
-    # An installed package can sit inside another project's checkout, so parent discovery is not build identity.
-    if not (ROOT / "src" / "fastbrowse" / "evals" / "versions.py").is_file():
-        return None
-    try:
-        done = subprocess.run(
-            ["git", *args], cwd=Path(__file__).parent, capture_output=True, text=True, timeout=10, check=True
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout.strip()
-
-
 def provenance(**extra: object) -> dict[str, object]:
-    """Who ran: the build, its commit, the interpreter, and a run id shared by every row of one invocation.
-
-    `git_dirty` is None outside a checkout (an installed wheel) and True when tracked files had uncommitted
-    changes or untracked, non-ignored files were present, so a score from an unreviewed tree is marked as one.
-    Ignored paths (an `artifacts/` directory) do not dirty a build; an untracked executable does.
-    """
-    try:
-        build = version("fastbrowse")
-    except PackageNotFoundError:
-        build = None
-    sha = _git("rev-parse", "HEAD")
-    status = None if sha is None else _git("status", "--porcelain")
-    dirty = None if status is None else bool(status)
-    if sha is None:
-        try:
-            receipt = json.loads(distribution("fastbrowse").read_text("direct_url.json") or "{}")
-        except (PackageNotFoundError, ValueError):
-            receipt = {}
-        vcs = receipt.get("vcs_info") if isinstance(receipt, dict) else None
-        commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
-        if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
-            sha, dirty = commit, False
+    """Who ran: the build (`fastbrowse.build.identity`), the interpreter, and a run id shared by every row of one
+    invocation."""
     return {
         "run_id": uuid.uuid4().hex[:12],
         "run_started": datetime.now(UTC).isoformat(timespec="seconds"),
-        "fastbrowse_version": build,
-        "git_sha": sha,
-        "git_dirty": dirty,
+        **identity(),
         "python": platform.python_version(),
         **extra,
     }

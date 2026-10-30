@@ -58,6 +58,27 @@ pinned by `evidence.manifest.json`. The site validates both files at one commit 
 
 Read [the eval workflow](agents/evals.md) before changing agent behavior or running paid checks.
 
+## Default LLM measurements
+
+`DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` stays on `google/gemini-3.8-flash` because it
+passes the live suite: `google/gemini-3.5-flash-lite` is two to three times faster a call but scored 8/12 live
+against 12/12, so it serves only purposes whose output is checked downstream.
+
+Gemini 3.5 Flash Lite at low reasoning was also measured as a candidate default against DeepSeek V4.1 Flash
+1017 on the Sauce Demo checkout: one task, 3 repeats per arm, identical prompt and limits, local Chrome.
+
+| Arm (resolved model) | Build | Verified | Median wall | Mean cost | Endings |
+|:--|:--|:--|--:|--:|:--|
+| Flash Lite, low reasoning | `16e13b68` | 1/3 | 34.9s | $0.0307 | 1 complete, 2 stuck |
+| DeepSeek V4.1 Flash 1017 | `16e13b68` | 1/3 | 91.9s | $0.0555 | 1 complete, 1 budget_exceeded, 1 stuck |
+| main default (3.8-flash + 3.5-flash-lite) | `e1d478b` | 2/3 | 45.5s | $0.0532 | 2 complete, 1 stuck |
+| 0.5.25 published campaign (reference) | `48c964d` | 3/3 | not recorded | not recorded | |
+
+At n=3 this shows no improvement: Flash Lite is level with DeepSeek on completions and behind main, though
+62% faster and 45% cheaper than DeepSeek. Both Flash Lite failures placed the order, then could not read the
+order total from the confirmation page and gave up. That is the separately filed unsatisfiable-requirement
+shape, not a model defect.
+
 ## Codex with Cua Driver
 
 A diagnostic arm, not one of the three comparisons.
