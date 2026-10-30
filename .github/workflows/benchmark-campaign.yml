@@ -22,7 +22,8 @@ name: Benchmark campaign
 # The vendor arms always run on their own hosted browsers.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY
+#   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
+#            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the candidate reads the fixture run back)
 #            BROWSER_USE_API_KEY (with `browser: cloud` or the head-to-head group)
 #   secrets, optional: BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID (the head-to-head group's browserbase arm)
 #            FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
@@ -148,6 +149,8 @@ jobs:
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           PARALLAX_DEPLOY_KEY: ${{ secrets.PARALLAX_DEPLOY_KEY }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           GROUP_SET: ${{ inputs.groups }}
         run: |
           missing=""
@@ -158,6 +161,8 @@ jobs:
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
+          need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
+          need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
           if test "$BROWSER" = cloud || test "$GROUP_SET" != fastbrowse; then
             need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           fi
@@ -330,6 +335,10 @@ jobs:
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id }}
           FIXTURE_RUN: ${{ steps.fixture.outputs.run }}
+          # The fixture run's traces are read back from fastbrowse's Langfuse project (evals/storage.py HOST).
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           cd parallax
           args=()
