@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A typed value is not taken for a sent one.** A read of a filled form quoted the value beside the form's unpressed button, and a run could end complete with nothing sent. Jev and the done check are now told which fields hold a value no action has sent, and the run presses the form's control.
 - **Cloud browsers start on the Browser Use V4 API.** Every Browser Use Cloud browser is created on V4 with its residential US proxy and CAPTCHA solving asked for by name, so a run no longer depends on the service's defaults or an older API.
 - **The Browser Use Cloud browser is the default everywhere.** `run_task` in Python and Rust, like the CLI, MCP server and SDKs, now starts a cloud browser when no browser is named, and needs `BROWSER_USE_API_KEY` to do so. This breaks a script that relied on local Chrome by default: pass `chrome=LocalChrome()` in Python, `local: true` in Rust, or `--local`.
 - **OpenRouter is the recommended route, and comes first.** One `OPENROUTER_API_KEY` serves Jev, images included, and the LLM. With both keys set, Jev now starts on OpenRouter rather than direct TypeSafe; `FASTBROWSE_DECISION_SOURCE=typesafe` picks direct.

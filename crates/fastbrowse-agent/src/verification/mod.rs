@@ -189,6 +189,8 @@ pub struct DoneOptions<'a> {
     pub changed_since_read: bool,
     /// The current page was read and has not changed since, so it is the evidence the notes quote.
     pub page_read: bool,
+    /// What the run typed on this page and no action has sent.
+    pub unsent: Option<String>,
     /// The site failure standing where the run is, stated so an answer drawn from it is not taken as the task's.
     pub site_failure: Option<String>,
     /// Requirements whose list the reader saw go on past what the run read.
@@ -269,6 +271,9 @@ pub async fn check_done(
     }
     if options.changed_since_read {
         context.insert("page_changed_since_read".into(), true.into());
+    }
+    if let Some(unsent) = &options.unsent {
+        context.insert("unsent_input".into(), unsent.clone().into());
     }
     if let Some(failure) = &options.site_failure {
         context.insert("site_failure".into(), failure.clone().into());
@@ -626,6 +631,15 @@ mod tests {
         let check = done(vec![("unmet_r1", 0.9), ("unmet_r2", 0.1)], &counted_notes());
         assert_eq!(check.verdict, DoneVerdict::Reject);
         assert_eq!(check.unmet, ["r1"]);
+    }
+
+    #[test]
+    fn the_done_check_is_told_what_was_typed_and_never_sent() {
+        let jev = TableJev::new(vec![("unmet_r1", 0.9), ("unmet_r2", 0.1)]);
+        let options = DoneOptions { unsent: Some("nothing sent".into()), ..DoneOptions::default() };
+        let (plan, notes, thresholds) = (count_plan(), counted_notes(), Thresholds::default());
+        block_on(check_done(&jev, "Count them.", &plan, &page(), &notes, &thresholds, None, &options)).expect("check");
+        assert_eq!(jev.2.lock().unwrap()[0]["unsent_input"], "nothing sent");
     }
 
     #[test]

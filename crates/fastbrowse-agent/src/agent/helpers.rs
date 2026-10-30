@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 use super::state::RunState;
-use crate::memory::{Notes, fact_id};
+use crate::memory::{Notes, fact_id, unique};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry};
 
@@ -301,6 +301,33 @@ pub(crate) fn unread_transaction(state: &RunState) -> bool {
     // Possible submissions also include searches and filters. Only a requested state change needs a receipt read.
     state.ready_plan.as_ref().is_some_and(|plan| plan.requirements.iter().any(|r| r.kind == RequirementKind::Action))
         && state.transaction_candidates.iter().any(|c| !c.outcome_read && c.committing != Some(false))
+}
+
+/// The fact, when there is one, that fields on this page hold a value the run typed with no later action that could
+/// have sent it.
+///
+/// A typed value sits in the page until something sends it, which neither the field nor a read of it shows: a read of
+/// a filled form quoted the value beside the form's unpressed button, and Jev took that for the task done.
+pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
+    let mut fields = Vec::new();
+    for entry in history.iter().rev().filter(|entry| entry.outcome == StepOutcome::Executed) {
+        match entry.operation {
+            Some(Operation::Fill) => fields.extend(entry.target.iter().cloned()),
+            Some(Operation::Read | Operation::Select | Operation::Scroll | Operation::ScrollUp) => {}
+            Some(Operation::Click) if entry.setting == Some(true) => {}
+            _ => break,
+        }
+    }
+    let shown = |field: &String| {
+        observation.controls.iter().any(|c| describe(c) == *field && c.value.as_deref().is_some_and(|v| !v.is_empty()))
+    };
+    let fields = unique(fields.into_iter().filter(shown).rev());
+    (!fields.is_empty()).then(|| {
+        format!(
+            "No action has sent what was typed into {}: the page holds the typed value, and it reaches the site only once the form's own control sends it.",
+            fields.join(", ")
+        )
+    })
 }
 
 /// The action recovery named, taken only when Jev is unsure or escalates and the control still offers it. Jev sees
