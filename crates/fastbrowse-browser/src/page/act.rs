@@ -771,10 +771,7 @@ impl CdpPage {
                     "((id, text, origin) => {{ const e = window.__fastbrowse?.nodes.get(id); \
                      if (!e?.isConnected || (origin !== null && e.ownerDocument.location.origin !== origin)) return false; \
                      const doc = e.ownerDocument; if (e.getRootNode().activeElement !== e) return false; \
-                     if (typeof e.select === 'function') e.select(); else {{ const range = doc.createRange(); \
-                     range.selectNodeContents(e); const selection = doc.getSelection(); selection.removeAllRanges(); \
-                     selection.addRange(range); }} \
-                     return doc.execCommand('insertText', false, text); }})({local_id}, {}, {})",
+                     {SELECT_TEXT_JS}return doc.execCommand('insertText', false, text); }})({local_id}, {}, {})",
                     py_json(&json!(text)),
                     py_json(&json!(secret_origin))
                 );
