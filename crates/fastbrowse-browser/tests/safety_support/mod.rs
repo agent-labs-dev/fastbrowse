@@ -12,7 +12,7 @@ use std::time::Duration;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_core::page::Observation;
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::time::{Instant, sleep};
 use tokio_tungstenite::tungstenite::Message;
 

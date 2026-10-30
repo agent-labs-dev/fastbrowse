@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{
-    Harness, chrome, eval_value, find, harness, harness_on, harness_with, js, observe_until, sites, try_eval, wait_until,
+    Harness, chrome, eval_value, find, harness, harness_on, harness_with, js, observe_until, sites, try_eval,
+    wait_until,
 };
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::SessionOptions;

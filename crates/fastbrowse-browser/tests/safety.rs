@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{RecordingArtifactSink, chrome, eval_active, eval_value, find, harness, sites, sites_dir, turn, wait_until};
+use common::{
+    RecordingArtifactSink, chrome, eval_active, eval_value, find, harness, sites, sites_dir, turn, wait_until,
+};
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;

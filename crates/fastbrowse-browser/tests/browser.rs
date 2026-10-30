@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{Harness, RecordingArtifactSink, chrome, eval_value, find, harness, harness_on, observe_until, sites, turn};
+use common::{
+    Harness, RecordingArtifactSink, chrome, eval_value, find, harness, harness_on, observe_until, sites, turn,
+};
 use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::error::BrowserError;
@@ -20,7 +22,7 @@ use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
-use fastbrowse_core::page::{ActResult, Action, BlockKind, Capture, Control, Observation};
+use fastbrowse_core::page::{ActResult, Action, BlockKind, Control, Observation};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
@@ -752,7 +754,7 @@ async fn test_capture_offsets_slice_exactly_to_each_block() {
     assert!(headings.iter().any(|h| capture.block_text(h) == "Table"));
     let tables: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Table).collect();
     assert!(!tables.is_empty());
-    assert!(capture.block_text(&tables[0]).contains("Ada"));
+    assert!(capture.block_text(tables[0]).contains("Ada"));
     let mut links = capture.blocks.iter().filter(|b| b.kind == BlockKind::Link);
     assert!(links.any(|link| link.href.as_deref() == Some("https://example.com/docs")));
     h.close().await;
@@ -1048,21 +1050,12 @@ async fn test_content_shown_only_under_the_pointer_is_reached_by_hovering() {
     assert!(after.controls.iter().any(|c| c.label == "View profile"));
     let captured = h.page.capture().await.expect("capture");
     assert!(captured.text.contains("name: grace"));
-    let revealed = captured
-        .blocks
-        .iter()
-        .find(|b| captured.block_text(b).contains("name: grace"))
-        .expect("revealed block");
+    let revealed =
+        captured.blocks.iter().find(|b| captured.block_text(b).contains("name: grace")).expect("revealed block");
     let context = revealed.control_context.as_ref().expect("control context");
     assert_eq!(context.label, "User Avatar");
     assert_eq!(context.context.as_deref(), Some("2 of 2"));
-    assert!(
-        captured
-            .blocks
-            .iter()
-            .filter(|b| captured.block_text(b) == "Team")
-            .all(|b| b.control_context.is_none())
-    );
+    assert!(captured.blocks.iter().filter(|b| captured.block_text(b) == "Team").all(|b| b.control_context.is_none()));
     let after_controls: Vec<&Control> = after.controls.iter().collect();
     assert_eq!(avatars(&after_controls), avatars(&hovers));
     let first = after.controls.iter().find(|c| c.context.as_deref() == Some("1 of 2")).expect("first avatar");
@@ -1455,7 +1448,7 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
             assert_eq!(block.source_url.as_deref(), Some(format!("{}{path}", sites().main).as_str()));
             assert!(capture.block_text(block).starts_with("name,total\n"), "{path}");
         }
-        assert_eq!(capture.block_text(&rows[0]), "name,total\nReport,139.79", "{path}");
+        assert_eq!(capture.block_text(rows[0]), "name,total\nReport,139.79", "{path}");
         let partial = rows[0].heading_path[0].contains("only part");
         assert_eq!(partial, path == "/report.csv?partial", "{path}");
         h.close().await;
@@ -1695,11 +1688,8 @@ async fn test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_cont
         h.page.evaluate(&session_id, script).await.expect("evaluate");
         let captured = h.page.capture().await.expect("capture");
         if mutation == "outside" {
-            let outside = captured
-                .blocks
-                .iter()
-                .find(|b| captured.block_text(b) == "Outside name")
-                .expect("outside block");
+            let outside =
+                captured.blocks.iter().find(|b| captured.block_text(b) == "Outside name").expect("outside block");
             assert!(outside.control_context.is_none(), "{mutation}");
         } else {
             assert!(captured.blocks.iter().all(|b| b.control_context.is_none()), "{mutation}");
