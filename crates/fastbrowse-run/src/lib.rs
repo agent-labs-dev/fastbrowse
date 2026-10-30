@@ -577,7 +577,10 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
         Owned::Handed => {}
         Owned::Local(mut process) => process.close().await,
         Owned::Cloud(mut remote) => {
-            let _ = remote.stop().await;
+            if remote.stop().await.is_err() {
+                // The error's text can carry the service's reply; the browser bills until its timeout either way.
+                fastbrowse_browser::warn("the cloud browser did not stop and bills until its timeout");
+            }
             cost.extend(remote.cost());
         }
     }

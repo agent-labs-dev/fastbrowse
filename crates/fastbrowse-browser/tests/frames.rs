@@ -221,7 +221,7 @@ async fn test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_lates
 }
 
 /// Python also checks every failure is logged as a warning that quotes nothing private; the Rust warnings go to
-/// stderr only when `FASTBROWSE_LOG` is set, and a test cannot read its own stderr. Python's handler that raises has
+/// stderr, and a test cannot read its own stderr. Python's handler that raises has
 /// no case here: core's `FrameHandler` returns nothing, so it cannot fail.
 #[tokio::test]
 async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {

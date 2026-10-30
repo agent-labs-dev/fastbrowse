@@ -18,10 +18,26 @@ pub mod session;
 pub mod testing;
 pub mod urlsplit;
 
-/// A warning Python logs through `logging`: written to stderr when `FASTBROWSE_LOG` is set, else dropped. Never
-/// pass an error's message here, only its kind: transport errors can carry credentials or page text.
-pub(crate) fn warn(message: &str) {
-    if std::env::var_os("FASTBROWSE_LOG").is_some() {
-        eprintln!("fastbrowse: {message}");
+/// A warning for whoever runs this, on stderr. Never pass an error's message here, only its kind: transport errors
+/// can carry credentials or page text.
+pub fn warn(message: &str) {
+    eprintln!("fastbrowse: {message}");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_warning_reaches_stderr_with_nothing_configured() {
+        if std::env::var_os("FASTBROWSE_TEST_WARN").is_some() {
+            super::warn("left running");
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::a_warning_reaches_stderr_with_nothing_configured", "--nocapture"])
+            .env("FASTBROWSE_TEST_WARN", "1")
+            .env_remove("FASTBROWSE_LOG")
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stderr).contains("fastbrowse: left running"));
     }
 }
