@@ -467,13 +467,15 @@ fn remember(
             push_unique(&mut basis, source);
         }
     }
-    let mut quote = claim.cite.as_ref().and_then(|cite| cited(page, part, cite));
+    let mut cite = claim.cite.clone();
+    let mut quote = cite.as_ref().and_then(|cite| cited(page, part, cite));
     // A blank excerpt asks for the complete blocks, as a null one does.
     if let Some(raw) = claim.excerpt.as_ref().filter(|raw| !text::strip(raw).is_empty()) {
-        let Some(span) = quote.clone() else { return Ok(None) };
         let mut excerpt = text::strip(raw).to_string();
-        let mut matches = loose_matches(&excerpt, &span.quote);
-        if matches.is_empty() {
+        let mut matches = quote.as_ref().map(|span| loose_matches(&excerpt, &span.quote)).unwrap_or_default();
+        if matches.is_empty()
+            && let Some(span) = &quote
+        {
             // Readers copy our block labels between paragraphs; those annotations are not captured page text.
             let markers: Vec<String> = offered(page, part)
                 .into_iter()
@@ -491,8 +493,22 @@ fn remember(
             matches = loose_matches(&excerpt, &span.quote);
         }
         if matches.is_empty() {
-            return Ok(None);
+            // The excerpt is the literal anchor and the block label only points at it. A reader quoted
+            // "katherine@example.com: 423345" exactly and labelled it with the line above, grace's code, and the run
+            // stalled with the sign-in code it had read nowhere in its notes.
+            let holding: Vec<&Block> = offered(page, part)
+                .into_iter()
+                .filter(|block| !loose_matches(&excerpt, page.slice(block.start, block.end)).is_empty())
+                .collect();
+            let [block] = holding.as_slice() else { return Ok(None) };
+            cite = Some(Cite::one(&block.source_id));
+            quote = cite.as_ref().and_then(|cite| cited(page, part, cite));
+            matches = quote.as_ref().map(|span| loose_matches(&excerpt, &span.quote)).unwrap_or_default();
+            if matches.is_empty() {
+                return Ok(None);
+            }
         }
+        let span = quote.clone().expect("matches come from a cited span");
         // An excerpt found more than once in its cited run still holds there: the claim keeps the whole run, which
         // states it, rather than being refused or narrowed to one of the places it could be.
         if let Some((offset, stop)) = excerpt_match(page, &span, &matches) {
@@ -502,7 +518,7 @@ fn remember(
             if block.kind == BlockKind::Table {
                 start = span.start;
             }
-            let cite = claim.cite.as_ref().expect("an excerpt needs a cite");
+            let cite = cite.as_ref().expect("an excerpt needs a cite");
             if cite.first != cite.last && (start, end) != (span.start, span.end) {
                 // Narrowing a total to its value can discard the subjects in the reader's selected blocks.
                 let context = quoted(span.clone());
@@ -1828,5 +1844,30 @@ mod tests {
     #[test]
     fn instructions_past_the_budget_go_in_one_prompt_rather_than_a_character_at_a_time() {
         assert_eq!(chunks(100_000).len(), 1);
+    }
+
+    #[test]
+    fn an_exact_excerpt_under_the_wrong_label_is_found_in_the_block_that_holds_it() {
+        let captured = capture(&[
+            (BlockKind::Paragraph, "grace@example.com: 427586"),
+            (BlockKind::Paragraph, "katherine@example.com: 423345"),
+        ]);
+        let page = Page::new(&captured);
+        let claim = |excerpt: &str| ReadClaim {
+            cite: Some(Cite::one("s0")),
+            excerpt: Some(excerpt.into()),
+            draws_on: Vec::new(),
+            records: Vec::new(),
+            orders_list: None,
+            text: "The code for katherine@example.com is 423345.".into(),
+            requirement_id: None,
+        };
+        let mut notes = Notes::default();
+        let remembered = |claim: &ReadClaim, notes: &mut Notes| {
+            remember(&page, &whole_page(&page), claim, notes, &IndexMap::new(), false, &Trace::disabled()).unwrap()
+        };
+        let fact = remembered(&claim("katherine@example.com: 423345"), &mut notes).expect("the quote is on the page");
+        assert_eq!(fact.evidence.unwrap().quote, "katherine@example.com: 423345");
+        assert!(remembered(&claim("katherine@example.com: 423586"), &mut notes).is_none());
     }
 }
