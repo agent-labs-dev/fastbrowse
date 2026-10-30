@@ -3,10 +3,13 @@
 //!
 //! Jev: TYPESAFE_API_KEY selects direct TypeSafe; otherwise OPENROUTER_API_KEY is primary, with AI_GATEWAY_API_KEY
 //! (Vercel AI Gateway) as backup when set, or primary when neither other key is set. FASTBROWSE_DECISION_SOURCE picks
-//! openrouter, typesafe or gateway explicitly. OpenRouter and direct use the gateway as backup; the gateway uses direct
-//! when configured, otherwise OpenRouter. FASTBROWSE_DECISION_BASE_URL points either at a proxy or another host serving the
-//! same API, and FASTBROWSE_DECISION_MODEL pins an OpenRouter or direct model. A custom endpoint or model disables
-//! automatic failover.
+//! a source explicitly: openrouter, typesafe, gateway, telnyx, ollama, custom, openai, aimlapi or perplexity. OpenRouter
+//! and direct use the gateway as backup; the gateway uses direct when configured, otherwise OpenRouter; the rest have no
+//! backup. telnyx, openai, aimlapi and perplexity read TELNYX_API_KEY, OPENAI_API_KEY, AIMLAPI_API_KEY and
+//! PERPLEXITY_API_KEY; ollama and custom read FASTBROWSE_DECISION_API_KEY, which is optional.
+//! FASTBROWSE_DECISION_BASE_URL points any source at a proxy or another host serving the same API, and custom requires
+//! it. FASTBROWSE_DECISION_MODEL pins the model of any source but the gateway, and ollama and custom require it. A
+//! custom endpoint or model disables automatic failover.
 //!
 //! LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
 //! Gateway's OpenAI-compatible chat completions, and when both are set the gateway takes over a run whose OpenRouter
