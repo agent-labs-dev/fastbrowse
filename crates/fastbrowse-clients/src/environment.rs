@@ -1,10 +1,10 @@
 //! Settings from the environment and `.env`, and the default Jev and LLM clients
 //! built from them.
 //!
-//! Jev: TYPESAFE_API_KEY selects direct TypeSafe; otherwise OPENROUTER_API_KEY is primary, with AI_GATEWAY_API_KEY
-//! (Vercel AI Gateway) as backup when set, or primary when neither other key is set. FASTBROWSE_DECISION_SOURCE picks
+//! Jev: OPENROUTER_API_KEY is primary, one key for Jev and the LLM; otherwise TYPESAFE_API_KEY selects direct TypeSafe,
+//! and AI_GATEWAY_API_KEY (Vercel AI Gateway) is primary when neither other key is set. FASTBROWSE_DECISION_SOURCE picks
 //! a source explicitly: openrouter, typesafe, gateway, telnyx, ollama, custom, openai, aimlapi or perplexity. OpenRouter
-//! and direct use the gateway as backup; the gateway uses direct when configured, otherwise OpenRouter; the rest have no
+//! and direct use the gateway as backup; the gateway uses OpenRouter when configured, otherwise direct; the rest have no
 //! backup. telnyx, openai, aimlapi and perplexity read TELNYX_API_KEY, OPENAI_API_KEY, AIMLAPI_API_KEY and
 //! PERPLEXITY_API_KEY; ollama and custom read FASTBROWSE_DECISION_API_KEY, which is optional.
 //! FASTBROWSE_DECISION_BASE_URL points any source at a proxy or another host serving the same API, and custom requires
@@ -422,10 +422,10 @@ impl Settings {
 
     /// The Jev provider a run starts on, and the one it fails over to when that one's retries run out.
     pub fn decision_route(&self) -> (DecisionSource, Option<DecisionSource>) {
-        let source = self.decision_source.unwrap_or(if set(&self.typesafe_api_key) {
-            DecisionSource::TypeSafe
-        } else if set(&self.openrouter_api_key) {
+        let source = self.decision_source.unwrap_or(if set(&self.openrouter_api_key) {
             DecisionSource::OpenRouter
+        } else if set(&self.typesafe_api_key) {
+            DecisionSource::TypeSafe
         } else {
             DecisionSource::Gateway
         });
@@ -440,8 +440,8 @@ impl Settings {
             DecisionSource::OpenRouter | DecisionSource::TypeSafe => {
                 set(&self.ai_gateway_api_key).then_some(DecisionSource::Gateway)
             }
-            DecisionSource::Gateway if set(&self.typesafe_api_key) => Some(DecisionSource::TypeSafe),
-            DecisionSource::Gateway => set(&self.openrouter_api_key).then_some(DecisionSource::OpenRouter),
+            DecisionSource::Gateway if set(&self.openrouter_api_key) => Some(DecisionSource::OpenRouter),
+            DecisionSource::Gateway => set(&self.typesafe_api_key).then_some(DecisionSource::TypeSafe),
             _ => None,
         };
         (source, backup)
@@ -530,7 +530,7 @@ impl Settings {
             DecisionSource::Gateway => Box::new(VercelGatewayJevClient::new(
                 key(
                     &self.ai_gateway_api_key,
-                    "set AI_GATEWAY_API_KEY for Jev via the gateway, OPENROUTER_API_KEY or TYPESAFE_API_KEY",
+                    "set OPENROUTER_API_KEY for Jev, or AI_GATEWAY_API_KEY for the gateway, or TYPESAFE_API_KEY",
                 )?,
                 http.clone(),
                 &base_url(GATEWAY_URL),

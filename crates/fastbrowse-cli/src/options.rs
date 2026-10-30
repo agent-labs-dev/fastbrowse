@@ -19,12 +19,9 @@ fn refuse<T>(message: impl Into<String>) -> Result<T, ConfigurationError> {
     Err(ConfigurationError(message.into()))
 }
 
-/// Whether the run starts a Browser Use Cloud browser: it is handed none, fetches without one, and was not asked for
-/// local Chrome by `local`, a headed window or a kept profile, which only local Chrome has.
+/// `fastbrowse_run::on_cloud` for a task the entry point has already given its Chrome.
 pub fn on_cloud(task: &RunTask) -> bool {
-    let chrome = task.chrome.clone().unwrap_or_default();
-    let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
-    !(task.fetch || handed || task.local || chrome.headed || chrome.profile.is_some())
+    fastbrowse_run::on_cloud(task, &task.chrome.clone().unwrap_or_default())
 }
 
 /// What the machine and the settings must hold for `task`, found before a browser opens: ffmpeg for a recording,

@@ -59,7 +59,7 @@ fn settings(primary: Option<DecisionSource>, direct_key: bool) -> Settings {
 }
 
 fn backup_of(primary: DecisionSource) -> DecisionSource {
-    if primary == DecisionSource::Gateway { DecisionSource::TypeSafe } else { DecisionSource::Gateway }
+    if primary == DecisionSource::Gateway { DecisionSource::OpenRouter } else { DecisionSource::Gateway }
 }
 
 type Seen = Arc<Mutex<Vec<DecisionSource>>>;
@@ -100,9 +100,8 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
     ];
     for (setting, direct_key) in routes {
         for status in RETRYABLE_STATUS {
-            let fallback = if direct_key { DecisionSource::TypeSafe } else { DecisionSource::OpenRouter };
-            let primary = setting.unwrap_or(fallback);
-            let backup = if primary == DecisionSource::Gateway { fallback } else { DecisionSource::Gateway };
+            let primary = setting.unwrap_or(DecisionSource::OpenRouter);
+            let backup = backup_of(primary);
             let seen = Seen::default();
             let http = recording(&seen, move |provider, _, request| {
                 let expected = match provider {

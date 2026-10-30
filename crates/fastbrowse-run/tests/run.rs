@@ -9,7 +9,7 @@ use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluatio
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{LLMPurpose, Status};
 use fastbrowse_core::telemetry::Ledger;
-use fastbrowse_run::{Cancel, Host, RunError, RunTask, run_task};
+use fastbrowse_run::{Cancel, Host, RunError, RunTask, on_cloud, run_task};
 use indexmap::IndexMap;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
@@ -117,7 +117,13 @@ async fn test_a_browser_connection_that_closes_is_an_outage() {
 #[tokio::test]
 async fn browser_choices_that_contradict_each_other_are_errors_before_any_browser_starts() {
     let cases: Vec<((RunTask, Host), &str)> = vec![
-        (task(|o, _| o.cloud_extensions = vec!["x".into()]), "cloud_extensions"),
+        (
+            task(|o, _| {
+                o.local = true;
+                o.cloud_extensions = vec!["x".into()];
+            }),
+            "cloud_extensions",
+        ),
         (
             task(|o, _| {
                 o.cdp_url = Some("ws://localhost:1/x".into());
@@ -125,7 +131,13 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
             }),
             "pass one",
         ),
-        (task(|o, _| o.attach = true), "attach and target_match need cdp_url or cdp_port"),
+        (
+            task(|o, _| {
+                o.local = true;
+                o.attach = true;
+            }),
+            "attach and target_match need cdp_url or cdp_port",
+        ),
         (
             task(|o, h| {
                 o.cdp_url = Some("ws://localhost:1/x".into());
@@ -133,8 +145,20 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
             }),
             "a cloud key would start a second one",
         ),
-        (task(|o, _| o.cloud_profile = Some("p".into())), "needs a key"),
-        (task(|o, _| o.proxy_country = Some("de".into())), "proxy_country belongs to a Browser Use Cloud browser"),
+        (
+            task(|o, _| {
+                o.local = true;
+                o.cloud_profile = Some("p".into());
+            }),
+            "needs the cloud browser",
+        ),
+        (
+            task(|o, _| {
+                o.local = true;
+                o.proxy_country = Some("de".into());
+            }),
+            "proxy_country",
+        ),
     ];
     for (options, expected) in cases {
         // Arguments that contradict each other are refused outright; a browser that cannot start ends the run.
@@ -147,6 +171,23 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
         };
         assert!(error.contains(expected), "{error}");
     }
+}
+
+#[tokio::test]
+async fn a_run_naming_no_browser_needs_the_cloud_key() {
+    let error = run(task(|_, _| {})).await.unwrap_err();
+    assert!(matches!(&error, RunError::Configuration(message) if message.contains("BROWSER_USE_API_KEY")), "{error}");
+}
+
+#[test]
+fn only_a_named_local_or_handed_browser_leaves_the_cloud() {
+    let chrome = fastbrowse_core::models::LocalChrome::default();
+    assert!(on_cloud(&RunTask::default(), &chrome));
+    assert!(!on_cloud(&RunTask { local: true, ..RunTask::default() }, &chrome));
+    assert!(!on_cloud(&RunTask { cdp_port: Some(9222), ..RunTask::default() }, &chrome));
+    assert!(!on_cloud(&RunTask { fetch: true, ..RunTask::default() }, &chrome));
+    let headed = fastbrowse_core::models::LocalChrome { headed: true, ..chrome };
+    assert!(!on_cloud(&RunTask::default(), &headed));
 }
 
 #[tokio::test]

@@ -79,7 +79,7 @@ pub use fastbrowse_core::protocol::RunTask;
 /// What a run is given besides its arguments: the caller's own objects, which no wire carries.
 #[derive(Clone, Default)]
 pub struct Host {
-    /// A Browser Use Cloud key: the run starts a cloud browser with it, and local Chrome without it.
+    /// A Browser Use Cloud key. Without it, a run that names no other browser takes the one the settings hold.
     pub browser_api_key: Option<String>,
     pub check_access: Option<CheckAccess>,
     pub jev: Option<Arc<dyn DecisionClient>>,
@@ -509,6 +509,13 @@ fn refused(message: &str) -> Refused {
     Refused { message: message.into(), unavailable: false }
 }
 
+/// Whether a run starts a Browser Use Cloud browser: it is handed none, fetches without one, and was not asked for
+/// local Chrome by `local`, a headed window or a kept profile, which only local Chrome has.
+pub fn on_cloud(task: &RunTask, chrome: &LocalChrome) -> bool {
+    let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
+    !(task.fetch || handed || task.local || chrome.headed || chrome.profile.is_some())
+}
+
 /// The browser a run drives: one it is handed, a cloud browser, or local Chrome.
 async fn browser(
     task: &RunTask,
@@ -558,7 +565,6 @@ async fn browser(
         timeout_minutes: task.cloud_timeout_minutes.unwrap_or(15),
         profile: task.cloud_profile.clone(),
         viewport: task.viewport,
-        allow_resizing: task.cloud_allow_resizing,
         extensions: task.cloud_extensions.clone(),
         ..BrowserUseCloudOptions::default()
     };
@@ -639,6 +645,10 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         fetch_spent = read.result.cost.lines;
     }
     let chrome = task.chrome.clone().unwrap_or_else(|| settings.local_chrome());
+    // A `chrome` argument names local Chrome; with no browser named at all the run takes the cloud one.
+    if host.browser_api_key.is_none() && task.chrome.is_none() && on_cloud(&task, &chrome) {
+        host.browser_api_key = Some(settings.browser_key()?.to_string());
+    }
     let mut browser_cost: Vec<CostLine> = Vec::new();
     // Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is ready to open
     // when the tab is.

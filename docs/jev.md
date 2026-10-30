@@ -62,18 +62,16 @@ preference rather than calibrated probability, so no Jev threshold is known to h
 
 ## Choosing a provider
 
-Use direct TypeSafe. It is the recommended Jev route: one service between fastbrowse and the model, the
-published direct-API price. Set
-`TYPESAFE_API_KEY`; `FASTBROWSE_DECISION_SOURCE=typesafe` makes the choice explicit.
+Use OpenRouter. It is the recommended route: one `OPENROUTER_API_KEY` serves Jev, images included, and the LLM,
+so one account meters and bills a run.
 
-OpenRouter is supported for Jev, images included, when it is the only Jev key, but it is not recommended. It
-adds a third party between fastbrowse and TypeSafe. Treat it as a
-convenience for a machine that has no direct key, not as the production route.
+Direct TypeSafe remains available and adds no service between fastbrowse and the model. It takes over when
+`TYPESAFE_API_KEY` is the only Jev key; `FASTBROWSE_DECISION_SOURCE=typesafe` picks it beside an OpenRouter key.
 
-The Vercel AI Gateway is a last resort rather than the recommended Jev route. `AI_GATEWAY_API_KEY` alone
+The Vercel AI Gateway is a last resort rather than a recommended Jev route. `AI_GATEWAY_API_KEY` alone
 serves the LLM and also serves Jev as the last resort; beside a direct or OpenRouter key it adds a Jev backup.
 
-Jev images go to TypeSafe's own API and to OpenRouter. On those routes each step's action decision is sent the viewport
+Jev images go to OpenRouter and to TypeSafe's own API. On those routes each step's action decision is sent the viewport
 screenshot: the state names it `viewport_screenshot`, and the request carries the PNG in TypeSafe's
 `assets` map with the `TypeSafe-Danger-Zone-Images` header. A screenshot outside TypeSafe's documented
 sizes, or one taken while a secret shows as page text, is not sent. The gateway and every backup
@@ -89,12 +87,12 @@ runs on that click as on any other.
 
 ## Provider failover
 
-Provider selection is **ours**: a supplied `TYPESAFE_API_KEY` selects direct TypeSafe for Jev, the
-recommended route. Otherwise `OPENROUTER_API_KEY` is primary, which is supported but not recommended. The
+Provider selection is **ours**: a supplied `OPENROUTER_API_KEY` is primary for Jev, the recommended route.
+Otherwise `TYPESAFE_API_KEY` selects direct TypeSafe. The
 LLM uses `FASTBROWSE_LLM_BASE_URL` when it is set, otherwise OpenRouter when keyed, otherwise the gateway.
 `AI_GATEWAY_API_KEY` adds a Vercel AI Gateway backup, or serves Jev when neither other key is supplied. `FASTBROWSE_DECISION_SOURCE=openrouter`, `typesafe` or `gateway` overrides the first provider.
-OpenRouter and direct TypeSafe use the gateway as backup when keyed; the gateway uses direct TypeSafe
-when keyed, otherwise OpenRouter. A selected source without its key is a configuration error.
+OpenRouter and direct TypeSafe use the gateway as backup when keyed; the gateway uses OpenRouter
+when keyed, otherwise direct TypeSafe. A selected source without its key is a configuration error.
 
 If a retryable HTTP status outlasts the first provider's retry budget, the client repeats the evaluation through the backup
 provider and stays there for the rest of the run. A second outage raises; providers never alternate.

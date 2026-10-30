@@ -8,13 +8,11 @@ a native binary, so the machine needs no Python.
 
 ```sh
 npm install fastbrowse
-export TYPESAFE_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
 
-`TYPESAFE_API_KEY` is the recommended Jev route. `OPENROUTER_API_KEY` serves the LLM and, when it is the
-only Jev key, Jev; it is not the recommended Jev route. Without it,
-the LLM uses `AI_GATEWAY_API_KEY`.
+`OPENROUTER_API_KEY` is the recommended route for Jev and the LLM. Without it, the LLM uses `AI_GATEWAY_API_KEY`
+and Jev uses `TYPESAFE_API_KEY` when set.
 
 With it npm installs the binary for your platform as an optional dependency: `@fastbrowse/darwin-arm64`,
 `darwin-x64`, `linux-arm64`, `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on
@@ -72,7 +70,7 @@ fields. With any other field it ends `unverified` with no data.
 
 `run` also takes `context`, `inputs`, `attachments` as bytes, `downloads`, `record`, `onFrame` (JPEG frames of the
 active tab; none are sent without it), and the browser choices `chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`,
-`attach`, `targetMatch`, `foreground`, `proxyCountry`, `viewport` and `cloudAllowResizing`. `Fastbrowse.start`
+`attach`, `targetMatch`, `foreground`, `proxyCountry` and `viewport`. `Fastbrowse.start`
 takes the browser choices as defaults for every run, and a run passes `null` for one to go without that default.
 `env` in `Fastbrowse.start` adds to the environment the process inherits.
 

@@ -311,7 +311,6 @@ type RunParams struct {
 	Foreground          bool              `json:"foreground,omitempty"`
 	ProxyCountry        *string           `json:"proxy_country,omitempty"`
 	Viewport            *[2]int64         `json:"viewport,omitempty"`
-	CloudAllowResizing  bool              `json:"cloud_allow_resizing,omitempty"`
 	CloudExtensions     []string          `json:"cloud_extensions,omitempty"`
 	CloudTimeoutMinutes *int64            `json:"cloud_timeout_minutes,omitempty"`
 	AllowedOrigins      []string          `json:"allowed_origins,omitempty"`

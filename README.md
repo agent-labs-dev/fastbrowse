@@ -45,22 +45,12 @@ slower: 18.9s a task to 15.3s. These figures are the published campaign, release
 
 ## Try it
 
-You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, Chrome or Chromium, and an
-[OpenRouter](https://openrouter.ai/) key:
+You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, an
+[OpenRouter](https://openrouter.ai/) key and a [Browser Use](https://browser-use.com/) key:
 
 ```sh
-export OPENROUTER_API_KEY=...
-uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/ --local
-```
-
-That one key serves both models: the LLM that plans, reads and writes, and Jev, the model that picks each action.
-`--local` runs the Chrome on your machine; `FASTBROWSE_CHROME` names the binary if it is not found.
-
-For regular use, add two keys and drop `--local`:
-
-```sh
-export TYPESAFE_API_KEY=...     # Jev direct from Typesafe, the recommended route
-export BROWSER_USE_API_KEY=...  # a Browser Use Cloud browser
+export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM that plans, reads and writes
+export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
@@ -175,9 +165,9 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-**Choosing the browser.** With no browser argument, `run_task` runs local Chrome. `browser_api_key=` starts a
-cloud browser, and `cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into
-it. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
+**Choosing the browser.** With no browser argument, `run_task` starts a Browser Use Cloud browser with
+`BROWSER_USE_API_KEY`, or the key in `browser_api_key=`. `chrome=LocalChrome()` runs local Chrome instead, and
+`cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into a cloud browser. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
 
@@ -249,7 +239,6 @@ as the CLI does.
 
 ```sh
 npm install fastbrowse zod
-export TYPESAFE_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
 
@@ -352,7 +341,7 @@ Desktop, Cursor or any MCP client. It returns the answer with numbered citation 
 for, the quotes behind them, the status and what to do next, and reports progress every step.
 
 ```sh
-claude mcp add fastbrowse -e TYPESAFE_API_KEY=... -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
+claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
   -- uvx --from fastbrowse fastbrowse-mcp --max-dollars 0.25
 ```
 
@@ -364,7 +353,7 @@ For a client configured by JSON, such as Claude Desktop:
     "fastbrowse": {
       "command": "uvx",
       "args": ["--from", "fastbrowse", "fastbrowse-mcp"],
-      "env": { "TYPESAFE_API_KEY": "...", "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
+      "env": { "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
     }
   }
 }

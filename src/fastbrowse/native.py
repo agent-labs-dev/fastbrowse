@@ -86,7 +86,6 @@ _PLAIN = (
     "target_match",
     "foreground",
     "proxy_country",
-    "cloud_allow_resizing",
     "cloud_timeout_minutes",
     "cursor",
     "fetch",

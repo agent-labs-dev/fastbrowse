@@ -385,7 +385,6 @@ export interface RunParams {
   foreground?: boolean;
   proxy_country?: string | null;
   viewport?: [number, number] | null;
-  cloud_allow_resizing?: boolean;
   cloud_extensions?: string[];
   cloud_timeout_minutes?: number | null;
   allowed_origins?: string[] | null;

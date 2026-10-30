@@ -89,7 +89,6 @@ pub struct BrowserUseCloudOptions {
     pub timeout_minutes: u32,
     pub profile: Option<String>,
     pub viewport: Option<(u32, u32)>,
-    pub allow_resizing: bool,
     pub extensions: Vec<String>,
     /// The longest one request may take.
     pub http_timeout: Duration,
@@ -102,7 +101,6 @@ impl Default for BrowserUseCloudOptions {
             timeout_minutes: 15,
             profile: None,
             viewport: None,
-            allow_resizing: false,
             extensions: vec![],
             http_timeout: Duration::from_secs(60),
         }
@@ -163,9 +161,6 @@ impl BrowserUseCloudBrowser {
         let mut body: Vec<(&str, Value)> = vec![("timeout", json!(options.timeout_minutes))];
         if !options.extensions.is_empty() {
             body.push(("extensionIds", json!(extension_ids(&options.extensions)?)));
-        }
-        if options.allow_resizing {
-            body.push(("allowResizing", json!(true)));
         }
         if let Some(country) = &options.proxy_country {
             body.push(("proxyCountryCode", json!(country)));
@@ -1009,10 +1004,6 @@ mod tests {
                     ..Default::default()
                 },
                 r#"{"timeout":240,"proxyCountryCode":"us","solveCaptchas":true,"profileId":"profile-42"}"#,
-            ),
-            (
-                BrowserUseCloudOptions { allow_resizing: true, ..Default::default() },
-                r#"{"timeout":15,"allowResizing":true,"proxyCountryCode":"us","solveCaptchas":true}"#,
             ),
             (
                 BrowserUseCloudOptions {

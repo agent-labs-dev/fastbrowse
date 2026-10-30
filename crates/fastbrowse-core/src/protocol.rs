@@ -285,8 +285,6 @@ pub struct RunTask {
     #[serde(default)]
     pub viewport: Option<(u32, u32)>,
     #[serde(default)]
-    pub cloud_allow_resizing: bool,
-    #[serde(default)]
     pub cloud_extensions: Vec<String>,
     /// How long a cloud browser may live; 15 minutes when none is given.
     #[serde(default)]
@@ -582,7 +580,6 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("foreground", Ty::Bool, false),
         Field::default("proxy_country", text(), none()),
         Field::default("viewport", Ty::optional(Ty::Tuple(vec![count(u32::MAX), count(u32::MAX)])), none()),
-        Field::default("cloud_allow_resizing", Ty::Bool, false),
         Field::default("cloud_extensions", Ty::list(Ty::Str), empty()),
         Field::default("cloud_timeout_minutes", Ty::optional(count(u32::MAX)), none()),
         Field::default("allowed_origins", Ty::optional(Ty::list(Ty::Str)), none()),
