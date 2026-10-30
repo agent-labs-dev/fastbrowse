@@ -346,8 +346,6 @@
     const owner = doc.defaultView.frameElement;
     return `${framePath(owner.ownerDocument) || 'root'}/${identity(owner)}`;
   };
-  registry.framePath = framePath;
-  registry.submitSemantics = submitSemantics;
 
   // Traverse light DOM plus any open shadow roots, and same-origin same-process nested iframes.
   let inaccessible = 0;
