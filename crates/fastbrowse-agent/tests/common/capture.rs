@@ -91,7 +91,7 @@ pub fn notes_json(notes: &Notes) -> Value {
     serde_json::to_value(notes.state()).expect("notes state")
 }
 
-fn sorted_owners(mut state: Value) -> Value {
+pub fn sorted_owners(mut state: Value) -> Value {
     if let Some(Value::Array(owners)) = state.get_mut("owners") {
         owners.sort_by_key(|pair| pair[0].as_str().unwrap_or_default().to_string());
     }

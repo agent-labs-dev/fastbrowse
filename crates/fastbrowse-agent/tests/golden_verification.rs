@@ -168,7 +168,7 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
         let expected = &case["notes_after"]["notes"];
         let wanted = if expected.get("$same").is_some() { args["notes"]["$notes"].clone() } else { expected.clone() };
         let actual = notes_json(notes);
-        if actual != sorted(wanted.clone()) {
+        if actual != sorted_owners(wanted.clone()) {
             problems.push(format!("notes\n  rust:   {}\n  python: {}", clip(&actual), clip(&wanted)));
         }
     }
@@ -197,13 +197,6 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
         problems.push(panic_text(&panic));
     }
     if problems.is_empty() { Ok(None) } else { Err(problems.join("\n")) }
-}
-
-fn sorted(mut state: Value) -> Value {
-    if let Some(Value::Array(owners)) = state.get_mut("owners") {
-        owners.sort_by_key(|pair| pair[0].as_str().unwrap_or_default().to_string());
-    }
-    state
 }
 
 fn clip(value: &Value) -> String {
