@@ -426,6 +426,15 @@ type StepFact struct {
 	DeepLink *string    `json:"deep_link"`
 }
 
+type StepFallback struct {
+	// The reason the run stopped following Jev, as recovery was told it.
+	Reason string `json:"reason"`
+	// Jev's certainty on the step it gave up, on the weakest link of its choices.
+	Confidence float64 `json:"confidence"`
+	// The control Jev chose, by its label, when it chose one.
+	Target *string `json:"target"`
+}
+
 type StepOutcome string
 
 const (
@@ -450,6 +459,8 @@ type StepResult struct {
 	// Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
+	// The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
+	Fallback *StepFallback `json:"fallback,omitempty"`
 	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
 	Choices []StepChoice `json:"choices,omitempty"`
 }

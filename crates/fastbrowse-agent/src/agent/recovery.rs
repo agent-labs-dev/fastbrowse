@@ -472,6 +472,7 @@ impl Agent {
             facts: Vec::new(),
             page_changed: None,
             duration_ms: 0,
+            fallback: None,
             choices: Vec::new(),
         };
         self.record_step(state, step, true, None).await

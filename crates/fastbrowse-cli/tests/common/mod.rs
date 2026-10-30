@@ -234,6 +234,7 @@ pub fn step(index: i64) -> StepResult {
         facts: Vec::new(),
         page_changed: None,
         duration_ms: 5,
+        fallback: None,
         choices: Vec::new(),
     }
 }

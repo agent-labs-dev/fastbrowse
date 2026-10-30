@@ -459,6 +459,7 @@ impl Agent {
                             facts: Vec::new(),
                             page_changed: None,
                             duration_ms: 0,
+                            fallback: None,
                             choices: Vec::new(),
                         };
                         self.record_step(state, step, false, page.frame.clone()).await?;
@@ -495,6 +496,7 @@ impl Agent {
             facts,
             page_changed: None,
             duration_ms: page.started.elapsed().as_millis() as i64,
+            fallback: None,
             choices: Vec::new(),
         };
         self.record_step(state, step, false, page.frame.clone()).await?;

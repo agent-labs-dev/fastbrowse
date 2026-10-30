@@ -1472,6 +1472,7 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         facts: Vec::new(),
         page_changed: None,
         duration_ms: 0,
+        fallback: None,
         choices: Vec::new(),
     };
     agent.record_step(&mut state, step, false, None).await.unwrap();
