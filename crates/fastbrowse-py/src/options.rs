@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fastbrowse_agent::verification::RecordSchema;
+use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, Authorization, Bytes, Limits, LocalChrome, SecretRef};
 use fastbrowse_core::output_schema::output_model;
@@ -12,6 +13,12 @@ use fastbrowse_run::RunTask;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value;
+
+/// Why the options make no run: an argument Python would refuse with `ValueError`, or settings that do not configure.
+pub enum Refusal {
+    Invalid(String),
+    Configuration(ConfigurationError),
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,12 +53,14 @@ pub struct Options {
     pub fetch: bool,
     pub fetch_first: bool,
     pub config: Option<Config>,
+    /// The run's settings by their environment variable names, read instead of the environment and `.env`.
+    pub settings: Option<IndexMap<String, String>>,
 }
 
 impl Options {
     /// The `RunTask` without its callbacks. An argument out of range fails as Python's `ValueError` would.
-    pub fn task(self) -> Result<RunTask, String> {
-        let out_of_range = |what: &str| format!("{what} is out of range");
+    pub fn task(self) -> Result<RunTask, Refusal> {
+        let out_of_range = |what: &str| Refusal::Invalid(format!("{what} is out of range"));
         let cdp_port =
             self.cdp_port.map(|port| u16::try_from(port).map_err(|_| out_of_range("cdp_port"))).transpose()?;
         let viewport = self
@@ -66,8 +75,15 @@ impl Options {
         let output_schema = match &self.output_schema {
             None => None,
             Some(schema) => Some(Arc::new(RecordSchema::from_output(
-                output_model(schema).map_err(|error| format!("output_schema: {error}"))?,
+                output_model(schema).map_err(|error| Refusal::Invalid(format!("output_schema: {error}")))?,
             ))),
+        };
+        let settings = match self.settings {
+            None => None,
+            Some(settings) => {
+                let pairs: Vec<(String, String)> = settings.into_iter().collect();
+                Some(Settings::from_sources(&pairs, None).map_err(Refusal::Configuration)?)
+            }
         };
         Ok(RunTask {
             start: self.start,
@@ -105,6 +121,7 @@ impl Options {
             fetch: self.fetch,
             fetch_first: self.fetch_first,
             config: self.config,
+            settings,
             ..RunTask::default()
         })
     }
