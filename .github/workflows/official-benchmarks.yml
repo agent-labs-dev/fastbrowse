@@ -273,10 +273,14 @@ jobs:
       - name: Install parallax and fastbrowse
         # Every later parallax command runs with --no-sync: a syncing `uv run` would put back the fastbrowse
         # parallax pins and measure that build instead of this one.
+        env:
+          FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
         run: |
           cd parallax
           uv sync --locked --extra browser --extra track
-          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+          # A git+file install records the commit in direct_url.json, so the run names the measured build
+          # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
+          uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
           uv run --no-sync python -c "import fastbrowse, parallax"
       - name: Check out the pinned upstream
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
