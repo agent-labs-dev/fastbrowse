@@ -523,12 +523,6 @@ async fn whole_loops_match_python() {
         cases_out.push(replay(case, update.then(Arc::default)).await);
     }
     if update {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/agent.json");
-        let mut out = Vec::new();
-        let mut writer =
-            serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
-        serde::Serialize::serialize(&Value::Array(cases_out), &mut writer).unwrap();
-        out.push(b'\n');
-        fs::write(path, out).unwrap();
+        common::save("agent.json", &Value::Array(cases_out));
     }
 }

@@ -162,12 +162,8 @@ fn notes_answer_as_python_answers() {
         }
     }
     if update {
-        let mut out = Vec::new();
-        let mut writer =
-            serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
-        serde::Serialize::serialize(&golden, &mut writer).unwrap();
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/memory.json");
-        std::fs::write(path, capture::ascii(&String::from_utf8(out).unwrap()) + "\n").unwrap();
+        std::fs::write(path, capture::ascii(&pretty(&golden)) + "\n").unwrap();
     }
 }
 

@@ -38,6 +38,21 @@ pub fn cases(name: &str) -> Vec<Value> {
     }
 }
 
+/// A golden file's JSON as Python's json.dump(indent=1, ensure_ascii=False) wrote it, before its final newline.
+pub fn pretty(value: &Value) -> String {
+    let mut out = Vec::new();
+    let mut serializer =
+        serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
+    serde::Serialize::serialize(value, &mut serializer).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+/// Writes a golden file as `pretty` lays it out.
+pub fn save(name: &str, value: &Value) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
+    fs::write(&path, pretty(value) + "\n").unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+}
+
 pub fn parse<T: DeserializeOwned>(value: &Value) -> T {
     serde_json::from_value(value.clone()).unwrap_or_else(|e| panic!("{e}: {value}"))
 }
