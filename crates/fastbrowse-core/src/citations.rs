@@ -41,7 +41,6 @@ pub fn text_fragment(url: &str, text: &str) -> Result<String, EmptyQuote> {
 
 #[cfg(test)]
 mod tests {
-    //! Mirrors tests/test_citations.py.
     use super::*;
     use percent_encoding::percent_decode_str;
 

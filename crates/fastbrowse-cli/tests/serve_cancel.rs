@@ -1,4 +1,4 @@
-//! tests/test_serve_cancel.py: cancelling a run over the serve protocol, as a client sees it.
+//! Cancelling a run over the serve protocol, as a client sees it.
 //!
 //! `run_task` is replaced by a stand-in that holds a browser open until it is stopped. What is asserted is the order of
 //! the messages the server wrote and whether that browser was closed by then.

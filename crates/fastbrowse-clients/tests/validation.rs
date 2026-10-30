@@ -1,4 +1,4 @@
-//! tests/clients/test_validation.py: retries and the accounting of what they cost, seen through the Jev clients
+//! Retries and the accounting of what they cost, seen through the Jev clients
 //! since the request loop itself is crate-private.
 
 mod common;

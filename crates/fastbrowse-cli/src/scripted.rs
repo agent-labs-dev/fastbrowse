@@ -188,7 +188,7 @@ async fn run(name: &str, task: RunTask, host: Host, requests: Requests) -> Outco
             let host = Host { jev: Some(jev), llm: Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM)), ..host };
             fastbrowse_run::run_task(task, host).await
         }
-        // tests/test_mcp_server.py's `Recorder`: the events a run sends, then a cited answer with a download.
+        // The events a run sends, then a cited answer with a download.
         "tests.test_mcp_server:Recorder" => {
             emit(&host, browser(Some("https://live.example.com/session"), None)).await;
             let answered = mcp_result();

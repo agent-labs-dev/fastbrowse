@@ -1280,8 +1280,7 @@ fn find_control(candidates: &[Control], control_id: &str) -> Result<Control> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_policy.py's cases that are about more than the bytes sent: the rest replay Python's requests in
-    //! tests/golden_policy.rs.
+    //! Cases about more than the bytes sent; tests/golden_policy.rs replays the recorded requests.
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::{Context, Waker};

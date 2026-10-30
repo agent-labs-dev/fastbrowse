@@ -490,8 +490,6 @@ pub trait Page: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    //! The parts of tests/test_page.py about the page types; the browser's own (`_capped`, `_same_http_origin`,
-    //! `_browser_error`) belong to the browser layer.
     use super::*;
 
     fn link(label: &str, next_page: Option<bool>, i: usize) -> Control {

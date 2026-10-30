@@ -104,7 +104,7 @@ impl OriginGrant {
 
 #[cfg(test)]
 mod tests {
-    //! The cases from tests/test_page.py and tests/test_safety.py, then the behavior WHATWG changes, pinned.
+    //! The behavior WHATWG changes, pinned.
     use super::*;
 
     fn grant() -> OriginGrant {

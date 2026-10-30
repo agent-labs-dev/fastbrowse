@@ -85,7 +85,7 @@ pub(crate) mod testing {
     use fastbrowse_core::py::datetime::DateTime;
     use fastbrowse_core::py::{sha256_hex, text};
 
-    /// tests/test_retrieval.py's `capture`: the parts joined by blank lines, one block each.
+    /// The parts joined by blank lines, one block each.
     pub fn capture(parts: &[(BlockKind, &str)]) -> Capture {
         let joined = parts.iter().map(|(_, part)| *part).collect::<Vec<_>>().join("\n\n");
         let mut blocks = Vec::new();

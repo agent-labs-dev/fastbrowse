@@ -1,4 +1,4 @@
-//! tests/test_cli.py: the CLI's flags, its preflight errors on both streams, and its exit codes, with `run_task`
+//! The CLI's flags, its preflight errors on both streams, and its exit codes, with `run_task`
 //! replaced by a recorder.
 
 mod common;

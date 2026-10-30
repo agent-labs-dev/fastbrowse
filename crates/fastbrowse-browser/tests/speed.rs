@@ -1,7 +1,7 @@
 mod common;
 mod safety_support;
 
-// tests/browser/test_speed.py: reproducible local timings and settling regressions, without model API calls. The
+// Reproducible local timings and settling regressions, without model API calls. The
 // Rust layer keeps each Python bound. Where Python shortens a module constant with monkeypatch, the Rust bound is
 // the same expression of the real constant, read through a seam.
 //

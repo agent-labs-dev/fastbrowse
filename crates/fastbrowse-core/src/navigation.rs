@@ -195,7 +195,7 @@ pub fn same_address(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    //! The task_urls and navigation_urls cases of tests/test_navigation.py; the rest drive the policy and the agent.
+    //! The task_urls and navigation_urls cases; the rest drive the policy and the agent.
     use super::*;
 
     const ALPHA: &str = "https://alpha.example.test/project";

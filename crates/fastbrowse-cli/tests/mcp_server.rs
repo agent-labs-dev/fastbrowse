@@ -1,4 +1,4 @@
-//! tests/test_mcp_server.py: the MCP server's gates and the shape of what it returns, driven through MCP messages
+//! The MCP server's gates and the shape of what it returns, driven through MCP messages
 //! with `run_task` replaced by a recorder, so no browser and no model keys.
 
 mod common;

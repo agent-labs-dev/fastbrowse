@@ -1,4 +1,4 @@
-//! tests/clients/test_failover.py: a run moves to its backup Jev provider only after the primary's retries run out.
+//! A run moves to its backup Jev provider only after the primary's retries run out.
 
 mod common;
 

@@ -1,7 +1,7 @@
 mod common;
 mod safety_support;
 
-// tests/browser/test_safety.py: safety boundaries exercised through real Chrome. The Python tests drive the agent
+// Safety boundaries exercised through real Chrome. The Python tests drive the agent
 // with scripted models; what is ported here is each test's browser-layer part, and the agent's own gates (the
 // secret resolver, the irreversible-action and download checks, model-metadata masking) stay with the agent.
 //

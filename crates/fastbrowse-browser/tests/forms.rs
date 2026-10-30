@@ -1,5 +1,3 @@
-//! tests/browser/test_forms.py, test_form_evidence.py, test_deceptive_form.py and test_hidden_upload.py.
-//!
 //! A parametrized Python test is one Rust test that runs each case on a fresh session, in pytest's order.
 
 mod common;

@@ -1,4 +1,4 @@
-//! The helpers tests/browser/test_browser.py lends the capture, navigation and evidence suites: `eval_value`,
+//! The helpers the capture, navigation and evidence suites share: `eval_value`,
 //! `wait_until`, `find` and `observe_until`, and slicing a capture's text by a block's code-point offsets.
 
 #![allow(dead_code)]

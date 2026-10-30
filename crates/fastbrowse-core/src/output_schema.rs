@@ -735,7 +735,6 @@ impl ResponseSchema for OutputModel {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_output_schema.py, apart from the extraction case, which belongs to verification.
     use super::*;
     use serde_json::json;
 

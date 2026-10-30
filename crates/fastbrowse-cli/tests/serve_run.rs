@@ -1,4 +1,4 @@
-//! tests/test_serve_run.py: `run` over the serve protocol, as a client sees it, with `run_task` replaced by a recorder.
+//! `run` over the serve protocol, as a client sees it, with `run_task` replaced by a recorder.
 
 mod common;
 

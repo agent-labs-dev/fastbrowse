@@ -1,5 +1,4 @@
-//! Helpers the safety and speed suites share: tests/browser/test_browser.py's `find`, `observe_until`,
-//! `wait_until` and `eval_value`, a fixture server whose pages a test writes as a closure, and a CDP proxy that
+//! Helpers the safety and speed suites share: `find`, `observe_until`, `wait_until` and `eval_value`, a fixture server whose pages a test writes as a closure, and a CDP proxy that
 //! logs every message, standing in for the Python tests' wrapped `send_raw` and `_evaluate`.
 
 #![allow(dead_code)]

@@ -1,6 +1,6 @@
 mod common;
 
-// End-to-end tests of the browser layer against a real headless Chrome and fixture sites: tests/browser/test_browser.py.
+// End-to-end tests of the browser layer against a real headless Chrome and fixture sites.
 //
 // Where the Python tests replace a session's handler or method (`_prepare_session`, `_on_target_created`,
 // `send_raw`, `_before_action`), these put a websocket proxy between the session and Chrome that holds back,

@@ -345,7 +345,6 @@ impl Drop for Span<'_> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_telemetry.py.
     use super::*;
     use crate::models::CostBasis;
     use crate::testing::block_on;

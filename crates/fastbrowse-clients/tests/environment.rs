@@ -1,4 +1,4 @@
-//! tests/clients/test_environment.py: settings choose the Jev and LLM routes, and a custom endpoint gets only its own
+//! Settings choose the Jev and LLM routes, and a custom endpoint gets only its own
 //! key. Python builds `Settings(**values)`; these tests give the environment variables those values come from, which
 //! also covers what pydantic-settings does for Python: names without regard to case, and `.env` under the environment.
 

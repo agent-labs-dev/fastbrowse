@@ -1,4 +1,4 @@
-//! tests/test_serve_output.py: `output_schema` in a `run`. A JSON Schema goes in, `run_task` gets a model, and what
+//! `output_schema` in a `run`. A JSON Schema goes in, `run_task` gets a model, and what
 //! that model produced comes back under the caller's names.
 
 mod common;

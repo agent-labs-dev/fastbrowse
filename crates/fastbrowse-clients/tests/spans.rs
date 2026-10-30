@@ -1,4 +1,4 @@
-//! tests/clients/test_call_spans.py: every dispatched model call leaves its span in the trace, however it ended. A
+//! Every dispatched model call leaves its span in the trace, however it ended. A
 //! failed or cancelled call is billed too, and missing from the trace it made that time look free.
 
 mod common;

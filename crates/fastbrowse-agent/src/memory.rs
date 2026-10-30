@@ -320,8 +320,8 @@ pub struct Notes {
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
 }
 
-/// Everything a `Notes` holds, as `tests/golden/capture.py` writes it, so a recorded call can start from the notes a
-/// Python test had built. Sets are sorted; maps keep insertion order.
+/// Everything a `Notes` holds, in the golden fixtures' form, so a recorded call can start from recorded notes. Sets
+/// are sorted; maps keep insertion order.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1103,8 +1103,7 @@ pub(crate) fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_memory.py. The cases that assemble an answer or build an output audit wait for retrieval.py and
-    //! verification.py; tests/golden_memory.rs replays the rest of the file's scenarios against Python's results.
+    //! tests/golden_memory.rs replays the recorded memory scenarios.
     use fastbrowse_core::models::SourceControl;
 
     use super::*;

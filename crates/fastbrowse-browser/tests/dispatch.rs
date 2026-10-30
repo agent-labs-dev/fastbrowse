@@ -1,5 +1,4 @@
-//! tests/browser/test_dispatch.py: pointer handlers can invalidate a target before its press or replace an editor
-//! before typing.
+//! Pointer handlers can invalidate a target before its press or replace an editor before typing.
 //!
 //! A parametrized Python test is one Rust test that runs each case on a fresh session, in pytest's order.
 

@@ -1,5 +1,4 @@
-//! A fake client for `fastbrowse serve` on in-memory streams, and the stand-in runs the serve tests share: the Rust
-//! side of `tests/serve_client.py` and of the recorders in `tests/test_serve_*.py`.
+//! A fake client for `fastbrowse serve` on in-memory streams, and the stand-in runs the serve tests share.
 //!
 //! The client speaks to the server in lines of JSON, as the JavaScript SDK does, so a test asserts what a client on
 //! the other side of the pipe would see and never looks inside the server.

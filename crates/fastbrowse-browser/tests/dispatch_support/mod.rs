@@ -1,5 +1,4 @@
-//! What tests/browser/test_browser.py lends the dispatch and form suites (`eval_value`, `find`, `observe_until`,
-//! `wait_until`), plus a CDP proxy that stands in for the monkeypatched `page._input` and `page._evaluate`.
+//! What the dispatch and form suites share (`eval_value`, `find`, `observe_until`, `wait_until`), plus a CDP proxy that stands in for the monkeypatched `page._input` and `page._evaluate`.
 
 #![allow(dead_code)]
 
