@@ -8,6 +8,8 @@ name: Official benchmarks
 #
 # Each task runs `repeat` times (at least 1; a release runs 3). A task's figure is the mean of its repeats' upstream
 # scores, and the group records its repeat count.
+# A slot the site kept from any outcome on every retry is listed as blocked: outside the score, neither a pass nor a
+# failure, and it does not fail the run.
 #
 # Every run goes to the private Langfuse project, finished or not. A finished run also leaves `official-rows-*`, its
 # public rows (`parallax browser official-rows`): opaque task ids, scores, seconds, dollars and protocol facts, and
@@ -297,7 +299,8 @@ jobs:
           # A git+file install records the commit in direct_url.json, so the run names the measured build
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
-          uv run --no-sync python -c "import fastbrowse, parallax"
+          # Publication imports the measured build's public contract: a mismatch stops here, before any paid run.
+          uv run --no-sync python -c "import fastbrowse, parallax.browser_use.publication"
       - name: Check out the pinned upstream
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

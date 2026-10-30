@@ -9,9 +9,17 @@ import subprocess
 import tempfile
 from collections.abc import Collection
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple, Self
+from typing import Annotated, Any, Literal, NamedTuple, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 
 from fastbrowse.evals.catalog import CatalogTask, eligible
 from fastbrowse.evals.publication import REGRESSION_FACTOR
@@ -73,6 +81,19 @@ class Row(PublicModel):
             if self.dollars is None:
                 raise ValueError("Fastbrowse rows report their cost")
         return self
+
+
+class BlockedSlot(PublicModel):
+    """A scheduled slot the site kept from any outcome on every attempt. It measured no agent, so it has no grade: it
+    is outside every score, shown apart from the rows, and counts as neither a pass nor a failure. Its time and spend
+    are what the attempts took."""
+
+    task: Identifier
+    repeat: Annotated[int, Field(ge=0)]
+    arm: Arm
+    seconds: Amount
+    dollars: Amount | None
+    physical_runs: Annotated[int, Field(gt=0)]
 
 
 class Coverage(NamedTuple):
@@ -138,6 +159,15 @@ class Group(PublicModel):
     repeats: Annotated[int, Field(gt=0)]
     limits: Annotated[list[Limit], Field(min_length=1, max_length=12)]
     rows: list[Row]
+    blocked: list[BlockedSlot] = []
+
+    @model_serializer(mode="wrap")
+    def without_empty_blocked(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A group with nothing blocked keeps the bytes it has always had, so approved candidates still match."""
+        data = handler(self)
+        if not data["blocked"]:
+            del data["blocked"]
+        return data
 
     @model_validator(mode="after")
     def coverage(self) -> Self:
@@ -158,18 +188,18 @@ class Group(PublicModel):
     def check_slots(self, arms: tuple[Arm, ...]) -> None:
         """The arms depend on the candidate's schema, so the candidate checks each group's slots against them.
 
-        Each measured arm has one row for every repeat of every task it runs: the whole task set, or for a partial
-        arm the part of it its rows name, which `check_catalog` holds to the catalog. Its cost is reported on every
-        row or on none."""
+        Each measured arm has one row or one blocked slot for every repeat of every task it runs: the whole task set,
+        or for a partial arm the part of it its rows name, which `check_catalog` holds to the catalog. Its cost is
+        reported on every row or on none."""
         spec = COVERAGE[self.id]
         measured = self.measured_arms(arms)
-        if {r.arm for r in self.rows} - set(arms) or not measured:
+        if {r.arm for r in (*self.rows, *self.blocked)} - set(arms) or not measured:
             raise ValueError(f"{self.id} measures only {', '.join(arms)}")
         if missing := [arm for arm in (arms if spec.required is None else spec.required) if arm not in measured]:
             raise ValueError(f"{self.id} must measure {', '.join(missing)}")
         for arm in measured:
             rows = [r for r in self.rows if r.arm == arm]
-            slots = [(r.task, r.repeat) for r in rows]
+            slots = [(r.task, r.repeat) for r in (*rows, *(b for b in self.blocked if b.arm == arm))]
             tasks = {task for task, _ in slots} if arm in spec.partial else set(self.task_ids)
             expected = {(task, repeat) for task in tasks for repeat in range(self.repeats)}
             if len(slots) != len(set(slots)) or set(slots) != expected or not tasks <= set(self.task_ids):
@@ -475,9 +505,12 @@ def regressions(
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == arm and r.task == task]
             before = [r for r in old.rows if r.arm == arm and r.task == task]
+            # A task the site blocked on every repeat, here or in the baseline, has nothing to compare.
+            if not now or not before:
+                continue
             if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):
                 raise ValueError(f"source-score regression: {group.id}/{task}")
-            if sum(r.completed for r in now) < sum(r.completed for r in before):
+            if sum(r.completed for r in now) / len(now) < sum(r.completed for r in before) / len(before):
                 raise ValueError(f"completion regression: {group.id}/{task}")
             # Wall time moves with cloud load, so it is not compared; the calls a run made and its model
             # throughput are properties of the build. `dollars` is kept: it is a charge, not a duration.
