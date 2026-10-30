@@ -537,8 +537,11 @@ async fn browser(
         return Ok((connection, Owned::Handed));
     }
     let Some(key) = key else {
-        let cloud =
-            [("cloud_profile", task.cloud_profile.is_some()), ("cloud_extensions", !task.cloud_extensions.is_empty())];
+        let cloud = [
+            ("cloud_profile", task.cloud_profile.is_some()),
+            ("proxy_country", task.proxy_country.is_some()),
+            ("cloud_extensions", !task.cloud_extensions.is_empty()),
+        ];
         if let Some((name, _)) = cloud.iter().find(|(_, on)| *on) {
             return Err(refused(&format!("{name} belongs to a Browser Use Cloud browser, which needs a key")));
         }
