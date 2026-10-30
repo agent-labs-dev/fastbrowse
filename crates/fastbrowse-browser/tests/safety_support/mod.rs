@@ -159,10 +159,6 @@ pub fn serve_on(listener: TcpListener, handler: Handler) -> u16 {
     port
 }
 
-pub fn serve(handler: impl Fn(&str) -> Reply + Send + Sync + 'static) -> u16 {
-    serve_on(TcpListener::bind("127.0.0.1:0").expect("bind"), Arc::new(handler))
-}
-
 /// `quote`: percent-encode everything but unreserved characters and `/`, as `urllib.parse.quote` does.
 pub fn quote(text: &str) -> String {
     text.bytes()
