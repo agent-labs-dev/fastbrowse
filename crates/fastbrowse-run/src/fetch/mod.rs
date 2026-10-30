@@ -144,7 +144,7 @@ fn decoded<'a>(coding: Option<&str>, body: &'a [u8]) -> Result<Cow<'a, [u8]>, No
     let out = match coding.as_str() {
         "" | "identity" => return Ok(Cow::Borrowed(body)),
         "gzip" | "x-gzip" => inflate(&mut MultiGzDecoder::new(body)),
-        // RFC 9110's deflate is zlib-wrapped, but servers send raw deflate too, which httpx also reads.
+        // RFC 9110's deflate is zlib-wrapped, but servers send raw deflate too.
         "deflate" => inflate(&mut ZlibDecoder::new(body)).or_else(|_| inflate(&mut DeflateDecoder::new(body))),
         _ => return Err(refused("the response uses a compression a browserless read does not decode")),
     }
@@ -165,10 +165,10 @@ pub async fn fetch_capture(
     seconds: f64,
 ) -> Result<Capture, NotFetched> {
     eligible(url, allowed_origins)?;
-    // The codings httpx asks for and decodes. A server may compress whatever it is asked, as python.org's CDN gzips a
+    // The codings this decodes. A server may compress whatever it is asked, as python.org's CDN gzips a
     // request for identity, so asking for these costs nothing a refusal would have saved.
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
-    // 200 to one that names it, and httpx sends its own default where this sends none. The version is the crate's own.
+    // 200 to one that names it. The version is the crate's own.
     let headers = [
         ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
         ("accept-encoding".to_string(), "gzip, deflate".to_string()),
