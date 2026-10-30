@@ -14,8 +14,9 @@ import hashlib
 import re
 from pathlib import Path
 
+from npm_platform_package import TARGETS
+
 REPO = Path(__file__).resolve().parent.parent
-TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64")
 _ARCHIVE = re.compile(r"fastbrowse-rust-(?P<target>[a-z0-9-]+)\.tar\.gz")
 
 
