@@ -1455,11 +1455,7 @@ impl Shared {
                 if !state.frame_scheduled {
                     state.frame_scheduled = true;
                     let shared = self.clone();
-                    if state.closing {
-                        state.frame_scheduled = false;
-                    } else {
-                        state.delivery = Some(tokio::spawn(async move { deliver_frames(&shared).await }));
-                    }
+                    state.delivery = Some(tokio::spawn(async move { deliver_frames(&shared).await }));
                 }
             }
         }
