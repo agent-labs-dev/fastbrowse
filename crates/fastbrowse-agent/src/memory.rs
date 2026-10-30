@@ -894,8 +894,6 @@ impl Notes {
             return Err(AgentError::Invalid("max_chars must be nonnegative".into()));
         }
         let budget = max_chars as usize;
-        let aliases: HashMap<&str, usize> =
-            self.facts.keys().enumerate().map(|(i, key)| (key.as_str(), i + 1)).collect();
         let empty = IndexMap::new();
         let shown_ids = options.labels.as_ref().unwrap_or(&empty);
         let shown = |key: &str| shown_ids.get(key).cloned().unwrap_or_else(|| key.to_string());
@@ -911,13 +909,10 @@ impl Notes {
         let summarized: HashSet<&String> = omittable.iter().filter(|key| !counted.contains(key)).collect();
 
         let basis_text = |fact: &Fact| -> String {
-            // A ranking can cite every counted record again; full span ids undo the tally's compact rendering.
-            let records: Vec<String> = fact
-                .basis
-                .iter()
-                .filter(|key| counted.contains(key))
-                .map(|key| aliases.get(key.as_str()).map_or_else(|| "?".into(), usize::to_string))
-                .collect();
+            // Each counted record is named by the id its own line shows. Numbered by position in the notes, which no
+            // line shows, a tally of 14 products read across three pages looked unsupported to the completion check.
+            let records: Vec<String> =
+                fact.basis.iter().filter(|key| counted.contains(key)).map(|key| shown(key)).collect();
             let other: Vec<Value> =
                 fact.basis.iter().filter(|key| !counted.contains(key)).map(|key| Value::from(shown(key))).collect();
             let mut parts = Vec::new();
