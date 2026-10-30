@@ -63,17 +63,22 @@ def test_fixture_ports_are_placeholders() -> None:
 
 
 def test_capture_dates_are_placeholders() -> None:
-    def state(day: str, weekday: str, months: tuple[str, str], week: list[str]) -> dict[str, object]:
-        return {
-            "date": f"{day} ({weekday}). In one month: {months[0]}; in two months: {months[1]}",
-            "next_days": week,
-            "captured_at": f"{day}T10:11:12.345678+00:00",
-        }
+    def state(day: str, weekday: str, *months: str) -> dict[str, object]:
+        date = "\n".join([f"{day} ({weekday})", *months])
+        return {"date": date, "note": f"today: {json.dumps(date)}", "captured_at": f"{day}T10:11:12.345678+00:00"}
 
-    friday = state("2026-10-23", "Friday", ("November 2026", "December 2026"), ["Saturday 2026-10-24"])
-    monday = state("2027-02-01", "Monday", ("March 2027", "April 2027"), ["Tuesday 2027-02-02"])
+    october = (
+        "October 2026: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; "
+        "Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25"
+    )
+    february = (
+        "February 2027: Mon 1 8 15 22; Tue 2 9 16 23; Wed 3 10 17 24; Thu 4 11 18 25; "
+        "Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28"
+    )
+    friday = state("2026-10-23", "Friday", october)
+    monday = state("2027-02-01", "Monday", february, october)
     assert request_key(LLM, friday) == request_key(LLM, monday)
-    assert canonical_value(friday) == {"date": "<today>", "next_days": ["<next day>"], "captured_at": "<timestamp>"}
+    assert canonical_value(friday) == {"date": "<today>", "note": 'today: "<today>"', "captured_at": "<timestamp>"}
 
 
 def test_screenshots_are_placeholders() -> None:

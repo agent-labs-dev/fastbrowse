@@ -157,8 +157,8 @@ and where fastbrowse follows it:
   its control. Protected controls skip the check and an unanswered one is kept.
   The short-fact read does the same when a page has more quotable spans than a Choice can offer or more
   text than its input allows: one Noul per window of about 1,500 characters (**ours**), a longer block asked about
-  in pieces. Jev chooses only when every window was answered and every one at 0.6 or above (**ours**; Jev scores a passage it cannot place near 0.5) fits in the
-  choice; otherwise the LLM reader reads the whole page. An `absent` answer from a narrowed page is not trusted.
+  in pieces. Jev chooses when every window was answered: the passages go in by score, highest first, until the next would pass
+  the input limit or the Choice's option limit, and an unanswered window sends the page to the LLM reader whole.
   Requests stay small because the gateway sheds large ones: measured on Wikipedia windows, a 26k-token Noul
   batch returned 503 until its retries ran out on five of eight tries, a 4k-token batch on none.
   The step request cannot be split that way, since its state is shared: when one larger than a batch runs out

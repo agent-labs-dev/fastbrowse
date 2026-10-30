@@ -35,17 +35,23 @@ fn decisions_ask_and_choose_as_python_does() {
             };
             outcomes.push(json!({"result": result, "trace": trace.events()}));
         }
-        jev.finish();
         if updating {
-            let asked = jev.2.into_inner().unwrap();
-            let calls = case["calls"].as_array_mut().unwrap().iter_mut().filter(|call| call.get("jev").is_some());
-            for (call, (state, questions)) in calls.zip(asked) {
-                call["jev"] = json!({"state": state, "questions": questions});
-            }
+            let mut asked = jev.2.into_inner().unwrap().into_iter();
+            // Calls the change no longer makes drop out of the recording, and the diff shows them.
+            case["calls"].as_array_mut().unwrap().retain_mut(|call| {
+                if call.get("jev").is_none() {
+                    return true;
+                }
+                asked.next().is_some_and(|(state, questions)| {
+                    call["jev"] = json!({"state": state, "questions": questions});
+                    true
+                })
+            });
             case["outcome"] = Value::Array(outcomes);
             case["ledger_after"] = ledger_state(ledger.as_ref());
             continue;
         }
+        jev.finish();
         assert_outcome(case, Value::Array(outcomes));
         assert_eq!(ledger_state(ledger.as_ref()), case["ledger_after"], "{}: ledger", case["name"]);
     }
@@ -74,8 +80,7 @@ fn requests_are_built_as_python_builds_them() {
         let context: StepContext = parse(&case["context"]);
         let config: Config = parse(&case["config"]);
         let options = case_profile(case).max_choice_options;
-        let compact = case["compact"].as_bool().unwrap();
-        let request = build_request(&observation, &observation.controls, &context, &config, options, compact);
+        let request = build_request(&observation, &observation.controls, &context, &config, options);
         let questions: Map<String, Value> = request.questions.iter().map(|(k, q)| (k.clone(), q.dump())).collect();
         let built = json!({
             "state": write(&request.state, Style::HTTPX),

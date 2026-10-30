@@ -29,7 +29,7 @@ use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text counts the characters of page text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
-const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode (a trip or ticket type, a tab) is not the one the task needs, the control that sets\nthe mode is the target, not the form's submit. A control that explores or browses broadly does not run the\nsearch the task asked for.\nElements marked offscreen can be targeted directly. A link's href shows where it leads.\nElements that read alike carry a `context`: the card, row or section each one belongs to. When the task\nor subgoal names one of those, choose the element whose context matches it.";
+const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads.\nElements carry a `context`: the card, row or section each one belongs to. When the task or subgoal names\none of those, choose the element whose context matches it.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
@@ -72,22 +72,13 @@ str_enum! {
         None = "none",
         Relevance = "relevance",
         OnscreenOnly = "onscreen_only",
-        /// On-screen elements with long labels shortened and links cut to their path. Amazon's signed-in results page
-        /// offered 112 products with ~200-character titles and ~480-character tracking links, twice over (state and
-        /// target question), and the run stopped at `observation_limit` before it could pick one.
-        Compact = "compact",
-        /// Compacted, and only the elements that fit offered; the rest are counted as omitted for a scroll to reach.
+        /// Only the elements that fit offered; the rest are counted as omitted for a scroll to reach.
         Capped = "capped",
-        /// Compacted, with the oldest actions dropped and long texts cut until the request fits Jev's documented
+        /// The oldest actions dropped and long texts cut until the request fits Jev's documented
         /// limit; the state counts the dropped actions and each cut text ends saying how much was left out.
         Trimmed = "trimmed",
     }
 }
-
-pub const COMPACT_CHARS: usize = 80;
-/// Longer than a label: a link's identity can sit in its query (`/item?id=123`), so it is trimmed, not cut to the
-/// path. Amazon's product id sits in the path's first 70 characters, ahead of the tracking query.
-pub const COMPACT_HREF_CHARS: usize = 120;
 
 str_enum! {
     pub enum ReadAssessment {
@@ -362,7 +353,7 @@ pub async fn decide(
     let mut shortlist_tried = controls.len() > max_offered;
     if shortlist_tried {
         let shortlisted =
-            shortlist(jev, &observation, &controls, &context, fitting, ledger, false, relevance_cache, trace).await?;
+            shortlist(jev, &observation, &controls, &context, fitting, ledger, relevance_cache, trace).await?;
         if let Some((kept, paid, used)) = shortlisted {
             (controls, cost, tokens) = (kept, paid, used);
             reduction = Reduction::Relevance;
@@ -371,14 +362,11 @@ pub async fn decide(
             controls = controls.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|(_, c)| c).collect();
         }
     }
-    // Shortening text loses nothing a choice needs, so it is tried before any control is dropped, and kept for every
-    // rung after it.
-    let mut compact = false;
     let mut trimmed = false;
     loop {
-        let request = build_request(&observation, &controls, &context, config, options, compact);
+        let request = build_request(&observation, &controls, &context, config, options);
         if fits(&request, config) {
-            match evaluate(jev, &request, &controls, reduction, ledger, compact).await {
+            match evaluate(jev, &request, &controls, reduction, ledger).await {
                 Ok(mut decision) => {
                     decision.cost = cost.iter().cloned().chain(decision.cost).collect();
                     decision.input_tokens += tokens;
@@ -402,13 +390,6 @@ pub async fn decide(
                 Err(error) => return Err(error),
             }
         }
-        if !compact {
-            compact = true;
-            if reduction == Reduction::None {
-                reduction = Reduction::Compact;
-            }
-            continue;
-        }
         // Long history and texts are cut when that alone makes room for every control offered; a page whose controls
         // are what overflow keeps its texts and has its controls shortlisted instead.
         if !trimmed {
@@ -421,8 +402,7 @@ pub async fn decide(
         if !shortlist_tried {
             shortlist_tried = true;
             let shortlisted =
-                shortlist(jev, &observation, &controls, &context, fitting, ledger, true, relevance_cache, trace)
-                    .await?;
+                shortlist(jev, &observation, &controls, &context, fitting, ledger, relevance_cache, trace).await?;
             if let Some((kept, paid, used)) = shortlisted {
                 (controls, cost, tokens) = (kept, paid, used);
                 reduction = Reduction::Relevance;
@@ -464,9 +444,9 @@ impl Fitting<'_> {
         (self.config.observation.group_size.max(0) as usize).min(self.options)
     }
 
-    /// How many characters the compact request's state runs over Jev's limit; zero or less when it fits.
+    /// How many characters the request's state runs over Jev's limit; zero or less when it fits.
     fn excess(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> i64 {
-        let request = build_request(observation, controls, context, self.config, self.options, true);
+        let request = build_request(observation, controls, context, self.config, self.options);
         let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
         text::len(&dumps(&request.state)) as i64 - self.config.tokens.input_chars(&written)
     }
@@ -636,7 +616,6 @@ async fn shortlist(
     context: &StepContext,
     fitting: Fitting<'_>,
     ledger: Option<&Ledger>,
-    compact: bool,
     cache: Option<&RelevanceCache>,
     trace: &Trace,
 ) -> Result<Option<Shortlist>> {
@@ -727,7 +706,7 @@ async fn shortlist(
     let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_set.len())));
     while low < high {
         let middle = (low + high).div_ceil(2);
-        if fits(&build_request(observation, &kept(middle), context, config, fitting.options, compact), config) {
+        if fits(&build_request(observation, &kept(middle), context, config, fitting.options), config) {
             low = middle;
         } else {
             high = middle - 1;
@@ -806,7 +785,6 @@ pub fn build_request(
     context: &StepContext,
     config: &Config,
     max_options: usize,
-    compact: bool,
 ) -> Request {
     let indexed = index_controls(controls);
     // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls
@@ -873,12 +851,12 @@ pub fn build_request(
         }
         let candidates = &indexed[operation];
         if candidates.len() <= limit {
-            questions.insert(format!("{operation}_target"), target_question(*operation, candidates, compact).into());
+            questions.insert(format!("{operation}_target"), target_question(*operation, candidates).into());
             targets.insert(*operation, candidates.clone());
             continue;
         }
         let parts = chunks(candidates, size);
-        questions.insert(format!("{operation}_group"), group_question(*operation, &parts, compact, &TARGET).into());
+        questions.insert(format!("{operation}_group"), group_question(*operation, &parts, &TARGET).into());
         groups.insert(*operation, parts);
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
@@ -890,7 +868,7 @@ pub fn build_request(
             drop_groups = chunks(&drops, size);
             questions.insert(
                 "drag_destination_group".into(),
-                group_question(Operation::Drag, &drop_groups, compact, &DESTINATION).into(),
+                group_question(Operation::Drag, &drop_groups, &DESTINATION).into(),
             );
         }
     }
@@ -939,7 +917,7 @@ pub fn build_request(
         );
     }
     Request {
-        state: state(observation, controls, context, compact),
+        state: state(observation, controls, context),
         images: context.screenshot.iter().map(|png| (screenshot_reference(png), png.clone())).collect(),
         questions,
         targets,
@@ -961,7 +939,6 @@ async fn evaluate(
     controls: &[Control],
     reduction: Reduction,
     ledger: Option<&Ledger>,
-    compact: bool,
 ) -> Result<Decision> {
     let mut cost: Vec<CostLine> = Vec::new();
     let mut tokens = 0;
@@ -996,7 +973,7 @@ async fn evaluate(
         let group_answer = choice_answer(&evaluation, &format!("{operation}_group"))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
         let key = format!("{operation}_target");
-        let questions = IndexMap::from([(key.clone(), target_question(operation, group, compact).into())]);
+        let questions = IndexMap::from([(key.clone(), target_question(operation, group).into())]);
         let inner = ask(&questions).await?;
         let target_answer = choice_answer(&inner, &key)?;
         target = Some(find_control(group, &target_answer.choice)?);
@@ -1103,7 +1080,7 @@ fn group_index(choice: &str, count: usize) -> Result<usize> {
         .ok_or_else(|| AgentError::Invalid("list index out of range".into()))
 }
 
-fn state(observation: &Observation, controls: &[Control], context: &StepContext, compact: bool) -> Value {
+fn state(observation: &Observation, controls: &[Control], context: &StepContext) -> Value {
     let mut state = Map::new();
     state.insert("task".into(), context.task.clone().into());
     // "Next month" and "the next Monday" are relative to today, which only the done check was told: shown which month
@@ -1127,8 +1104,7 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     if context.omitted_actions > 0 {
         state.insert("omitted_actions".into(), context.omitted_actions.into());
     }
-    state
-        .insert("elements".into(), Value::Array(controls.iter().map(|c| Value::Object(element(c, compact))).collect()));
+    state.insert("elements".into(), Value::Array(controls.iter().map(|c| Value::Object(element(c))).collect()));
     if let Some(background) = context.background.as_deref().map(text::strip).filter(|b| !b.is_empty()) {
         state.insert("background".into(), background.into());
     }
@@ -1191,27 +1167,17 @@ fn relevance_element(control: &Control) -> Map<String, Value> {
     element
 }
 
-fn shortened(text: &str, limit: usize) -> String {
-    if text::len(text) <= limit { text.to_string() } else { format!("{}...", text::prefix(text, limit)) }
-}
-
 /// A control as the step's state lists it.
-pub fn element(control: &Control, compact: bool) -> Map<String, Value> {
-    let (mut label, mut context, mut href) = (control.label.clone(), control.context.clone(), control.href.clone());
-    if compact {
-        label = shortened(&label, COMPACT_CHARS);
-        context = context.map(|c| shortened(&c, COMPACT_CHARS));
-        href = href.map(|h| shortened(&h, COMPACT_HREF_CHARS));
-    }
+pub fn element(control: &Control) -> Map<String, Value> {
     let mut element = Map::new();
     element.insert("id".into(), control.id.clone().into());
-    element.insert("label".into(), label.into());
+    element.insert("label".into(), control.label.clone().into());
     element.insert("role".into(), control.role.clone().into());
     element.insert("operations".into(), sorted_operations(control));
     let optional = [
-        ("context", context.map(Value::from)),
+        ("context", control.context.clone().map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
-        ("href", href.map(Value::from)),
+        ("href", control.href.clone().map(Value::from)),
         ("checked", control.checked.map(Value::from)),
         ("selected", control.selected.map(Value::from)),
         ("expanded", control.expanded.map(Value::from)),
@@ -1238,14 +1204,11 @@ pub fn element(control: &Control, compact: bool) -> Map<String, Value> {
     element
 }
 
-fn group_question(operation: Operation, groups: &[Vec<Control>], compact: bool, rules: &str) -> ChoiceQuestion {
+fn group_question(operation: Operation, groups: &[Vec<Control>], rules: &str) -> ChoiceQuestion {
     choice(
         dumps(&json!({"rules": [rules, GROUP], "operation": operation.as_str()})),
         groups.iter().enumerate().map(|(i, group)| {
-            let labels: Vec<String> = group
-                .iter()
-                .map(|c| if compact { shortened(&c.label, COMPACT_CHARS) } else { c.label.clone() })
-                .collect();
+            let labels: Vec<&str> = group.iter().map(|c| c.label.as_str()).collect();
             (i.to_string(), Value::from(labels.join(" | ")))
         }),
     )
@@ -1258,21 +1221,21 @@ fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
     )
 }
 
-fn target_question(operation: Operation, candidates: &[Control], compact: bool) -> ChoiceQuestion {
+fn target_question(operation: Operation, candidates: &[Control]) -> ChoiceQuestion {
     // Sending only the label and pointing Jev at the shared state for the rest is two thirds smaller on a dense page,
     // and it was tried. It bought no measured latency, because the request was never the slow part, and a criterion
     // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
     // the attributes in front of it.
     choice(
         dumps(&json!({"rules": *TARGET, "operation": operation.as_str()})),
-        candidates.iter().map(|c| (c.id.clone(), Value::Object(target_element(c, operation, compact)))),
+        candidates.iter().map(|c| (c.id.clone(), Value::Object(target_element(c, operation)))),
     )
 }
 
 /// Ported from browser-use/jev-ultrafast (MIT), snapshot.js: name opening a field separately from typing in it so a
 /// picker is a useful click target even when its value is already filled.
-fn target_element(control: &Control, operation: Operation, compact: bool) -> Map<String, Value> {
-    let mut element = element(control, compact);
+fn target_element(control: &Control, operation: Operation) -> Map<String, Value> {
+    let mut element = element(control);
     if control.operations.contains(&Operation::Fill) {
         let label = element["label"].as_str().unwrap_or_default().to_string();
         match operation {
@@ -1617,24 +1580,14 @@ mod tests {
     }
 
     #[test]
-    fn test_a_link_told_apart_by_its_query_keeps_it_when_compact() {
-        let mut link = Control::new("q", "link", "Item", [Operation::Click]);
-        link.href = Some("/item?id=456".into());
-        assert_eq!(element(&link, true)["href"], "/item?id=456");
-        let mut long = link.clone();
-        long.label = "x".repeat(100);
-        assert_eq!(element(&long, true)["label"], format!("{}...", "x".repeat(80)));
-    }
-
-    #[test]
     fn test_what_the_page_says_about_a_field_is_shown_to_jev() {
         let mut field = button(1);
         field.required = Some(true);
         field.invalid = Some(true);
-        assert_eq!(element(&field, false)["required"], true);
-        assert_eq!(element(&field, false)["invalid"], true);
-        assert!(!element(&button(2), false).contains_key("required"));
-        assert!(!element(&button(2), false).contains_key("invalid"));
+        assert_eq!(element(&field)["required"], true);
+        assert_eq!(element(&field)["invalid"], true);
+        assert!(!element(&button(2)).contains_key("required"));
+        assert!(!element(&button(2)).contains_key("invalid"));
     }
 
     #[test]
@@ -1642,18 +1595,18 @@ mod tests {
         let mut page = observation(vec![]);
         page.captured_at = DateTime::new(2026, 9, 26, 20, 0, 0).utc();
         let context = StepContext::new("Select next month's first Friday");
-        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false).state;
-        assert_eq!(state["date"], "2026-09-26 (Saturday). In one month: October 2026; in two months: November 2026");
+        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS).state;
+        assert_eq!(state["date"], page.today());
     }
 
     #[test]
     fn test_jev_reads_the_callers_background_apart_from_the_task() {
         let page = observation(vec![]);
         let mut context = StepContext::new("Find the price");
-        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false).state;
+        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS).state;
         assert!(state.get("background").is_none());
         context.background = Some(" Asked by email from Ana. ".into());
-        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false).state;
+        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS).state;
         assert_eq!(
             (&state["task"], &state["background"]),
             (&json!("Find the price"), &json!("Asked by email from Ana."))
@@ -1664,10 +1617,10 @@ mod tests {
     fn test_the_step_state_refers_to_the_viewport_it_is_sent() {
         let page = observation(vec![]);
         let mut context = StepContext::new("Pick the red square");
-        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false);
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS);
         assert!(request.state.get("viewport_screenshot").is_none() && request.images.is_empty());
         context.screenshot = Some(b"png".to_vec());
-        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false);
+        let request = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let reference = format!("screenshot-{}", sha256_hex(b"png"));
         assert_eq!(request.state["viewport_screenshot"], json!(reference));
         assert_eq!(request.images, Images::from([(reference, b"png".to_vec())]));
@@ -1677,7 +1630,7 @@ mod tests {
     fn test_drag_is_not_offered_when_nothing_is_draggable() {
         let page = observation(vec![button(1)]);
         let request =
-            build_request(&page, &[button(1)], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS, false);
+            build_request(&page, &[button(1)], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
         assert!(!request.questions.contains_key("drag_target"));
         assert!(!request.questions.contains_key("drag_destination"));
     }

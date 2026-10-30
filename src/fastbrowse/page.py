@@ -104,18 +104,28 @@ class Observation(Frozen):
 
     @property
     def today(self) -> str:
-        """The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next
-        Monday strictly after today" as 2026-10-05 in three runs of three.
+        """The capture date with its weekday, then a calendar of this month and the twelve after it, a month to a line
+        and each weekday's dates together. A relative day is looked up in it rather than counted. It runs to this month
+        next year because a month or weekday named without a year means its next occurrence, which always falls in
+        that span."""
+        today = self.captured_at
+        lines = [f"{today:%Y-%m-%d (%A)}"]
+        month = today.replace(day=1)
+        for _ in range(13):
+            lines.append(_month_calendar(month))
+            month = (month + timedelta(days=32)).replace(day=1)
+        return "\n".join(lines)
 
-        The coming months are named too: told only the date in September, Jev took "the month after next" as
-        October, clicking a calendar's Next once, in one run of four. Each is named by its distance: listed bare
-        as "the next three months", the last of them was taken for it in six runs of six."""
-        first = self.captured_at.replace(day=1)
-        months = []
-        for _ in range(2):
-            first = (first + timedelta(days=32)).replace(day=1)
-            months.append(f"{first:%B %Y}")
-        return f"{self.captured_at:%Y-%m-%d (%A)}. In one month: {months[0]}; in two months: {months[1]}"
+
+def _month_calendar(first: datetime) -> str:
+    """One month as a line, Monday first: `November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; ...`."""
+    days = [first + timedelta(days=offset) for offset in range(31)]
+    in_month = [day for day in days if day.month == first.month]
+    columns = (
+        f"{name} {' '.join(str(day.day) for day in in_month if day.weekday() == weekday)}"
+        for weekday, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+    )
+    return f"{first:%B %Y}: {'; '.join(columns)}"
 
 
 class BlockKind(StrEnum):

@@ -227,26 +227,37 @@ pub struct Observation {
 }
 
 impl Observation {
-    /// The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next Monday
-    /// strictly after today" as 2026-10-05 in three runs of three.
-    ///
-    /// The coming months are named too, each by its distance: told only the date in September, Jev took "the month
-    /// after next" as October in one run of four, and listed bare the last of three was taken for it in six of six.
+    /// The capture date with its weekday, then a calendar of this month and the twelve after it, a month to a line and
+    /// each weekday's dates together. A relative day is looked up in it rather than counted. It runs to this month next
+    /// year because a month or weekday named without a year means its next occurrence, which always falls in that span.
     pub fn today(&self) -> String {
-        let mut first = self.captured_at.first_of_month();
-        let mut months = Vec::new();
-        for _ in 0..2 {
-            first = first.add_days(32).first_of_month();
-            months.push(format!("{} {}", first.month_name(), first.year));
+        let today = self.captured_at;
+        let mut lines = vec![format!("{} ({})", today.date_string(), today.weekday_name())];
+        let mut month = today.first_of_month();
+        for _ in 0..=12 {
+            lines.push(month_calendar(month));
+            month = month.add_days(32).first_of_month();
         }
-        format!(
-            "{} ({}). In one month: {}; in two months: {}",
-            self.captured_at.date_string(),
-            self.captured_at.weekday_name(),
-            months[0],
-            months[1]
-        )
+        lines.join("\n")
     }
+}
+
+/// One month as a line, Monday first: `November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; ...`.
+fn month_calendar(first: DateTime) -> String {
+    let mut columns: Vec<(usize, String)> = (0..7)
+        .map(|offset| {
+            let start = first.add_days(offset);
+            let days: Vec<String> = (0..)
+                .map(|weeks| start.add_days(7 * weeks))
+                .take_while(|day| day.month == first.month)
+                .map(|day| day.day.to_string())
+                .collect();
+            (start.weekday(), format!("{} {}", &start.weekday_name()[..3], days.join(" ")))
+        })
+        .collect();
+    columns.sort();
+    let columns: Vec<String> = columns.into_iter().map(|(_, column)| column).collect();
+    format!("{} {}: {}", first.month_name(), first.year, columns.join("; "))
 }
 
 str_enum! {
@@ -560,7 +571,20 @@ mod tests {
         };
         assert_eq!(
             observation.today(),
-            "2026-09-27 (Sunday). In one month: October 2026; in two months: November 2026"
+            "2026-09-27 (Sunday)\n\
+             September 2026: Mon 7 14 21 28; Tue 1 8 15 22 29; Wed 2 9 16 23 30; Thu 3 10 17 24; Fri 4 11 18 25; Sat 5 12 19 26; Sun 6 13 20 27\n\
+             October 2026: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25\n\
+             November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; Wed 4 11 18 25; Thu 5 12 19 26; Fri 6 13 20 27; Sat 7 14 21 28; Sun 1 8 15 22 29\n\
+             December 2026: Mon 7 14 21 28; Tue 1 8 15 22 29; Wed 2 9 16 23 30; Thu 3 10 17 24 31; Fri 4 11 18 25; Sat 5 12 19 26; Sun 6 13 20 27\n\
+             January 2027: Mon 4 11 18 25; Tue 5 12 19 26; Wed 6 13 20 27; Thu 7 14 21 28; Fri 1 8 15 22 29; Sat 2 9 16 23 30; Sun 3 10 17 24 31\n\
+             February 2027: Mon 1 8 15 22; Tue 2 9 16 23; Wed 3 10 17 24; Thu 4 11 18 25; Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28\n\
+             March 2027: Mon 1 8 15 22 29; Tue 2 9 16 23 30; Wed 3 10 17 24 31; Thu 4 11 18 25; Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28\n\
+             April 2027: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; Fri 2 9 16 23 30; Sat 3 10 17 24; Sun 4 11 18 25\n\
+             May 2027: Mon 3 10 17 24 31; Tue 4 11 18 25; Wed 5 12 19 26; Thu 6 13 20 27; Fri 7 14 21 28; Sat 1 8 15 22 29; Sun 2 9 16 23 30\n\
+             June 2027: Mon 7 14 21 28; Tue 1 8 15 22 29; Wed 2 9 16 23 30; Thu 3 10 17 24; Fri 4 11 18 25; Sat 5 12 19 26; Sun 6 13 20 27\n\
+             July 2027: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25\n\
+             August 2027: Mon 2 9 16 23 30; Tue 3 10 17 24 31; Wed 4 11 18 25; Thu 5 12 19 26; Fri 6 13 20 27; Sat 7 14 21 28; Sun 1 8 15 22 29\n\
+             September 2027: Mon 6 13 20 27; Tue 7 14 21 28; Wed 1 8 15 22 29; Thu 2 9 16 23 30; Fri 3 10 17 24; Sat 4 11 18 25; Sun 5 12 19 26"
         );
     }
 

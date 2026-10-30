@@ -1407,6 +1407,25 @@ async fn test_calendar_twins_are_named_by_the_month_they_show() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_uniquely_labelled_control_is_given_its_section_heading() {
+    let _gate = gate().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r#"document.body.innerHTML = `
+        <section><h2>Billing</h2><div><label>Card <input></label><button>Pay now</button></div></section>
+        <section><h2>Delivery</h2><div><a href="/track">Track parcel</a></div></section>`"#,
+    )
+    .await;
+    let obs = observe_until(&h.page, "Track parcel").await;
+    assert_eq!(find(&obs, "Card").context.as_deref(), Some("Billing"));
+    assert_eq!(find(&obs, "Pay now").context.as_deref(), Some("Billing"));
+    assert_eq!(find(&obs, "Track parcel").context.as_deref(), Some("Delivery"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_table_controls_keep_columns_across_empty_cells_and_spans() {
     let _gate = gate().await;
     let Some(h) = harness().await else { return };
@@ -1426,7 +1445,7 @@ async fn test_table_controls_keep_columns_across_empty_cells_and_spans() {
     )
     .await;
     let obs = observe_until(&h.page, "Quote").await;
-    assert_eq!(find(&obs, "2").context.as_deref(), Some("column: October 2026 / Friday"));
+    assert_eq!(find(&obs, "2").context.as_deref(), Some("A; column: October 2026 / Friday"));
     assert_eq!(find(&obs, "8").context.as_deref(), Some("column: October 2026 / Thursday"));
     assert_eq!(find(&obs, "9").context.as_deref(), Some("column: October 2026 / Friday"));
     assert_eq!(find(&obs, "Buy").context.as_deref(), Some("column: Price"));
