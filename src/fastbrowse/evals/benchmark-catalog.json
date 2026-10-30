@@ -17,7 +17,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "f082b3865ac6c497",
@@ -30,7 +31,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "6f2e9d6fdc17c9ef",
@@ -43,7 +45,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "22d226397996fdfe",
@@ -56,7 +59,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "af2133290d01960d",
@@ -69,7 +73,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "428a55863b39c9bf",
@@ -82,7 +87,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "523371efdc8b624d",
@@ -95,7 +101,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "f7600f020d792b84",
@@ -179,7 +186,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "c7e94e8328f84822",
@@ -192,7 +200,8 @@
           "fastbrowse",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "f030aaed28518af6",
@@ -205,7 +214,8 @@
           "fastbrowse",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "85188f1a21157e8b",
@@ -218,7 +228,8 @@
           "fastbrowse",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "eaab86b26f889379",
@@ -231,7 +242,8 @@
           "fastbrowse",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "a131701dc432663c",
@@ -244,7 +256,8 @@
           "fastbrowse",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "2d000b7dcacd1b64",
@@ -257,7 +270,8 @@
           "fastbrowse",
           "jev-ultrafast",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "c6d39f65709fe56a",
@@ -272,7 +286,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "7346e375b230ed70",
@@ -285,7 +300,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "cbcaaadaf64d8a3c",
@@ -298,7 +314,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "34089d28cd723bca",
@@ -311,7 +328,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "7cd731724fe362dd",
@@ -324,7 +342,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "8bdeabb8809e521c",
@@ -337,7 +356,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "0601b9cd9c2d307a",
@@ -350,7 +370,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "7e78f195989e9563",
@@ -363,7 +384,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "ac0970e11f50dfc5",
@@ -376,7 +398,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "684ce012462d2eb1",
@@ -389,7 +412,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "163d4fdbb56932e6",
@@ -402,7 +426,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "6fb9021727b5cd63",
@@ -415,7 +440,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "541e7f078f3cd8b0",
@@ -428,7 +454,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "7018897e7b8edfc2",
@@ -443,7 +470,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "915c2d8954051ca2",
@@ -456,7 +484,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "ad2d7a24c3174568",
@@ -469,7 +498,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "8bfbd4c04f7f3058",
@@ -482,7 +512,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "9a0f2cf19cbb7ce4",
@@ -495,7 +526,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "43dd0b1d19f6905f",
@@ -508,7 +540,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "a722b9e069c3635c",
@@ -521,7 +554,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "9e71d0ebbdb5b8a9",
@@ -534,7 +568,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "3f72b4886300e4d3",
@@ -547,7 +582,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "167a9ac22a4d2b5e",
@@ -562,7 +598,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "3cb69f4cca7a0a8f",
@@ -575,7 +612,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "8e95c92bf66332fc",
@@ -588,7 +626,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "1fb42fae24121a93",
@@ -601,7 +640,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "cd7a6d69941f0acd",
@@ -614,7 +654,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "a19f2c321120f96c",
@@ -627,7 +668,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "03de37005dd92ef9",
@@ -640,7 +682,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "229527ffedbeb4ed",
@@ -653,7 +696,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "fb98974ee75f2c0d",
@@ -668,7 +712,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "f4f090b26286cfe4",
@@ -681,7 +726,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "7b8df76175c2e6a3",
@@ -694,7 +740,8 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "cua-codex"
+          "cua-codex",
+          "browser-harness"
         ],
         "expect": "complete",
         "source_fingerprint": "33a5efb78a02cf46",
@@ -731,6 +778,11 @@
     "cua-codex": {
       "pin": "cua-driver==0.34.0; codex-cli==0.160.1",
       "tier": "local",
+      "default": false
+    },
+    "browser-harness": {
+      "pin": "browser-harness==0.1.13; codex-cli==0.163.0; cli+skill",
+      "tier": "A",
       "default": false
     }
   },

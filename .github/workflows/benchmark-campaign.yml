@@ -23,6 +23,10 @@ name: Benchmark campaign
 # the runner, so it needs no Browser Use key either. The `all` selection adds the three head-to-head
 # comparisons (C1 agent-against-agent, C2 backend-against-backend, C3 Ultrafast), which need Browser
 # Use Cloud, the pool and every secret above.
+# `browser-harness` runs C4 alone: fastbrowse against Browser Harness (Codex CLI 0.163.0 with
+# browser-harness 0.1.13 as its CLI and skill, GPT-6 Luna at medium reasoning via OpenRouter), both on a
+# Browser Use Cloud browser, so it needs `browser: cloud` and BROWSER_USE_API_KEY but no pool. Its ledger
+# is uploaded as an artifact and not staged: the publication gate has no C4 group yet.
 
 on:
   workflow_dispatch:
@@ -43,7 +47,7 @@ on:
         description: Which publication groups to run
         required: true
         type: choice
-        options: [fastbrowse, all]
+        options: [fastbrowse, all, browser-harness]
         default: fastbrowse
       browser:
         description: The fastbrowse arm's browser, headless local Chrome on the runner or Browser Use Cloud
@@ -132,7 +136,7 @@ jobs:
           GROUP_SET: ${{ inputs.groups }}
         run: |
           # shellcheck disable=SC2128
-          if test "$GROUP_SET" = all && test "$BROWSER" = local; then
+          if test "$GROUP_SET" != fastbrowse && test "$BROWSER" = local; then
             echo "::error::browser local runs only the fastbrowse group; the comparisons need Browser Use Cloud"
             exit 1
           fi
@@ -162,8 +166,10 @@ jobs:
           # shellcheck disable=SC2128
           fastbrowse_only='[{"label":"internal-fastbrowse","key":"internal","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}]'
           all_groups='[{"label":"C1 agent against agent","key":"c1","arms":"fastbrowse browser-use","out":"c1-agent.jsonl"},{"label":"C2 backend against backend","key":"c2","arms":"fastbrowse fastbrowse-pool","out":"c2-backend.jsonl"},{"label":"C3 Ultrafast","key":"c3","arms":"fastbrowse-pool jev-ultrafast","out":"c3-ultrafast.jsonl"},{"label":"internal-fastbrowse","key":"internal","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}]'
+          browser_harness='[{"label":"C4 Browser Harness","key":"c4","arms":"fastbrowse browser-harness","out":"c4-browser-harness.jsonl"}]'
           case "$GROUP_SET" in
             all) include="$all_groups" ;;
+            browser-harness) include="$browser_harness" ;;
             *) include="$fastbrowse_only" ;;
           esac
           echo "matrix=$include" >> "$GITHUB_OUTPUT"
@@ -205,6 +211,10 @@ jobs:
           # a syncing `uv run` would reinstall the pinned build over this one.
           uv pip install "$GITHUB_WORKSPACE/fastbrowse"
           uv run --no-sync python -c "import fastbrowse, parallax"
+      # The browser-harness arm's agent; the arm checks this exact version before each attempt.
+      - name: Install Codex for the Browser Harness arm
+        if: ${{ matrix.key == 'c4' }}
+        run: npm install --global @openai/codex@0.163.0
       - name: Export the catalog
         run: |
           cd parallax
@@ -248,7 +258,8 @@ jobs:
   stage:
     name: Stage the candidate
     needs: [resolve, campaign]
-    if: ${{ success() }}
+    # C4 has no publication group yet, so a browser-harness campaign ends at its uploaded ledger.
+    if: ${{ success() && inputs.groups != 'browser-harness' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write

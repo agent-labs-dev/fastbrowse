@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Browser Harness joins the benchmark campaign.** Dispatching the Benchmark campaign with `groups: browser-harness` runs C4: fastbrowse against [Browser Harness](https://github.com/browser-use/browser-harness) 0.1.13, driven by the Codex CLI with its CLI and skill on GPT-6 Luna, both on a Browser Use Cloud browser, three repeats over the 47 credential-free completion tasks. The ledger is kept as a run artifact; nothing is published until C4 has a publication group.
+
 ## [0.9.0] - 2026-10-29
 
 - **A .NET client.** `dotnet add package Fastbrowse` runs tasks from .NET over the protocol the JavaScript SDK speaks, with the same options: structured output, secrets resolved in your process, an `until` check, events and frames. Cancelling the `CancellationToken` stops a run once its browser has closed. The package carries each platform's binary. .NET 10 or newer.

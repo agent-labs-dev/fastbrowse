@@ -8,13 +8,14 @@ records each comparison's sources and the earlier records that are no longer on 
 These are recorded benchmark comparisons, not a controlled experiment: the associations below do not
 establish cause.
 
-Benchmarking compares exactly three things, and nothing else is a headline:
+Benchmarking compares these things, and nothing else is a headline:
 
 | | Comparison | Arms | Publication group | Status |
 |:--|:--|:--|:--|:--|
 | C1 | agent against agent | `fastbrowse` against `browser-use`, the hosted Browser Use agent | `internal-hosted` | recorded below |
 | C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | earlier campaign record below; not on the published page |
 | C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 6 tasks both run | `internal-ultrafast` | not yet measured |
+| C4 | fastbrowse against Browser Harness | `fastbrowse` against `browser-harness` (Codex CLI with Browser Harness's CLI and skill), both on a Browser Use Cloud browser, over the 47 credential-free completion tasks | none yet | not yet measured; see below |
 
 The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web) are diagnostics, described in
 [measuring fastbrowse](evals.md); none of them is one of the three comparisons.
@@ -108,9 +109,24 @@ its own pool, against `jev-ultrafast` (fastbrowse 58 of 60, median 8.6s; `jev-ul
 source: the `docs/results/0.5.14.jsonl` entry in `docs/results/publication-baselines.json`). Figures approved
 under that pairing keep it, under their own schema.
 
+## C4: fastbrowse against Browser Harness (`browser-harness`)
+
+Not yet measured. [Browser Harness](https://github.com/browser-use/browser-harness) is Browser Use's harness for coding
+agents. The arm runs it the way Browser Use's own README comparison did: the Codex CLI given `browser-harness` as its
+CLI and `SKILL.md` (not `browser-harness-mcp`), on GPT-6 Luna at medium reasoning with web search off, attached over CDP
+to a fresh Browser Use Cloud browser. Here that agent is Codex CLI 0.163.0 with browser-harness 0.1.13, reaching the
+model through OpenRouter. `fastbrowse` runs on the same kind of browser, so the two differ only in the agent. The task
+set is the one the Codex with Cua Driver arm runs: completion tasks without credentials.
+
+The Benchmark campaign runs it with `groups: browser-harness` and keeps the ledger as a run artifact. Nothing is staged
+for publication: the publication gate has no C4 group yet. Spend per run is the cloud browser's metered charge plus
+Codex's recorded tokens at OpenRouter's list prices, since Codex reports tokens, not charges. A three-task smoke
+on 2026-10-30 (fastbrowse 0.7.1, one repeat) passed 3 of 3 on both arms: fastbrowse at $0.040 in total and a
+median of 8.8s, Browser Harness at $0.011 and 15.0s. Three tasks are a check that the arm runs, not a result.
+
 ## What is not claimed here
 
-- No speed, cost or success delta is claimed for C3 until an approved campaign of it exists.
+- No speed, cost or success delta is claimed for C3 or C4 until an approved campaign of it exists.
 - Browser Use Cloud rates are published and may change.
 - fastbrowse's `dollars` are metered provider cost. The hosted product's customer price is separate
   (`fastbrowse-hosted/docs/billing.md`).
