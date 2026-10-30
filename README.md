@@ -166,8 +166,7 @@ restart it without the flag, when you are done.
 
 ### Models
 
-The LLM defaults to `google/gemini-3.8-flash` at low reasoning effort, with `google/gemini-3.5-flash-lite` for
-proposing a direct address and typing field text.
+The LLM defaults to `deepseek/deepseek-v4.1-flash-1017` with reasoning off for every purpose.
 
 | Setting | Effect |
 |:--|:--|

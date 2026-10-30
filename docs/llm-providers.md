@@ -21,10 +21,10 @@ from, how the schema is asked for and where a reasoning effort goes. The table i
 
 | `FASTBROWSE_LLM_PROVIDER` | Address | Key | Schema | Reasoning effort | Default model |
 |:--|:--|:--|:--|:--|:--|
-| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`, `low` unless set | `google/gemini-3.8-flash` |
-| `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`, `low` unless set | `google/gemini-3.8-flash` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `none` for DeepSeek, otherwise only when set | `deepseek/deepseek-v4.1-flash-1017` |
+| `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `none` for DeepSeek, otherwise only when set | `deepseek/deepseek-v4.1-flash-1017` |
 | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
-| `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, `low` unless set | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
 | `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | strict `json_schema` | `reasoning_effort` | `openai/gpt-oss-120b` |
 | `together` | `https://api.together.ai/v1` | `TOGETHER_API_KEY` | `json_schema`, not strict | not taken | none |
@@ -49,8 +49,8 @@ Rules that hold across the table:
   asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on the first plan instead.
   `FASTBROWSE_LLM_MODEL_<PURPOSE>` pins one purpose as it does on OpenRouter.
 - **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` or `FASTBROWSE_LLM_REASONING_<PURPOSE>` is
-  set**, except on OpenRouter, the gateway and Anthropic, which default to `low`. A purpose's own effort goes in the
-  same field as the global one, for that purpose alone. A provider whose OpenAI-compatible API takes no effort stops the run with a
+  set**, except on OpenRouter and the gateway, which default to `none`, and Anthropic, which defaults to `low` since
+  Claude refuses `none`. A purpose's own effort goes in the same field as the global one, for that purpose alone. A provider whose OpenAI-compatible API takes no effort stops the run with a
   configuration error, rather than drop a setting you asked for.
 - **`FASTBROWSE_LLM_STRICT` overrides the preset's strictness, and `FASTBROWSE_LLM_EXTRA_BODY` applies to every
   preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, including
