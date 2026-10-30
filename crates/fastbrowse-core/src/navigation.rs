@@ -1,7 +1,6 @@
 //! Addresses supplied by the caller, never inferred from page instructions.
 //!
-//! An address is judged as Chrome would load it (WHATWG, ADR 0002), where Python used `urlsplit`, `urljoin` and IDNA
-//! 2003. The cases where the two disagree are pinned in the tests below.
+//! An address is judged as Chrome would load it (WHATWG, ADR 0002).
 
 use indexmap::IndexSet;
 use url::{Host, Url};
@@ -341,14 +340,14 @@ mod tests {
         assert!(left.is_empty());
     }
 
-    /// Where WHATWG and `urlsplit` disagree, the address is the one Chrome opens.
+    /// The address is the one Chrome opens.
     #[test]
     fn an_address_is_judged_as_chrome_parses_it() {
-        // Extra slashes before the host are skipped: Chrome opens https://nohost/. Python found no host.
+        // Extra slashes before the host are skipped: Chrome opens https://nohost/.
         assert_eq!(urls("Open https:///nohost"), ["https:///nohost"]);
-        // An empty label is a host WHATWG keeps; IDNA 2003 refused it.
+        // An empty label is a host WHATWG keeps.
         assert_eq!(urls("Open https://a..example.test/"), ["https://a..example.test/"]);
-        // A path joined onto the start is percent-encoded as Chrome writes it; urljoin kept the raw letters.
+        // A path joined onto the start is percent-encoded as Chrome writes it.
         assert_eq!(task_urls("Open /caf\u{e9}", Some(ENTRY), false), ["https://example.test/caf%C3%A9"]);
         // One address written two ways is one document.
         assert!(same_address("https://example.test/a b", "https://example.test/a%20b"));
