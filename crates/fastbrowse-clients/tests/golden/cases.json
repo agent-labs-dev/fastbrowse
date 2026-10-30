@@ -2531,7 +2531,7 @@
     "event": "request_retry",
     "call": "llm model-read",
     "attempt": 1,
-    "reason": "no response within 30s (ReadTimeout)",
+    "reason": "silent for 30s (ReadTimeout)",
     "wait": 0.5
    },
    {
@@ -3110,7 +3110,7 @@
    {
     "error": {
      "type": "LLMRetriesExhausted",
-     "message": "LLM transport failed after 6 requests in <t>s; last: no response within 30s (ReadTimeout)"
+     "message": "LLM transport failed after 6 requests in <t>s; last: silent for 30s (ReadTimeout)"
     }
    }
   ],
@@ -3184,35 +3184,35 @@
     "event": "request_retry",
     "call": "llm model-field_text",
     "attempt": 1,
-    "reason": "no response within 30s (ReadTimeout)",
+    "reason": "silent for 30s (ReadTimeout)",
     "wait": 0.5
    },
    {
     "event": "request_retry",
     "call": "llm model-field_text",
     "attempt": 2,
-    "reason": "no response within 30s (ReadTimeout)",
+    "reason": "silent for 30s (ReadTimeout)",
     "wait": 1.5
    },
    {
     "event": "request_retry",
     "call": "llm model-field_text",
     "attempt": 3,
-    "reason": "no response within 30s (ReadTimeout)",
+    "reason": "silent for 30s (ReadTimeout)",
     "wait": 4.0
    },
    {
     "event": "request_retry",
     "call": "llm model-field_text",
     "attempt": 4,
-    "reason": "no response within 30s (ReadTimeout)",
+    "reason": "silent for 30s (ReadTimeout)",
     "wait": 8.0
    },
    {
     "event": "request_retry",
     "call": "llm model-field_text",
     "attempt": 5,
-    "reason": "no response within 30s (ReadTimeout)",
+    "reason": "silent for 30s (ReadTimeout)",
     "wait": 8.0
    },
    {
@@ -3330,7 +3330,7 @@
     "event": "request_retry",
     "call": "llm model-field_text",
     "attempt": 1,
-    "reason": "no response within 30s (TimeoutError)",
+    "reason": "silent for 30s (TimeoutError)",
     "wait": 0.5
    },
    {
@@ -6074,7 +6074,7 @@
     "event": "request_retry",
     "call": "jev",
     "attempt": 1,
-    "reason": "no response within 15s (TimeoutError)",
+    "reason": "silent for 15s (TimeoutError)",
     "wait": 0.5
    },
    {
@@ -6866,7 +6866,7 @@
     "event": "request_retry",
     "call": "jev",
     "attempt": 1,
-    "reason": "no response within 15s (ReadTimeout)",
+    "reason": "silent for 15s (ReadTimeout)",
     "wait": 0.5
    },
    {

@@ -113,7 +113,8 @@ fn llm_argument(py: Python<'_>, call: LlmCall) -> PyResult<Bound<'_, PyTuple>> {
 
 fn request_argument(py: Python<'_>, request: Request) -> PyResult<Bound<'_, PyTuple>> {
     let body = PyBytes::new(py, &request.body);
-    (request.method.as_str(), request.url, request.headers, body, request.max_bytes).into_pyobject(py)
+    (request.method.as_str(), request.url, request.headers, body, request.max_bytes, request.timeout.as_secs_f64())
+        .into_pyobject(py)
 }
 
 fn text(answer: &Bound<'_, PyAny>) -> PyResult<String> {

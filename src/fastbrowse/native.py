@@ -326,10 +326,12 @@ type _Sent = tuple[str, int, list[tuple[str, str]], bytes] | tuple[str, str]
 
 
 def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
-    async def send(method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None) -> _Sent:
+    async def send(
+        method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None, silence: float
+    ) -> _Sent:
         try:
-            # The core times each request itself and cancels this call when it runs out.
-            request = client.build_request(method, url, headers=headers, content=body or None, timeout=None)
+            # The core's timeout bounds each silence, not the whole answer, as an httpx timeout does.
+            request = client.build_request(method, url, headers=headers, content=body or None, timeout=silence)
             # The core follows redirects itself, checking each against the run's allowed origins.
             response = await client.send(request, stream=True, follow_redirects=False)
             try:

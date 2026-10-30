@@ -616,14 +616,42 @@ async fn test_a_keyless_client_sends_no_authorization_and_scrubs_nothing() {
     assert!(error.contains("local") && !error.contains("[api key]"), "{error}");
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_trickling_response_is_bounded_by_attempt_deadline() {
-    // test_attempt_deadline.py: a body that keeps trickling resets a read timeout, so the attempt has an elapsed
-    // deadline too. A transport that never finishes stands in for the trickle; the deadline drops it.
-    let script = Script::new([Step::Stall]);
-    let error = script.http().post_json("https://provider.test", &json!({}), &[], 0.05).await.unwrap_err();
+/// A provider on a local socket that sends its response head, then `chunks` body pieces `gap` apart.
+async fn trickling(chunks: &'static [&'static str], gap: std::time::Duration) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = socket.read(&mut request).await.unwrap();
+        let length: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\n\r\n");
+        socket.write_all(head.as_bytes()).await.unwrap();
+        for chunk in chunks {
+            tokio::time::sleep(gap).await;
+            socket.write_all(chunk.as_bytes()).await.unwrap();
+        }
+        std::future::pending::<()>().await;
+    });
+    format!("http://{address}/v1/chat/completions")
+}
+
+#[tokio::test]
+async fn test_a_long_answer_that_keeps_arriving_is_read_to_its_end() {
+    // A model writing a long answer is not cut off: the provider's keep-alive bytes show it is still working, so only
+    // silence ends an attempt, never the time the answer takes in all.
+    let chunks: &[&str] = &["\n ", "\n ", "\n ", "{\"ok\": ", "true}"];
+    let url = trickling(chunks, std::time::Duration::from_millis(100)).await;
+    let response = Http::hyper().post_json(&url, &json!({}), &[], 0.3).await.unwrap();
+    assert_eq!(response.json_value(), Some(json!({"ok": true})));
+}
+
+#[tokio::test]
+async fn test_a_provider_that_falls_silent_times_out() {
+    let url = trickling(&["\n ", "{}"], std::time::Duration::from_millis(500)).await;
+    let error = Http::hyper().post_json(&url, &json!({}), &[], 0.1).await.unwrap_err();
     assert_eq!(error, TransportError::Timeout("TimeoutError"));
-    assert_eq!(script.requests().len(), 1);
 }
 
 #[tokio::test]

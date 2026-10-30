@@ -198,12 +198,14 @@ pub fn retryable(response: &Response) -> bool {
 }
 
 const MAX_BACKOFF_SECONDS: f64 = 10.0;
-/// Jev answers in about a second, so an attempt this old is stuck upstream, and a retry beats waiting on it.
+/// Jev answers in about a second, so a Jev provider silent this long is stuck upstream, and a retry beats waiting on it.
 pub const JEV_ATTEMPT_SECONDS: f64 = 15.0;
 /// A Jev call slower than this is the provider's outage: 45 measured gateway calls from 10 to 600 controls (670 to 25k
 /// input tokens) took 0.40 to 0.48s median and 0.93s at worst. Retries and backoff count toward it.
 pub const JEV_SLOW_SECONDS: f64 = 2.0;
-/// Leaves room for long reads and verification while bounding upstream stalls; flash-lite plans take about 0.8s.
+/// How long an LLM provider may stay silent before the attempt is retried. It bounds a stall, not an answer: OpenRouter
+/// sends its response head at once and a keep-alive byte every few seconds while the model writes, so a long read or
+/// verification answer is read to its end however long it takes.
 pub const LLM_ATTEMPT_SECONDS: f64 = 30.0;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -422,7 +424,7 @@ async fn send(
             let failure = describe(&response);
             (Some(response), failure)
         }
-        Err(TransportError::Timeout(name)) => (None, format!("no response within {attempt_seconds:.0}s ({name})")),
+        Err(TransportError::Timeout(name)) => (None, format!("silent for {attempt_seconds:.0}s ({name})")),
         // The type names the failure; its text can quote the request, credential included.
         Err(TransportError::Transient(name)) => (None, format!("no response ({name})")),
         Err(TransportError::Fatal(name)) => {

@@ -24,4 +24,4 @@ http-body-util = "0.1.5"
 bytes = "1.12.1"
 
 [dev-dependencies]
-tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "test-util"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "test-util", "net", "io-util"] }

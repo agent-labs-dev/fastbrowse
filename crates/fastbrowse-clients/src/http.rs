@@ -43,6 +43,10 @@ pub struct Request {
     /// Stop reading the body once it passes this many bytes, as a streamed `httpx` read can: the response then holds
     /// one byte more than the bound, so a caller sees it was passed without the rest landing in memory.
     pub max_bytes: Option<usize>,
+    /// The longest wait for the response head, and then for each body chunk, as an httpx timeout bounds each read. A
+    /// body that keeps arriving is read to its end, however long a model takes to write it: a provider that is still
+    /// working sends keep-alive bytes, so silence this long is a stall.
+    pub timeout: Duration,
 }
 
 impl Request {
@@ -102,7 +106,7 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 /// a failure reports: its text can quote the request, credential included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
-    /// `httpx.TimeoutException` or the attempt deadline: a repeat can clear it.
+    /// `httpx.TimeoutException`, or [`Request::timeout`] passed in silence: a repeat can clear it.
     Timeout(&'static str),
     /// `httpx.NetworkError`, `RemoteProtocolError`, `ProxyError` or `DecodingError`: a repeat can clear it.
     Transient(&'static str),
@@ -190,8 +194,8 @@ impl Http {
         self
     }
 
-    /// `http.post(url, json=body, headers=headers, timeout=seconds)`, bounded by an elapsed deadline as well: HTTP
-    /// read timeouts reset on each chunk, so a trickling body would otherwise hold an attempt forever.
+    /// `http.post(url, json=body, headers=headers, timeout=seconds)`: `seconds` bounds each silence, see
+    /// [`Request::timeout`].
     pub async fn post_json(
         &self,
         url: &str,
@@ -208,9 +212,10 @@ impl Http {
             headers: all,
             body: write(body, Style::HTTPX).into(),
             max_bytes: None,
+            timeout: Duration::from_secs_f64(seconds),
         };
         let mut event = HttpEvent { trace: &self.trace, url, body, began: monotonic(), written: false };
-        let result = self.send(request, seconds).await;
+        let result = self.send(request).await;
         event.write(|fields| match &result {
             Ok(response) => {
                 fields.insert("status".into(), response.status.into());
@@ -244,11 +249,12 @@ impl Http {
             headers: headers.to_vec(),
             body: Vec::new(),
             max_bytes,
+            timeout: Duration::from_secs_f64(seconds),
         };
-        self.send(request, seconds).await
+        self.send(request).await
     }
 
-    async fn send(&self, request: Request, seconds: f64) -> Result<Response, TransportError> {
+    async fn send(&self, request: Request) -> Result<Response, TransportError> {
         // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too.
         let credential = request
             .header("authorization")
@@ -257,14 +263,9 @@ impl Http {
             .or_else(|| request.header("api-key"))
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
-        match tokio::time::timeout(Duration::from_secs_f64(seconds), self.transport.send(request)).await {
-            Ok(Ok(mut response)) => {
-                response.credential = credential;
-                Ok(response)
-            }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(TransportError::Timeout("TimeoutError")),
-        }
+        let mut response = self.transport.send(request).await?;
+        response.credential = credential;
+        Ok(response)
     }
 }
 
@@ -301,20 +302,22 @@ impl Transport for HyperTransport {
                 Method::Get => hyper::Method::GET,
                 Method::Post => hyper::Method::POST,
             };
-            let request_max = request.max_bytes;
+            let (request_max, silence) = (request.max_bytes, request.timeout);
+            let stalled = |_| TransportError::Timeout("TimeoutError");
             let mut builder = hyper::Request::builder().method(method).uri(uri);
             for (name, value) in &request.headers {
                 builder = builder.header(name.as_str(), value.as_str());
             }
             let outgoing =
                 builder.body(Full::new(Bytes::from(request.body))).map_err(|_| TransportError::Fatal("InvalidURL"))?;
-            let response = client.request(outgoing).await.map_err(|error| {
-                if error.is_connect() {
-                    TransportError::Transient("ConnectError")
-                } else {
-                    TransportError::Transient("RemoteProtocolError")
-                }
-            })?;
+            let response =
+                tokio::time::timeout(silence, client.request(outgoing)).await.map_err(stalled)?.map_err(|error| {
+                    if error.is_connect() {
+                        TransportError::Transient("ConnectError")
+                    } else {
+                        TransportError::Transient("RemoteProtocolError")
+                    }
+                })?;
             let status = response.status().as_u16();
             let headers = response
                 .headers()
@@ -325,7 +328,7 @@ impl Transport for HyperTransport {
                 .collect();
             let mut incoming = response.into_body();
             let mut body = Vec::new();
-            while let Some(frame) = incoming.frame().await {
+            while let Some(frame) = tokio::time::timeout(silence, incoming.frame()).await.map_err(stalled)? {
                 let frame = frame.map_err(|_| TransportError::Transient("ReadError"))?;
                 if let Some(chunk) = frame.data_ref() {
                     body.extend_from_slice(chunk);

@@ -88,7 +88,10 @@ impl Transport for Script {
             match step {
                 Some(Step::Reply(response)) => Ok(response),
                 Some(Step::Fail(error)) => Err(error),
-                Some(Step::Stall) => std::future::pending().await,
+                Some(Step::Stall) => {
+                    tokio::time::sleep(request.timeout).await;
+                    Err(TransportError::Timeout("TimeoutError"))
+                }
                 Some(Step::Cancel) => {
                     cancel.notify_one();
                     std::future::pending().await
