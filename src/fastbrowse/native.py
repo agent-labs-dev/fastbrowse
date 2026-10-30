@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from fastbrowse import build
+from fastbrowse.config import Config
 from fastbrowse.jev import (
     JevClient,
     JevError,
@@ -78,7 +79,6 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _PLAIN = (
     "start",
     "context",
-    "browser_api_key",
     "cloud_profile",
     "cdp_url",
     "cdp_port",
@@ -92,20 +92,20 @@ _PLAIN = (
     "fetch",
     "fetch_first",
 )
-"""`run_task` arguments that are JSON already."""
+"""`run_task` arguments that are JSON already and belong to the run itself."""
 
 
 def _dumped(value: BaseModel | None) -> Any:
     return None if value is None else value.model_dump(mode="json")
 
 
-def options(arguments: dict[str, Any]) -> str:
-    """`run_task`'s data arguments, as the JSON `fastbrowse._native.run_task` reads."""
+def run_task_json(task: str, arguments: dict[str, Any]) -> str:
+    """The run as the `RunTask` JSON every entry point shares, which `fastbrowse._native.run_task` reads."""
     output_schema: type[BaseModel] | None = arguments["output_schema"]
-    secrets: SecretResolver | None = arguments["secrets"]
     origins, viewport, inputs = arguments["allowed_origins"], arguments["viewport"], arguments["inputs"]
     return json.dumps(
         {
+            "task": task,
             **{name: arguments[name] for name in _PLAIN},
             "allowed_origins": None if origins is None else list(origins),
             "viewport": None if viewport is None else list(viewport),
@@ -119,10 +119,8 @@ def options(arguments: dict[str, Any]) -> str:
             ],
             "limits": _dumped(arguments["limits"]),
             "authorization": _dumped(arguments["authorization"]),
-            "secrets": None if secrets is None else [ref.model_dump(mode="json") for ref in secrets.available()],
             "downloads": None if arguments["downloads"] is None else str(arguments["downloads"]),
             "record": None if arguments["record"] is None else str(arguments["record"]),
-            "config": _dumped(arguments["config"]),
         }
     )
 
@@ -396,9 +394,12 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
 
     # A `traced()` block collecting this run's events gets the core's too.
     events = collecting()
+    config: Config | None = arguments["config"]
     native = core.run_task(
-        task,
-        options(arguments),
+        run_task_json(task, arguments),
+        browser_api_key=arguments["browser_api_key"],
+        secrets=None if secrets is None else json.dumps([ref.model_dump(mode="json") for ref in secrets.available()]),
+        config=None if config is None else config.model_dump_json(),
         on_event=None if on_event is None else raised.wrap(event),
         on_frame=None if on_frame is None else raised.wrap(on_frame),
         until=None if until is None else raised.wrap(until),

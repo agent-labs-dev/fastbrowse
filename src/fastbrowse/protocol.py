@@ -6,7 +6,7 @@ types generated for the JavaScript SDK are read from one definition.
 
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
@@ -115,8 +115,12 @@ class RunAttachment(Params):
     content: Base64Bytes
 
 
+U32 = Annotated[int, Field(ge=0, le=2**32 - 1)]
+"""A Rust `u32`."""
+
+
 class RunParams(Params):
-    """One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+    """One run: the run's arguments, and what the server needs to talk to the client about it.
 
     The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
     environment the server inherited.
@@ -124,6 +128,12 @@ class RunParams(Params):
 
     run_id: str = Field(min_length=1)
     """Chosen by the client, and carried by every message the server sends about this run."""
+    secrets: tuple[SecretRef, ...] = ()
+    """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
+    frames: bool = False
+    """Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed."""
+    until: bool = False
+    """Whether the client holds a check of its own. The check stays there: the server asks it with `run/until`."""
     task: str
     start: str | None = None
     context: str | None = None
@@ -134,13 +144,6 @@ class RunParams(Params):
     authorization: Authorization | None = None
     output_schema: dict[str, Any] | None = None
     """The shape of `RunResult.data`, as JSON Schema draft 2020-12 with an object at its root."""
-    secrets: tuple[SecretRef, ...] = ()
-    """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
-    frames: bool = False
-    """Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed."""
-    until: bool = False
-    """Whether the client holds a check of its own. The check is a function and stays there: the server asks
-    it with `run/until`."""
     downloads: Path | None = None
     record: Path | None = None
     cursor: bool = False
@@ -152,15 +155,24 @@ class RunParams(Params):
     """Which local Chrome, and how. A headed window or a kept profile implies `local`."""
     cloud_profile: str | None = None
     cdp_url: str | None = None
-    cdp_port: int | None = None
+    cdp_port: int | None = Field(default=None, ge=0, le=65535)
     attach: bool = False
     target_match: str | None = None
     foreground: bool = False
     """Bring the run's tab and its browser window to the front, to watch it. Otherwise a visible window stays in
     the background."""
     proxy_country: str | None = None
-    viewport: tuple[int, int] | None = None
+    viewport: tuple[U32, U32] | None = None
     cloud_allow_resizing: bool = False
+    cloud_extensions: tuple[str, ...] = ()
+    cloud_timeout_minutes: U32 | None = None
+    """How long a cloud browser may live; 15 minutes when none is given."""
+    allowed_origins: tuple[str, ...] | None = None
+    """The only origins the run may open, each exact."""
+    fetch: bool = False
+    """Read every page over HTTP and start no browser."""
+    fetch_first: bool = False
+    """Read over HTTP first, and start a browser only if the task turns out to need one."""
 
 
 class RunCancelParams(Params):

@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_core::models::{CostBreakdown, LocalChrome, RunResult, SecretValue, Status, StepResult};
+use fastbrowse_core::protocol::RunTask;
 use fastbrowse_core::py::{self, text};
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -18,114 +19,29 @@ fn refuse<T>(message: impl Into<String>) -> Result<T, ConfigurationError> {
     Err(ConfigurationError(message.into()))
 }
 
-/// Browser Use Cloud unless the operator asked for local Chrome: `--local`, or a headed window or kept profile, which
-/// only local Chrome has, whether from its flag or from FASTBROWSE_HEADED / FASTBROWSE_PROFILE.
-///
-/// A cloud profile or a country asked of local Chrome is refused: the run would start signed out, or browse from this
-/// machine's address, and report neither.
-pub fn cloud(
-    local: bool,
-    chrome: &LocalChrome,
-    cloud_profile: Option<&str>,
-    proxy_country: Option<&str>,
-) -> Result<bool, ConfigurationError> {
-    let on_cloud = !(local || chrome.headed || chrome.profile.is_some());
-    for (flag, value) in [("--cloud-profile", cloud_profile), ("--proxy-country", proxy_country)] {
-        if value.is_some() && !on_cloud {
-            return refuse(format!(
-                "{flag} needs the cloud browser: drop it, or drop --local, --headed and --profile \
-                 (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)"
-            ));
-        }
-    }
-    Ok(on_cloud)
+/// Whether the run starts a Browser Use Cloud browser: it is handed none, fetches without one, and was not asked for
+/// local Chrome by `local`, a headed window or a kept profile, which only local Chrome has.
+pub fn on_cloud(task: &RunTask) -> bool {
+    let chrome = task.chrome.clone().unwrap_or_default();
+    let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
+    !(task.fetch || handed || task.local || chrome.headed || chrome.profile.is_some())
 }
 
-/// What `handed_over` weighs besides the browser it is handed.
-pub struct HandOver<'a> {
-    pub cdp_url: Option<&'a str>,
-    pub cdp_port: Option<i64>,
-    pub attach: bool,
-    pub target_match: Option<&'a str>,
-    pub local: bool,
-    pub cloud_asked: bool,
-    pub chrome: &'a LocalChrome,
-    pub cloud_profile: Option<&'a str>,
-    pub proxy_country: Option<&'a str>,
-}
-
-/// Whether the run drives a browser the operator already runs, named by URL or by port.
-///
-/// Attaching replaces every option that shapes a started browser, so combining them is refused the way
-/// `--cloud-profile` on local Chrome is: as a configuration error, before any browser work.
-pub fn handed_over(asked: &HandOver<'_>) -> Result<bool, ConfigurationError> {
-    if asked.cdp_url.is_some() && asked.cdp_port.is_some() {
-        return refuse("--cdp-url and --cdp-port both name a browser to attach to; pass one");
+/// What the machine and the settings must hold for `task`, found before a browser opens: ffmpeg for a recording,
+/// Chrome for a local run, and the model keys. Returns the cloud browser's key when the run starts one.
+pub fn environment(task: &RunTask, settings: &Settings) -> Result<Option<String>, ConfigurationError> {
+    if task.record.is_some() && which("ffmpeg").is_none() {
+        return refuse("record needs ffmpeg on PATH");
     }
-    if asked.cdp_url.is_none() && asked.cdp_port.is_none() {
-        if asked.attach || asked.target_match.is_some() {
-            return refuse("--attach and --target-match need --cdp-url or --cdp-port");
-        }
-        return Ok(false);
+    let cloud = on_cloud(task);
+    let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
+    let binary = task.chrome.as_ref().and_then(|chrome| chrome.binary.as_deref());
+    if !(cloud || handed || task.fetch) && find_chrome(binary).is_none() {
+        return refuse("Chrome was not found: install it, or name it in FASTBROWSE_CHROME or in `chrome.binary`");
     }
-    let flag = if asked.cdp_url.is_some() { "--cdp-url" } else { "--cdp-port" };
-    let conflicts: Vec<&str> = [
-        ("--local", asked.local),
-        ("--cloud", asked.cloud_asked),
-        ("--headed", asked.chrome.headed),
-        ("--profile", asked.chrome.profile.is_some()),
-        ("--cloud-profile", asked.cloud_profile.is_some()),
-        ("--proxy-country", asked.proxy_country.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(conflict, on)| on.then_some(conflict))
-    .collect();
-    if !conflicts.is_empty() {
-        return refuse(format!("{flag} attaches to a browser already running; drop {}", conflicts.join(", ")));
-    }
-    if let Some(url) = asked.cdp_url
-        && !(url.starts_with("ws://") || url.starts_with("wss://"))
-    {
-        return refuse(format!("--cdp-url expects a ws:// or wss:// URL, got {}", text::repr(url)));
-    }
-    if let Some(port) = asked.cdp_port
-        && !(0 < port && port < 65536)
-    {
-        return refuse(format!("--cdp-port expects a port from 1 to 65535, got {port}"));
-    }
-    Ok(true)
-}
-
-/// A recording is encoded by ffmpeg, and without it the run would browse to the end and save nothing.
-pub fn recording(record: Option<&Path>) -> Result<(), ConfigurationError> {
-    if record.is_some() && which("ffmpeg").is_none() {
-        return refuse("--record needs ffmpeg on PATH");
-    }
-    Ok(())
-}
-
-/// A two-letter code, lowercased as Browser Use Cloud expects; a shop serves the visitor's country from it. The error
-/// is argparse's `ArgumentTypeError` text.
-pub fn country_code(value: &str) -> Result<String, String> {
-    let code = text::strip(value).to_lowercase();
-    if code.chars().count() != 2 || !code.chars().all(char::is_alphabetic) {
-        return Err(format!("{} is not a two-letter country code, e.g. uk", text::repr(value)));
-    }
-    if code == "gb" {
-        // ISO says gb; Browser Use's code for the United Kingdom is uk, and it would reject gb only at browser start.
-        return Err("Browser Use's code for the United Kingdom is uk, not gb".into());
-    }
-    Ok(code)
-}
-
-/// The country a cloud browser browses from: the one asked for, and the United States when none was.
-pub fn proxy_country(asked: Option<&str>) -> String {
-    asked.unwrap_or("us").to_string()
-}
-
-/// The cloud browser's key when the run wants one; None runs local Chrome.
-pub fn browser_key(settings: &Settings, on_cloud: bool) -> Result<Option<String>, ConfigurationError> {
-    if on_cloud { settings.browser_key().map(|key| Some(key.to_string())) } else { Ok(None) }
+    let key = if cloud { Some(settings.browser_key()?.to_string()) } else { None };
+    check_model_keys(settings)?;
+    Ok(key)
 }
 
 /// The flags add to FASTBROWSE_HEADED and FASTBROWSE_PROFILE; they cannot unset them. `binary` replaces
@@ -384,32 +300,5 @@ mod tests {
             "'https://a.example/login' is not an origin: drop everything after the host"
         );
         assert_eq!(scoped_secret("p=V@ftp://a").unwrap_err(), "expected NAME=ENV_VAR@https://host, got 'p=V@ftp://a'");
-    }
-
-    #[test]
-    fn a_country_is_two_letters_and_never_gb() {
-        assert_eq!(country_code(" UK ").unwrap(), "uk");
-        assert_eq!(country_code("gb").unwrap_err(), "Browser Use's code for the United Kingdom is uk, not gb");
-        assert_eq!(country_code("usa").unwrap_err(), "'usa' is not a two-letter country code, e.g. uk");
-    }
-
-    #[test]
-    fn a_handed_over_browser_refuses_what_shapes_a_started_one() {
-        let chrome = LocalChrome { binary: None, headed: true, profile: None };
-        let asked = HandOver {
-            cdp_url: Some("ws://b"),
-            cdp_port: None,
-            attach: false,
-            target_match: None,
-            local: true,
-            cloud_asked: false,
-            chrome: &chrome,
-            cloud_profile: None,
-            proxy_country: Some("uk"),
-        };
-        assert_eq!(
-            handed_over(&asked).unwrap_err().0,
-            "--cdp-url attaches to a browser already running; drop --local, --headed, --proxy-country"
-        );
     }
 }

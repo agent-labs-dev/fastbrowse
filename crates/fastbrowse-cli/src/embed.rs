@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_clients::environment::Settings;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Event, RunResult};
-use fastbrowse_core::protocol::{ErrorCode, ServerMethod};
+use fastbrowse_core::protocol::{ErrorCode, Method, RunParams, ServerMethod};
 use fastbrowse_core::py::dump::Dump;
 use serde_json::Value;
 
 use crate::runner::{Cancel, Runner, default_runner};
-use crate::serve::{Callbacks, ClientError, Refused, SettingsSource, arguments, reply, run_params, secret_failure};
+use crate::serve::{Callbacks, ClientError, Refused, SettingsSource, arguments, read, reply, secret_failure};
 
 /// A host function the run awaits. An `Err` carries the message of what the host raised or threw.
 pub type HostCall<A, R> = Arc<dyn Fn(A) -> BoxFuture<'static, Result<R, String>> + Send + Sync>;
@@ -98,7 +98,7 @@ impl Embedded {
         if let Some(requests) = &self.requests {
             requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(params.clone());
         }
-        let params = run_params(&params)?;
+        let params: RunParams = read(Method::Run, params)?;
         // `serve` asks the client for what the params say it holds, so a host that holds less has to say so here.
         if params.frames && host.on_frame.is_none() {
             return Err(refusal("run: frames is set and no frame callback was given".into()));
@@ -111,10 +111,11 @@ impl Embedded {
         }
         let failed = Failed { cancel: cancel.clone(), failure: Arc::default() };
         let callbacks = callbacks(host, &failed);
-        let args = arguments(&params, &self.settings, callbacks)?;
-        let outcome = self.runner.run(args).await;
+        let run_id = params.run_id.clone();
+        let (task, run_host) = arguments(params, &self.settings, callbacks)?;
+        let outcome = self.runner.run(task, run_host).await;
         let failure = failed.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
-        reply(outcome, failure, &params.run_id)
+        reply(outcome, failure, &run_id)
     }
 }
 

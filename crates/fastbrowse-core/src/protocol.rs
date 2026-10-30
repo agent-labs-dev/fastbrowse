@@ -226,33 +226,16 @@ pub struct RunAttachment {
 fn run_id<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let id = String::deserialize(d)?;
     if id.is_empty() {
-        return Err(serde::de::Error::custom("String should have at least 1 character"));
+        return Err(serde::de::Error::custom("run_id must not be empty"));
     }
     Ok(id)
 }
 
-fn viewport<'de, D: Deserializer<'de>>(d: D) -> Result<Option<(i64, i64)>, D::Error> {
-    match Option::<Vec<Value>>::deserialize(d)? {
-        None => Ok(None),
-        Some(items) if items.len() == 2 => {
-            let width = lax::int_of(&items[0]).map_err(serde::de::Error::custom)?;
-            let height = lax::int_of(&items[1]).map_err(serde::de::Error::custom)?;
-            Ok(Some((width, height)))
-        }
-        Some(_) => Err(serde::de::Error::custom("Tuple should have 2 items")),
-    }
-}
-
-/// One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
-///
-/// The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the environment
-/// the server inherited.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One run's arguments: what the CLI's flags, a `run` request, the MCP `browse` tool and the Python and Node `run_task`
+/// all describe. The caller's own objects (its callbacks, its model clients, a browser key) are not among them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RunParams {
-    /// Chosen by the client, and carried by every message the server sends about this run.
-    #[serde(deserialize_with = "run_id")]
-    pub run_id: String,
+pub struct RunTask {
     pub task: String,
     #[serde(default)]
     pub start: Option<String>,
@@ -270,24 +253,15 @@ pub struct RunParams {
     /// The shape of `RunResult.data`, as JSON Schema draft 2020-12 with an object at its root.
     #[serde(default)]
     pub output_schema: Option<serde_json::Map<String, Value>>,
-    /// The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`.
-    #[serde(default)]
-    pub secrets: Vec<SecretRef>,
-    /// Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub frames: bool,
-    /// Whether the client holds a check of its own. The check stays there: the server asks it with `run/until`.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub until: bool,
     #[serde(default)]
     pub downloads: Option<PathBuf>,
     #[serde(default)]
     pub record: Option<PathBuf>,
     /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver.
-    #[serde(default, deserialize_with = "lax::boolean")]
+    #[serde(default)]
     pub cursor: bool,
     /// Local Chrome instead of a Browser Use Cloud browser.
-    #[serde(default, deserialize_with = "lax::boolean")]
+    #[serde(default)]
     pub local: bool,
     /// Which local Chrome, and how. A headed window or a kept profile implies `local`.
     #[serde(default)]
@@ -296,21 +270,96 @@ pub struct RunParams {
     pub cloud_profile: Option<String>,
     #[serde(default)]
     pub cdp_url: Option<String>,
-    #[serde(default, deserialize_with = "lax::opt_int")]
-    pub cdp_port: Option<i64>,
-    #[serde(default, deserialize_with = "lax::boolean")]
+    #[serde(default)]
+    pub cdp_port: Option<u16>,
+    #[serde(default)]
     pub attach: bool,
     #[serde(default)]
     pub target_match: Option<String>,
     /// Bring the run's tab and its browser window to the front, to watch it.
-    #[serde(default, deserialize_with = "lax::boolean")]
+    #[serde(default)]
     pub foreground: bool,
+    /// The two-letter country a cloud browser browses from; the United States when none is given.
     #[serde(default)]
     pub proxy_country: Option<String>,
-    #[serde(default, deserialize_with = "viewport")]
-    pub viewport: Option<(i64, i64)>,
-    #[serde(default, deserialize_with = "lax::boolean")]
+    #[serde(default)]
+    pub viewport: Option<(u32, u32)>,
+    #[serde(default)]
     pub cloud_allow_resizing: bool,
+    #[serde(default)]
+    pub cloud_extensions: Vec<String>,
+    /// How long a cloud browser may live; 15 minutes when none is given.
+    #[serde(default)]
+    pub cloud_timeout_minutes: Option<u32>,
+    /// The only origins the run may open, each exact.
+    #[serde(default)]
+    pub allowed_origins: Option<Vec<String>>,
+    /// Read every page over HTTP and start no browser.
+    #[serde(default)]
+    pub fetch: bool,
+    /// Read over HTTP first, and start a browser only if the task turns out to need one.
+    #[serde(default)]
+    pub fetch_first: bool,
+}
+
+/// One run: the run's arguments, and what the server needs to talk to the client about it.
+///
+/// The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the environment
+/// the server inherited.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RunParams {
+    /// Chosen by the client, and carried by every message the server sends about this run.
+    pub run_id: String,
+    /// The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`.
+    pub secrets: Vec<SecretRef>,
+    /// Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed.
+    pub frames: bool,
+    /// Whether the client holds a check of its own. The check stays there: the server asks it with `run/until`.
+    pub until: bool,
+    #[serde(flatten)]
+    pub run: RunTask,
+}
+
+/// The fields of `RunParams` that are about the exchange rather than the run.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Envelope {
+    #[serde(deserialize_with = "run_id")]
+    run_id: String,
+    #[serde(default)]
+    secrets: Vec<SecretRef>,
+    #[serde(default)]
+    frames: bool,
+    #[serde(default)]
+    until: bool,
+}
+
+/// `value` read as `T`, its error naming the field at fault, since the caller's own path ends at this map.
+fn located<T: serde::de::DeserializeOwned, E: serde::de::Error>(value: Value) -> Result<T, E> {
+    serde_path_to_error::deserialize(value).map_err(|error| match error.path().to_string() {
+        path if path == "." => E::custom(error.into_inner()),
+        path => E::custom(format!("{path}: {}", error.into_inner())),
+    })
+}
+
+impl<'de> Deserialize<'de> for RunParams {
+    /// Split by hand, since a flattened struct accepts any field: a misspelled option must be refused, not dropped.
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut run = serde_json::Map::<String, Value>::deserialize(d)?;
+        let envelope: serde_json::Map<String, Value> = ["run_id", "secrets", "frames", "until"]
+            .into_iter()
+            .filter_map(|key| run.remove(key).map(|value| (key.to_string(), value)))
+            .collect();
+        let envelope: Envelope = located(Value::Object(envelope))?;
+        let run: RunTask = located(Value::Object(run))?;
+        Ok(RunParams {
+            run_id: envelope.run_id,
+            secrets: envelope.secrets,
+            frames: envelope.frames,
+            until: envelope.until,
+            run,
+        })
+    }
 }
 
 /// Which run to stop. One that is not active, because it finished or never was, is left as it is.
@@ -504,45 +553,59 @@ impl Schema for RunAttachment {
     }
 }
 
+/// `RunTask`'s fields, which `RunParams` carries beside its own.
+fn run_task_fields() -> Vec<Field> {
+    let text = || Ty::optional(Ty::Str);
+    let path = || Ty::optional(Ty::Path);
+    let none = || Value::Null;
+    let empty = || Value::Array(vec![]);
+    let count = |maximum: u32| Ty::Int.constrained("minimum", 0).constrained("maximum", maximum);
+    vec![
+        Field::required("task", Ty::Str),
+        Field::default("start", text(), none()),
+        Field::default("context", text(), none()),
+        Field::default("inputs", Ty::optional(Ty::map(Ty::Str)), none()),
+        Field::default("attachments", Ty::list(RunAttachment::ty()), empty()),
+        Field::default("limits", Ty::optional(Limits::ty()), none()),
+        Field::default("authorization", Ty::optional(Authorization::ty()), none()),
+        Field::default("output_schema", Ty::optional(Ty::map(Ty::Any)), none()),
+        Field::default("downloads", path(), none()),
+        Field::default("record", path(), none()),
+        Field::default("cursor", Ty::Bool, false),
+        Field::default("local", Ty::Bool, false),
+        Field::default("chrome", Ty::optional(LocalChrome::ty()), none()),
+        Field::default("cloud_profile", text(), none()),
+        Field::default("cdp_url", text(), none()),
+        Field::default("cdp_port", Ty::optional(count(u16::MAX.into())), none()),
+        Field::default("attach", Ty::Bool, false),
+        Field::default("target_match", text(), none()),
+        Field::default("foreground", Ty::Bool, false),
+        Field::default("proxy_country", text(), none()),
+        Field::default("viewport", Ty::optional(Ty::Tuple(vec![count(u32::MAX), count(u32::MAX)])), none()),
+        Field::default("cloud_allow_resizing", Ty::Bool, false),
+        Field::default("cloud_extensions", Ty::list(Ty::Str), empty()),
+        Field::default("cloud_timeout_minutes", Ty::optional(count(u32::MAX)), none()),
+        Field::default("allowed_origins", Ty::optional(Ty::list(Ty::Str)), none()),
+        Field::default("fetch", Ty::Bool, false),
+        Field::default("fetch_first", Ty::Bool, false),
+    ]
+}
+
 impl Schema for RunParams {
     fn ty() -> Ty {
-        let text = || Ty::optional(Ty::Str);
-        let path = || Ty::optional(Ty::Path);
-        let none = || Value::Null;
-        let empty = || Value::Array(vec![]);
+        let mut fields = vec![
+            Field::required("run_id", Ty::Str.constrained("minLength", 1)),
+            Field::default("secrets", Ty::list(SecretRef::ty()), Value::Array(vec![])),
+            Field::default("frames", Ty::Bool, false),
+            Field::default("until", Ty::Bool, false),
+        ];
+        fields.extend(run_task_fields());
         params(
             "RunParams",
             Some(
-                "One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
+                "One run: the run's arguments, and what the server needs to talk to the client about it.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
             ),
-            vec![
-                Field::required("run_id", Ty::Str.constrained("minLength", 1)),
-                Field::required("task", Ty::Str),
-                Field::default("start", text(), none()),
-                Field::default("context", text(), none()),
-                Field::default("inputs", Ty::optional(Ty::map(Ty::Str)), none()),
-                Field::default("attachments", Ty::list(RunAttachment::ty()), empty()),
-                Field::default("limits", Ty::optional(Limits::ty()), none()),
-                Field::default("authorization", Ty::optional(Authorization::ty()), none()),
-                Field::default("output_schema", Ty::optional(Ty::map(Ty::Any)), none()),
-                Field::default("secrets", Ty::list(SecretRef::ty()), empty()),
-                Field::default("frames", Ty::Bool, false),
-                Field::default("until", Ty::Bool, false),
-                Field::default("downloads", path(), none()),
-                Field::default("record", path(), none()),
-                Field::default("cursor", Ty::Bool, false),
-                Field::default("local", Ty::Bool, false),
-                Field::default("chrome", Ty::optional(LocalChrome::ty()), none()),
-                Field::default("cloud_profile", text(), none()),
-                Field::default("cdp_url", text(), none()),
-                Field::default("cdp_port", Ty::optional(Ty::Int), none()),
-                Field::default("attach", Ty::Bool, false),
-                Field::default("target_match", text(), none()),
-                Field::default("foreground", Ty::Bool, false),
-                Field::default("proxy_country", text(), none()),
-                Field::default("viewport", Ty::optional(Ty::Tuple(vec![Ty::Int, Ty::Int])), none()),
-                Field::default("cloud_allow_resizing", Ty::Bool, false),
-            ],
+            fields,
         )
         .ty()
     }
@@ -731,13 +794,17 @@ mod tests {
 
     #[test]
     fn run_params_refuse_what_they_do_not_name() {
-        assert!(serde_json::from_value::<RunParams>(json!({"run_id": "r", "task": "t", "tsak": 1})).is_err());
+        let unknown = serde_json::from_value::<RunParams>(json!({"run_id": "r", "task": "t", "tsak": 1}));
+        assert!(unknown.unwrap_err().to_string().contains("unknown field `tsak`"));
         assert!(serde_json::from_value::<RunParams>(json!({"run_id": "", "task": "t"})).is_err());
-        let params: RunParams =
-            serde_json::from_value(json!({"run_id": "r", "task": "t", "attachments": [{"name": "a", "mime_type": "text/plain", "content": "aGVs bG8="}], "viewport": [1280, "720"]}))
-                .unwrap();
-        assert_eq!(params.attachments[0].content.0, b"hello");
-        assert_eq!(params.viewport, Some((1280, 720)));
+        assert!(serde_json::from_value::<RunParams>(json!({"run_id": "r", "task": "t", "cdp_port": 70000})).is_err());
+        let params: RunParams = serde_json::from_value(json!({"run_id": "r", "task": "t", "frames": true, "attachments": [{"name": "a", "mime_type": "text/plain", "content": "aGVs bG8="}], "viewport": [1280, 720]}))
+            .unwrap();
+        assert!(params.frames);
+        assert_eq!(params.run.attachments[0].content.0, b"hello");
+        assert_eq!(params.run.viewport, Some((1280, 720)));
+        let written = serde_json::to_value(&params).unwrap();
+        assert_eq!(serde_json::from_value::<RunParams>(written).unwrap(), params);
         let refused =
             serde_json::from_value::<RunAttachment>(json!({"name": "a", "mime_type": "m", "content": "aGVsbG8"}));
         assert!(refused.unwrap_err().to_string().contains("Base64 decoding error: 'Incorrect padding'"));

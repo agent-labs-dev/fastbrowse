@@ -266,8 +266,6 @@ public enum LLMPurpose
     FieldText,
     [JsonStringEnumMemberName("recover")]
     Recover,
-    [JsonStringEnumMemberName("verify")]
-    Verify,
     [JsonStringEnumMemberName("compose")]
     Compose,
     [JsonStringEnumMemberName("shortcut")]
@@ -419,7 +417,7 @@ public sealed record RunFrame
 }
 
 /// <summary>
-/// One run. Apart from <c>run_id</c>, each field is the <c>run_task</c> argument or the CLI flag of the same name.
+/// One run: the run's arguments, and what the server needs to talk to the client about it.
 ///
 /// The reply is the <c>RunResult</c>. No API key is among the fields: model and browser keys come from the
 /// environment the server inherited.
@@ -428,6 +426,15 @@ public sealed record RunParams
 {
     [JsonPropertyName("run_id")]
     public required string RunId { get; init; }
+
+    [JsonPropertyName("secrets")]
+    public IReadOnlyList<SecretRef>? Secrets { get; init; }
+
+    [JsonPropertyName("frames")]
+    public bool? Frames { get; init; }
+
+    [JsonPropertyName("until")]
+    public bool? Until { get; init; }
 
     [JsonPropertyName("task")]
     public required string Task { get; init; }
@@ -452,15 +459,6 @@ public sealed record RunParams
 
     [JsonPropertyName("output_schema")]
     public JsonElement? OutputSchema { get; init; }
-
-    [JsonPropertyName("secrets")]
-    public IReadOnlyList<SecretRef>? Secrets { get; init; }
-
-    [JsonPropertyName("frames")]
-    public bool? Frames { get; init; }
-
-    [JsonPropertyName("until")]
-    public bool? Until { get; init; }
 
     [JsonPropertyName("downloads")]
     public string? Downloads { get; init; }
@@ -503,6 +501,21 @@ public sealed record RunParams
 
     [JsonPropertyName("cloud_allow_resizing")]
     public bool? CloudAllowResizing { get; init; }
+
+    [JsonPropertyName("cloud_extensions")]
+    public IReadOnlyList<string>? CloudExtensions { get; init; }
+
+    [JsonPropertyName("cloud_timeout_minutes")]
+    public long? CloudTimeoutMinutes { get; init; }
+
+    [JsonPropertyName("allowed_origins")]
+    public IReadOnlyList<string>? AllowedOrigins { get; init; }
+
+    [JsonPropertyName("fetch")]
+    public bool? Fetch { get; init; }
+
+    [JsonPropertyName("fetch_first")]
+    public bool? FetchFirst { get; init; }
 }
 
 public sealed record RunResult

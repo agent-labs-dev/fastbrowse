@@ -29,33 +29,6 @@ from fastbrowse.models import (
     SecretResolver,
     UntilCheck,
 )
-from fastbrowse.page import BrowserError
-
-
-async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.AsyncClient | None = None) -> str:
-    """The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint."""
-    endpoint = f"http://{host}:{port}/json/version"
-    try:
-        async with httpx.AsyncClient(timeout=5) if http is None else _borrowed(http) as client:
-            response = await client.get(endpoint)
-            response.raise_for_status()
-            version = response.json()
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        if status != 404:
-            raise BrowserError(f"{endpoint} answered {status}, so it names no DevTools websocket") from None
-        # Chrome's remote debugging switch at chrome://inspect serves the websocket but not this discovery route.
-        raise BrowserError(
-            f"{endpoint} answered 404, so it names no DevTools websocket. A Chrome whose remote debugging was "
-            "turned on at chrome://inspect serves none here: its DevToolsActivePort file holds the port on the "
-            "first line and the browser path on the second, so pass ws://127.0.0.1:<port><path> as cdp_url instead."
-        ) from None
-    except (httpx.HTTPError, ValueError) as exc:
-        raise BrowserError(f"no DevTools endpoint at {endpoint} ({type(exc).__name__})") from None
-    ws_url = version.get("webSocketDebuggerUrl") if isinstance(version, dict) else None
-    if not isinstance(ws_url, str) or not ws_url:
-        raise BrowserError(f"{endpoint} named no webSocketDebuggerUrl")
-    return ws_url
 
 
 @asynccontextmanager
@@ -103,11 +76,11 @@ async def run_task(
     foreground: bool = False,
     allowed_origins: Sequence[str] | None = None,
     check_access: Callable[[], Awaitable[None]] | None = None,
-    proxy_country: str | None = "us",
+    proxy_country: str | None = None,
     viewport: tuple[int, int] | None = None,
     cloud_allow_resizing: bool = False,
     cloud_extensions: Sequence[str] = (),
-    cloud_timeout_minutes: int = 15,
+    cloud_timeout_minutes: int | None = None,
     jev: JevClient | None = None,
     llm: LLMClient | None = None,
     output_schema: type[BaseModel] | None = None,
@@ -207,9 +180,3 @@ async def run_task(
     The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`).
     """
     return await native.run(task, locals())
-
-
-@asynccontextmanager
-async def _borrowed(http: httpx.AsyncClient) -> AsyncGenerator[httpx.AsyncClient]:
-    """A caller's client outlives the run, so hand it back rather than closing it."""
-    yield http

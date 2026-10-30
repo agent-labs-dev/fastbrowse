@@ -245,7 +245,7 @@ impl Http {
                     let message = "Not Acceptable: Client must accept both application/json and text/event-stream";
                     return refused(server_error(StatusCode::NOT_ACCEPTABLE, -32600, message, Some(id)));
                 }
-                let message = match crate::pyjson::loads(body) {
+                let message: Value = match serde_json::from_slice(body) {
                     Ok(message) => message,
                     Err(error) => {
                         let message = format!("Parse error: {error}");
@@ -253,8 +253,8 @@ impl Http {
                     }
                 };
                 let Value::Object(object) = &message else {
-                    let message = format!("Validation error: {}", not_a_message(&message));
-                    return refused(server_error(StatusCode::BAD_REQUEST, -32602, &message, Some(id)));
+                    let message = "Validation error: a JSON-RPC message is one JSON object";
+                    return refused(server_error(StatusCode::BAD_REQUEST, -32602, message, Some(id)));
                 };
                 let is_request = object.contains_key("id") && object.contains_key("method");
                 let initializing = is_request && object.get("method").and_then(Value::as_str) == Some("initialize");
@@ -298,29 +298,6 @@ impl Http {
             _ => refused(server_error(StatusCode::METHOD_NOT_ALLOWED, -32600, "Method Not Allowed", Some(id))),
         }
     }
-}
-
-/// pydantic's account of a body that is no JSON-RPC message at all, such as a batch.
-fn not_a_message(value: &Value) -> String {
-    let shown = super::browse_arguments::py_repr(value);
-    let kind = match value {
-        Value::Array(_) => "list",
-        Value::String(_) => "str",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::Bool(_) => "bool",
-        Value::Null => "NoneType",
-        Value::Object(_) => "dict",
-    };
-    let lines: Vec<String> = ["JSONRPCRequest", "JSONRPCNotification", "JSONRPCResponse", "JSONRPCError"]
-        .iter()
-        .map(|model| {
-            format!(
-                "{model}\n  Input should be a valid dictionary or instance of {model} [type=model_type, input_value={shown}, input_type={kind}]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
-            )
-        })
-        .collect();
-    format!("4 validation errors for JSONRPCMessage\n{}", lines.join("\n"))
 }
 
 /// Serve until the process is stopped.

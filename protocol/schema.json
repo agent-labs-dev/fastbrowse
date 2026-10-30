@@ -858,12 +858,30 @@
     },
     "RunParams": {
       "additionalProperties": false,
-      "description": "One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
+      "description": "One run: the run's arguments, and what the server needs to talk to the client about it.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
       "properties": {
         "run_id": {
           "minLength": 1,
           "title": "Run Id",
           "type": "string"
+        },
+        "secrets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SecretRef"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "frames": {
+          "default": false,
+          "title": "Frames",
+          "type": "boolean"
+        },
+        "until": {
+          "default": false,
+          "title": "Until",
+          "type": "boolean"
         },
         "task": {
           "title": "Task",
@@ -951,24 +969,6 @@
           "default": null,
           "title": "Output Schema"
         },
-        "secrets": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/SecretRef"
-          },
-          "title": "Secrets",
-          "type": "array"
-        },
-        "frames": {
-          "default": false,
-          "title": "Frames",
-          "type": "boolean"
-        },
-        "until": {
-          "default": false,
-          "title": "Until",
-          "type": "boolean"
-        },
         "downloads": {
           "anyOf": [
             {
@@ -1043,6 +1043,8 @@
         "cdp_port": {
           "anyOf": [
             {
+              "maximum": 65535,
+              "minimum": 0,
               "type": "integer"
             },
             {
@@ -1093,9 +1095,13 @@
               "minItems": 2,
               "prefixItems": [
                 {
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 {
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "type": "integer"
                 }
               ],
@@ -1111,6 +1117,53 @@
         "cloud_allow_resizing": {
           "default": false,
           "title": "Cloud Allow Resizing",
+          "type": "boolean"
+        },
+        "cloud_extensions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Cloud Extensions",
+          "type": "array"
+        },
+        "cloud_timeout_minutes": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cloud Timeout Minutes"
+        },
+        "allowed_origins": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Origins"
+        },
+        "fetch": {
+          "default": false,
+          "title": "Fetch",
+          "type": "boolean"
+        },
+        "fetch_first": {
+          "default": false,
+          "title": "Fetch First",
           "type": "boolean"
         }
       },

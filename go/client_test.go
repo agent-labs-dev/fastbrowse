@@ -21,7 +21,7 @@ func serverBinary(t *testing.T) string {
 	}
 	built, _ := filepath.Abs(filepath.Join("..", "target", "debug", executable()))
 	if _, err := os.Stat(built); err != nil {
-		t.Skip("no fastbrowse binary: run `cargo build -p fastbrowse-cli`, or set FASTBROWSE_TEST_BINARY")
+		t.Skip("no fastbrowse binary: run `cargo build -p fastbrowse-cli --features scripted`, or set FASTBROWSE_TEST_BINARY")
 	}
 	return built
 }

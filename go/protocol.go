@@ -176,7 +176,6 @@ const (
 	LLMPurposeRead      LLMPurpose = "read"
 	LLMPurposeFieldText LLMPurpose = "field_text"
 	LLMPurposeRecover   LLMPurpose = "recover"
-	LLMPurposeVerify    LLMPurpose = "verify"
 	LLMPurposeCompose   LLMPurpose = "compose"
 	LLMPurposeShortcut  LLMPurpose = "shortcut"
 )
@@ -282,37 +281,42 @@ type RunFrame struct {
 	Frame string `json:"frame"`
 }
 
-// One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+// One run: the run's arguments, and what the server needs to talk to the client about it.
 //
 // The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
 // environment the server inherited.
 type RunParams struct {
-	RunID              string            `json:"run_id"`
-	Task               string            `json:"task"`
-	Start              *string           `json:"start,omitempty"`
-	Context            *string           `json:"context,omitempty"`
-	Inputs             map[string]string `json:"inputs,omitempty"`
-	Attachments        []RunAttachment   `json:"attachments,omitempty"`
-	Limits             *Limits           `json:"limits,omitempty"`
-	Authorization      *Authorization    `json:"authorization,omitempty"`
-	OutputSchema       json.RawMessage   `json:"output_schema,omitempty"`
-	Secrets            []SecretRef       `json:"secrets,omitempty"`
-	Frames             bool              `json:"frames,omitempty"`
-	Until              bool              `json:"until,omitempty"`
-	Downloads          *string           `json:"downloads,omitempty"`
-	Record             *string           `json:"record,omitempty"`
-	Cursor             bool              `json:"cursor,omitempty"`
-	Local              bool              `json:"local,omitempty"`
-	Chrome             *LocalChrome      `json:"chrome,omitempty"`
-	CloudProfile       *string           `json:"cloud_profile,omitempty"`
-	CDPURL             *string           `json:"cdp_url,omitempty"`
-	CDPPort            *int64            `json:"cdp_port,omitempty"`
-	Attach             bool              `json:"attach,omitempty"`
-	TargetMatch        *string           `json:"target_match,omitempty"`
-	Foreground         bool              `json:"foreground,omitempty"`
-	ProxyCountry       *string           `json:"proxy_country,omitempty"`
-	Viewport           *[2]int64         `json:"viewport,omitempty"`
-	CloudAllowResizing bool              `json:"cloud_allow_resizing,omitempty"`
+	RunID               string            `json:"run_id"`
+	Secrets             []SecretRef       `json:"secrets,omitempty"`
+	Frames              bool              `json:"frames,omitempty"`
+	Until               bool              `json:"until,omitempty"`
+	Task                string            `json:"task"`
+	Start               *string           `json:"start,omitempty"`
+	Context             *string           `json:"context,omitempty"`
+	Inputs              map[string]string `json:"inputs,omitempty"`
+	Attachments         []RunAttachment   `json:"attachments,omitempty"`
+	Limits              *Limits           `json:"limits,omitempty"`
+	Authorization       *Authorization    `json:"authorization,omitempty"`
+	OutputSchema        json.RawMessage   `json:"output_schema,omitempty"`
+	Downloads           *string           `json:"downloads,omitempty"`
+	Record              *string           `json:"record,omitempty"`
+	Cursor              bool              `json:"cursor,omitempty"`
+	Local               bool              `json:"local,omitempty"`
+	Chrome              *LocalChrome      `json:"chrome,omitempty"`
+	CloudProfile        *string           `json:"cloud_profile,omitempty"`
+	CDPURL              *string           `json:"cdp_url,omitempty"`
+	CDPPort             *int64            `json:"cdp_port,omitempty"`
+	Attach              bool              `json:"attach,omitempty"`
+	TargetMatch         *string           `json:"target_match,omitempty"`
+	Foreground          bool              `json:"foreground,omitempty"`
+	ProxyCountry        *string           `json:"proxy_country,omitempty"`
+	Viewport            *[2]int64         `json:"viewport,omitempty"`
+	CloudAllowResizing  bool              `json:"cloud_allow_resizing,omitempty"`
+	CloudExtensions     []string          `json:"cloud_extensions,omitempty"`
+	CloudTimeoutMinutes *int64            `json:"cloud_timeout_minutes,omitempty"`
+	AllowedOrigins      []string          `json:"allowed_origins,omitempty"`
+	Fetch               bool              `json:"fetch,omitempty"`
+	FetchFirst          bool              `json:"fetch_first,omitempty"`
 }
 
 type RunResult struct {

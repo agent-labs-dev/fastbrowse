@@ -47,7 +47,7 @@ fn text(value: Option<&Value>) -> Option<&str> {
 
 /// The item's username, password and authenticator code, keyed by the secret names the agent sees.
 pub fn login_values(item_json: &str, origin: &str) -> Result<IndexMap<String, SecretValue>, BitwardenError> {
-    // pydantic's message would quote the input, which here holds the password.
+    // serde's message would quote the input, which here holds the password.
     let unreadable = || BitwardenError("bw returned something other than a vault item".into());
     let item: Value = serde_json::from_str(item_json).map_err(|_| unreadable())?;
     let name = text(item.get("name")).ok_or_else(unreadable)?;

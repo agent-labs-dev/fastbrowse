@@ -15,7 +15,7 @@ fastbrowse-agent = { workspace = true }
 fastbrowse-browser = { workspace = true }
 # The CLI the `fastbrowse` command runs, with the hidden `--run-task` stand-ins the binary has (the Python CLI ships
 # its own), so the smoke test drives the wheel as it drives the binary.
-fastbrowse-cli = { workspace = true }
+fastbrowse-cli = { workspace = true, features = ["scripted"] }
 fastbrowse-clients = { workspace = true }
 fastbrowse-core = { workspace = true }
 fastbrowse-run = { workspace = true }

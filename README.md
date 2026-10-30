@@ -300,8 +300,7 @@ it. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens an
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
 
-**Your own script on the page.** `connect_cdp()` hands you the attached page without the agent, and
-`resolve_cdp_port(port)` returns the `ws://` URL behind a DevTools port:
+**Your own script on the page.** `connect_cdp()` hands you the attached page without the agent:
 
 ```python
 from fastbrowse import connect_cdp

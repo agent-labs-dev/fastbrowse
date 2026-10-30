@@ -85,14 +85,14 @@ fn nothing(_: Value) -> std::result::Result<(), String> {
 }
 
 fn boolean(value: Value) -> std::result::Result<bool, String> {
-    value.as_bool().ok_or_else(|| "the result cannot be used: Input should be a valid boolean".into())
+    value.as_bool().ok_or_else(|| "the result cannot be used: expected true or false".into())
 }
 
 fn secret(value: Value) -> std::result::Result<Option<String>, String> {
     match value {
         Value::Null => Ok(None),
         Value::String(value) => Ok(Some(value)),
-        _ => Err("the result cannot be used: Input should be a valid string".into()),
+        _ => Err("the result cannot be used: expected a string or null".into()),
     }
 }
 

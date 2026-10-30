@@ -11,13 +11,11 @@ pub mod embed;
 pub mod entry;
 pub mod mcp;
 pub mod options;
-pub mod pyjson;
 pub mod runner;
 #[cfg(feature = "scripted")]
 pub mod scripted;
 pub mod serve;
 pub mod totp;
-pub mod validate;
 
 /// `logging` as the entry points configure it: warnings and worse on stderr, named by whose they are.
 pub mod log {

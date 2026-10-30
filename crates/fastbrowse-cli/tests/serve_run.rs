@@ -16,7 +16,7 @@ use fastbrowse_core::models::{Authorization, Limits, LocalChrome, Status};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
-async fn received(fields: Value) -> fastbrowse_cli::runner::RunArgs {
+async fn received(fields: Value) -> common::Call {
     let recorder = Recorder::default();
     let mut client = serving(recorder.runner(), settings());
     client.result("run", Some(run_params("run-1", fields))).await;
@@ -78,7 +78,7 @@ async fn test_run_calls_run_task_and_replies_with_its_result() {
     assert_eq!(response["result"]["status"], "complete");
     assert_eq!(response["result"]["answer"], "The latest version is 0.28.1");
     assert_eq!(response["result"]["final_url"], "https://pypi.org/project/httpx/");
-    assert_eq!(recorder.calls()[0].task, "What is the latest version of httpx?");
+    assert_eq!(recorder.calls()[0].task.task, "What is the latest version of httpx?");
 }
 
 #[tokio::test]
@@ -96,19 +96,19 @@ async fn test_the_fields_that_describe_the_task_arrive_as_run_tasks_arguments() 
         "cloud_allow_resizing": true,
     }))
     .await;
-    assert_eq!(call.task, "Add the kettle to the cart");
-    assert_eq!(call.start.as_deref(), Some(START));
-    assert_eq!(call.inputs.unwrap()["email"], "ada@example.com");
-    assert_eq!(call.attachments[0].name, "receipt.pdf");
-    assert_eq!(call.attachments[0].content.0, b"\xfb\xff\xfe");
+    assert_eq!(call.task.task, "Add the kettle to the cart");
+    assert_eq!(call.task.start.as_deref(), Some(START));
+    assert_eq!(call.task.inputs.unwrap()["email"], "ada@example.com");
+    assert_eq!(call.task.attachments[0].name, "receipt.pdf");
+    assert_eq!(call.task.attachments[0].content.0, b"\xfb\xff\xfe");
     assert_eq!(
-        call.limits,
+        call.task.limits,
         Some(Limits { max_steps: Some(12), max_dollars: Some(0.5), max_seconds: Some(90.0), ..Limits::default() })
     );
-    assert_eq!(call.authorization, Some(Authorization { irreversible_actions: true }));
-    assert_eq!(call.downloads, Some(tools.path.join("downloads")));
-    assert_eq!(call.viewport, Some((1280, 720)));
-    assert!(call.cloud_allow_resizing);
+    assert_eq!(call.task.authorization, Some(Authorization { irreversible_actions: true }));
+    assert_eq!(call.task.downloads, Some(tools.path.join("downloads")));
+    assert_eq!(call.task.viewport, Some((1280, 720)));
+    assert!(call.task.cloud_allow_resizing);
 }
 
 /// One `run` with `record` to the binary, whose PATH is `path`: the reply, or the refusal.
@@ -149,30 +149,30 @@ fn test_a_recording_without_ffmpeg_is_a_configuration_error() {
 #[tokio::test]
 async fn test_fields_left_out_leave_run_task_its_own_defaults() {
     let call = received(json!({})).await;
-    assert!(call.start.is_none() && call.inputs.is_none() && call.attachments.is_empty());
+    assert!(call.task.start.is_none() && call.task.inputs.is_none() && call.task.attachments.is_empty());
     // None is what `run_task` reads as "the default limits" and "nothing authorized".
-    assert!(call.limits.is_none() && call.authorization.is_none());
-    assert!(call.downloads.is_none() && call.record.is_none() && call.viewport.is_none());
-    assert!(!call.cloud_allow_resizing && !call.attach);
+    assert!(call.task.limits.is_none() && call.task.authorization.is_none());
+    assert!(call.task.downloads.is_none() && call.task.record.is_none() && call.task.viewport.is_none());
+    assert!(!call.task.cloud_allow_resizing && !call.task.attach);
     // A run in a visible window stays behind it unless the caller asks to watch.
-    assert!(!call.foreground && received(json!({"foreground": true})).await.foreground);
+    assert!(!call.task.foreground && received(json!({"foreground": true})).await.task.foreground);
 }
 
 #[tokio::test]
 async fn test_the_browser_is_the_cloud_one_unless_the_run_asks_for_another() {
     let call = received(json!({})).await;
-    assert_eq!(call.browser_api_key.as_deref(), Some("bu"));
-    assert!(call.cdp_url.is_none() && call.cdp_port.is_none());
-    // The CLI's default country, since an unset one would browse from wherever the cloud put the browser.
-    assert_eq!(call.proxy_country.as_deref(), Some("us"));
+    assert_eq!(call.host.browser_api_key.as_deref(), Some("bu"));
+    assert!(call.task.cdp_url.is_none() && call.task.cdp_port.is_none());
+    // Unset here: the run browses from the United States when no country is asked for.
+    assert!(call.task.proxy_country.is_none());
 }
 
 #[tokio::test]
 async fn test_cloud_options_reach_the_cloud_browser() {
     let call = received(json!({"cloud_profile": "prof_1", "proxy_country": "UK"})).await;
-    assert_eq!(call.browser_api_key.as_deref(), Some("bu"));
-    assert_eq!(call.cloud_profile.as_deref(), Some("prof_1"));
-    assert_eq!(call.proxy_country.as_deref(), Some("uk"));
+    assert_eq!(call.host.browser_api_key.as_deref(), Some("bu"));
+    assert_eq!(call.task.cloud_profile.as_deref(), Some("prof_1"));
+    assert_eq!(call.task.proxy_country.as_deref(), Some("UK"));
 }
 
 #[tokio::test]
@@ -189,8 +189,8 @@ async fn test_local_chrome_runs_without_the_cloud_key() {
     ] {
         // A headed window and a kept profile are things only local Chrome has, so each implies it, as in the CLI.
         let call = received(fields).await;
-        assert!(call.browser_api_key.is_none());
-        assert_eq!(call.chrome, Some(expected));
+        assert!(call.host.browser_api_key.is_none());
+        assert_eq!(call.task.chrome, Some(expected));
     }
 }
 
@@ -214,9 +214,9 @@ async fn test_headed_and_profile_from_the_environment_count_as_they_do_for_the_c
     );
     client.result("run", Some(run_params("run-1", json!({})))).await;
     let call = &recorder.calls()[0];
-    assert!(call.browser_api_key.is_none());
+    assert!(call.host.browser_api_key.is_none());
     assert_eq!(
-        call.chrome,
+        call.task.chrome,
         Some(LocalChrome { binary: Some(CHROME.into()), headed: true, profile: Some("/tmp/from-env".into()) })
     );
 }
@@ -227,7 +227,7 @@ async fn test_a_chrome_binary_named_by_the_run_replaces_the_one_in_the_environme
     let mut client =
         serving(recorder.runner(), settings_with(|settings| settings.chrome = Some("not-installed-anywhere".into())));
     client.result("run", Some(run_params("run-1", json!({"local": true, "chrome": {"binary": CHROME}})))).await;
-    assert_eq!(recorder.calls()[0].chrome.as_ref().unwrap().binary.as_deref(), Some(CHROME));
+    assert_eq!(recorder.calls()[0].task.chrome.as_ref().unwrap().binary.as_deref(), Some(CHROME));
 }
 
 #[tokio::test]
@@ -241,10 +241,10 @@ async fn test_a_browser_handed_over_is_driven_without_starting_one() {
         (json!({"cdp_port": 9222, "attach": true, "target_match": "Inbox"}), None, Some(9222)),
     ] {
         let call = received(fields.clone()).await;
-        assert_eq!((call.cdp_url.as_deref(), call.cdp_port), (url, port));
-        assert!(call.browser_api_key.is_none());
-        assert_eq!(call.attach, fields.get("attach").is_some());
-        assert_eq!(call.target_match.as_deref(), fields.get("target_match").and_then(Value::as_str));
+        assert_eq!((call.task.cdp_url.as_deref(), call.task.cdp_port), (url, port));
+        assert!(call.host.browser_api_key.is_none());
+        assert_eq!(call.task.attach, fields.get("attach").is_some());
+        assert_eq!(call.task.target_match.as_deref(), fields.get("target_match").and_then(Value::as_str));
     }
 }
 
@@ -313,10 +313,17 @@ async fn test_invalid_params_are_refused_before_run_task_is_called() {
                 "run-1",
                 json!({"attachments": [{"name": "a", "mime_type": "text/plain", "content": "not base64!"}]}),
             ),
-            "attachments.0.content",
+            "attachments[0].content",
         ),
         (run_params("run-1", json!({"viewport": [1280]})), "viewport"),
         (run_params("run-1", json!({"proxy_country": "gb"})), "proxy_country"),
+        (run_params("run-1", json!({"local": true, "cloud_profile": "prof_1"})), "cloud_profile needs the cloud"),
+        (run_params("run-1", json!({"local": true, "proxy_country": "uk"})), "proxy_country needs the cloud"),
+        (run_params("run-1", json!({"cdp_url": "ws://b.test/devtools", "cdp_port": 9222})), "cdp_port both"),
+        (run_params("run-1", json!({"cdp_url": "http://b.test/devtools"})), "ws://"),
+        (run_params("run-1", json!({"cdp_port": 70000})), "cdp_port"),
+        (run_params("run-1", json!({"attach": true})), "attach and target_match need"),
+        (run_params("run-1", json!({"cdp_port": 9222, "chrome": {"headed": true}})), "chrome.headed"),
     ] {
         let recorder = Recorder::default();
         let mut client = serving(recorder.runner(), settings());
@@ -326,6 +333,17 @@ async fn test_invalid_params_are_refused_before_run_task_is_called() {
         assert!(recorder.calls().is_empty());
         assert!(client.inbox.is_empty());
     }
+}
+
+#[tokio::test]
+async fn test_a_profile_from_the_environment_counts_against_a_handed_over_browser() {
+    let recorder = Recorder::default();
+    let settings = settings_with(|settings| settings.profile = Some("/tmp/from-env".into()));
+    let mut client = serving(recorder.runner(), settings);
+    let response = client.request("run", Some(run_params("run-1", json!({"cdp_port": 9222})))).await;
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    assert!(response["error"]["message"].as_str().unwrap().contains("chrome.profile"), "{response}");
+    assert!(recorder.calls().is_empty());
 }
 
 #[tokio::test]
@@ -340,14 +358,6 @@ async fn test_a_configuration_error_is_refused_before_run_task_is_called() {
         (no_model_keys, json!({"local": true}), "OPENROUTER_API_KEY"),
         (|s| s.browser_use_api_key = None, json!({}), "BROWSER_USE_API_KEY"),
         (|s| s.chrome = Some("not-installed-anywhere".into()), json!({"local": true}), "Chrome was not found"),
-        (|_| {}, json!({"local": true, "cloud_profile": "prof_1"}), "--cloud-profile"),
-        (|_| {}, json!({"local": true, "proxy_country": "uk"}), "--proxy-country"),
-        (|_| {}, json!({"cdp_url": "ws://b.test/devtools", "cdp_port": 9222}), "--cdp-port"),
-        (|_| {}, json!({"cdp_url": "http://b.test/devtools"}), "ws://"),
-        (|_| {}, json!({"cdp_port": 70000}), "65535"),
-        (|_| {}, json!({"attach": true}), "--attach"),
-        (|_| {}, json!({"cdp_port": 9222, "chrome": {"headed": true}}), "--headed"),
-        (|s| s.profile = Some("/tmp/from-env".into()), json!({"cdp_port": 9222}), "--profile"),
     ];
     for (change, fields, named) in cases {
         let recorder = Recorder::default();
@@ -393,7 +403,7 @@ async fn test_a_run_after_the_first_has_finished_succeeds() {
     let first = client.result("run", Some(run_params("run-1", json!({})))).await;
     let second = client.result("run", Some(run_params("run-2", json!({"task": "Then check out"})))).await;
     assert_eq!((first["status"].clone(), second["status"].clone()), (json!("complete"), json!("complete")));
-    let tasks: Vec<String> = recorder.calls().into_iter().map(|call| call.task).collect();
+    let tasks: Vec<String> = recorder.calls().into_iter().map(|call| call.task.task).collect();
     assert_eq!(tasks, ["Add the kettle to the cart", "Then check out"]);
 }
 
@@ -429,7 +439,7 @@ async fn test_a_run_that_raises_ends_as_an_error_result_and_the_server_keeps_ser
         let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         async move {
             if attempt == 0 {
-                return Err(RunError::Failed("RuntimeError: Chrome went away".into()));
+                return Err(RunError::Invalid("Chrome went away".into()));
             }
             Ok(result(Status::Complete))
         }
@@ -439,7 +449,7 @@ async fn test_a_run_that_raises_ends_as_an_error_result_and_the_server_keeps_ser
     let result = client.result("run", Some(run_params("run-2", json!({})))).await;
     assert_eq!(
         (failed["result"]["status"].clone(), failed["result"]["error"].clone()),
-        (json!("error"), json!("RuntimeError: Chrome went away"))
+        (json!("error"), json!("Chrome went away"))
     );
     assert_eq!(result["status"], "complete");
 }

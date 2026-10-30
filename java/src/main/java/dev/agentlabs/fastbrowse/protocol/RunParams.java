@@ -8,13 +8,16 @@ import java.util.Map;
 import tools.jackson.databind.JsonNode;
 
 /**
- * One run. Apart from {@code run_id}, each field is the {@code run_task} argument or the CLI flag of the same name.
+ * One run: the run's arguments, and what the server needs to talk to the client about it.
  *
  * The reply is the {@code RunResult}. No API key is among the fields: model and browser keys come from the
  * environment the server inherited.
  */
 public record RunParams(
     @JsonProperty("run_id") String runId,
+    @JsonProperty("secrets") List<SecretRef> secrets,
+    @JsonProperty("frames") Boolean frames,
+    @JsonProperty("until") Boolean until,
     @JsonProperty("task") String task,
     @JsonProperty("start") String start,
     @JsonProperty("context") String context,
@@ -23,9 +26,6 @@ public record RunParams(
     @JsonProperty("limits") Limits limits,
     @JsonProperty("authorization") Authorization authorization,
     @JsonProperty("output_schema") JsonNode outputSchema,
-    @JsonProperty("secrets") List<SecretRef> secrets,
-    @JsonProperty("frames") Boolean frames,
-    @JsonProperty("until") Boolean until,
     @JsonProperty("downloads") String downloads,
     @JsonProperty("record") String record,
     @JsonProperty("cursor") Boolean cursor,
@@ -39,7 +39,12 @@ public record RunParams(
     @JsonProperty("foreground") Boolean foreground,
     @JsonProperty("proxy_country") String proxyCountry,
     @JsonProperty("viewport") List<Long> viewport,
-    @JsonProperty("cloud_allow_resizing") Boolean cloudAllowResizing) {
+    @JsonProperty("cloud_allow_resizing") Boolean cloudAllowResizing,
+    @JsonProperty("cloud_extensions") List<String> cloudExtensions,
+    @JsonProperty("cloud_timeout_minutes") Long cloudTimeoutMinutes,
+    @JsonProperty("allowed_origins") List<String> allowedOrigins,
+    @JsonProperty("fetch") Boolean fetch,
+    @JsonProperty("fetch_first") Boolean fetchFirst) {
 
     /** A builder for a {@code RunParams}, every field unset. */
     public static Builder builder() {
@@ -49,6 +54,9 @@ public record RunParams(
     /** Builds a {@code RunParams}. A field left unset is null, or the zero of a primitive. */
     public static final class Builder {
         private String runId;
+        private List<SecretRef> secrets;
+        private Boolean frames;
+        private Boolean until;
         private String task;
         private String start;
         private String context;
@@ -57,9 +65,6 @@ public record RunParams(
         private Limits limits;
         private Authorization authorization;
         private JsonNode outputSchema;
-        private List<SecretRef> secrets;
-        private Boolean frames;
-        private Boolean until;
         private String downloads;
         private String record;
         private Boolean cursor;
@@ -74,11 +79,31 @@ public record RunParams(
         private String proxyCountry;
         private List<Long> viewport;
         private Boolean cloudAllowResizing;
+        private List<String> cloudExtensions;
+        private Long cloudTimeoutMinutes;
+        private List<String> allowedOrigins;
+        private Boolean fetch;
+        private Boolean fetchFirst;
 
         private Builder() {}
 
         public Builder runId(String runId) {
             this.runId = runId;
+            return this;
+        }
+
+        public Builder secrets(List<SecretRef> secrets) {
+            this.secrets = secrets;
+            return this;
+        }
+
+        public Builder frames(Boolean frames) {
+            this.frames = frames;
+            return this;
+        }
+
+        public Builder until(Boolean until) {
+            this.until = until;
             return this;
         }
 
@@ -119,21 +144,6 @@ public record RunParams(
 
         public Builder outputSchema(JsonNode outputSchema) {
             this.outputSchema = outputSchema;
-            return this;
-        }
-
-        public Builder secrets(List<SecretRef> secrets) {
-            this.secrets = secrets;
-            return this;
-        }
-
-        public Builder frames(Boolean frames) {
-            this.frames = frames;
-            return this;
-        }
-
-        public Builder until(Boolean until) {
-            this.until = until;
             return this;
         }
 
@@ -207,8 +217,33 @@ public record RunParams(
             return this;
         }
 
+        public Builder cloudExtensions(List<String> cloudExtensions) {
+            this.cloudExtensions = cloudExtensions;
+            return this;
+        }
+
+        public Builder cloudTimeoutMinutes(Long cloudTimeoutMinutes) {
+            this.cloudTimeoutMinutes = cloudTimeoutMinutes;
+            return this;
+        }
+
+        public Builder allowedOrigins(List<String> allowedOrigins) {
+            this.allowedOrigins = allowedOrigins;
+            return this;
+        }
+
+        public Builder fetch(Boolean fetch) {
+            this.fetch = fetch;
+            return this;
+        }
+
+        public Builder fetchFirst(Boolean fetchFirst) {
+            this.fetchFirst = fetchFirst;
+            return this;
+        }
+
         public RunParams build() {
-            return new RunParams(runId, task, start, context, inputs, attachments, limits, authorization, outputSchema, secrets, frames, until, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudAllowResizing);
+            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudAllowResizing, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, fetchFirst);
         }
     }
 }

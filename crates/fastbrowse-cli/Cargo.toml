@@ -12,9 +12,9 @@ name = "fastbrowse"
 path = "src/main.rs"
 
 [features]
-default = ["scripted"]
+default = []
 # The stand-in runs and test servers the SDK and protocol tests start the binary with, as `--run-task NAME` and
-# FASTBROWSE_TEST_SERVER. A release build can leave them out.
+# FASTBROWSE_TEST_SERVER. Off unless asked for: the Python and Node bindings and the binaries CI publishes turn it on.
 scripted = ["tokio/signal"]
 
 [dependencies]
@@ -35,6 +35,9 @@ http-body-util = "0.1.5"
 bytes = "1.12.1"
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.1", default-features = false }
+serde_path_to_error = "0.1.20"
 
 [dev-dependencies]
+# The crate itself with its stand-ins, for the tests that start the binary with them.
+fastbrowse-cli = { path = ".", features = ["scripted"] }
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "io-util", "test-util"] }

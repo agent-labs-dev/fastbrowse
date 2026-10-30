@@ -95,8 +95,7 @@ async fn test_a_line_that_is_not_json_gets_a_parse_error_and_the_server_keeps_se
     client.send_line(b"\xff\xfe\n");
     let undecodable = client.receive().await;
     let result = client.result("initialize", Some(json!({"protocol_version": 1}))).await;
-    // The in-memory line keeps its newline, which CPython counts into the position as well.
-    let message = "Expecting ':' delimiter: line 2 column 1 (char 37)";
+    let message = "EOF while parsing an object at line 2 column 0";
     assert_eq!(refused, json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": message}}));
     assert_eq!(undecodable["error"]["code"], -32700);
     assert_eq!(result["protocol_version"], 1);

@@ -164,7 +164,7 @@ jobs:
           --target-dir "$RUNNER_TEMP/package"
       # The Go client against the binary just built, its scripted runs standing in for the agent. Its types are
       # written from protocol/schema.json and committed; a schema changed without them fails here.
-      - run: cargo build -p fastbrowse-cli --locked
+      - run: cargo build -p fastbrowse-cli --features scripted --locked
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version-file: go/go.mod, cache: false}
       - run: go -C go generate ./... && git diff --exit-code -- go

@@ -40,7 +40,7 @@ npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk                                   # starts `fastbrowse serve` from the uv environment
 go -C go generate ./... && git diff --exit-code -- go && go -C go vet ./...
-FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli --features scripted
 python3 scripts/java_types.py && git diff --exit-code -- java
 FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify    # Java 17+, Maven
 python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet

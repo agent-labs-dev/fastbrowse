@@ -13,8 +13,6 @@ public enum LLMPurpose {
     FIELD_TEXT,
     @JsonProperty("recover")
     RECOVER,
-    @JsonProperty("verify")
-    VERIFY,
     @JsonProperty("compose")
     COMPOSE,
     @JsonProperty("shortcut")

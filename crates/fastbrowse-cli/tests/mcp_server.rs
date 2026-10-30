@@ -8,15 +8,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CHROME, START, browser_event, result, runner, step, step_event};
+use common::{CHROME, Call, START, browser_event, result, runner, step, step_event};
 use fastbrowse_cli::mcp::{
-    self, DeclaredSecret, McpServer, Outbox, ServerConfig, Session, bounded, configure, is_loopback, output_model,
-    parse,
+    self, DeclaredSecret, McpServer, Outbox, ServerConfig, Session, bounded, configure, is_loopback, parse,
 };
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
+use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_clients::environment::{DecisionSource, Secret, Settings};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status};
-use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, mpsc};
@@ -52,7 +50,7 @@ fn answered(status: Status) -> RunResult {
 #[derive(Clone)]
 struct Recorder {
     result: RunResult,
-    calls: Arc<Mutex<Vec<RunArgs>>>,
+    calls: Arc<Mutex<Vec<Call>>>,
 }
 
 impl Recorder {
@@ -62,11 +60,11 @@ impl Recorder {
 
     fn runner(&self) -> Arc<dyn Runner> {
         let recorder = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let recorder = recorder.clone();
             async move {
                 recorder.calls.lock().unwrap().push(args.clone());
-                let on_event = args.on_event.clone().unwrap();
+                let on_event = args.host.on_event.clone().unwrap();
                 on_event(browser_event(Some("https://live.example.com/session"), None)).await;
                 for index in 0..recorder.result.steps.len() {
                     on_event(step_event(index as i64, None)).await;
@@ -76,7 +74,7 @@ impl Recorder {
         })
     }
 
-    fn last(&self) -> RunArgs {
+    fn last(&self) -> Call {
         self.calls.lock().unwrap().last().cloned().expect("a run was started")
     }
 
@@ -211,7 +209,7 @@ async fn test_authorize_is_refused_unless_the_operator_allowed_it() {
     assert!(!recorder.called());
     let config = ServerConfig { allow_authorize: true, ..ServerConfig::default() };
     call(config, &recorder, json!({"task": "Buy it", "start": START, "authorize": true})).await;
-    assert!(recorder.last().authorization.unwrap().irreversible_actions);
+    assert!(recorder.last().task.authorization.unwrap().irreversible_actions);
 }
 
 #[tokio::test]
@@ -229,7 +227,7 @@ async fn test_a_call_cannot_raise_the_servers_limits() {
     let config = ServerConfig { ceilings, ..ServerConfig::default() };
     let arguments = json!({"task": "t", "start": START, "max_steps": 500, "max_dollars": 9.0, "max_seconds": 10});
     call(config, &recorder, arguments).await;
-    let limits = recorder.last().limits.unwrap();
+    let limits = recorder.last().task.limits.unwrap();
     assert_eq!((limits.max_steps, limits.max_dollars, limits.max_seconds), (Some(20), Some(0.5), Some(10.0)));
 }
 
@@ -247,12 +245,12 @@ async fn test_secrets_reach_a_run_only_on_their_own_origin() {
     let config = ServerConfig { secrets: vec![secret], ..ServerConfig::default() };
     let recorder = Recorder::new(answered(Status::Complete));
     call(config.clone(), &recorder, json!({"task": "Sign in", "start": START})).await;
-    let resolver = recorder.last().secrets.unwrap();
+    let resolver = recorder.last().host.secrets.unwrap();
     assert_eq!(resolver.available().iter().map(|r| r.name.clone()).collect::<Vec<_>>(), ["password"]);
     assert_eq!(resolver.resolve("password", "https://shop.example.com").await.as_deref(), Some("hunter2"));
     assert_eq!(resolver.resolve("password", "https://evil.example.com").await, None);
     call(config, &recorder, json!({"task": "Sign in", "start": "https://other.example.com/"})).await;
-    assert!(recorder.last().secrets.is_none());
+    assert!(recorder.last().host.secrets.is_none());
 }
 
 #[tokio::test]
@@ -292,22 +290,15 @@ async fn test_fields_become_the_runs_output_schema() {
     let recorder = Recorder::new(answered(Status::Complete));
     let fields = json!({"price": {"type": "number", "description": "In USD"}, "listed": {"type": "date"}});
     call(ServerConfig::default(), &recorder, json!({"task": "t", "start": START, "fields": fields})).await;
-    let schema = recorder.last().output_schema.unwrap();
-    let price = &schema.fields()[0];
-    assert_eq!((price.name.as_str(), price.description.as_deref()), ("price", Some("In USD")));
-    assert_eq!(price.ty, fastbrowse_core::output_schema::OutputType::Number(Vec::new()));
-    assert_eq!(schema.fields()[1].name, "listed");
-}
-
-fn fields(names: &[&str]) -> IndexMap<String, (String, Option<String>)> {
-    names.iter().map(|name| (name.to_string(), ("string".to_string(), None))).collect()
-}
-
-#[test]
-fn test_field_names_that_cannot_be_a_model_field_are_refused() {
-    for name in ["_private", "model_config", "class", "two words", "json"] {
-        assert!(output_model(&fields(&[name])).is_err(), "{name}");
-    }
+    let schema = recorder.last().task.output_schema.unwrap();
+    assert_eq!(
+        Value::Object(schema),
+        json!({
+            "type": "object",
+            "properties": {"price": {"type": "number", "description": "In USD"}, "listed": {"type": "string"}},
+            "required": ["price", "listed"],
+        })
+    );
 }
 
 #[tokio::test]
@@ -366,7 +357,7 @@ fn test_configure_refuses_a_setup_that_cannot_work() {
         (&["--secret", "password=UNSET@https://a.example"], |_| {}, "unset variables: UNSET"),
         (&["--profile", "p", "--max-concurrent", "2"], |_| {}, "one Chrome at a time"),
         (&[], |_| {}, "BROWSER_USE_API_KEY"),
-        (&["--local", "--cloud-profile", "p"], |_| {}, "--cloud-profile needs the cloud browser"),
+        (&["--local", "--cloud-profile", "p"], |_| {}, "cloud_profile needs the cloud browser"),
         (&["--headed"], |s| s.chrome = Some("no-such-chrome".into()), "Chrome was not found"),
         // FASTBROWSE_HEADED alone still means local Chrome, as it did before cloud became the default.
         (
@@ -458,8 +449,8 @@ async fn test_http_needs_the_bearer_token_except_for_the_health_check() {
 
 #[tokio::test]
 async fn test_a_run_that_overruns_its_deadline_is_abandoned() {
-    let hangs = runner(|args: RunArgs| async move {
-        args.cancel.guard(tokio::time::sleep(Duration::from_secs(30))).await?;
+    let hangs = runner(|args: Call| async move {
+        args.host.cancel.guard(tokio::time::sleep(Duration::from_secs(30))).await?;
         unreachable!("the deadline stops the run first")
     });
     let config = ServerConfig { grace_seconds: 0.0, ..ServerConfig::default() };
@@ -474,10 +465,10 @@ async fn test_a_call_waiting_for_a_slot_does_not_spend_its_own_time_limit() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (on_start, on_release) = (started.clone(), release.clone());
-    let both = runner(move |args: RunArgs| {
+    let both = runner(move |args: Call| {
         let (started, release) = (on_start.clone(), on_release.clone());
         async move {
-            if args.task == "first" {
+            if args.task.task == "first" {
                 started.notify_one();
                 release.notified().await;
             }

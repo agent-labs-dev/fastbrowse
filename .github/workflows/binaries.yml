@@ -80,7 +80,7 @@ jobs:
           else
             build=(cargo build --target "$TRIPLE")
           fi
-          "${build[@]}" --locked --profile release-small -p fastbrowse-cli
+          "${build[@]}" --locked --profile release-small -p fastbrowse-cli --features scripted
           "${build[@]}" --locked --release -p fastbrowse-node
       - name: Stage the build
         run: |

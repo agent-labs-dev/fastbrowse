@@ -5,24 +5,23 @@
 mod bridge;
 mod connect;
 mod host;
-mod options;
 
 use std::sync::Arc;
 
 use fastbrowse_cli::embed::{HostCall, HostResolve};
-use fastbrowse_cli::runner::Cancel;
 use fastbrowse_clients::http::{Http, Request, Response};
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::Event;
+use fastbrowse_core::models::SecretRef;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Trace;
-use fastbrowse_run::RunError;
+use fastbrowse_run::{Cancel, Host, RunError, RunTask};
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCFunction, PyTuple};
 
 use crate::bridge::{Context, Failure, HostJev, HostLlm, HostSecrets, HostTransport, LlmCall, Sent};
 use crate::host::{host_call, runtime};
-use crate::options::Options;
 
 pyo3::create_exception!(
     fastbrowse._native,
@@ -48,12 +47,12 @@ fn nothing(_: &Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
-/// `TypeAdapter(bool).validate_python(answer, strict=True)`: anything but a bool is refused, as `serve` refuses it.
+/// An `until` answer: anything but a bool is refused, as `serve` refuses it.
 fn strict_bool(answer: &Bound<'_, PyAny>) -> PyResult<bool> {
     answer
         .cast::<pyo3::types::PyBool>()
         .map(|value| value.is_true())
-        .map_err(|_| PyValueError::new_err("the result cannot be used: Input should be a valid boolean"))
+        .map_err(|_| PyValueError::new_err("the result cannot be used: expected true or false"))
 }
 
 fn resolver(event_loop: Arc<Py<PyAny>>, function: Py<PyAny>) -> HostResolve {
@@ -141,8 +140,9 @@ fn refused(kind: &str, message: String) -> PyErr {
     RunRefused::new_err((kind.to_string(), message))
 }
 
-/// Start a run on the running event loop. `options` is `run_task`'s data arguments as JSON (`fastbrowse.native`
-/// writes them), and each callback is a Python function: `on_event` gets each event as JSON, `on_frame` each JPEG as
+/// Start a run on the running event loop. `task` is the run as JSON, the `RunTask` every entry point shares
+/// (`fastbrowse.native` writes it); `browser_api_key`, `secrets` (the refs the resolver offers, as JSON) and `config`
+/// (JSON) are the host's side. Each callback is a Python function: `on_event` gets each event as JSON, `on_frame` each JPEG as
 /// bytes, `until` the final URL, `resolve_secret` a name and an origin. `check_access`, `jev`, `llm` and `http` are the
 /// caller's own objects wrapped by `fastbrowse.native` into functions that answer JSON (see `bridge`).
 ///
@@ -150,14 +150,16 @@ fn refused(kind: &str, message: String) -> PyErr {
 /// until or secret callback that raises stops the run, which then refuses with `callback`.
 #[pyfunction]
 #[pyo3(signature = (
-    task, options, *, on_event=None, on_frame=None, until=None, resolve_secret=None, check_access=None, jev=None,
-    llm=None, http=None, trace=false,
+    task, *, browser_api_key=None, secrets=None, config=None, on_event=None, on_frame=None, until=None,
+    resolve_secret=None, check_access=None, jev=None, llm=None, http=None, trace=false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn run_task(
     py: Python<'_>,
-    task: String,
-    options: &str,
+    task: &str,
+    browser_api_key: Option<String>,
+    secrets: Option<&str>,
+    config: Option<&str>,
     on_event: Option<Py<PyAny>>,
     on_frame: Option<Py<PyAny>>,
     until: Option<Py<PyAny>>,
@@ -168,10 +170,11 @@ fn run_task(
     http: Option<Py<PyAny>>,
     trace: bool,
 ) -> PyResult<Run> {
-    let mut options: Options =
-        serde_json::from_str(options).map_err(|error| PyValueError::new_err(error.to_string()))?;
-    let refs = options.secrets.take();
-    let mut run = options.task().map_err(PyValueError::new_err)?;
+    let invalid = |error: serde_json::Error| refused("invalid", error.to_string());
+    let task: RunTask = serde_json::from_str(task).map_err(invalid)?;
+    let refs: Option<Vec<SecretRef>> = secrets.map(serde_json::from_str).transpose().map_err(invalid)?;
+    let config: Option<Config> = config.map(serde_json::from_str).transpose().map_err(invalid)?;
+    let mut run = Host { browser_api_key, config, ..Host::default() };
     let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
     let result = event_loop.call_method0("create_future")?;
     let finished = event_loop.call_method0("create_future")?;
@@ -249,15 +252,11 @@ fn run_task(
     if trace.enabled() {
         run.http = Some(run.http.take().unwrap_or_else(Http::hyper).with_trace(trace.clone()));
     }
-    let stopped = cancel.clone();
-    run.cancel = Some(Arc::new(move || {
-        let stopped = stopped.clone();
-        Box::pin(async move { stopped.tripped().await })
-    }));
+    run.cancel = cancel.clone();
     let handle = Run { result: result.clone().unbind(), finished: finished.clone().unbind(), cancel, trace };
     let (result, finished) = (result.unbind(), finished.unbind());
     runtime().spawn(async move {
-        let outcome = fastbrowse_run::run_task(&task, run).await;
+        let outcome = fastbrowse_run::run_task(task, run).await;
         Python::attach(|py| {
             let settle =
                 PyCFunction::new_closure(py, None, None, move |args: &Bound<'_, PyTuple>, _| -> PyResult<()> {
@@ -273,7 +272,9 @@ fn run_task(
                                 None
                             }
                             Err(RunError::Cancelled) => Some(refused("cancelled", "the run was cancelled".into())),
-                            Err(RunError::Invalid(message)) => Some(refused("invalid", message.clone())),
+                            Err(RunError::Invalid(message) | RunError::UnsupportedSchema(message)) => {
+                                Some(refused("invalid", message.clone()))
+                            }
                             Err(RunError::Configuration(message)) => Some(refused("configuration", message.clone())),
                             Err(RunError::Recording(message)) => Some(refused("recording", message.clone())),
                         };

@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
+use fastbrowse_cli::runner::{Host, RunError, RunTask, Runner};
 use fastbrowse_cli::serve::{Server, SettingsSource, Transport};
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::BoxFuture;
@@ -257,33 +257,40 @@ pub fn run_params(run_id: &str, fields: Value) -> Value {
     params
 }
 
+/// What a runner was called with: the run, and what hosts it.
+#[derive(Clone)]
+pub struct Call {
+    pub task: RunTask,
+    pub host: Host,
+}
+
 /// Stands where `run_task` does, and keeps what it was called with.
 #[derive(Clone, Default)]
 pub struct Recorder {
-    pub calls: Arc<Mutex<Vec<RunArgs>>>,
+    pub calls: Arc<Mutex<Vec<Call>>>,
     pub result: Option<RunResult>,
     pub events: Vec<Event>,
     pub hold: Option<Arc<Notify>>,
 }
 
 impl Recorder {
-    pub fn calls(&self) -> Vec<RunArgs> {
+    pub fn calls(&self) -> Vec<Call> {
         self.calls.lock().unwrap().clone()
     }
 
     pub fn runner(&self) -> Arc<dyn Runner> {
         let recorder = self.clone();
-        Arc::new(move |args: RunArgs| -> BoxFuture<'static, Result<RunResult, RunError>> {
+        Arc::new(move |task: RunTask, host: Host| -> BoxFuture<'static, Result<RunResult, RunError>> {
             let recorder = recorder.clone();
             Box::pin(async move {
-                recorder.calls.lock().unwrap().push(args.clone());
+                recorder.calls.lock().unwrap().push(Call { task, host: host.clone() });
                 for event in recorder.events.clone() {
-                    if let Some(on_event) = &args.on_event {
+                    if let Some(on_event) = &host.on_event {
                         on_event(event).await;
                     }
                 }
                 if let Some(hold) = &recorder.hold {
-                    args.cancel.guard(hold.notified()).await?;
+                    host.cancel.guard(hold.notified()).await?;
                 }
                 Ok(recorder.result.clone().unwrap_or_else(|| result(Status::Complete)))
             })
@@ -294,10 +301,12 @@ impl Recorder {
 /// A runner from an async closure.
 pub fn runner<F, Fut>(run: F) -> Arc<dyn Runner>
 where
-    F: Fn(RunArgs) -> Fut + Send + Sync + 'static,
+    F: Fn(Call) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<RunResult, RunError>> + Send + 'static,
 {
-    Arc::new(move |args: RunArgs| -> BoxFuture<'static, Result<RunResult, RunError>> { Box::pin(run(args)) })
+    Arc::new(move |task: RunTask, host: Host| -> BoxFuture<'static, Result<RunResult, RunError>> {
+        Box::pin(run(Call { task, host }))
+    })
 }
 
 /// The binary under test.

@@ -9,7 +9,7 @@ use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluatio
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{LLMPurpose, Status};
 use fastbrowse_core::telemetry::Ledger;
-use fastbrowse_run::{RunError, RunTask, run_task};
+use fastbrowse_run::{Cancel, Host, RunError, RunTask, run_task};
 use indexmap::IndexMap;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
@@ -44,15 +44,21 @@ impl LLMClient for Silent {
     }
 }
 
-fn task(change: impl FnOnce(&mut RunTask)) -> RunTask {
-    let mut options = RunTask {
+/// "read the page", run with clients that answer nothing and settings from nowhere, as `change` alters them.
+fn task(change: impl FnOnce(&mut RunTask, &mut Host)) -> (RunTask, Host) {
+    let mut task = RunTask { task: "read the page".into(), ..RunTask::default() };
+    let mut host = Host {
         jev: Some(Arc::new(Silent)),
         llm: Some(Arc::new(Silent)),
         settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
-        ..RunTask::default()
+        ..Host::default()
     };
-    change(&mut options);
-    options
+    change(&mut task, &mut host);
+    (task, host)
+}
+
+async fn run((task, host): (RunTask, Host)) -> Result<fastbrowse_core::models::RunResult, RunError> {
+    run_task(task, host).await
 }
 
 fn answering(status: u16) -> Http {
@@ -63,11 +69,11 @@ fn answering(status: u16) -> Http {
 
 #[tokio::test]
 async fn test_a_devtools_port_without_its_discovery_route_names_the_websocket_to_pass() {
-    let options = task(|o| {
+    let options = task(|o, h| {
         o.cdp_port = Some(9222);
-        o.http = Some(answering(404));
+        h.http = Some(answering(404));
     });
-    let result = run_task("read the page", options).await.unwrap();
+    let result = run(options).await.unwrap();
     assert_eq!(result.status, Status::Error);
     let error = result.error.unwrap();
     assert!(error.contains("answered 404") && error.contains("DevToolsActivePort"), "{error}");
@@ -77,11 +83,11 @@ async fn test_a_devtools_port_without_its_discovery_route_names_the_websocket_to
 #[tokio::test]
 async fn test_a_devtools_port_refusing_discovery_names_the_status_without_the_chrome_inspect_advice() {
     for status in [401, 403, 500] {
-        let options = task(|o| {
+        let options = task(|o, h| {
             o.cdp_port = Some(9222);
-            o.http = Some(answering(status));
+            h.http = Some(answering(status));
         });
-        let result = run_task("read the page", options).await.unwrap();
+        let result = run(options).await.unwrap();
         assert_eq!(result.status, Status::Error);
         let error = result.error.unwrap();
         assert!(error.contains(&format!("answered {status}")), "{error}");
@@ -99,50 +105,56 @@ async fn test_a_browser_connection_that_closes_is_an_outage() {
             let _ = socket.read(&mut buffer).await;
         }
     });
-    let options = task(|o| {
+    let options = task(|o, _| {
         o.cdp_url = Some(format!("ws://127.0.0.1:{port}/devtools/browser/x"));
         o.attach = true;
     });
-    let result = run_task("read the page", options).await.unwrap();
+    let result = run(options).await.unwrap();
     assert_eq!(result.status, Status::Unavailable, "{:?}", result.error);
     assert!(result.error.is_some());
 }
 
 #[tokio::test]
 async fn browser_choices_that_contradict_each_other_are_errors_before_any_browser_starts() {
-    let cases: Vec<(RunTask, &str)> = vec![
-        (task(|o| o.cloud_extensions = vec!["x".into()]), "cloud_extensions"),
+    let cases: Vec<((RunTask, Host), &str)> = vec![
+        (task(|o, _| o.cloud_extensions = vec!["x".into()]), "cloud_extensions"),
         (
-            task(|o| {
+            task(|o, _| {
                 o.cdp_url = Some("ws://localhost:1/x".into());
                 o.cdp_port = Some(1);
             }),
             "pass one",
         ),
-        (task(|o| o.attach = true), "attach and target_match require cdp_url or cdp_port"),
+        (task(|o, _| o.attach = true), "attach and target_match need cdp_url or cdp_port"),
         (
-            task(|o| {
+            task(|o, h| {
                 o.cdp_url = Some("ws://localhost:1/x".into());
-                o.browser_api_key = Some("key".into());
+                h.browser_api_key = Some("key".into());
             }),
             "a cloud key would start a second one",
         ),
-        (task(|o| o.cloud_profile = Some("p".into())), "needs a cloud browser"),
+        (task(|o, _| o.cloud_profile = Some("p".into())), "needs a key"),
     ];
     for (options, expected) in cases {
-        let result = run_task("read the page", options).await.unwrap();
-        assert_eq!(result.status, Status::Error);
-        assert!(result.error.as_deref().is_some_and(|e| e.contains(expected)), "{:?}", result.error);
+        // Arguments that contradict each other are refused outright; a browser that cannot start ends the run.
+        let error = match run(options).await {
+            Ok(result) => {
+                assert_eq!(result.status, Status::Error);
+                result.error.unwrap_or_default()
+            }
+            Err(refused) => refused.to_string(),
+        };
+        assert!(error.contains(expected), "{error}");
     }
 }
 
 #[tokio::test]
 async fn a_recording_cannot_be_combined_with_allowed_origins() {
-    let options = task(|o| {
+    let options = task(|o, _| {
         o.allowed_origins = Some(vec!["https://example.test".into()]);
         o.record = Some("r.mp4".into());
     });
-    let refused = run_task("read the page", options).await.unwrap_err();
+    let refused = run(options).await.unwrap_err();
     assert!(matches!(refused, RunError::Invalid(message) if message.contains("allowed_origins")));
 }
 
@@ -156,20 +168,15 @@ async fn a_cancelled_run_closes_its_connection_before_it_returns() {
         let (socket, _) = listener.accept().await.unwrap();
         let _ = accepted.send(socket);
     });
-    let (stop, stopped) = tokio::sync::watch::channel(false);
-    let options = task(|o| {
+    let cancel = Cancel::default();
+    let options = task(|o, h| {
         o.cdp_url = Some(format!("ws://127.0.0.1:{port}/devtools/browser/x"));
-        o.cancel = Some(Arc::new(move || -> BoxFuture<'static, ()> {
-            let mut stopped = stopped.clone();
-            Box::pin(async move {
-                let _ = stopped.wait_for(|stop| *stop).await;
-            })
-        }));
+        h.cancel = cancel.clone();
     });
-    let run = tokio::spawn(run_task("read the page", options));
+    let running = tokio::spawn(run(options));
     let mut socket = connected.await.unwrap();
-    stop.send(true).unwrap();
-    let refused = run.await.unwrap().unwrap_err();
+    cancel.trip();
+    let refused = running.await.unwrap().unwrap_err();
     assert_eq!(refused, RunError::Cancelled);
     // The run has returned, so its end of the connection is closed: what is left to read ends.
     let mut rest = Vec::new();
@@ -193,23 +200,20 @@ fn shell_and_no_devtools() -> Http {
 #[tokio::test]
 async fn test_fetch_first_goes_to_the_browser_when_the_read_needs_one() {
     let read = |change: fn(&mut RunTask)| {
-        task(move |o| {
+        task(move |o, h| {
             o.start = Some("https://shop.example/app".into());
-            o.http = Some(shell_and_no_devtools());
+            h.http = Some(shell_and_no_devtools());
             change(o);
         })
     };
     // Fetch mode ends where the read does, naming why.
-    let result = run_task("read the page", read(|o| o.fetch = true)).await.unwrap();
+    let result = run(read(|o| o.fetch = true)).await.unwrap();
     assert_eq!(result.status, Status::Blocked, "{:?}", result.error);
     // Fetch-first takes the same shell to the browser: the handed-over port is asked for its socket.
-    let result = run_task(
-        "read the page",
-        read(|o| {
-            o.fetch_first = true;
-            o.cdp_port = Some(9222);
-        }),
-    )
+    let result = run(read(|o| {
+        o.fetch_first = true;
+        o.cdp_port = Some(9222);
+    }))
     .await
     .unwrap();
     assert_eq!(result.status, Status::Error);
@@ -250,15 +254,15 @@ async fn test_fetch_first_takes_a_bot_check_jev_saw_in_the_document_to_the_brows
         };
         Box::pin(async move { Ok(response) })
     }));
-    let options = task(|o| {
-        o.jev = Some(Arc::new(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()))));
-        o.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+    let options = task(|o, h| {
+        h.jev = Some(Arc::new(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()))));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
         o.start = Some("https://shop.example/app".into());
-        o.http = Some(http);
+        h.http = Some(http);
         o.fetch_first = true;
         o.cdp_port = Some(9222);
     });
-    let result = run_task("read the page", options).await.unwrap();
+    let result = run(options).await.unwrap();
     // The handed-over port is asked for its socket, so the run reached the browser.
     assert_eq!(result.status, Status::Error, "{:?}", result.error);
     assert!(result.error.as_deref().is_some_and(|error| error.contains("answered 404")), "{:?}", result.error);

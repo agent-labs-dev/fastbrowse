@@ -4,7 +4,7 @@
 export type ArtifactKind = 'download';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unknown';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
-export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'verify' | 'compose' | 'shortcut';
+export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'compose' | 'shortcut';
 /**
  * Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
  * next page of a list or DONE once a lookup is answered.
@@ -310,13 +310,16 @@ export interface RunFrame {
   frame: string;
 }
 /**
- * One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+ * One run: the run's arguments, and what the server needs to talk to the client about it.
  *
  * The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
  * environment the server inherited.
  */
 export interface RunParams {
   run_id: string;
+  secrets?: SecretRef[];
+  frames?: boolean;
+  until?: boolean;
   task: string;
   start?: string | null;
   context?: string | null;
@@ -329,9 +332,6 @@ export interface RunParams {
   output_schema?: {
     [k: string]: unknown;
   } | null;
-  secrets?: SecretRef[];
-  frames?: boolean;
-  until?: boolean;
   downloads?: string | null;
   record?: string | null;
   cursor?: boolean;
@@ -346,6 +346,11 @@ export interface RunParams {
   proxy_country?: string | null;
   viewport?: [number, number] | null;
   cloud_allow_resizing?: boolean;
+  cloud_extensions?: string[];
+  cloud_timeout_minutes?: number | null;
+  allowed_origins?: string[] | null;
+  fetch?: boolean;
+  fetch_first?: boolean;
 }
 export interface SecretRef {
   name: string;

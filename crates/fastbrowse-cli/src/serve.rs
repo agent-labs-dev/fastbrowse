@@ -14,25 +14,24 @@ use std::sync::{Arc, Mutex};
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{
-    Attachment, Bytes, Event, EventHandler, FrameHandler, Image, RunResult, SecretRef, SecretResolver, UntilCheck,
+    Event, EventHandler, FrameHandler, Image, RunResult, SecretRef, SecretResolver, UntilCheck,
 };
-use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::protocol::{
-    Error, ErrorCode, ErrorResponse, InitializeResult, JsonRpc, Method, Notification, PROTOCOL_VERSION, RequestId,
-    Response, RunCancelParams, RunEvent, RunFrame, RunParams, RunUntilParams, SecretsResolveParams, ServerMethod,
-    ServerRequest,
+    Error, ErrorCode, ErrorResponse, InitializeParams, InitializeResult, JsonRpc, Method, NoParams, Notification,
+    PROTOCOL_VERSION, Request, RequestId, Response, RunCancelParams, RunEvent, RunFrame, RunParams, RunUntilParams,
+    SecretsResolveParams, ServerMethod, ServerRequest,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text::repr;
-use fastbrowse_core::safety::secret_allowed;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::options::{self, HandOver};
-use crate::runner::{Cancel, RunArgs, RunError, Runner};
-use crate::{log, pyjson, validate};
+use crate::log;
+use crate::options;
+use crate::runner::{Cancel, Host, RunError, RunTask, Runner};
 
 /// Lines in and lines out. `receive` returns one line, or None once the input has ended. `send` writes one whole
 /// line before it returns, so lines go out in the order they were sent and never interleave.
@@ -211,10 +210,10 @@ impl Server {
     }
 
     async fn receive(&self, line: &[u8]) {
-        let payload = match pyjson::loads(line) {
+        let payload: Value = match serde_json::from_slice(line) {
             Ok(payload) => payload,
-            Err(message) => {
-                let error = Error { code: ErrorCode::ParseError, message };
+            Err(error) => {
+                let error = Error { code: ErrorCode::ParseError, message: error.to_string() };
                 return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
             }
         };
@@ -224,28 +223,33 @@ impl Server {
         {
             return self.settle(map);
         }
-        if let Err(problems) = validate::check(&validate::request(), &payload) {
-            let error = Error { code: ErrorCode::InvalidRequest, message: problems };
-            return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: id_of(&payload), error }).await;
-        }
-        let id = id_of(&payload);
-        let method = payload["method"].as_str().unwrap_or_default().to_string();
+        let request: Request = match serde_json::from_value(payload.clone()) {
+            Ok(request) => request,
+            Err(error) => {
+                let error = Error { code: ErrorCode::InvalidRequest, message: error.to_string() };
+                return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: id_of(&payload), error }).await;
+            }
+        };
+        let id = request.id;
         let params = match payload.get("params") {
             None | Some(Value::Null) => json!({}),
             Some(params) => params.clone(),
         };
-        let Some(known) = Method::parse(&method) else {
-            let refusal = refused(ErrorCode::MethodNotFound, format!("unknown method {}", repr(&method)));
+        let Some(known) = Method::parse(&request.method) else {
+            let refusal = refused(ErrorCode::MethodNotFound, format!("unknown method {}", repr(&request.method)));
             return self.refuse(id.as_ref(), refusal).await;
         };
-        let shape = match known {
-            Method::Initialize => validate::initialize_params(),
-            Method::Run => validate::run_params(),
-            Method::RunCancel => validate::run_cancel_params(),
-            Method::Shutdown => validate::no_params(),
+        if params.is_array() {
+            let message = format!("{}: params: name them; no method takes them by position", known.as_str());
+            return self.refuse(id.as_ref(), refused(ErrorCode::InvalidParams, message)).await;
+        }
+        let checked = match known {
+            Method::Initialize => read::<InitializeParams>(known, params.clone()).map(drop),
+            Method::Shutdown => read::<NoParams>(known, params.clone()).map(drop),
+            Method::RunCancel | Method::Run => Ok(()),
         };
-        if let Err(problems) = validate::check(&shape, &params) {
-            return self.refuse(id.as_ref(), refused(ErrorCode::InvalidParams, format!("{method}: {problems}"))).await;
+        if let Err(refusal) = checked {
+            return self.refuse(id.as_ref(), refusal).await;
         }
         match known {
             Method::Initialize => {
@@ -259,16 +263,18 @@ impl Server {
                 self.state().closing = true;
                 self.respond(id.as_ref(), Value::Null).await;
             }
-            Method::RunCancel => {
-                match serde_json::from_value::<RunCancelParams>(params) {
-                    Ok(cancel) if self.state().active.as_deref() == Some(cancel.run_id.as_str()) => self.cancel_run(),
-                    _ => {}
+            Method::RunCancel => match read::<RunCancelParams>(known, params) {
+                Ok(cancel) => {
+                    if self.state().active.as_deref() == Some(cancel.run_id.as_str()) {
+                        self.cancel_run();
+                    }
+                    self.respond(id.as_ref(), Value::Null).await;
                 }
-                self.respond(id.as_ref(), Value::Null).await;
-            }
-            Method::Run => match serde_json::from_value::<RunParams>(params) {
+                Err(refusal) => self.refuse(id.as_ref(), refusal).await,
+            },
+            Method::Run => match read::<RunParams>(known, params) {
                 Ok(params) => self.start_run(id, params).await,
-                Err(error) => self.refuse(id.as_ref(), params_refused(&error)).await,
+                Err(refusal) => self.refuse(id.as_ref(), refusal).await,
             },
         }
     }
@@ -314,7 +320,8 @@ impl Server {
             cancel: cancel.clone(),
             failure: Arc::default(),
         };
-        let arguments = match self.arguments(&params, &context) {
+        let run_id = params.run_id.clone();
+        let arguments = match self.arguments(params, &context) {
             Ok(arguments) => arguments,
             Err(refusal) => {
                 self.finish_run();
@@ -323,10 +330,11 @@ impl Server {
         };
         let server = self.clone();
         let mut running: BoxFuture<'static, ()> = Box::pin(async move {
-            let outcome = server.0.runner.run(arguments).await;
+            let (task, host) = arguments;
+            let outcome = server.0.runner.run(task, host).await;
             server.finish_run();
             let failure = context.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-            match reply(outcome, failure, &context.run_id) {
+            match reply(outcome, failure, &run_id) {
                 Ok(result) => server.respond(id.as_ref(), result.dump()).await,
                 Err(refusal) => server.refuse(id.as_ref(), refusal).await,
             }
@@ -353,7 +361,7 @@ impl Server {
     }
 
     /// The callbacks a run of this server reaches its client through, and the run's arguments with them.
-    fn arguments(&self, params: &RunParams, context: &RunContext) -> Result<RunArgs, Refused> {
+    fn arguments(&self, params: RunParams, context: &RunContext) -> Result<(RunTask, Host), Refused> {
         let (events, frames, checks, secrets) = (context.clone(), context.clone(), context.clone(), context.clone());
         let callbacks = Callbacks {
             cancel: context.cancel.clone(),
@@ -445,93 +453,42 @@ impl Server {
     }
 }
 
-/// A `run` request as `run_task`'s arguments, or the reason it cannot become a run.
+/// A `run` request as the run and what hosts it, or the reason it cannot become a run.
 ///
-/// What the environment can get wrong is found here, before a browser opens: `run_task` reads its model keys only
-/// when it builds the clients, and a missing Chrome would surface as a failed run. The key checks hold for a
-/// stand-in runner too, so the server refuses the same requests whatever runs them.
-pub fn arguments(params: &RunParams, settings: &SettingsSource, callbacks: Callbacks) -> Result<RunArgs, Refused> {
-    let proxy_country = match &params.proxy_country {
-        None => None,
-        Some(asked) => Some(
-            options::country_code(asked)
-                .map_err(|error| refused(ErrorCode::InvalidParams, format!("run: proxy_country: {error}")))?,
-        ),
-    };
-    let output_schema = match &params.output_schema {
-        None => None,
-        Some(schema) => Some(
-            output_model(&Value::Object(schema.clone()))
-                .map_err(|error| refused(ErrorCode::UnsupportedSchema, format!("run: output_schema: {error}")))?,
-        ),
-    };
-    options::recording(params.record.as_deref())?;
+/// What the environment can get wrong is found here, before a browser opens: the run reads its model keys only when
+/// it builds the clients, and a missing Chrome would surface as a failed run. The checks hold for a stand-in runner
+/// too, so every entry point refuses the same requests whatever runs them.
+pub fn arguments(
+    params: RunParams,
+    settings: &SettingsSource,
+    callbacks: Callbacks,
+) -> Result<(RunTask, Host), Refused> {
+    let RunParams { secrets, frames, until, run: mut task, .. } = params;
     let settings = settings()?;
-    let local = params.chrome.clone().unwrap_or_default();
-    let chrome = options::chrome(&settings, local.headed, local.profile.as_deref(), local.binary.as_deref());
-    let handed_over = options::handed_over(&HandOver {
-        cdp_url: params.cdp_url.as_deref(),
-        cdp_port: params.cdp_port,
-        attach: params.attach,
-        target_match: params.target_match.as_deref(),
-        local: params.local,
-        cloud_asked: false,
-        chrome: &chrome,
-        cloud_profile: params.cloud_profile.as_deref(),
-        proxy_country: proxy_country.as_deref(),
-    })?;
-    let on_cloud = !handed_over
-        && options::cloud(params.local, &chrome, params.cloud_profile.as_deref(), proxy_country.as_deref())?;
-    if !handed_over && !on_cloud && options::find_chrome(chrome.binary.as_deref()).is_none() {
-        return Err(ConfigurationError(
-            "Chrome was not found: install it, or name it in FASTBROWSE_CHROME or in `chrome.binary`".into(),
-        )
-        .into());
+    if !task.fetch {
+        let local = task.chrome.clone().unwrap_or_default();
+        task.chrome = Some(options::chrome(&settings, local.headed, local.profile.as_deref(), local.binary.as_deref()));
     }
-    let browser_api_key = options::browser_key(&settings, on_cloud)?;
-    options::check_model_keys(&settings)?;
-    let mut args = RunArgs::new(params.task.clone());
-    args.start = params.start.clone();
-    args.browser_api_key = browser_api_key;
-    args.chrome = Some(chrome);
-    args.cloud_profile = params.cloud_profile.clone();
-    args.cdp_url = params.cdp_url.clone();
-    args.cdp_port = params.cdp_port;
-    args.attach = params.attach;
-    args.target_match = params.target_match.clone();
-    args.foreground = params.foreground;
-    args.proxy_country = Some(options::proxy_country(proxy_country.as_deref()));
-    args.viewport = params.viewport;
-    args.cloud_allow_resizing = params.cloud_allow_resizing;
-    args.context = params.context.clone();
-    args.inputs = params.inputs.clone();
-    args.attachments = params
-        .attachments
-        .iter()
-        .map(|attachment| Attachment {
-            name: attachment.name.clone(),
-            mime_type: attachment.mime_type.clone(),
-            content: Bytes(attachment.content.0.clone()),
-        })
-        .collect();
-    args.limits = params.limits.clone();
-    args.authorization = params.authorization.clone();
-    args.output_schema = output_schema;
-    args.secrets = match callbacks.resolve {
-        Some(resolve) if !params.secrets.is_empty() => {
-            Some(Arc::new(OriginChecked { refs: params.secrets.clone(), resolve }) as _)
-        }
-        _ => None,
+    fastbrowse_run::check(&task).map_err(|error| match error {
+        RunError::UnsupportedSchema(message) => refused(ErrorCode::UnsupportedSchema, message),
+        RunError::Configuration(message) => refused(ErrorCode::Configuration, message),
+        other => refused(ErrorCode::InvalidParams, other.to_string()),
+    })?;
+    let browser_api_key = options::environment(&task, &settings)?;
+    let host = Host {
+        browser_api_key,
+        secrets: match callbacks.resolve {
+            Some(resolve) if !secrets.is_empty() => Some(Arc::new(ClientSecrets { refs: secrets, resolve }) as _),
+            _ => None,
+        },
+        cancel: callbacks.cancel,
+        on_event: Some(callbacks.on_event),
+        // A run with no frame handler starts no screencast, so a client that reads no frames pays for none.
+        on_frame: callbacks.on_frame.filter(|_| frames),
+        until: callbacks.until.filter(|_| until),
+        ..Host::default()
     };
-    args.downloads = params.downloads.clone();
-    args.record = params.record.clone();
-    args.cursor = params.cursor;
-    args.cancel = callbacks.cancel;
-    args.on_event = Some(callbacks.on_event);
-    // A run with no frame handler starts no screencast, so a client that reads no frames pays for none.
-    args.on_frame = callbacks.on_frame.filter(|_| params.frames);
-    args.until = callbacks.until.filter(|_| params.until);
-    Ok(args)
+    Ok((task, host))
 }
 
 /// What a run's callbacks reach, wherever the client is: over the wire for `serve`, in this process for the bindings.
@@ -549,16 +506,15 @@ pub struct Callbacks {
 /// `(name, origin)` to the value the client holds, or None.
 pub type Resolve = Arc<dyn Fn(String, String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
 
-/// The refusal of `run` params that passed the shape check and still could not be read.
-fn params_refused(error: &serde_json::Error) -> Refused {
-    refused(ErrorCode::InvalidParams, format!("{}: params: {error}", Method::Run.as_str()))
-}
-
-/// `run` params as the model, or the refusal `serve` answers them with.
-pub fn run_params(params: &Value) -> Result<RunParams, Refused> {
-    validate::check(&validate::run_params(), params)
-        .map_err(|problems| refused(ErrorCode::InvalidParams, format!("{}: {problems}", Method::Run.as_str())))?;
-    serde_json::from_value(params.clone()).map_err(|error| params_refused(&error))
+/// A method's params as its model, or the refusal that names the method, the field at fault and the fault.
+pub fn read<T: DeserializeOwned>(method: Method, params: Value) -> Result<T, Refused> {
+    serde_path_to_error::deserialize(params).map_err(|error| {
+        let message = match error.path().to_string() {
+            path if path == "." => error.into_inner().to_string(),
+            path => format!("{path}: {}", error.into_inner()),
+        };
+        refused(ErrorCode::InvalidParams, format!("{}: {message}", method.as_str()))
+    })
 }
 
 /// How a run's outcome is answered. `failure` is the first callback the client failed, which stopped the run.
@@ -576,9 +532,9 @@ pub fn reply(
             Some(failure) => Ok(options::error_result(failure.to_string())),
             None => Err(refused(ErrorCode::Cancelled, format!("run {} was cancelled", repr(run_id)))),
         },
-        Err(RunError::Failed(message)) => {
-            // The reply has room for what went wrong and none for where, so the detail goes to the log.
-            log::error(&format!("serve: run {} failed\n{message}", repr(run_id)));
+        Err(RunError::UnsupportedSchema(message)) => Err(refused(ErrorCode::UnsupportedSchema, message)),
+        Err(RunError::Invalid(message) | RunError::Recording(message)) => {
+            log::error(&format!("serve: run {} failed: {message}", repr(run_id)));
             Ok(options::error_result(message))
         }
     }
@@ -619,11 +575,11 @@ impl RunContext {
     }
 }
 
-/// `TypeAdapter(bool).validate_python(answer, strict=True)`, named by what was expected and never by what came.
+/// The client's answer to `run/until`, named by what was expected and never by what came.
 fn strict_bool(value: Value) -> Result<bool, ClientError> {
     value.as_bool().ok_or_else(|| ClientError {
         method: ServerMethod::RunUntil,
-        message: "the result cannot be used: Input should be a valid boolean".into(),
+        message: "the result cannot be used: expected true or false".into(),
         code: None,
     })
 }
@@ -641,34 +597,26 @@ pub fn secret_value(answer: Value) -> Result<Option<String>, ClientError> {
         Value::String(value) => Ok(Some(value)),
         _ => Err(ClientError {
             method: ServerMethod::SecretsResolve,
-            message: "the result cannot be used: Input should be a valid string".into(),
+            message: "the result cannot be used: expected a string or null".into(),
             code: None,
         }),
     }
 }
 
-/// A run's `SecretResolver` for values the client holds. Each one is asked for as it is typed, and none is kept.
-///
-/// The origin rule is applied here, ahead of the question: a client asked about an origin its ref does not cover
-/// would have to apply the rule a second time to refuse, and the two could disagree.
-struct OriginChecked {
+/// A run's `SecretResolver` for values the client holds. Each one is asked for as it is typed, and none is kept. The
+/// run applies each ref's origin rule before it asks.
+struct ClientSecrets {
     refs: Vec<SecretRef>,
     resolve: Resolve,
 }
 
-impl SecretResolver for OriginChecked {
+impl SecretResolver for ClientSecrets {
     fn available(&self) -> Vec<SecretRef> {
         self.refs.clone()
     }
 
     fn resolve<'a>(&'a self, name: &'a str, origin: &'a str) -> BoxFuture<'a, Option<String>> {
-        Box::pin(async move {
-            let secret = self.refs.iter().find(|secret| secret.name == name)?;
-            if !secret_allowed(secret, origin) {
-                return None;
-            }
-            (self.resolve)(name.to_string(), origin.to_string()).await
-        })
+        (self.resolve)(name.to_string(), origin.to_string())
     }
 }
 
