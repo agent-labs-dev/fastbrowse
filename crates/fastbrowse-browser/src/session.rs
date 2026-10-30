@@ -1,5 +1,5 @@
 //! One owned tab on a `BrowserConnection`: attach, OOPIF sessions, popup ownership, dialogs, downloads, live
-//! frames and origin scoping. `browser/session.py`'s `BrowserSession`.
+//! frames and origin scoping.
 //!
 //! State is kept by a handler on the connection's reader, so it is current whenever a call returns. The handler
 //! never blocks: work an event starts (preparing a frame's session, adopting a popup, releasing a paused request)
@@ -223,7 +223,7 @@ pub(crate) struct Popup {
 
 #[derive(Default)]
 pub(crate) struct State {
-    /// Insertion ordered, as Python's dict: `tabs()` lists them in this order, and a closed active tab with neither
+    /// Insertion ordered: `tabs()` lists them in this order, and a closed active tab with neither
     /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
     /// Tab target ids, least recently active first: where a closed active tab with no opener hands over to.
@@ -384,7 +384,7 @@ impl BrowserSession {
         matches!(timeout(secs(seconds), generation.changed()).await, Ok(Ok(())))
     }
 
-    /// `__aenter__`: connect, then open the run's tab or attach to the window asked for.
+    /// Connect, then open the run's tab or attach to the window asked for.
     pub async fn open(&self) -> Result<(), BrowserError> {
         self.check_access().await?;
         self.0.state.lock().unwrap().closing = false;
@@ -397,7 +397,7 @@ impl BrowserSession {
         }));
         *self.0.client.lock().unwrap() = Some(client);
         // A caller that gives up while the tab is being set up (a run's time budget) drops this future; the tab it may
-        // already own and the socket are then closed in the background, as Python's `except BaseException` closes them.
+        // already own and the socket are then closed in the background.
         let mut guard = OpenGuard(Some(self.clone()));
         let opened = async {
             self.check_access().await?;
@@ -438,7 +438,7 @@ impl BrowserSession {
         Ok(())
     }
 
-    /// `_close`: stop background work, release paused requests, stop casts, close owned tabs, close the socket.
+    /// Stop background work, release paused requests, stop casts, close owned tabs, close the socket.
     pub async fn close(&self) -> Result<(), BrowserError> {
         let (background, delivery, paused) = {
             let mut state = self.0.state.lock().unwrap();
@@ -1164,7 +1164,7 @@ impl State {
         self.tabs.iter().any(|t| t.target_id == target_id)
     }
 
-    /// `self._tabs[id] = state`: a known tab keeps its place.
+    /// Add `tab`: a known tab keeps its place.
     fn insert_tab(&mut self, tab: TabState) {
         match self.tabs.iter_mut().find(|t| t.target_id == tab.target_id) {
             Some(existing) => *existing = tab,
@@ -1550,7 +1550,7 @@ pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id
         );
         Ok::<(), BrowserError>(())
     };
-    // Settled however this ends, as Python's `finally` does: a session closing mid-adoption drops this future, and a
+    // Settled however this ends: a session closing mid-adoption drops this future, and a
     // `follow_popup` waiting on the popup must still learn it never joined.
     let _settle = AdoptionSettled { shared, target_id };
     let _ = adopt.await;
@@ -1711,7 +1711,7 @@ async fn capture_download(
     Ok(())
 }
 
-/// `_together`: send independent commands at once and wait for all of them, failing with the first error as
+/// Send independent commands at once and wait for all of them, failing with the first error as
 /// sequential sends would, and dropping the rest when one fails so none outlives the session it was sent on.
 pub async fn together(commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>>) -> Result<(), BrowserError> {
     try_join_all(commands).await.map(drop)
@@ -1898,8 +1898,7 @@ pub fn str_of(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_owned()
 }
 
-/// `json.dumps` with Python's default separators (`", "` and `": "`) and `ensure_ascii`, so a script built here is
-/// the script Python builds, byte for byte.
+/// JSON as `json.dumps` writes it by default: `", "` and `": "` separators and `ensure_ascii`.
 pub fn py_json(value: &Value) -> String {
     let mut out = String::new();
     write_py_json(value, &mut out);
@@ -1960,7 +1959,7 @@ fn write_py_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// Python's `repr` of a str, for messages Python builds with `!r`.
+/// Python's `repr` of a str, the quoting these messages use.
 pub fn py_repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::new();
