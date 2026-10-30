@@ -849,8 +849,7 @@ impl CdpPage {
     /// Give an autocomplete field's suggestions time to arrive before the page is read.
     ///
     /// Typing settles the fingerprint immediately, but the suggestions it asks for arrive over the network afterwards,
-    /// so the snapshot caught an empty popup and Jev was asked to choose from a list that had not loaded. That is what
-    /// stalled `wiki-godel` at an uncertain next step with the query typed and nothing chosen. The wait is one round
+    /// so the snapshot caught an empty popup and Jev was asked to choose from a list that had not loaded. The wait is one round
     /// trip, resolves as soon as options appear and returns at once for a field that has no popup to wait for.
     ///
     /// The wait is best effort by construction. Typing into a search box can submit it, and a navigation discards the
