@@ -394,7 +394,11 @@ impl Agent {
     /// Jev's offered controls as a step reports them. Their labels come from the masked observation already, and are
     /// masked again so a label that reaches a step can never carry a secret whatever it was read from.
     fn choices(&self, decision: &Decision) -> Vec<StepChoice> {
-        let chosen = decision.target.as_ref().map(|target| target.id.as_str());
+        let chosen: Vec<&str> = [&decision.target, &decision.destination]
+            .into_iter()
+            .flatten()
+            .map(|control| control.id.as_str())
+            .collect();
         decision
             .offered
             .iter()
@@ -402,8 +406,9 @@ impl Agent {
                 id: control.id.clone(),
                 role: control.role.clone(),
                 label: self.mask(&control.label),
+                context: control.context.as_deref().map(|context| self.mask(context)),
                 operations: control.operations.iter().copied().collect(),
-                chosen: chosen == Some(control.id.as_str()),
+                chosen: chosen.contains(&control.id.as_str()),
             })
             .collect()
     }

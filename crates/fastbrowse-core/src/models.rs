@@ -303,8 +303,11 @@ pub struct StepChoice {
     pub role: String,
     /// The label as Jev read it, with resolved secrets masked.
     pub label: String,
+    /// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+    #[serde(default)]
+    pub context: Option<String>,
     pub operations: Vec<Operation>,
-    /// Whether this is the control Jev chose.
+    /// Whether Jev chose this control: the target, and for a drag the destination too.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub chosen: bool,
 }
@@ -317,8 +320,12 @@ impl Schema for StepChoice {
                 Field::required("id", Ty::Str),
                 Field::required("role", Ty::Str),
                 Field::required("label", Ty::Str).doc("The label as Jev read it, with resolved secrets masked."),
+                Field::default("context", Ty::optional(Ty::Str), Value::Null).doc(
+                    "The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.",
+                ),
                 Field::required("operations", Ty::list(Operation::ty())),
-                Field::default("chosen", Ty::Bool, Value::Bool(false)).doc("Whether this is the control Jev chose."),
+                Field::default("chosen", Ty::Bool, Value::Bool(false))
+                    .doc("Whether Jev chose this control: the target, and for a drag the destination too."),
             ],
         )
         .ty()

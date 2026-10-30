@@ -406,13 +406,11 @@ async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
             let Some(choices) = step.as_object_mut().unwrap().remove("choices") else { continue };
             listed += 1;
             let chosen: Vec<&Value> = choices.as_array().unwrap().iter().filter(|c| c["chosen"] == true).collect();
-            // A read or DONE takes no target, so its list has nothing chosen.
-            match step["target"].as_str().filter(|_| step["decided_by"] == "jev") {
-                Some(target) => {
-                    assert_eq!(chosen.len(), 1, "{name}: {choices}");
-                    assert!(target.contains(chosen[0]["label"].as_str().unwrap()), "{name}: {step}");
-                }
-                None => assert!(chosen.len() <= 1, "{name}: {choices}"),
+            // A read or DONE takes no target, so its list has nothing chosen; a drag marks its destination too.
+            assert!(chosen.len() <= 2, "{name}: {choices}");
+            if let Some(target) = step["target"].as_str().filter(|_| step["decided_by"] == "jev") {
+                let labels = chosen.iter().map(|choice| choice["label"].as_str().unwrap());
+                assert!(labels.into_iter().any(|label| target.contains(label)), "{name}: {step}");
             }
             assert!(!choices.to_string().contains("hunter2"), "{name}: {choices}");
         }

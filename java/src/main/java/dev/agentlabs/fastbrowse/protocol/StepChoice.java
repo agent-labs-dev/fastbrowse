@@ -7,12 +7,14 @@ import java.util.List;
 
 /**
  * @param label The label as Jev read it, with resolved secrets masked.
- * @param chosen Whether this is the control Jev chose.
+ * @param context The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+ * @param chosen Whether Jev chose this control: the target, and for a drag the destination too.
  */
 public record StepChoice(
     @JsonProperty("id") String id,
     @JsonProperty("role") String role,
     @JsonProperty("label") String label,
+    @JsonProperty("context") String context,
     @JsonProperty("operations") List<Operation> operations,
     @JsonProperty("chosen") boolean chosen) {
 
@@ -26,6 +28,7 @@ public record StepChoice(
         private String id;
         private String role;
         private String label;
+        private String context;
         private List<Operation> operations;
         private boolean chosen;
 
@@ -46,6 +49,11 @@ public record StepChoice(
             return this;
         }
 
+        public Builder context(String context) {
+            this.context = context;
+            return this;
+        }
+
         public Builder operations(List<Operation> operations) {
             this.operations = operations;
             return this;
@@ -57,7 +65,7 @@ public record StepChoice(
         }
 
         public StepChoice build() {
-            return new StepChoice(id, role, label, operations, chosen);
+            return new StepChoice(id, role, label, context, operations, chosen);
         }
     }
 }

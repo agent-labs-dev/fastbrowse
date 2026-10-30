@@ -313,9 +313,13 @@ export interface StepChoice {
    * The label as Jev read it, with resolved secrets masked.
    */
   label: string;
+  /**
+   * The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+   */
+  context: string | null;
   operations: Operation[];
   /**
-   * Whether this is the control Jev chose.
+   * Whether Jev chose this control: the target, and for a drag the destination too.
    */
   chosen: boolean;
 }

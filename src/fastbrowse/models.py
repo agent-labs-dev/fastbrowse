@@ -145,9 +145,11 @@ class StepChoice(Frozen):
     role: str
     label: str
     """The label as Jev read it, with resolved secrets masked."""
+    context: str | None = None
+    """The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked."""
     operations: tuple[Operation, ...]
     chosen: bool = False
-    """Whether this is the control Jev chose."""
+    """Whether Jev chose this control: the target, and for a drag the destination too."""
 
 
 class ArtifactKind(StrEnum):

@@ -647,11 +647,17 @@ public sealed record StepChoice
     [JsonPropertyName("label")]
     public required string Label { get; init; }
 
+    /// <summary>
+    /// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+    /// </summary>
+    [JsonPropertyName("context")]
+    public string? Context { get; init; }
+
     [JsonPropertyName("operations")]
     public required IReadOnlyList<Operation> Operations { get; init; }
 
     /// <summary>
-    /// Whether this is the control Jev chose.
+    /// Whether Jev chose this control: the target, and for a drag the destination too.
     /// </summary>
     [JsonPropertyName("chosen")]
     public required bool Chosen { get; init; }

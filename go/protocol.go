@@ -400,9 +400,11 @@ type StepChoice struct {
 	ID   string `json:"id"`
 	Role string `json:"role"`
 	// The label as Jev read it, with resolved secrets masked.
-	Label      string      `json:"label"`
+	Label string `json:"label"`
+	// The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+	Context    *string     `json:"context"`
 	Operations []Operation `json:"operations"`
-	// Whether this is the control Jev chose.
+	// Whether Jev chose this control: the target, and for a drag the destination too.
 	Chosen bool `json:"chosen"`
 }
 
