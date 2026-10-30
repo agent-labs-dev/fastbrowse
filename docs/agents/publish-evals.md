@@ -62,7 +62,8 @@ computes every figure from the candidate's per-attempt rows. Its `systems` maps 
 arm, `cost_not_reported` lists those of them whose rows carry no cost, and `not_measured` lists the site systems
 with no rows. The live suite card shows the head-to-head group
 (`internal-hosted`) when the campaign ran it, else `internal-fastbrowse`. A card the candidate has no group for
-keeps its file. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
+keeps its file only while that file carries no measured figures: the site reads one candidate's rows, so a card still
+measured by an earlier campaign stops the write, and that campaign's group must be measured again. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
 publish a campaign again, dispatch `publish-evals.yml` with the campaign run's id.
 
 An upload to Langfuse does not approve publication.
