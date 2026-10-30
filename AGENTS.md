@@ -249,6 +249,11 @@ The five default roles, each label named after its role: `needs-triage`, `needs-
 
 Single-context: one glossary and one ADR directory at the repo root, created on first use. See `docs/agents/domain.md`.
 
+## Credit contributors
+
+A fix for a reported bug, a feature someone asked for, or someone's merged code credits them in its changelog bullet
+and in [CREDITS.md](CREDITS.md). The rule is in [docs/agents/credits.md](docs/agents/credits.md).
+
 ## Releasing
 
 Versions are patch-by-patch unless the maintainer says otherwise, and every one needs a changelog entry:
