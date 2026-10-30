@@ -8,6 +8,8 @@ name: Official benchmarks
 #
 # Each task runs `repeat` times (at least 1; a release runs 3). A task's figure is the mean of its repeats' upstream
 # scores, and the group records its repeat count.
+# A slot the site kept from any outcome on every retry is listed as blocked: outside the score, neither a pass nor a
+# failure, and it does not fail the run.
 #
 # Every run goes to the private Langfuse project, finished or not. A finished run also leaves `official-rows-*`, its
 # public rows (`parallax browser official-rows`): opaque task ids, scores, seconds, dollars and protocol facts, and
@@ -15,6 +17,9 @@ name: Official benchmarks
 # `parallax_sha`, to publish them: the site reads one candidate, so every group in it must come from one build.
 # `campaign_id` does that itself: when every suite has passed, this workflow dispatches the campaign with this
 # run's id, which is how a release publishes every group from one candidate. A failed run dispatches nothing.
+#
+# `smoke` finds bugs before a release: one repeat of 10 sampled tasks per suite, traces sent to Langfuse marked as
+# smoke, and no public rows or campaign dispatch, so it can never publish.
 #
 # No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
 # approved `budget` only decides whether the next task may start (`start-gate-v1`).
@@ -28,7 +33,7 @@ name: Official benchmarks
 #            OPENROUTER_API_KEY (the agent's LLM and Jev)
 #            PARALLAX_JUDGE_API_KEY (the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the run's record in the fastbrowse-evals project)
-#            BROWSER_USE_API_KEY (only with `browser: cloud`)
+#            BROWSER_USE_API_KEY (every task runs on a Browser Use Cloud browser)
 #            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
 #   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
 #   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
@@ -55,7 +60,7 @@ name: Official benchmarks
 # judge, so its agent is not run again here. Ultrafast returns no answer, so it is not run on them.
 #
 # `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
-# reserve (1 dollar), browser reserve (1, or 0 on local Chrome) and the judge variable's `budget_usd` while in flight.
+# reserve (1 dollar), browser reserve (1) and the judge variable's `budget_usd` while in flight.
 # With the judge variables' 20 (BU Bench) and 60 (Online-Mind2Web) dollars, 8 workers on cloud browsers hold at
 # most 8 x 62 = 496 dollars on Online-Mind2Web. The 600 dollar default keeps all 8 workers running until 104
 # dollars is spent, and a suite stops early only if its actual spend passes 538 dollars (BU Bench: 578).
@@ -77,12 +82,6 @@ on:
         type: choice
         options: [all, bu-bench, online-mind2web]
         default: all
-      browser:
-        description: Headless local Chrome on the runner, or Browser Use Cloud browsers
-        required: true
-        type: choice
-        options: [local, cloud]
-        default: local
       repeat:
         description: Runs per task (at least 1)
         required: true
@@ -95,6 +94,11 @@ on:
         description: Task workers per suite, sharing one start-gate ledger
         required: true
         default: "8"
+      smoke:
+        description: One repeat of 10 sampled tasks per suite to find bugs from traces. Never publishable
+        required: true
+        type: boolean
+        default: false
       campaign_id:
         description: When set, dispatch the benchmark campaign of this name with these rows once every job has passed
         required: false
@@ -110,10 +114,9 @@ concurrency:
 
 env:
   UV_PYTHON: "3.13"
-  REPEAT: ${{ inputs.repeat }}
+  REPEAT: ${{ inputs.smoke && '1' || inputs.repeat }}
   BUDGET: ${{ inputs.budget }}
   WORKERS: ${{ inputs.concurrency }}
-  BROWSER: ${{ inputs.browser }}
   # The upstream pins. BU Bench's task file ships inside its repository, encrypted, so its digest is the file at
   # the pinned commit. Online-Mind2Web's tasks are the gated Hugging Face file fastbrowse pins
   # (src/fastbrowse/evals/sources.py). That file is not in LFS, so Hugging Face lists only its Git blob; the
@@ -188,7 +191,7 @@ jobs:
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
           need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
-          if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
+          need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           # Online-Mind2Web is gated: HF_TOKEN's account must also have accepted the dataset's access conditions.
           if test "$SUITE_SET" != bu-bench; then need HF_TOKEN "$HF_TOKEN"; fi
           if test -n "$missing"; then
@@ -296,7 +299,8 @@ jobs:
           # A git+file install records the commit in direct_url.json, so the run names the measured build
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
-          uv run --no-sync python -c "import fastbrowse, parallax"
+          # Publication imports the measured build's public contract: a mismatch stops here, before any paid run.
+          uv run --no-sync python -c "import fastbrowse, parallax.browser_use.publication"
       - name: Check out the pinned upstream
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -358,7 +362,6 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
-          # Ignored with a local browser: the runner then drives the local Chrome alone.
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           JUDGE: ${{ matrix.judge }}
           DIGEST: ${{ env[format('{0}_DATASET_SHA256', matrix.prefix)] }}
@@ -367,12 +370,6 @@ jobs:
         run: |
           cd parallax
           mapfile -t judge < <(jq -r '.[]' <<< "$JUDGE")
-          browser=()
-          if test "$BROWSER" = local; then
-            chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
-            test -n "$chrome" || { echo "::error::browser local needs Chrome on the runner, and none was found"; exit 1; }
-            browser=(--local-browser "$chrome" --browser-reserve-dollars 0)
-          fi
           mkdir -p "$(dirname "$OUT")"
           uv run --no-sync parallax browser official "$SUITE" \
             --upstream-root "$GITHUB_WORKSPACE/upstream" \
@@ -381,8 +378,8 @@ jobs:
             --dataset "$DATASET" \
             --dataset-sha256 "$DIGEST" \
             "${judge[@]}" \
-            "${browser[@]}" \
             --repeat "$REPEAT" \
+            ${{ inputs.smoke && '--sample 10' || '' }} \
             --concurrency "$WORKERS" \
             --budget "$BUDGET" \
             --out "$OUT" \
@@ -398,8 +395,9 @@ jobs:
         run: |
           test -f "$OUT/manifest.json" || { echo "::warning::no run to track"; exit 0; }
           cd parallax
-          uv run --no-sync parallax browser track-official "$OUT" --push
+          uv run --no-sync parallax browser track-official "$OUT" --push ${{ inputs.smoke && '--smoke' || '' }}
       - name: Write the public rows
+        if: ${{ !inputs.smoke }}
         # Refuses a run publication would refuse, here where the plaintext is, so the run still uploads below.
         env:
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
@@ -415,6 +413,7 @@ jobs:
             --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
             --out "$RUNNER_TEMP/$SUITE.rows.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.smoke }}
         with:
           name: official-rows-${{ matrix.suite }}
           path: ${{ runner.temp }}/${{ matrix.suite }}.rows.json
@@ -438,7 +437,7 @@ jobs:
   campaign:
     name: Dispatch the campaign with these rows
     needs: official
-    if: ${{ inputs.campaign_id != '' }}
+    if: ${{ inputs.campaign_id != '' && !inputs.smoke }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {actions: write}
     steps:

@@ -24,20 +24,22 @@ name: Benchmark campaign
 #                 skill, GPT-6 Luna via OpenRouter, on a Browser Use Cloud browser) runs only the set's credential-free
 #                 completion tasks; it needs no secret beyond BROWSER_USE_API_KEY and OPENROUTER_API_KEY.
 #   all           both.
-# `browser` picks the fastbrowse arm's browser: headless Chrome on the runner (local) or a Browser Use Cloud browser.
-# The vendor arms always run on their own hosted browsers.
+# The fastbrowse arm runs on a Browser Use Cloud browser, and the vendor arms on their own hosted browsers.
 #
 # Repository configuration this file needs (checked before any paid call):
 #   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
 #            with the fixture run)
-#            BROWSER_USE_API_KEY (with `browser: cloud` or the head-to-head group)
+#            BROWSER_USE_API_KEY
 #   secrets, optional: FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
+# `smoke` finds bugs before a release: one repeat of every task in the chosen group (`groups: all` means the fastbrowse
+# group), its ledger sent to Langfuse marked as smoke, and no candidate or site pull request, so it can never publish.
+#
 # `budget` is each group's approved total. It only gates whether the next run may start: a run holds its agent,
-# browser and judge reserves (1 + 1 + 1 dollars, the browser 0 on local Chrome) while in flight, and starts only
+# browser and judge reserves (1 + 1 + 1 dollars) while in flight, and starts only
 # while everything committed plus that hold fits. At Parallax's default 8 runs in flight that is at most 24 dollars
 # held, so the 300 dollar default leaves 276 for spend before a run waits, and a full campaign stops early only if
 # its actual spend passes about 297 dollars.
@@ -63,12 +65,6 @@ on:
         type: choice
         options: [fastbrowse, head-to-head, all]
         default: all
-      browser:
-        description: The fastbrowse arm's browser, headless local Chrome on the runner or Browser Use Cloud
-        required: true
-        type: choice
-        options: [local, cloud]
-        default: local
       repeat:
         description: Runs per task (at least 3; a published comparison rests on three)
         required: true
@@ -81,6 +77,11 @@ on:
         description: Space separated Parallax suites
         required: true
         default: "core dev heldout stretch-dev stretch-heldout"
+      smoke:
+        description: One repeat to find bugs from traces. Never publishable; with groups all it runs the fastbrowse group
+        required: true
+        type: boolean
+        default: false
       official_runs:
         description: Space separated Official benchmarks run ids of this build whose public rows join the candidate
         required: false
@@ -97,9 +98,8 @@ concurrency:
 env:
   UV_PYTHON: "3.13"
   SUITES: ${{ inputs.suites }}
-  REPEAT: ${{ inputs.repeat }}
+  REPEAT: ${{ inputs.smoke && '1' || inputs.repeat }}
   BUDGET: ${{ inputs.budget }}
-  BROWSER: ${{ inputs.browser }}
 
 jobs:
   resolve:
@@ -115,16 +115,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0, persist-credentials: false}
       # A quick dispatch cannot be the run a published comparison points at: fewer than three repeats is not a
-      # rate. This fails before the credential check and before any paid call.
+      # rate. This fails before the credential check and before any paid call. A smoke run has its one repeat
+      # because its stage and publish jobs never run.
       - name: Require the full comparison protocol
         env:
+          SMOKE: ${{ inputs.smoke }}
           CAMPAIGN_ID: ${{ inputs.campaign_id }}
           OFFICIAL_RUNS: ${{ inputs.official_runs }}
         run: |
           case "$REPEAT" in
             ''|*[!0-9]*) echo "repeat must be an integer, got '$REPEAT'"; exit 1 ;;
           esac
-          test "$REPEAT" -ge 3 || { echo "repeat must be at least 3, got $REPEAT"; exit 1; }
+          if test "$SMOKE" != true; then
+            test "$REPEAT" -ge 3 || { echo "repeat must be at least 3, got $REPEAT"; exit 1; }
+          fi
           case "$BUDGET" in
             ''|*[!0-9.]*) echo "budget must be a number, got '$BUDGET'"; exit 1 ;;
           esac
@@ -162,7 +166,6 @@ jobs:
           PARALLAX_DEPLOY_KEY: ${{ secrets.PARALLAX_DEPLOY_KEY }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          GROUP_SET: ${{ inputs.groups }}
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
@@ -174,9 +177,7 @@ jobs:
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
           need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
-          if test "$BROWSER" = cloud || test "$GROUP_SET" != fastbrowse; then
-            need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
-          fi
+          need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           if test -n "$missing"; then
             echo "::error::missing repository configuration:$missing"
             exit 1
@@ -184,7 +185,7 @@ jobs:
       - name: Build the group matrix
         id: matrix
         env:
-          GROUP_SET: ${{ inputs.groups }}
+          GROUP_SET: ${{ inputs.smoke && inputs.groups == 'all' && 'fastbrowse' || inputs.groups }}
         run: |
           vendors="browser-use jev-ultrafast browser-harness"
           fastbrowse='{"label":"fastbrowse","key":"fastbrowse","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}'
@@ -267,20 +268,11 @@ jobs:
           mkdir -p "$(dirname "$OUT")"
           read -ra arms <<< "$ARMS"
           read -ra suites <<< "$SUITES"
-          browser=()
-          if test "$BROWSER" = local; then
-            chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
-            test -n "$chrome" || { echo "::error::browser local needs Chrome on the runner, and none was found"; exit 1; }
-            browser=(--local-browser "$chrome")
-            # Only a group with no hosted browser holds nothing for one; the vendor arms' browsers are billed.
-            if test "${#arms[@]}" -eq 1; then browser+=(--browser-reserve-dollars 0); fi
-          fi
           uv run --no-sync parallax browser internal \
             --arms "${arms[@]}" \
             --suite "${suites[@]}" \
             --repeat "$REPEAT" \
             --budget "$BUDGET" \
-            "${browser[@]}" \
             --out "$OUT"
       - name: Send the ledger to Langfuse
         # A stopped group is tracked too: every arm's experiment lists what ran.
@@ -293,7 +285,7 @@ jobs:
         run: |
           test -s "$OUT" || { echo "::warning::no ledger to track"; exit 0; }
           cd parallax
-          uv run --no-sync parallax browser track-ledger "$OUT" --push
+          uv run --no-sync parallax browser track-ledger "$OUT" --push ${{ inputs.smoke && '--smoke' || '' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -305,6 +297,7 @@ jobs:
   stage:
     name: Build the candidate
     needs: [resolve, campaign]
+    if: ${{ !inputs.smoke }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read

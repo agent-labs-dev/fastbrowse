@@ -271,6 +271,57 @@ def test_changed_protocol_cannot_silently_skip_regressions(candidate):
         regressions(Candidate.model_validate(candidate), before)
 
 
+def _block(candidate: dict, index: int) -> dict:
+    """Move one official row out of the score: the slot the site blocked on every retry."""
+    group = candidate["groups"][2]
+    row = group["rows"].pop(index)
+    slot = {k: row[k] for k in ("task", "repeat", "arm", "seconds", "dollars")} | {"physical_runs": 6}
+    group.setdefault("blocked", []).append(slot)
+    return slot
+
+
+def test_a_blocked_slot_fills_its_place_in_the_grid_and_stays_out_of_the_rows(candidate):
+    baseline = Candidate.model_validate(copy.deepcopy(candidate))
+    slot = _block(candidate, 0)
+    published = Candidate.model_validate(candidate)
+    assert [b.task for b in published.groups[2].blocked] == [slot["task"]]
+    assert len(published.groups[2].rows) == 199
+    regressions(published, baseline)
+
+
+def test_a_slot_cannot_be_both_graded_and_blocked(candidate):
+    group = candidate["groups"][2]
+    _block(candidate, 0)
+    group["rows"].append({**group["rows"][0], "task": group["blocked"][0]["task"]})
+    group["rows"].pop(0)
+    group["blocked"].append(dict(group["blocked"][0]))
+    with pytest.raises(ValidationError, match="exactly one measured row"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_group_with_nothing_graded_cannot_publish(candidate):
+    for _ in range(len(candidate["groups"][2]["rows"])):
+        _block(candidate, 0)
+    with pytest.raises(ValidationError, match="measures only"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_group_with_nothing_blocked_keeps_its_bytes(candidate):
+    dumped = Candidate.model_validate(candidate).model_dump(mode="json")
+    assert not any("blocked" in group for group in dumped["groups"])
+    _block(candidate, 0)
+    assert "blocked" in Candidate.model_validate(candidate).model_dump(mode="json")["groups"][2]
+
+
+def test_a_blocked_repeat_cannot_hide_a_regression_on_the_repeats_that_graded(candidate):
+    baseline = Candidate.model_validate(copy.deepcopy(candidate))
+    for row in candidate["groups"][2]["rows"][:2]:
+        row["score"] = 0.0
+    _block(candidate, 1)
+    with pytest.raises(ValueError, match="source-score regression"):
+        regressions(Candidate.model_validate(candidate), baseline)
+
+
 def test_fastbrowse_completion_cannot_disagree_with_status(candidate):
     candidate["groups"][0]["rows"][0]["completed"] = False
     with pytest.raises(ValidationError, match="completion"):
