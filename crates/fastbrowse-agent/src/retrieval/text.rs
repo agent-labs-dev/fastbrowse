@@ -282,7 +282,7 @@ fn sentences(chars: &[char]) -> Vec<(usize, usize)> {
     found
 }
 
-fn currency(c: char) -> bool {
+pub(crate) fn currency(c: char) -> bool {
     matches!(c, '$' | '\u{a3}' | '\u{20ac}' | '\u{a5}')
 }
 

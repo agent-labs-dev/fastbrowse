@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 use super::chunks::{Cite, chunk_page, cited, evidence, marks, read_message};
 use super::notes_room;
 use super::reading::reader_chunk_chars;
-use super::text::{Page, SpanKind, cells, found, lines_of, names, spans, table_header_from_text};
+use super::text::{Page, SpanKind, cells, currency, found, lines_of, names, spans, table_header_from_text};
 use crate::comparison::digit;
 use crate::error::{AgentError, Result};
 use crate::memory::Notes;
@@ -185,10 +185,7 @@ struct Digits {
 }
 
 fn digits(raw: &str) -> Option<Digits> {
-    let kept: String = raw
-        .chars()
-        .filter(|c| !matches!(c, '$' | '\u{a3}' | '\u{20ac}' | '\u{a5}' | ',') && !text::is_space(*c))
-        .collect();
+    let kept: String = raw.chars().filter(|c| !currency(*c) && *c != ',' && !text::is_space(*c)).collect();
     let mut rest = kept.as_str();
     let mut negative = false;
     if let Some(after) = rest.strip_prefix('-') {
