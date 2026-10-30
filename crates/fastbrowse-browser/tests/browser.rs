@@ -1494,31 +1494,27 @@ async fn test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_an
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_download_evidence_is_whole_and_cites_the_response() {
+async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
     let _gate = gate().await;
-    // The Python test quotes the download through retrieval's `chunk` and `_cited`, which are not ported; with one
-    // chunk holding the whole capture, the quote is the block's text, its url the block's source or the capture's,
-    // and a run across frames or sources cites nothing, so those are asserted on the block itself.
+    // A CSV file is shown as a page table is: one block per record under its header, so a total or count cites each
+    // record it rests on. A file in any other format stays one block, marked whole when the server sent all of it.
     for path in ["/report.csv", "/export-report", "/report.csv?short", "/report.csv?partial"] {
         let Some(h) = harness().await else { return };
         h.goto("").await;
         h.goto(path).await;
         let capture = h.page.capture().await.expect("capture");
-        let block = capture.blocks.iter().find(|b| b.source_id.starts_with("download/")).expect("download block");
-        assert_eq!(block.kind, BlockKind::Table, "{path}");
-        let url = block.source_url.as_deref().unwrap_or(&capture.url);
-        assert_eq!(url, format!("{}{path}", sites().main));
-        let quote = slice(&capture, block.start, block.end);
-        assert!(quote.contains("name,total"), "{path}");
-        assert!(quote.contains("139.79"), "{path}");
-        assert_eq!(quote.matches("item,1").count(), if path.contains('?') { 0 } else { 10000 }, "{path}");
-        assert_eq!(block.complete_source, path != "/report.csv?partial", "{path}");
-        let first = &capture.blocks[0];
-        assert_ne!(
-            (first.frame_id.as_deref(), first.source_url.as_deref().unwrap_or(&capture.url)),
-            (block.frame_id.as_deref(), url),
-            "{path}"
-        );
+        let rows: Vec<_> = capture.blocks.iter().filter(|b| b.source_id.starts_with("download/")).collect();
+        let expected = if path.contains('?') { 1 } else { 10001 };
+        assert_eq!(rows.len(), expected, "{path}");
+        for block in &rows {
+            assert_eq!(block.kind, BlockKind::Table, "{path}");
+            assert!(!block.complete_source, "{path}");
+            assert_eq!(block.source_url.as_deref(), Some(format!("{}{path}", sites().main).as_str()));
+            assert!(slice(&capture, block.start, block.end).starts_with("name,total\n"), "{path}");
+        }
+        assert_eq!(slice(&capture, rows[0].start, rows[0].end), "name,total\nReport,139.79", "{path}");
+        let partial = rows[0].heading_path[0].contains("only part");
+        assert_eq!(partial, path == "/report.csv?partial", "{path}");
         h.close().await;
     }
 }

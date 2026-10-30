@@ -830,30 +830,47 @@ impl CdpPage {
             }
         }
         for (index, download) in self.session.download_texts().into_iter().enumerate() {
-            let start = offset;
-            text.push_str(&download.text);
-            offset += text::len(&download.text);
-            // CSV rows lose their column meanings when treated as unrelated prose excerpts.
+            // A CSV file is shown as a page table is: one block per row under its header row, so a reader cites,
+            // counts and totals its records one by one, as it does a table's.
             let table = download.mime == "text/csv"
                 || download.mime == "application/csv"
                 || download.name.to_lowercase().ends_with(".csv");
-            blocks.push(Block {
-                source_id: format!("download/{index}"),
-                source_url: Some(download.url.clone()),
-                complete_source: download.complete,
-                kind: if table { BlockKind::Table } else { BlockKind::Paragraph },
-                frame_id: None,
-                start: int(start),
-                end: int(offset),
-                heading_path: vec![format!("Downloaded file: {}", download.name)],
-                control_context: None,
-                href: None,
-                list_id: None,
-                list_count: None,
-                list_frameless: false,
-            });
-            text.push_str("\n\n");
-            offset += 2;
+            let rows = if table { csv_rows(&download.text) } else { Vec::new() };
+            let pieces: Vec<(String, String, bool)> = match rows.split_first() {
+                Some((header, data)) if !data.is_empty() => data
+                    .iter()
+                    .enumerate()
+                    .map(|(row, line)| (format!("download/{index}:{row}"), format!("{header}\n{line}"), false))
+                    .collect(),
+                _ => vec![(format!("download/{index}"), download.text.clone(), download.complete)],
+            };
+            let heading = if download.complete {
+                format!("Downloaded file: {}", download.name)
+            } else {
+                format!("Downloaded file: {}, of which the server sent only part", download.name)
+            };
+            for (source_id, piece, complete_source) in pieces {
+                let start = offset;
+                text.push_str(&piece);
+                offset += text::len(&piece);
+                blocks.push(Block {
+                    source_id,
+                    source_url: Some(download.url.clone()),
+                    complete_source,
+                    kind: if table { BlockKind::Table } else { BlockKind::Paragraph },
+                    frame_id: None,
+                    start: int(start),
+                    end: int(offset),
+                    heading_path: vec![heading.clone()],
+                    control_context: None,
+                    href: None,
+                    list_id: None,
+                    list_count: None,
+                    list_frameless: false,
+                });
+                text.push_str("\n\n");
+                offset += 2;
+            }
         }
         Ok(Capture {
             url,
@@ -1414,6 +1431,24 @@ fn net_error(error: &str) -> bool {
     error
         .strip_prefix("net::ERR_")
         .is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+}
+
+
+/// A CSV text's records in order, blank lines left out. A newline inside a quoted field belongs to its record.
+fn csv_rows(text: &str) -> Vec<&str> {
+    let (mut rows, mut start, mut quoted) = (Vec::new(), 0, false);
+    for (at, character) in text.char_indices() {
+        match character {
+            '"' => quoted = !quoted,
+            '\n' if !quoted => {
+                rows.push(&text[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    rows.push(&text[start..]);
+    rows.into_iter().map(|row| row.strip_suffix('\r').unwrap_or(row)).filter(|row| !row.trim().is_empty()).collect()
 }
 
 #[cfg(test)]
