@@ -1,4 +1,4 @@
-//! tests/test_serve_callbacks.py: frames, the `until` check and a failing client callback over the serve protocol.
+//! Frames, the `until` check and a failing client callback over the serve protocol.
 
 mod common;
 

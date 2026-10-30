@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 from fastbrowse.build import identity
 from fastbrowse.evals import baseline
+from fastbrowse.evals.status import Ending
 
 LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
@@ -258,25 +259,21 @@ def publish(release: str, source: Path) -> Path:
     Each live task needs three distinct measured repeats, and each fastbrowse task is compared at the task version
     it ran against the newest published release that ran the same protocol and model route with three attempts.
     """
-    from fastbrowse.evals.publication import gate, ledger_path
-
-    def read(file: Path) -> list[dict[str, Any]]:
-        return [json.loads(line) for line in file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    from fastbrowse.evals.publication import _release_of, gate, ledger_path, read_jsonl
 
     if release == "auto":
-        rows = read(source)
-        releases = {(row.get("run") or {}).get("fastbrowse_version") for row in rows}
-        if len(releases) != 1 or None in releases:
+        found = _release_of(read_jsonl(source))
+        if found is None:
             raise ValueError("rows must identify one fastbrowse release")
-        release = str(releases.pop())
+        release = found
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
         raise ValueError("release must be a numeric x.y.z version")
     target = RESULTS / f"{release}.jsonl"
     if target.exists() or ledger_path(target).exists() or any(name == release for name, _ in published()):
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
-    rows = read(source)
+    rows = read_jsonl(source)
     ledger_file = ledger_path(source)
-    ledger = read(ledger_file) if ledger_file.exists() else None
+    ledger = read_jsonl(ledger_file) if ledger_file.exists() else None
     report = gate(
         rows,
         release=release,
@@ -318,8 +315,9 @@ def published() -> list[tuple[str, list[dict[str, Any]]]]:
 
 def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
-    every retry, so it says nothing about the arm."""
-    return [r for r in rows if r.get("normalized_status") != "unavailable"]
+    every retry, or by a first navigation that timed out or could not reach the site, so it says nothing about the
+    arm."""
+    return [r for r in rows if r.get("normalized_status") != Ending.UNAVAILABLE]
 
 
 def _arm_rank(arm: str) -> int:
@@ -342,15 +340,13 @@ class _Comparison:
     """Selected results, including unavailable outcomes. Earlier retries remain in the attempt ledger."""
     scored: list[Mapping[str, Any]]
     """The attempts every figure is taken from: as many per arm at each task."""
-    left_out: list[str]
-    """Tasks some arm has no measured attempt at, so none of their attempts are scored."""
 
 
 def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
     """`rows` split by the arms their task ran on, each scored on matched attempts.
 
     A task runs only on the arms it grades on equal terms (`LiveTask.arms`): pooled, a suite set fastbrowse on 21
-    tasks beside Browser Use on 14. An attempt a provider outage ended measured nothing; dropping it from one arm
+    tasks beside Browser Use on 14. An `unavailable` attempt measured nothing; dropping it from one arm
     alone would score the arms on different attempts, so at each task an attempt counts only where every arm measured
     the same repeat of it (rows from before repeats were recorded pair earliest first), and a task some arm has none at
     is left out. Groups with most arms first."""
@@ -369,8 +365,7 @@ def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
         for per_arm in tasks.values():
             if len(per_arm) == len(arms):
                 scored += _paired(per_arm)
-        left_out = sorted({r["task"] for r in group} - {r["task"] for r in scored})
-        comparisons.append(_Comparison(arms, group, scored, left_out))
+        comparisons.append(_Comparison(arms, group, scored))
     return comparisons
 
 
@@ -403,7 +398,7 @@ class ArmSummary(BaseModel):
     passed: int
     total: int
     excluded: int = 0
-    """Attempts made but not scored: those a provider outage ended, and as many of this arm's at the same task when
+    """Attempts made but not scored: those that ended `unavailable`, and as many of this arm's at the same task when
     another arm lost one, so every arm is scored on the same attempts."""
     priced: int
     seconds: MetricSummary

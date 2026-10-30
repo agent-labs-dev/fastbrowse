@@ -11,11 +11,9 @@ import { promisify } from 'node:util';
 
 import { type Host, resolveBinary } from '../src/binary.ts';
 import { FastbrowseError } from '../src/index.ts';
-import { launcher, serverBinary } from './server.ts';
+import { launcher, packageVersion, serverBinary } from './server.ts';
 
 const sdk = fileURLToPath(new URL('../', import.meta.url));
-const pyproject = readFileSync(new URL('../../../pyproject.toml', import.meta.url), 'utf8');
-const packageVersion = /^version = "(.+)"$/m.exec(pyproject)?.[1];
 
 // Starts with the options given as JSON, prints the version the server reported, and closes.
 const START = `

@@ -180,15 +180,13 @@ def test_replay_ignores_the_bearer_token_and_serves_duplicates_in_order() -> Non
 def test_replay_miss_is_an_error_with_a_diff() -> None:
     cassette = Cassette(task="t")
     cassette.exchanges.append(_exchange(LLM, {"model": "m", "x": 1}, "{}"))
-    misses = []
-    proxy = Proxy(cassette, on_miss=misses.append)
+    proxy = Proxy(cassette)
     with proxy as base:
         response = _post(base, LLM, {"model": "m", "x": 2, "response_format": {"json_schema": {"name": "Plan"}}})
     assert response.status_code == MISS_STATUS
     assert "replay miss" in response.json()["error"]["message"]
-    assert [m.purpose for m in misses] == ["llm:Plan"] and misses[0].model == "m"
-    assert '+ "x": 2' in misses[0].diff
-    assert proxy.misses == misses
+    assert [m.purpose for m in proxy.misses] == ["llm:Plan"] and proxy.misses[0].model == "m"
+    assert '+ "x": 2' in proxy.misses[0].diff
 
 
 def test_record_forwards_everything_and_fill_only_misses() -> None:
@@ -203,7 +201,7 @@ def test_record_forwards_everything_and_fill_only_misses() -> None:
         _post(base, JEV, {"q": "a"})
         _post(base, JEV, {"q": "a"})
     assert sent == ["a", "a"] and len(cassette.exchanges) == 2
-    assert cassette.cost == pytest.approx(0.02)
+    assert [exchange.cost for exchange in cassette.exchanges] == [0.01, 0.01]
 
     filling = Proxy(cassette, forward=forward)
     with filling as base:

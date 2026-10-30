@@ -3,26 +3,14 @@
 
 mod common;
 
-use common::{Script, Step, answer_model};
+use common::{Script, Step, answer_model, body, config_error, settings};
 use fastbrowse_clients::anthropic::messages_schema;
-use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_clients::http::{Request, Response};
 use fastbrowse_core::llm::{Generation, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose};
 use serde_json::{Value, json};
 
 const ENV: [(&str, &str); 2] = [("FASTBROWSE_LLM_PROVIDER", "anthropic"), ("ANTHROPIC_API_KEY", "anthropic-secret")];
-
-fn settings(env: &[(&str, &str)]) -> Settings {
-    Settings::from_sources(env, None).unwrap()
-}
-
-fn config_error<T>(built: Result<T, ConfigurationError>) -> String {
-    match built {
-        Ok(_) => panic!("expected a configuration error"),
-        Err(error) => error.to_string(),
-    }
-}
 
 fn reply(content: Value, stop_reason: &str) -> Step {
     Step::Reply(Response::json(
@@ -51,10 +39,6 @@ async fn generate(
     let llm = settings(env).llm(&script.http()).unwrap();
     let result = llm.generate_value(LLMPurpose::Read, messages, &answer_model(), None).await;
     (script.requests(), result)
-}
-
-fn body(request: &Request) -> Value {
-    serde_json::from_slice(&request.body).unwrap()
 }
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";

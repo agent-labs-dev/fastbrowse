@@ -2,7 +2,7 @@
 
 A browser agent that picks instead of generating. Every page is indexed into the controls it actually has, and a
 choice model picks one of them. An LLM plans, reads and writes prose. Code owns authorization gates, secret
-resolution, cost limits, and whether a run may call itself finished.
+resolution and cost limits, and reports an answer it cannot verify as unverified.
 
 ```sh
 go get github.com/agent-labs-dev/fastbrowse/go

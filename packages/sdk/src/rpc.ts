@@ -51,10 +51,6 @@ export class Connection {
     });
   }
 
-  notify(method: string, params: Params = {}): void {
-    if (!this.#ended) this.#send({ method, params });
-  }
-
   /** Serve a method the server calls on this side. */
   onRequest(method: string, handler: RequestHandler): void {
     this.#requests.set(method, handler);

@@ -1,5 +1,4 @@
-//! tests/browser/test_dispatch.py: pointer handlers can invalidate a target before its press or replace an editor
-//! before typing.
+//! Pointer handlers can invalidate a target before its press or replace an editor before typing.
 //!
 //! A parametrized Python test is one Rust test that runs each case on a fresh session, in pytest's order.
 
@@ -8,8 +7,8 @@ mod dispatch_support;
 
 use std::time::Duration;
 
-use common::{harness, harness_with, sites};
-use dispatch_support::{PROXY_ERROR, action, eval_active, eval_value, failing_proxy, fill, find, observe_until};
+use common::{eval_value, find, harness, harness_with, js, observe_until, sites};
+use dispatch_support::{PROXY_ERROR, action, eval_active, failing_proxy, fill};
 use fastbrowse_browser::page::scripts::UNCOVER_JS;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing;
@@ -17,11 +16,6 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use serde_json::{Value, json};
-
-/// A string as a JS literal, where Python's tests interpolate `repr()` or `json.dumps()`.
-fn js(text: &str) -> String {
-    serde_json::to_string(text).unwrap()
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_click_uses_an_exposed_point_but_never_passes_through_a_cover() {

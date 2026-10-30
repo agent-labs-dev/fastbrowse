@@ -1,4 +1,4 @@
-//! Where a browser and a login come from: `src/fastbrowse/adapters/`, ported.
+//! Where a browser and a login come from.
 
 #[cfg(feature = "cloud")]
 pub mod browser_use_cloud;

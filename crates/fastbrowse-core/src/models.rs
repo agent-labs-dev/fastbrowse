@@ -1046,7 +1046,6 @@ pub type UntilCheck = Arc<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sy
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_contracts.py, and the parts of tests/test_page.py about `BrowserConnection`.
     use super::*;
     use crate::decision::{Answer, Evaluation};
 

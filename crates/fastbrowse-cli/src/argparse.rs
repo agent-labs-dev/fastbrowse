@@ -2,8 +2,8 @@
 //!
 //! Long options with unique-prefix abbreviation and `--flag=value`, one positional, `-h`, repeatable options and a
 //! mutually exclusive pair. Errors are argparse's words, after the usage, with exit status 2. The help text is
-//! argparse's own output at 80 columns, kept beside the source, since reflowing it here would be a second formatter
-//! to keep in step.
+//! in `generated/*.txt`, kept by hand in argparse's layout at 80 columns, since reflowing it here would be a second
+//! formatter to keep in step. Each usage paragraph has to follow the parser's options by hand too.
 
 use std::collections::HashMap;
 

@@ -70,10 +70,6 @@ def _signed_in(site: Site, email: str) -> str | None:
     return None if email in site.sign_ins else f"{email} never signed in (signed in: {site.sign_ins or 'nobody'})"
 
 
-def _never_signed_in(site: Site, email: str) -> str | None:
-    return None if email not in site.sign_ins else f"{email} signed in, which the task did not allow"
-
-
 def _posted(site: Site, path: str) -> list[dict[str, str]]:
     return [fields for posted, fields in site.posts if posted == path]
 

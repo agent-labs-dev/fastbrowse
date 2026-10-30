@@ -1,9 +1,8 @@
 //! An address read for the search state a page keeps in it, its query and its
 //! fragment alike.
 //!
-//! Everything that asks whether two addresses name the same search reads them through here. Lineage once dropped the
-//! fragment while the search check kept it, so on a site routing its searches by fragment a corrected `/search#new`
-//! matched a guessed `/search#old` and stayed guessed.
+//! Everything that asks whether two addresses name the same search reads them through here, so every comparison keeps
+//! the fragment as well as the query: a site may route its searches by fragment.
 
 use url::Url;
 

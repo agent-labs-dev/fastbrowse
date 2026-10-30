@@ -189,7 +189,7 @@ async fn run(name: &str, task: RunTask, host: Host, requests: Requests) -> Outco
             let host = Host { jev: Some(jev), llm: Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM)), ..host };
             fastbrowse_run::run_task(task, host).await
         }
-        // tests/test_mcp_server.py's `Recorder`: the events a run sends, then a cited answer with a download.
+        // The events a run sends, then a cited answer with a download.
         "tests.test_mcp_server:Recorder" => {
             emit(&host, browser(Some("https://live.example.com/session"), None)).await;
             let answered = mcp_result();
@@ -262,12 +262,8 @@ const NAMES: [&str; 17] = [
     "scripted_run:two_frames",
 ];
 
-/// The run `name` stands for, as `--run-task` names it. `__main__:x` is how the SDK's scripted server names its runs.
+/// The run `name` stands for, as `--run-task` names it.
 pub fn named(name: &str, requests: Requests) -> Option<Arc<dyn Runner>> {
-    let name = match name.strip_prefix("__main__:") {
-        Some(run) => format!("scripted_run:{run}"),
-        None => name.to_string(),
-    };
     let name: &'static str = NAMES.iter().find(|known| **known == name)?;
     Some(Arc::new(move |task: RunTask, host: Host| -> BoxFuture<'static, Outcome> {
         Box::pin(run(name, task, host, requests.clone()))

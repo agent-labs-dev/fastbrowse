@@ -1,7 +1,7 @@
 """Run the audit suite's cases by tier and write one report plus a Markdown roll-up.
 
     uv run python -m fastbrowse.audit --tier 0
-    uv run python -m fastbrowse.audit --tier 1 2 --spend --max-dollars 0.05
+    uv run python -m fastbrowse.audit --tier 1 --tier 2 --spend --max-dollars 0.05
 
 Tier 0 spends nothing, so it is the default and is safe to run anywhere. Tiers 1 to 3 call paid models, so
 they are refused unless `--spend` is given.
@@ -160,37 +160,21 @@ def _evaluate(assertion: Assertion, ctx: Mapping[str, Any]) -> dict[str, Any]:
             ok = isinstance(actual, str) and str(value) not in actual
         case "present":
             ok = actual is not None and actual != "" and actual != [] and actual != {}
-        case "absent":
-            ok = actual is None
         case "is_true":
             ok = actual is True
-        case "is_false":
-            ok = actual is False
-        case "ge":
-            ok = isinstance(actual, (int, float)) and actual >= value  # type: ignore[operator]
-        case "le":
-            ok = isinstance(actual, (int, float)) and actual <= value  # type: ignore[operator]
         case "matches":
             import re
 
             ok = isinstance(actual, str) and re.search(str(value), actual) is not None
         case "list_eq":
             ok = actual == value
-        case "list_contains":
-            ok = isinstance(actual, list) and value in actual
-        case "list_excludes":
-            ok = isinstance(actual, list) and value not in actual
         case "count_eq":
             ok = isinstance(actual, (list, Mapping)) and len(actual) == value
         case "count_ge":
             ok = isinstance(actual, (list, Mapping)) and isinstance(value, int) and len(actual) >= value
-        case "one_of":
-            ok = isinstance(actual, str) and isinstance(value, list) and actual in value
         case "keys_present":
             keys = value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else ()
             ok = isinstance(actual, Mapping) and bool(keys) and all(key in actual for key in keys)
-        case "exists":
-            ok = actual is True
         case "nonempty":
             ok = actual is True
         case "claim":
@@ -203,10 +187,10 @@ def _evaluate(assertion: Assertion, ctx: Mapping[str, Any]) -> dict[str, Any]:
 def _file_state(path: str) -> dict[str, bool]:
     target = Path(path)
     if not target.exists():
-        return {"exists": False, "nonempty": False}
+        return {"nonempty": False}
     if target.is_dir():
-        return {"exists": True, "nonempty": any(target.iterdir())}
-    return {"exists": True, "nonempty": target.stat().st_size > 0}
+        return {"nonempty": any(target.iterdir())}
+    return {"nonempty": target.stat().st_size > 0}
 
 
 def _substitute(argv: Sequence[str], mapping: Mapping[str, str]) -> list[str]:

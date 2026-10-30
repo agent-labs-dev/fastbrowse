@@ -162,7 +162,6 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_effects.py.
     use super::*;
     use crate::models::Operation;
     use crate::py::datetime::DateTime;

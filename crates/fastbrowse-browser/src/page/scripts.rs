@@ -1,5 +1,5 @@
-//! The scripts `page.py` evaluates in the page, transcribed from its constants piece by piece, with the comments
-//! that explain them. A script Python builds from arguments is built in `page` by a function of the same name.
+//! The scripts `CdpPage` evaluates in the page, with the comments that explain them. A script built from arguments
+//! is built in `page` by a function of the same name.
 
 use std::sync::LazyLock;
 
@@ -24,6 +24,18 @@ pub fn py_float(value: f64) -> String {
     let text = format!("{value}");
     if text.contains(['.', 'e', 'i', 'N']) { text } else { format!("{text}.0") }
 }
+
+/// The element a control names as its popup, or null.
+pub const OWNED_JS: &str = "(e => { const id = e.getAttribute('aria-controls') || e.getAttribute('aria-owns'); \
+     return id ? e.ownerDocument.getElementById(id) : null; })";
+
+/// Whether a field asks for suggestions.
+pub static SUGGESTS_JS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "(e => e.getAttribute('role') === 'combobox' || e.type === 'search' || \
+         !!e.getAttribute('aria-autocomplete') || !!{OWNED_JS}(e))"
+    )
+});
 
 pub const SELECT_TEXT_JS: &str = concat!(
     "if (typeof e.select === 'function') e.select(); else { const range = e.ownerDocument.createRange(); ",

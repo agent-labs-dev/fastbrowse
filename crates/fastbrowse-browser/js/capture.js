@@ -2,7 +2,7 @@
 // Unlike snapshot.js (the viewport, for Jev's action choice) this reads the whole rendered document, on screen or not,
 // so the reading path and answer-evidence quotes see everything a user could scroll to.
 // Adjacent inline content (text, <strong>, <a>, <span>...) is one block, so a value inside markup stays with its label.
-// biome-ignore format: Python embeds this function inside an expression, where a semicolon is invalid.
+// biome-ignore format: CdpPage embeds this function inside an expression, where a semicolon is invalid.
 ((allowedOrigins = null) => {
   if (!document.body) return null;
   const HEADINGS = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
@@ -213,7 +213,7 @@
     // Headerless comparison rows need leading cells for identity and separate source spans for counting.
     if (!headers.length) return rows.map((row, index) => (index ? [line(rows[0]), line(row)].join('\n') : line(row)));
     const prefix = headers.map(line);
-    if (headers.length) prefix.push('| ' + headers[0].cells.map(() => '---').join(' | ') + ' |');
+    prefix.push('| ' + headers[0].cells.map(() => '---').join(' | ') + ' |');
     const data = rows.filter(row => !headers.includes(row));
     return data.length ? data.map(row => [...prefix, line(row)].join('\n')) : [prefix.join('\n')];
   };

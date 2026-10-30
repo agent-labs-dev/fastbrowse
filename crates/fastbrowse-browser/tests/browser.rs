@@ -1,6 +1,6 @@
 mod common;
 
-// End-to-end tests of the browser layer against a real headless Chrome and fixture sites: tests/browser/test_browser.py.
+// End-to-end tests of the browser layer against a real headless Chrome and fixture sites.
 //
 // Where the Python tests replace a session's handler or method (`_prepare_session`, `_on_target_created`,
 // `send_raw`, `_before_action`), these put a websocket proxy between the session and Chrome that holds back,
@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{Harness, RecordingArtifactSink, chrome, harness, harness_on, sites};
+use common::{
+    Harness, RecordingArtifactSink, chrome, eval_value, find, harness, harness_on, observe_until, sites, turn,
+};
 use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::error::BrowserError;
@@ -20,63 +22,18 @@ use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
-use fastbrowse_core::page::{ActResult, Action, BlockKind, Capture, Control, Observation};
+use fastbrowse_core::page::{ActResult, Action, BlockKind, Control, Observation};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 // -- helpers ----------------------------------------------------------------------------------------------------
-
-fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
-    observation.controls.iter().find(|c| c.label.contains(label)).unwrap_or_else(|| {
-        panic!(
-            "no control labelled like {label:?} in {:?}",
-            observation.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
-        )
-    })
-}
 
 async fn wait_until<F, Fut>(predicate: F)
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = bool>,
 {
-    wait_until_for(predicate, 5.0).await;
-}
-
-async fn wait_until_for<F, Fut>(mut predicate: F, timeout_seconds: f64)
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
-    while Instant::now() < deadline {
-        if predicate().await {
-            return;
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    panic!("condition was not met in time");
-}
-
-/// Observe until a control is actually there: an attached frame session predates its document.
-async fn observe_until(page: &CdpPage, label: &str) -> Observation {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let observation = page.observe().await.expect("observe");
-        if observation.controls.iter().any(|c| c.label.contains(label)) {
-            return observation;
-        }
-        assert!(Instant::now() < deadline, "condition was not met in time");
-        sleep(Duration::from_millis(50)).await;
-    }
-}
-
-async fn eval_value(session: &BrowserSession, session_id: &str, expression: &str) -> Value {
-    let out = session
-        .send("Runtime.evaluate", json!({"expression": expression, "returnByValue": true}), Some(session_id))
-        .await
-        .expect("Runtime.evaluate");
-    out["result"].get("value").cloned().unwrap_or(Value::Null)
+    common::wait_until(predicate, 5.0).await;
 }
 
 async fn eval_active(h: &Harness, expression: &str) -> Value {
@@ -99,11 +56,6 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-/// `capture.text[start:end]`: block offsets count code points, as Python indexes a `str`.
-fn slice(capture: &Capture, start: i64, end: i64) -> String {
-    capture.text.chars().skip(start.max(0) as usize).take((end - start).max(0) as usize).collect()
-}
-
 fn sha256_hex(content: &[u8]) -> String {
     HEXLOWER.encode(ring::digest::digest(&ring::digest::SHA256, content).as_ref())
 }
@@ -122,13 +74,6 @@ fn fill(target: &Control, text: &str) -> Action {
 
 async fn act(page: &CdpPage, action: Action, observation: &Observation) -> ActResult {
     page.act(&action, observation).await.expect("act")
-}
-
-/// One test at a time, as the Python suite runs. Tests share one Chrome, and with even two tabs at work a menu shown
-/// on the next animation frame was read before it drew and a plain click outlasted its two-second bound.
-async fn gate() -> tokio::sync::SemaphorePermit<'static> {
-    static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-    GATE.acquire().await.expect("the gate is never closed")
 }
 
 /// The `loaded_page` fixture: a fresh session on the main site's index.
@@ -268,7 +213,7 @@ fn recording(sent: Arc<Mutex<Vec<(String, Value)>>>) -> Hook {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_scroll_can_return_to_content_above_the_viewport() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/long-list.html").await;
     let session_id = active(&h);
@@ -286,7 +231,7 @@ async fn test_scroll_can_return_to_content_above_the_viewport() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_observe_lists_controls_and_masks_password() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let sign_in = find(&obs, "Sign in");
@@ -305,7 +250,7 @@ async fn test_observe_lists_controls_and_masks_password() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secret_typed_into_text_field_is_masked_but_preserves_value() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let username = find(&obs, "Username");
@@ -321,7 +266,7 @@ async fn test_secret_typed_into_text_field_is_masked_but_preserves_value() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fill_and_click_submits_form_and_page_changed() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let username = find(&obs, "Username");
@@ -338,7 +283,7 @@ async fn test_fill_and_click_submits_form_and_page_changed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_click_the_page_answers_over_fetch_is_judged_by_the_response() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     for (label, changed) in [("Add to cart", true), ("Track", false)] {
         h.goto("/quick-add.html").await;
@@ -351,7 +296,7 @@ async fn test_a_click_the_page_answers_over_fetch_is_judged_by_the_response() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_covered_click_dispatches_nothing() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let opened = act(&h.page, click(find(&obs, "Open modal")), &obs).await;
@@ -369,7 +314,7 @@ async fn test_covered_click_dispatches_nothing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_visually_hidden_radio_is_pressed_through_its_label() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/swatches.html").await;
     let obs = h.observe().await;
@@ -381,7 +326,7 @@ async fn test_a_visually_hidden_radio_is_pressed_through_its_label() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_small_fixed_child_does_not_hide_full_window_cover_from_hit_test() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     for shadow in [false, true] {
         let Some(h) = loaded().await else { return };
         let session_id = active(&h);
@@ -419,7 +364,7 @@ async fn test_small_fixed_child_does_not_hide_full_window_cover_from_hit_test() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_dom_swap_after_observe_makes_act_stale() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let target = find(&obs, "Swap target");
@@ -434,7 +379,7 @@ async fn test_dom_swap_after_observe_makes_act_stale() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_upload_bytes_match_sha256() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     use ring::rand::SecureRandom;
 
     let Some(h) = loaded().await else { return };
@@ -462,7 +407,7 @@ async fn test_upload_bytes_match_sha256() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_download_becomes_artifact_with_checksum() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let result = act(&h.page, click(find(&obs, "Download attachment")), &obs).await;
@@ -481,7 +426,7 @@ async fn test_download_becomes_artifact_with_checksum() {
 /// its page, so the click must count the download as its effect, and the next observation must carry its rows.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_click_that_downloads_is_a_page_change_not_a_dead_click() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -500,7 +445,7 @@ async fn test_a_click_that_downloads_is_a_page_change_not_a_dead_click() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_cross_origin_iframe_control_is_observed_and_clickable() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = observe_until(&h.page, "Frame button").await;
     let frame_button = find(&obs, "Frame button");
@@ -518,7 +463,7 @@ async fn test_cross_origin_iframe_control_is_observed_and_clickable() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_click_that_opens_a_tab_continues_there() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let opener_tab = obs.tabs.iter().find(|t| t.active).expect("active tab").clone();
@@ -541,7 +486,7 @@ async fn test_a_click_that_opens_a_tab_continues_there() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_new_tab_slow_to_set_up_is_still_followed() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
     let slow = Arc::new(AtomicBool::new(false));
     let armed = slow.clone();
@@ -567,7 +512,7 @@ async fn test_a_new_tab_slow_to_set_up_is_still_followed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_new_tab_announced_late_is_still_followed() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     for opener in ["window.open", "link"] {
         let Some(connection) = chrome().cloned() else { return };
         let (late, quiet) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
@@ -598,7 +543,7 @@ async fn test_a_new_tab_announced_late_is_still_followed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_new_tab_whose_opener_is_reported_late_is_still_followed() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
     let armed = Arc::new(AtomicBool::new(false));
     let strip = armed.clone();
@@ -626,7 +571,7 @@ async fn test_a_new_tab_whose_opener_is_reported_late_is_still_followed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_click_that_opens_no_window_does_not_wait_for_one() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
     let late = Arc::new(AtomicBool::new(false));
     let Some(h) = proxied(connection, announce_late(late.clone(), Arc::default(), 2.5)).await else { return };
@@ -642,7 +587,7 @@ async fn test_a_click_that_opens_no_window_does_not_wait_for_one() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
     let armed = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -671,7 +616,7 @@ async fn test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_tab_opened_from_a_cross_site_frame_is_followed() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let s = &h.session;
     wait_until(move || async move { !s.frame_sessions().is_empty() }).await;
@@ -697,7 +642,7 @@ async fn test_a_tab_opened_from_a_cross_site_frame_is_followed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_confirm_dialog_handled_via_dialog_operation() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let result = act(&h.page, click(find(&obs, "Confirm")), &obs).await;
@@ -721,7 +666,7 @@ async fn test_confirm_dialog_handled_via_dialog_operation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_unnamed_card_controls_are_named_by_their_icon_and_card() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     // A gallery's icon-only trash controls read "button" beside an edit link, so the choice picked the edit link or
     // refused the trash control it could not tie to an image.
     let Some(h) = harness().await else { return };
@@ -761,7 +706,7 @@ async fn test_unnamed_card_controls_are_named_by_their_icon_and_card() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_identical_labels_carry_their_card_as_context() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let adds: Vec<Option<&str>> =
@@ -774,7 +719,7 @@ async fn test_identical_labels_carry_their_card_as_context() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_lazily_built_menu_is_observed_after_the_click_that_opens_it() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let opener = find(&obs, "Search or jump to");
@@ -786,7 +731,7 @@ async fn test_lazily_built_menu_is_observed_after_the_click_that_opens_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_shadow_dom_button_is_clickable() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let result = act(&h.page, click(find(&obs, "Shadow button")), &obs).await;
@@ -798,7 +743,6 @@ async fn test_shadow_dom_button_is_clickable() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_record_keeps_a_value_it_only_draws() {
-    let _gate = gate().await;
     let Some(h) = loaded().await else { return };
     let card = |rating: &str, title: &str| {
         format!(
@@ -815,18 +759,18 @@ async fn test_a_record_keeps_a_value_it_only_draws() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_capture_offsets_slice_exactly_to_each_block() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let capture = h.page.capture().await.expect("capture");
     assert!(!capture.blocks.is_empty(), "expected at least one block");
     for block in &capture.blocks {
-        assert!(!slice(&capture, block.start, block.end).is_empty(), "block {} sliced to empty text", block.source_id);
+        assert!(!capture.block_text(block).is_empty(), "block {} sliced to empty text", block.source_id);
     }
     let headings: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Heading).collect();
-    assert!(headings.iter().any(|h| slice(&capture, h.start, h.end) == "Table"));
+    assert!(headings.iter().any(|h| capture.block_text(h) == "Table"));
     let tables: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Table).collect();
     assert!(!tables.is_empty());
-    assert!(slice(&capture, tables[0].start, tables[0].end).contains("Ada"));
+    assert!(capture.block_text(tables[0]).contains("Ada"));
     let mut links = capture.blocks.iter().filter(|b| b.kind == BlockKind::Link);
     assert!(links.any(|link| link.href.as_deref() == Some("https://example.com/docs")));
     h.close().await;
@@ -835,7 +779,7 @@ async fn test_capture_offsets_slice_exactly_to_each_block() {
 /// Wikipedia's search box swaps itself for a hydrated copy mid-insertion; the text still landed.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fill_succeeds_when_the_field_is_replaced_while_typing() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let result = act(&h.page, fill(find(&obs, "Hydrating field"), "godel"), &obs).await;
@@ -850,7 +794,7 @@ async fn test_fill_succeeds_when_the_field_is_replaced_while_typing() {
 /// The replacement must be the target's own: a decoy holding the same text does not vouch for it.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fill_fails_when_another_field_holds_the_text_we_could_not_insert() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     let obs = h.observe().await;
     let result = act(&h.page, fill(find(&obs, "Rejecting field"), "godel"), &obs).await;
@@ -860,7 +804,7 @@ async fn test_fill_fails_when_another_field_holds_the_text_we_could_not_insert()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_observation_keeps_every_control_and_the_whole_viewport_text() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     eval_active(
         &h,
@@ -879,7 +823,6 @@ async fn test_an_observation_keeps_every_control_and_the_whole_viewport_text() {
 /// A long list's rows below the viewport are not in its text, so the observation says how much a read would add.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_observation_counts_the_page_text_outside_the_viewport() {
-    let _gate = gate().await;
     let Some(h) = loaded().await else { return };
     eval_active(
         &h,
@@ -898,7 +841,7 @@ async fn test_an_observation_counts_the_page_text_outside_the_viewport() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_page_exception_is_typed_and_does_not_echo_page_text() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     eval_active(&h, "Object.defineProperty(document, 'title', {get() { throw new Error('echoed-secret'); }});").await;
     let raised = h.page.observe().await.expect_err("the title getter throws");
@@ -910,7 +853,7 @@ async fn test_page_exception_is_typed_and_does_not_echo_page_text() {
 /// Unassociated sibling labels left todo toggles absent from the choices offered to the policy.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_transparent_native_choices_keep_todo_context_and_change_only_state() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     for kind in ["radio", "checkbox"] {
         let Some(h) = harness().await else { return };
         h.goto("/todos.html").await;
@@ -941,7 +884,7 @@ async fn test_transparent_native_choices_keep_todo_context_and_change_only_state
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_transparent_choice_exception_does_not_admit_hidden_or_disabled_controls() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let changes = [
         "e.style.display = 'none'",
         "e.style.visibility = 'hidden'",
@@ -970,7 +913,7 @@ async fn test_transparent_choice_exception_does_not_admit_hidden_or_disabled_con
 /// A `display: contents` parent has no layout box, yet hides nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_transparent_choice_under_a_boxless_parent_is_offered() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/todos.html").await;
     eval_active(&h, "document.querySelectorAll('input')[1].parentElement.style.display = 'contents'").await;
@@ -980,7 +923,7 @@ async fn test_transparent_choice_under_a_boxless_parent_is_offered() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_styled_choice_uses_visible_label_and_native_state() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let styles = [
         "opacity:0",
         "display:none",
@@ -1016,7 +959,7 @@ async fn test_styled_choice_uses_visible_label_and_native_state() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_styled_choice_rejects_reassociated_label() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -1035,7 +978,7 @@ async fn test_styled_choice_rejects_reassociated_label() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_link_label_ignores_nested_style_and_script() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -1051,7 +994,7 @@ async fn test_link_label_ignores_nested_style_and_script() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fill_activates_picker_before_typing_and_offers_suggestion() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -1078,7 +1021,7 @@ async fn test_fill_activates_picker_before_typing_and_offers_suggestion() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_frameset_pages_are_read_through_their_frames() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/frames.html").await;
     // A frameset document has no text of its own: everything a user sees is in its frames.
@@ -1091,7 +1034,7 @@ async fn test_frameset_pages_are_read_through_their_frames() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_table_cell_drawn_with_an_icon_is_not_read_as_blank() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/icons.html").await;
     let text = h.page.capture().await.expect("capture").text;
@@ -1103,7 +1046,7 @@ async fn test_a_table_cell_drawn_with_an_icon_is_not_read_as_blank() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_menu_shown_on_the_next_animation_frame_opens() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/animated.html").await;
     let obs = h.observe().await;
@@ -1115,7 +1058,7 @@ async fn test_a_menu_shown_on_the_next_animation_frame_opens() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_content_shown_only_under_the_pointer_is_reached_by_hovering() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/hovers.html").await;
     let obs = h.observe().await;
@@ -1142,21 +1085,12 @@ async fn test_content_shown_only_under_the_pointer_is_reached_by_hovering() {
     assert!(after.controls.iter().any(|c| c.label == "View profile"));
     let captured = h.page.capture().await.expect("capture");
     assert!(captured.text.contains("name: grace"));
-    let revealed = captured
-        .blocks
-        .iter()
-        .find(|b| slice(&captured, b.start, b.end).contains("name: grace"))
-        .expect("revealed block");
+    let revealed =
+        captured.blocks.iter().find(|b| captured.block_text(b).contains("name: grace")).expect("revealed block");
     let context = revealed.control_context.as_ref().expect("control context");
     assert_eq!(context.label, "User Avatar");
     assert_eq!(context.context.as_deref(), Some("2 of 2"));
-    assert!(
-        captured
-            .blocks
-            .iter()
-            .filter(|b| slice(&captured, b.start, b.end) == "Team")
-            .all(|b| b.control_context.is_none())
-    );
+    assert!(captured.blocks.iter().filter(|b| captured.block_text(b) == "Team").all(|b| b.control_context.is_none()));
     let after_controls: Vec<&Control> = after.controls.iter().collect();
     assert_eq!(avatars(&after_controls), avatars(&hovers));
     let first = after.controls.iter().find(|c| c.context.as_deref() == Some("1 of 2")).expect("first avatar");
@@ -1171,7 +1105,7 @@ async fn test_content_shown_only_under_the_pointer_is_reached_by_hovering() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_visible_option_is_clicked_without_scrolling_its_menu_shut() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/menu.html").await;
     let obs = h.observe().await;
@@ -1188,7 +1122,7 @@ async fn test_a_visible_option_is_clicked_without_scrolling_its_menu_shut() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_fill_follows_focus_to_the_editor_its_click_opened() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     for opens in ["", "?late"] {
         let Some(h) = harness().await else { return };
         h.goto(&format!("/overlay.html{opens}")).await;
@@ -1208,7 +1142,7 @@ async fn test_a_fill_follows_focus_to_the_editor_its_click_opened() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_anchor_with_no_destination_but_click_semantics_is_offered_as_a_button() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     // jQuery UI's datepicker appends its Next/Prev anchors to <body> once the field is focused, with a click
     // handler and no href: they carry no destination, so they must never be offered, or capped, as a pager.
     let Some(h) = harness().await else { return };
@@ -1232,7 +1166,7 @@ async fn test_an_anchor_with_no_destination_but_click_semantics_is_offered_as_a_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_what_a_form_holds_is_quotable_but_a_password_is_not() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/icons.html").await;
     eval_active(
@@ -1261,7 +1195,7 @@ async fn test_what_a_form_holds_is_quotable_but_a_password_is_not() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_uniquely_named_date_field_still_gets_its_section_heading() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/icons.html").await;
     eval_active(
@@ -1283,7 +1217,7 @@ async fn test_a_uniquely_named_date_field_still_gets_its_section_heading() {
 /// A post's heading ("Data Entry Form") named a date picker's Submit, and the verifier read the wrong form.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_first_heading() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/icons.html").await;
     eval_active(
@@ -1308,7 +1242,7 @@ async fn test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_fi
 /// A shared "Options" heading, a hidden label and a label holding an output are not what names a card.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_twins_keep_their_card_names_past_shared_hidden_and_control_labels() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let card = |name: &str| {
         format!(
             "<div><h2>{name}</h2><label hidden>Unavailable</label><label>Total <output>12</output></label>\
@@ -1342,7 +1276,7 @@ async fn test_twins_keep_their_card_names_past_shared_hidden_and_control_labels(
 /// them, so two "Springfield" options read as "1 of 2" and "2 of 2" and the run picked one blind.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_same_named_siblings_are_told_apart_by_their_own_visible_descriptor() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let contexts = |obs: &Observation| -> Vec<Option<String>> {
         obs.controls.iter().filter(|c| c.label == "Springfield").map(|c| c.context.clone()).collect()
     };
@@ -1375,7 +1309,7 @@ async fn test_same_named_siblings_are_told_apart_by_their_own_visible_descriptor
 /// run could not tell which month it was on and went back and forth past the one it wanted.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_calendar_twins_are_named_by_the_month_they_show() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let calendar = |month: &str| {
         format!(
             "<div><div><a style=\"float:left\">Prev</a><a style=\"float:right\">Next</a>\
@@ -1408,7 +1342,6 @@ async fn test_calendar_twins_are_named_by_the_month_they_show() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_uniquely_labelled_control_is_given_its_section_heading() {
-    let _gate = gate().await;
     let Some(h) = harness().await else { return };
     h.goto("/icons.html").await;
     eval_active(
@@ -1427,7 +1360,7 @@ async fn test_a_uniquely_labelled_control_is_given_its_section_heading() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_table_controls_keep_columns_across_empty_cells_and_spans() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/icons.html").await;
     eval_active(
@@ -1457,7 +1390,7 @@ async fn test_table_controls_keep_columns_across_empty_cells_and_spans() {
 /// The whole point of `cdp_url`: drive a browser someone else started, and leave it running.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(chrome_connection) = chrome().cloned() else { return };
     let sink = Arc::new(RecordingArtifactSink::default());
     let handed = BrowserConnection::new(chrome_connection.cdp_url.clone(), true);
@@ -1478,7 +1411,7 @@ async fn test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run() {
 /// A run in a visible window clicks, types and captures behind the window's current tab, and activates nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_background_run_drives_its_tab_without_bringing_it_forward() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(chrome_connection) = chrome().cloned() else { return };
     let sent = Arc::new(Mutex::new(vec![]));
     let background = BrowserConnection { foreground: false, ..chrome_connection };
@@ -1514,7 +1447,7 @@ async fn test_a_background_run_drives_its_tab_without_bringing_it_forward() {
 /// for the answer. The run must still be able to answer it, and setup must then finish rather than hang.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_answered() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(chrome_connection) = chrome().cloned() else { return };
     let background = BrowserConnection { foreground: false, ..chrome_connection };
     let Some(h) = harness_on(background, Config::default(), SessionOptions::default()).await else { return };
@@ -1551,7 +1484,7 @@ async fn test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_an
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     // A CSV file is shown as a page table is: one block per record under its header, so a total or count cites each
     // record it rests on. A file in any other format stays one block, marked whole when the server sent all of it.
     for path in ["/report.csv", "/export-report", "/report.csv?short", "/report.csv?partial"] {
@@ -1566,9 +1499,9 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
             assert_eq!(block.kind, BlockKind::Table, "{path}");
             assert!(!block.complete_source, "{path}");
             assert_eq!(block.source_url.as_deref(), Some(format!("{}{path}", sites().main).as_str()));
-            assert!(slice(&capture, block.start, block.end).starts_with("name,total\n"), "{path}");
+            assert!(capture.block_text(block).starts_with("name,total\n"), "{path}");
         }
-        assert_eq!(slice(&capture, rows[0].start, rows[0].end), "name,total\nReport,139.79", "{path}");
+        assert_eq!(capture.block_text(rows[0]), "name,total\nReport,139.79", "{path}");
         let partial = rows[0].heading_path[0].contains("only part");
         assert_eq!(partial, path == "/report.csv?partial", "{path}");
         h.close().await;
@@ -1577,7 +1510,7 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_http_error_status_travels_with_the_observed_document() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     for status in [403u16, 419, 429, 503, 999] {
         let Some(h) = harness().await else { return };
         h.goto(&format!("/http-error/{status}")).await;
@@ -1592,7 +1525,7 @@ async fn test_http_error_status_travels_with_the_observed_document() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_http_status_is_not_attributed_to_a_client_side_route() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/http-error/404").await;
     assert_eq!(h.observe().await.response_status, Some(404));
@@ -1609,7 +1542,7 @@ async fn test_http_status_is_not_attributed_to_a_client_side_route() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_page_javascript_cannot_forge_the_http_status() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -1626,7 +1559,7 @@ async fn test_page_javascript_cannot_forge_the_http_status() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_http_status_world_is_made_once_per_document() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
     let sent = Arc::new(Mutex::new(vec![]));
     let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
@@ -1643,7 +1576,7 @@ async fn test_http_status_world_is_made_once_per_document() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_the_kept_status_world_is_addressed_only_by_its_unique_id() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
     let sent = Arc::new(Mutex::new(vec![]));
     let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
@@ -1689,7 +1622,7 @@ async fn test_the_kept_status_world_is_addressed_only_by_its_unique_id() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fields_carry_what_the_page_says_about_them() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     let markup = concat!(
@@ -1710,7 +1643,7 @@ async fn test_fields_carry_what_the_page_says_about_them() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_screenshots_match_the_png_frame_contract() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     assert!(h.page.screenshot().await.expect("screenshot").starts_with(b"\x89PNG\r\n\x1a\n"));
@@ -1719,7 +1652,7 @@ async fn test_screenshots_match_the_png_frame_contract() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_icon_only_buttons_keep_their_named_glyphs() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -1760,7 +1693,7 @@ async fn test_icon_only_buttons_keep_their_named_glyphs() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_button_wrapped_in_a_link_is_offered_once() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -1779,7 +1712,7 @@ async fn test_a_button_wrapped_in_a_link_is_offered_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_content() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     for mutation in ["outside", "siblings", "mixed", "label"] {
         let Some(h) = harness().await else { return };
         h.goto("/hovers.html").await;
@@ -1808,11 +1741,8 @@ async fn test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_cont
         h.page.evaluate(&session_id, script).await.expect("evaluate");
         let captured = h.page.capture().await.expect("capture");
         if mutation == "outside" {
-            let outside = captured
-                .blocks
-                .iter()
-                .find(|b| slice(&captured, b.start, b.end) == "Outside name")
-                .expect("outside block");
+            let outside =
+                captured.blocks.iter().find(|b| captured.block_text(b) == "Outside name").expect("outside block");
             assert!(outside.control_context.is_none(), "{mutation}");
         } else {
             assert!(captured.blocks.iter().all(|b| b.control_context.is_none()), "{mutation}");
@@ -1828,7 +1758,7 @@ async fn test_hover_quote_context_does_not_attach_to_unrelated_or_reordered_cont
 /// nothing and a screenshot of it never returned.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_headless_run_tab_has_a_window_of_its_own_and_paints() {
-    let _gate = gate().await;
+    let _turn = turn().await;
     if find_chrome(None).is_none() {
         eprintln!("Chrome is not installed; skipping");
         return;

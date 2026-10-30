@@ -1,5 +1,4 @@
-//! A fake client for `fastbrowse serve` on in-memory streams, and the stand-in runs the serve tests share: the Rust
-//! side of `tests/serve_client.py` and of the recorders in `tests/test_serve_*.py`.
+//! A fake client for `fastbrowse serve` on in-memory streams, and the stand-in runs the serve tests share.
 //!
 //! The client speaks to the server in lines of JSON, as the JavaScript SDK does, so a test asserts what a client on
 //! the other side of the pipe would see and never looks inside the server.
@@ -183,16 +182,20 @@ pub fn serving(runner: Arc<dyn Runner>, settings: SettingsSource) -> FakeClient 
     }
 }
 
+/// The model keys and a stand-in Chrome, with no cloud key and nothing read from a checkout's `.env`.
+pub fn model_settings() -> Settings {
+    Settings {
+        openrouter_api_key: Some(Secret::new("or")),
+        ai_gateway_api_key: Some(Secret::new("gw")),
+        chrome: Some(CHROME.into()),
+        ..Settings::default()
+    }
+}
+
 /// Every key set and nothing read from a checkout's `.env` or the environment of whoever runs the tests.
 pub fn settings_with(change: impl Fn(&mut Settings) + Send + Sync + 'static) -> SettingsSource {
     Arc::new(move || {
-        let mut settings = Settings {
-            openrouter_api_key: Some(Secret::new("or")),
-            ai_gateway_api_key: Some(Secret::new("gw")),
-            browser_use_api_key: Some(Secret::new("bu")),
-            chrome: Some(CHROME.into()),
-            ..Settings::default()
-        };
+        let mut settings = Settings { browser_use_api_key: Some(Secret::new("bu")), ..model_settings() };
         change(&mut settings);
         Ok(settings)
     })

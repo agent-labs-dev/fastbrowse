@@ -233,7 +233,7 @@ def _git(*args: str, cwd: Path, env: dict[str, str] | None = None) -> str:
     return done.stdout
 
 
-def publish(directory: Path, release: Release, remote: str = AUR_REMOTE) -> int:
+def publish(directory: Path, release: Release) -> int:
     """Put `directory`'s PKGBUILD and .SRCINFO on the AUR, or say the AUR already holds them.
 
     The key that authenticates this has to be one the package's AUR maintainer registered, so this is the one
@@ -242,7 +242,7 @@ def publish(directory: Path, release: Release, remote: str = AUR_REMOTE) -> int:
     wanted = {name: (directory / name).read_text(encoding="utf-8") for name in FILES}
     with tempfile.TemporaryDirectory(prefix="aur-") as scratch:
         work = Path(scratch) / "fastbrowse"
-        _git("clone", "--quiet", "--depth", "1", remote, str(work), cwd=Path(scratch))
+        _git("clone", "--quiet", "--depth", "1", AUR_REMOTE, str(work), cwd=Path(scratch))
         current = {name: (work / name).read_text(encoding="utf-8") for name in FILES if (work / name).exists()}
         differing = changed(current, wanted)
         if not differing:

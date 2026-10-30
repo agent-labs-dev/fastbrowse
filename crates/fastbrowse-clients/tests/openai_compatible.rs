@@ -1,5 +1,3 @@
-//! tests/clients/test_openai_compatible.py and test_attempt_deadline.py.
-//!
 //! Python shortens its retry and deadline constants by monkeypatching them; here they stay Python's and the clock is
 //! paused, so a full retry ladder passes at once. Python cancels a task and lets an abandoned
 //! request run to its deadline so its receipt can be read; here the future is dropped, and a request in flight is

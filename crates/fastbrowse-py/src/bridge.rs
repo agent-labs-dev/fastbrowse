@@ -195,8 +195,7 @@ impl Context {
 /// What answers a [`Context`] and closes it when the call ends. A call dropped while its client had begun spending
 /// (it reserved, recorded or validated) keeps answering until the wrapper says the client's cleanup is done: that is
 /// where a cancelled request records the charge it may have run up, and the ledger is only borrowed until this
-/// returns. Python's `run_task` joins a cancelled client the same way, with no time limit. A client that had asked
-/// nothing yet has nothing to record.
+/// returns. A client that had asked nothing yet has nothing to record.
 struct Answering<'a> {
     slot: Arc<Mutex<Option<UnboundedSender<Ask>>>>,
     asked: UnboundedReceiver<Ask>,

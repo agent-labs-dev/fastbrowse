@@ -36,7 +36,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "${{ matrix.python }}"
-      # The eval data loaders import yaml; without the extra, ty sees a different tree than we do.
+      # tests/test_ci.py imports yaml; without the extra, ty sees a different tree than we do.
       - run: uv sync --locked --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -150,8 +150,7 @@ jobs:
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with: {tool: nextest@0.9.150}
       - run: cargo nextest run --workspace --locked --no-fail-fast
-      # nextest does not run doctests. No crate has one today; this keeps it that way rather than silently
-      # dropping the check.
+      # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc
       # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.

@@ -3,17 +3,21 @@
 //!
 //! Jev: TYPESAFE_API_KEY selects direct TypeSafe; otherwise OPENROUTER_API_KEY is primary, with AI_GATEWAY_API_KEY
 //! (Vercel AI Gateway) as backup when set, or primary when neither other key is set. FASTBROWSE_DECISION_SOURCE picks
-//! openrouter, typesafe or gateway explicitly. OpenRouter and direct use the gateway as backup; the gateway uses direct
-//! when configured, otherwise OpenRouter. FASTBROWSE_DECISION_BASE_URL points either at a proxy or another host serving the
-//! same API, and FASTBROWSE_DECISION_MODEL pins an OpenRouter or direct model. A custom endpoint or model disables
-//! automatic failover.
+//! a source explicitly: openrouter, typesafe, gateway, telnyx, ollama, custom, openai, aimlapi or perplexity. OpenRouter
+//! and direct use the gateway as backup; the gateway uses direct when configured, otherwise OpenRouter; the rest have no
+//! backup. telnyx, openai, aimlapi and perplexity read TELNYX_API_KEY, OPENAI_API_KEY, AIMLAPI_API_KEY and
+//! PERPLEXITY_API_KEY; ollama and custom read FASTBROWSE_DECISION_API_KEY, which is optional.
+//! FASTBROWSE_DECISION_BASE_URL points any source at a proxy or another host serving the same API, and custom requires
+//! it. FASTBROWSE_DECISION_MODEL pins the model of any source but the gateway, and ollama and custom require it. A
+//! custom endpoint or model disables automatic failover.
 //!
 //! LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
 //! Gateway's OpenAI-compatible chat completions, and when both are set the gateway takes over a run whose OpenRouter
 //! key is refused. FASTBROWSE_LLM_BASE_URL points the LLM at any other OpenAI-compatible
 //! chat completions endpoint (for example a local vLLM server) instead, and FASTBROWSE_LLM_API_KEY supplies its bearer
 //! token when it has one; that endpoint never receives the OpenRouter or gateway key. FASTBROWSE_LLM_STRICT and
-//! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only. FASTBROWSE_LLM_MODEL sets the model for every
+//! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint and to the FASTBROWSE_LLM_PROVIDER presets, never to the
+//! OpenRouter or gateway routes; Anthropic's Messages API takes only the extra body. FASTBROWSE_LLM_MODEL sets the model for every
 //! purpose, and FASTBROWSE_LLM_REASONING sets the reasoning effort: none, low, medium or high.
 //!
 //! FASTBROWSE_LLM_PROVIDER names the LLM provider outright instead: openrouter, gateway, openai, anthropic, gemini,
@@ -23,8 +27,8 @@
 //! Cloud browser: BROWSER_USE_API_KEY. FASTBROWSE_CHROME names the Chrome binary; FASTBROWSE_HEADED=1 shows its window
 //! and FASTBROWSE_PROFILE keeps its profile between runs. A real environment variable beats `.env`.
 //!
-//! pydantic-settings reads names without regard to case, prefixes every field but the four keys with `FASTBROWSE_`,
-//! and validates in lax mode; [`Settings::from_sources`] does the same.
+//! [`Settings::from_sources`] reads names without regard to case, prefixes every field but the provider keys with
+//! `FASTBROWSE_`, and validates in lax mode.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -216,8 +220,8 @@ pub struct Settings {
     pub llm_strict: bool,
     /// Whether FASTBROWSE_LLM_STRICT was given: a preset's own default holds until it is.
     pub llm_strict_set: bool,
-    /// Extra JSON object merged into every chat completions request body to the custom endpoint. An invalid value
-    /// stops the run.
+    /// Extra JSON object merged into every request body to the custom endpoint or a FASTBROWSE_LLM_PROVIDER preset,
+    /// never to the OpenRouter or gateway routes. An invalid value stops the run.
     pub llm_extra_body: Option<String>,
     /// FASTBROWSE_LLM_REASONING; unset, each model gets its own default.
     pub llm_reasoning: Option<ReasoningEffort>,

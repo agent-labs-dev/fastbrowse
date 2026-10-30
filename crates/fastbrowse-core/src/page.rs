@@ -416,9 +416,8 @@ pub enum BrowserError {
     /// resolve is not one of these; that can be a mistyped address.
     #[error("{0}")]
     SiteUnreachable(String),
-    /// Python's `fetch.NeedsBrowser`: a page with no browser behind it was asked to act, render or read what it
-    /// could not fetch. Nothing failed, so the run ends `blocked`, and no handler that recovers from a browser
-    /// failure may catch it: Python's is not a `BrowserError`, so its `except BrowserError` clauses let it pass.
+    /// A page with no browser behind it was asked to act, render or read what it could not fetch. Nothing failed, so
+    /// the run ends `blocked`, and no handler that recovers from a browser failure may catch it.
     #[error("{0}")]
     NeedsBrowser(String),
 }
@@ -505,8 +504,6 @@ pub trait Page: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    //! The parts of tests/test_page.py about the page types; the browser's own (`_capped`, `_same_http_origin`,
-    //! `_browser_error`) belong to the browser layer.
     use super::*;
 
     fn link(label: &str, next_page: Option<bool>, i: usize) -> Control {

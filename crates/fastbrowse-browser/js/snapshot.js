@@ -1,9 +1,17 @@
 // Ported from jev-ultrafast (MIT): jev_ultrafast/snapshot.js.
 // Atomic single-evaluate observation of one frame's controls, viewport text, and a freshness fingerprint.
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
-// open shadow roots. Runs once per frame session (main frame or an OOPIF); the Python side merges frames.
-// biome-ignore format: Python appends mode arguments to this parenthesized expression.
+// open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
+// biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
 ((mode, allowedOrigins = null) => {
+  // Reading a cross-origin frame's document can throw.
+  const childDocument = frame => {
+    try {
+      return frame.contentDocument;
+    } catch {
+      return null;
+    }
+  };
   const granted = doc => {
     if (allowedOrigins === null) return true;
     const frame = doc.defaultView.frameElement;
@@ -98,12 +106,7 @@
           );
         if (e.shadowRoot) include(e.shadowRoot);
         if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-          let inner = null;
-          try {
-            inner = e.contentDocument;
-          } catch {
-            inner = null;
-          }
+          const inner = childDocument(e);
           if (inner?.body && granted(inner)) include(inner);
         }
       }
@@ -346,8 +349,6 @@
     const owner = doc.defaultView.frameElement;
     return `${framePath(owner.ownerDocument) || 'root'}/${identity(owner)}`;
   };
-  registry.framePath = framePath;
-  registry.submitSemantics = submitSemantics;
 
   // Traverse light DOM plus any open shadow roots, and same-origin same-process nested iframes.
   let inaccessible = 0;
@@ -358,19 +359,14 @@
     for (const e of root.querySelectorAll('*')) {
       if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-        let inner = null;
-        try {
-          inner = e.contentDocument;
-        } catch {
-          inner = null;
-        }
+        const inner = childDocument(e);
         if (inner && inner.body && granted(inner)) yield* walk(inner);
         else inaccessible++;
       }
     }
   }
 
-  // Guards and the page key go to Python as digests: each comparison is equality, and the full guards cost more to
+  // Guards and the page key go to Rust as digests: each comparison is equality, and the full guards cost more to
   // send than the snapshot takes to compute. Not cryptographic, and it needs not be: a page that wants a guard to
   // hold can simply leave its DOM alone.
   const digest = text => {
@@ -891,6 +887,14 @@
   // Visible text the viewport does not show, counted in characters: a read takes it in, and a page whose answer
   // sits further down a long list is not one to scroll through screen by screen.
   let offscreen_text = 0;
+  const readFrames = (doc, dx, dy, read) => {
+    for (const frame of doc.querySelectorAll('iframe,frame')) {
+      const inner = childDocument(frame);
+      if (!inner || !granted(inner)) continue;
+      const f = frame.getBoundingClientRect();
+      read(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
+    }
+  };
   // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
@@ -914,17 +918,7 @@
         offscreen_text += value.length;
       }
     }
-    for (const frame of doc.querySelectorAll('iframe,frame')) {
-      let inner = null;
-      try {
-        inner = frame.contentDocument;
-      } catch {
-        inner = null;
-      }
-      if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      readText(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
-    }
+    readFrames(doc, dx, dy, readText);
   };
   readText(document, 0, 0);
   const viewport_text = words.join('\n');
@@ -947,17 +941,7 @@
       visual_content = 1;
       return;
     }
-    for (const frame of doc.querySelectorAll('iframe,frame')) {
-      let inner = null;
-      try {
-        inner = frame.contentDocument;
-      } catch {
-        inner = null;
-      }
-      if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      readVisual(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
-    }
+    readFrames(doc, dx, dy, readVisual);
   };
   readVisual(document, 0, 0);
 

@@ -28,6 +28,31 @@ use serde_json::{Map, Value, json};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 
+/// The keys of the questions a step request asks Jev, which it answers under the same keys.
+pub(crate) mod keys {
+    use fastbrowse_core::models::Operation;
+
+    pub const OPERATION: &str = "operation";
+    pub const READ_ASSESSMENT: &str = "read_assessment";
+    pub const DRAG_DESTINATION: &str = "drag_destination";
+    pub const DRAG_DESTINATION_GROUP: &str = "drag_destination_group";
+    pub const SWITCH_TAB_TARGET: &str = "switch_tab_target";
+    pub const NAVIGATE_TARGET: &str = "navigate_target";
+    pub const NAVIGATE_GROUP: &str = "navigate_group";
+    pub const LOGIN_REQUIRED: &str = "login_required";
+    pub const BOT_CHECK: &str = "bot_check";
+
+    /// The question that picks `operation`'s target.
+    pub fn target(operation: Operation) -> String {
+        format!("{operation}_target")
+    }
+
+    /// The question that picks the group holding `operation`'s target.
+    pub fn group(operation: Operation) -> String {
+        format!("{operation}_group")
+    }
+}
+
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text counts the characters of page text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, and next_page marks the\none the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task or subgoal names\none of those, choose the element whose context matches it.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
@@ -415,9 +440,8 @@ pub async fn decide(
                 continue;
             }
         }
-        if !matches!(reduction, Reduction::OnscreenOnly | Reduction::Capped) && controls.iter().any(|c| c.offscreen) {
-            controls.retain(|c| !c.offscreen);
-            reduction = Reduction::OnscreenOnly;
+        if let Some(onscreen) = onscreen_rung(&controls, reduction) {
+            (controls, reduction) = (onscreen, Reduction::OnscreenOnly);
             continue;
         }
         // A page too dense even on screen is still worked rather than ending the run: the controls that fit are
@@ -566,8 +590,13 @@ fn shed(
     if state + largest <= config.tokens.batch_tokens as f64 {
         return None;
     }
+    onscreen_rung(controls, reduction).map(|onscreen| (onscreen, Reduction::OnscreenOnly))
+}
+
+/// The fitting ladder's on-screen rung: `controls` without the off-screen ones, or None when it has no more to drop.
+fn onscreen_rung(controls: &[Control], reduction: Reduction) -> Option<Vec<Control>> {
     (!matches!(reduction, Reduction::OnscreenOnly | Reduction::Capped) && controls.iter().any(|c| c.offscreen))
-        .then(|| (controls.iter().filter(|c| !c.offscreen).cloned().collect(), Reduction::OnscreenOnly))
+        .then(|| controls.iter().filter(|c| !c.offscreen).cloned().collect())
 }
 
 /// The controls at `indices`, in document order.
@@ -808,7 +837,7 @@ pub fn build_request(
     let offered = offered_operations(observation, &indexed, context, &urls);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     questions.insert(
-        "operation".into(),
+        keys::OPERATION.into(),
         choice(
             NEXT_ACTION.as_str(),
             offered.iter().map(|op| (op.as_str().to_string(), Value::from(operation_label(*op)))),
@@ -838,7 +867,7 @@ pub fn build_request(
             ),
         ];
         questions.insert(
-            "read_assessment".into(),
+            keys::READ_ASSESSMENT.into(),
             choice(instructions, criteria.map(|(key, text)| (key.as_str().to_string(), Value::from(text)))).into(),
         );
     }
@@ -852,23 +881,23 @@ pub fn build_request(
         }
         let candidates = &indexed[operation];
         if candidates.len() <= limit {
-            questions.insert(format!("{operation}_target"), target_question(*operation, candidates).into());
+            questions.insert(keys::target(*operation), target_question(*operation, candidates).into());
             targets.insert(*operation, candidates.clone());
             continue;
         }
         let parts = chunks(candidates, size);
-        questions.insert(format!("{operation}_group"), group_question(*operation, &parts, &TARGET).into());
+        questions.insert(keys::group(*operation), group_question(*operation, &parts, &TARGET).into());
         groups.insert(*operation, parts);
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
     let mut drop_groups: Vec<Vec<Control>> = Vec::new();
     if offered.contains(&Operation::Drag) {
         if drops.len() <= limit {
-            questions.insert("drag_destination".into(), destination_question(&drops).into());
+            questions.insert(keys::DRAG_DESTINATION.into(), destination_question(&drops).into());
         } else {
             drop_groups = chunks(&drops, size);
             questions.insert(
-                "drag_destination_group".into(),
+                keys::DRAG_DESTINATION_GROUP.into(),
                 group_question(Operation::Drag, &drop_groups, &DESTINATION).into(),
             );
         }
@@ -879,7 +908,7 @@ pub fn build_request(
             .tabs
             .iter()
             .map(|tab| (tab.id.clone(), json!({"title": tab.title, "url": tab.url, "active": tab.active})));
-        questions.insert("switch_tab_target".into(), choice(instructions, tabs).into());
+        questions.insert(keys::SWITCH_TAB_TARGET.into(), choice(instructions, tabs).into());
     }
     let mut navigation_groups: Vec<Vec<String>> = Vec::new();
     if offered.contains(&Operation::Navigate) {
@@ -890,14 +919,14 @@ pub fn build_request(
             navigation_groups = chunks(&urls, size);
             let criteria =
                 navigation_groups.iter().enumerate().map(|(i, group)| (i.to_string(), Value::from(group.join(" | "))));
-            questions.insert("navigate_group".into(), choice(instructions, criteria).into());
+            questions.insert(keys::NAVIGATE_GROUP.into(), choice(instructions, criteria).into());
         } else {
             let criteria = urls.iter().enumerate().map(|(i, url)| (i.to_string(), Value::from(url.as_str())));
-            questions.insert("navigate_target".into(), choice(instructions, criteria).into());
+            questions.insert(keys::NAVIGATE_TARGET.into(), choice(instructions, criteria).into());
         }
     }
     if context.check_login {
-        questions.insert("login_required".into(), login_question());
+        questions.insert(keys::LOGIN_REQUIRED.into(), login_question());
     }
     questions.insert(
         "site_failure".into(),
@@ -909,7 +938,7 @@ pub fn build_request(
     );
     if context.check_bot {
         questions.insert(
-            "bot_check".into(),
+            keys::BOT_CHECK.into(),
             noul(
                 "Does this page ask the visitor to pass an automated-traffic check?",
                 "The page is a CAPTCHA, a browser verification or a similar bot check.",
@@ -957,7 +986,7 @@ async fn evaluate(
     };
 
     let evaluation = ask(&request.questions).await?;
-    let operation_answer = choice_answer(&evaluation, "operation")?;
+    let operation_answer = choice_answer(&evaluation, keys::OPERATION)?;
     let mut operation = Operation::parse(&operation_answer.choice).ok_or_else(|| {
         AgentError::Invalid(format!("{} is not a valid Operation", text::repr(&operation_answer.choice)))
     })?;
@@ -967,13 +996,13 @@ async fn evaluate(
     let mut url: Option<String> = None;
     let mut target_confidence: Option<f64> = None;
     if let Some(candidates) = request.targets.get(&operation) {
-        let target_answer = choice_answer(&evaluation, &format!("{operation}_target"))?;
+        let target_answer = choice_answer(&evaluation, &keys::target(operation))?;
         target = Some(find_control(candidates, &target_answer.choice)?);
         target_confidence = Some(target_answer.confidence);
     } else if let Some(groups) = request.groups.get(&operation) {
-        let group_answer = choice_answer(&evaluation, &format!("{operation}_group"))?;
+        let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
-        let key = format!("{operation}_target");
+        let key = keys::target(operation);
         let questions = IndexMap::from([(key.clone(), target_question(operation, group).into())]);
         let inner = ask(&questions).await?;
         let target_answer = choice_answer(&inner, &key)?;
@@ -981,28 +1010,28 @@ async fn evaluate(
         // The element was only ever chosen from inside the group, so a doubtful group is a doubtful target.
         target_confidence = Some(group_answer.confidence * target_answer.confidence);
     } else if operation == Operation::SwitchTab {
-        let target_answer = choice_answer(&evaluation, "switch_tab_target")?;
+        let target_answer = choice_answer(&evaluation, keys::SWITCH_TAB_TARGET)?;
         tab_id = Some(target_answer.choice.clone());
         target_confidence = Some(target_answer.confidence);
     } else if operation == Operation::Navigate {
         let mut group_confidence = 1.0;
         let (target_answer, question) = if request.navigation_groups.is_empty() {
-            let question = match request.questions.get("navigate_target") {
+            let question = match request.questions.get(keys::NAVIGATE_TARGET) {
                 Some(Question::Choice(question)) => question.clone(),
                 _ => return Err(AgentError::Invalid("navigation requires caller-supplied choices".into())),
             };
-            (choice_answer(&evaluation, "navigate_target")?, question)
+            (choice_answer(&evaluation, keys::NAVIGATE_TARGET)?, question)
         } else {
-            let group_answer = choice_answer(&evaluation, "navigate_group")?;
+            let group_answer = choice_answer(&evaluation, keys::NAVIGATE_GROUP)?;
             let group = &request.navigation_groups[group_index(&group_answer.choice, request.navigation_groups.len())?];
             group_confidence = group_answer.confidence;
             let question = choice(
                 format!("{UNTRUSTED}\nChoose the caller-supplied address for the next unanswered requirement."),
                 group.iter().enumerate().map(|(i, url)| (i.to_string(), Value::from(url.as_str()))),
             );
-            let questions = IndexMap::from([("navigate_target".to_string(), question.clone().into())]);
+            let questions = IndexMap::from([(keys::NAVIGATE_TARGET.to_string(), question.clone().into())]);
             let inner = ask(&questions).await?;
-            (choice_answer(&inner, "navigate_target")?, question)
+            (choice_answer(&inner, keys::NAVIGATE_TARGET)?, question)
         };
         let chosen = question
             .criteria
@@ -1017,24 +1046,24 @@ async fn evaluate(
     let mut destination: Option<Control> = None;
     if operation == Operation::Drag {
         let destination_confidence = if request.destination_groups.is_empty() {
-            let destination_answer = choice_answer(&evaluation, "drag_destination")?;
+            let destination_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION)?;
             destination = Some(find_control(&request.destinations, &destination_answer.choice)?);
             destination_answer.confidence
         } else {
-            let group_answer = choice_answer(&evaluation, "drag_destination_group")?;
+            let group_answer = choice_answer(&evaluation, keys::DRAG_DESTINATION_GROUP)?;
             let group =
                 &request.destination_groups[group_index(&group_answer.choice, request.destination_groups.len())?];
-            let questions = IndexMap::from([("drag_destination".to_string(), destination_question(group).into())]);
+            let questions = IndexMap::from([(keys::DRAG_DESTINATION.to_string(), destination_question(group).into())]);
             let inner = ask(&questions).await?;
-            let destination_answer = choice_answer(&inner, "drag_destination")?;
+            let destination_answer = choice_answer(&inner, keys::DRAG_DESTINATION)?;
             destination = Some(find_control(group, &destination_answer.choice)?);
             group_answer.confidence * destination_answer.confidence
         };
         // A drag is only as certain as the weaker of its two ends.
         target_confidence = Some(target_confidence.map_or(destination_confidence, |t| t.min(destination_confidence)));
     }
-    let (read_assessment, read_confidence) = if request.questions.contains_key("read_assessment") {
-        let answer = choice_answer(&evaluation, "read_assessment")?;
+    let (read_assessment, read_confidence) = if request.questions.contains_key(keys::READ_ASSESSMENT) {
+        let answer = choice_answer(&evaluation, keys::READ_ASSESSMENT)?;
         let assessment = ReadAssessment::parse(&answer.choice).ok_or_else(|| {
             AgentError::Invalid(format!("{} is not a valid ReadAssessment", text::repr(&answer.choice)))
         })?;
@@ -1057,12 +1086,12 @@ async fn evaluate(
         tab_id,
         operation_confidence,
         target_confidence,
-        login_required: noul_probability(&evaluation, "login_required"),
+        login_required: noul_probability(&evaluation, keys::LOGIN_REQUIRED),
         offered_controls: controls.len() as i64,
         reduction,
         cost,
         input_tokens: tokens,
-        bot_check: noul_probability(&evaluation, "bot_check"),
+        bot_check: noul_probability(&evaluation, keys::BOT_CHECK),
         site_failure: noul_probability(&evaluation, "site_failure"),
         read_assessment,
         directed: false,
@@ -1291,8 +1320,7 @@ fn find_control(candidates: &[Control], control_id: &str) -> Result<Control> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_policy.py's cases that are about more than the bytes sent: the rest replay Python's requests in
-    //! tests/golden_policy.rs.
+    //! Cases about more than the bytes sent; tests/golden_policy.rs replays the recorded requests.
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::{Context, Waker};

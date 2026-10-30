@@ -2,7 +2,7 @@
 
 A browser agent that picks instead of generating. Every page is indexed into the controls it actually has, and a
 choice model picks one of them. An LLM plans, reads and writes prose. Code owns authorization gates, secret
-resolution, cost limits, and whether a run may call itself finished.
+resolution and cost limits, and reports an answer it cannot verify as unverified.
 
 Add the client and the binary for each platform you run on (`natives-darwin-arm64`, `natives-darwin-x64`,
 `natives-linux-arm64`, `natives-linux-x64`, `natives-win32-x64`). Java 17 or newer.

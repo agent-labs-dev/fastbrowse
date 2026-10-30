@@ -8,8 +8,7 @@
 //! click Add one; fill Token = secret:token
 //! ```
 //!
-//! Once the steps are spent the run is called done. Python's `run_task` entry, which hands these clients to the run,
-//! waits for the run loop's port.
+//! Once the steps are spent the run is called done.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -28,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::{AgentError, Result};
+use crate::policy::keys;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,17 +80,17 @@ impl ScriptedJev {
     }
 
     fn choice(step: Option<&Step>, key: &str, question: &ChoiceQuestion) -> Option<String> {
-        if key == "operation" {
+        if key == keys::OPERATION {
             return Some(step.map_or(Operation::Done, |step| step.operation).as_str().to_string());
         }
-        if key == "read_assessment" {
+        if key == keys::READ_ASSESSMENT {
             return Some("absent".into());
         }
         let step = step?;
         if key == "pick" {
             return step.pick.clone();
         }
-        if key == format!("{}_target", step.operation) {
+        if key == keys::target(step.operation) {
             // A control's id is only known once the page is indexed, so the script names it by its label.
             return question
                 .criteria
@@ -113,7 +113,7 @@ impl DecisionClient for ScriptedJev {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
         let mut script = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if questions.contains_key("operation") {
+        if questions.contains_key(keys::OPERATION) {
             // The page is asked about once per step, so this question is what moves the script on.
             script.step = script.ahead.pop_front();
         }

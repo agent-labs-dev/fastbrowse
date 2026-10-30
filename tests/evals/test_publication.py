@@ -503,13 +503,19 @@ def test_the_cli_blocks_a_run_that_breaks_integrity(tmp_path: Path, capsys: pyte
     assert "BLOCKED" in capsys.readouterr().out
 
 
+def _write_published(results: Path, sources: list[dict[str, Any]], *, ledger: bool = True) -> None:
+    """`sources` as a results file, with their attempt ledger beside it unless `ledger` is off."""
+    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
+    if ledger:
+        publication.ledger_path(results).write_text(
+            "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
+        )
+
+
 def test_the_cli_passes_a_clean_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     sources = attempts(3)
     path = tmp_path / "rows.jsonl"
-    path.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    publication.ledger_path(path).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-    )
+    _write_published(path, sources)
     assert publication.main(["--rows", str(path), "--baseline", str(tmp_path), "--require-ledger"]) == 0
     assert "PASS" in capsys.readouterr().out
 
@@ -554,11 +560,7 @@ def _published_change(tmp_path: Path, *, ledger: bool) -> Path:
     subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True, capture_output=True)
     sources = suite_rows()
     results = repo / "docs" / "results" / f"{RELEASE}.jsonl"
-    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    if ledger:
-        publication.ledger_path(results).write_text(
-            "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-        )
+    _write_published(results, sources, ledger=ledger)
     _commit(repo, "publish")
     return repo
 
@@ -592,19 +594,13 @@ def test_a_partial_live_suite_fails_the_diff_check(tmp_path: Path) -> None:
     _init_repo(repo)
     base = _at_release(suite_rows(), "9.9.8")
     base_results = repo / "docs" / "results" / "9.9.8.jsonl"
-    base_results.write_text("".join(json.dumps(source) + "\n" for source in base), encoding="utf-8")
-    publication.ledger_path(base_results).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(base)), encoding="utf-8"
-    )
+    _write_published(base_results, base)
     (repo / "README.md").write_text("base\n", encoding="utf-8")
     _commit(repo, "publish the full baseline")
     subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True, capture_output=True)
     sources = attempts(3)
     results = repo / "docs" / "results" / f"{RELEASE}.jsonl"
-    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    publication.ledger_path(results).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-    )
+    _write_published(results, sources)
     _commit(repo, "publish a subset")
     findings = publication.validate_diff("main", root=repo)
     assert any(finding.check == "coverage" for finding in findings)
@@ -645,10 +641,7 @@ def _published_base(tmp_path: Path) -> Path:
     _init_repo(repo)
     sources = suite_rows()
     results = repo / "docs" / "results" / f"{RELEASE}.jsonl"
-    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    publication.ledger_path(results).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-    )
+    _write_published(results, sources)
     _commit(repo, "publish")
     subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True, capture_output=True)
     return repo
@@ -739,11 +732,6 @@ def test_a_renamed_result_file_fails_the_diff_check(tmp_path: Path) -> None:
     _commit(repo, "rename a baseline")
     findings = publication.validate_diff("main", root=repo)
     assert any("removed" in finding.detail for finding in findings)
-
-
-def test_an_uncapped_start_gate_run_clears_publication_gate() -> None:
-    sources = attempts(3)
-    assert publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY).blocking == ()
 
 
 def test_a_published_slim_row_still_proves_it_ran_uncapped() -> None:

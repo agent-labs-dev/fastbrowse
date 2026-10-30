@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 #[test]
 fn decisions_ask_and_choose_as_python_does() {
     let mut golden = golden("policy.json");
-    let updating = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    let updating = capture::updating();
     let cases = golden["cases"].as_array_mut().unwrap();
     assert!(cases.len() > 50);
     for case in cases.iter_mut() {
@@ -60,21 +60,10 @@ fn decisions_ask_and_choose_as_python_does() {
     }
 }
 
-/// Writes a golden file as Python's json.dump(indent=1, ensure_ascii=False) wrote it.
-fn save(name: &str, value: &Value) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
-    let mut out = Vec::new();
-    let mut serializer =
-        serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
-    serde::Serialize::serialize(value, &mut serializer).unwrap();
-    out.push(b'\n');
-    std::fs::write(&path, out).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-}
-
 #[test]
 fn requests_are_built_as_python_builds_them() {
     let mut golden = golden("policy.json");
-    let updating = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    let updating = capture::updating();
     for case in golden["build_request"].as_array_mut().unwrap() {
         let observation: Observation = parse(&case["observation"]);
         let context: StepContext = parse(&case["context"]);

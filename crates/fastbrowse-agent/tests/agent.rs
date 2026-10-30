@@ -4,6 +4,8 @@
 //! `FASTBROWSE_UPDATE_GOLDEN=1` re-records them after an intended behaviour change: recorded answers are kept, a new
 //! request is answered from the case's `jev` and `llm` scripts, and the diff of `agent.json` is the behaviour change.
 
+mod common;
+
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
@@ -522,19 +524,13 @@ async fn play(case: &Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> (Value, Vec<
 
 #[tokio::test(start_paused = true)]
 async fn whole_loops_match_python() {
-    let update = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    let update = common::capture::updating();
     let mut cases_out = Vec::new();
     for case in cases() {
         cases_out.push(replay(case, update.then(Arc::default)).await);
     }
     if update {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/agent.json");
-        let mut out = Vec::new();
-        let mut writer =
-            serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
-        serde::Serialize::serialize(&Value::Array(cases_out), &mut writer).unwrap();
-        out.push(b'\n');
-        fs::write(path, out).unwrap();
+        common::save("agent.json", &Value::Array(cases_out));
     }
 }
 
