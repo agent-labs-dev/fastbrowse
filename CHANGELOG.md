@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Jev gets a screenshot on every Browser Use Cloud browser.** The service may pick a screen 1920 wide, past the 1568 pixel side Jev takes, and the screenshot was then dropped without a word. A browser now starts on a 1120 by 780 screen unless `viewport` names another, and a capture on a high density screen is shrunk to fit.
+- **A Browser Use Cloud proxy cost says it has not settled.** The service meters proxy data about 30 seconds after a browser stops, so the line a run reports could read $0 or part of the charge while calling itself metered. The line now has the new basis `unsettled`, and a run still returns without waiting for it.
 - **A typed value is not taken for a sent one.** A read of a filled form quoted the value beside the form's unpressed button, and a run could end complete with nothing sent. Jev and the done check are now told which fields hold a value no action has sent, and the run presses the form's control.
 - **Cloud browsers start on the Browser Use V4 API.** Every Browser Use Cloud browser is created on V4 with its residential US proxy and CAPTCHA solving asked for by name, so a run no longer depends on the service's defaults or an older API.
 - **The Browser Use Cloud browser is the default everywhere.** `run_task` in Python and Rust, like the CLI, MCP server and SDKs, now starts a cloud browser when no browser is named, and needs `BROWSER_USE_API_KEY` to do so. This breaks a script that relied on local Chrome by default: pass `chrome=LocalChrome()` in Python, `local: true` in Rust, or `--local`.

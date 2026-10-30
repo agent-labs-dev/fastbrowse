@@ -2,7 +2,7 @@
 // Do not edit: change the types there, then run `npm run generate:sdk`.
 
 export type ArtifactKind = 'download';
-export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unknown';
+export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
 export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'compose' | 'shortcut';
 /**

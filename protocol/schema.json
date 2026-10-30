@@ -184,6 +184,7 @@
         "metered",
         "estimated",
         "bounded",
+        "unsettled",
         "unknown"
       ],
       "title": "CostBasis",
