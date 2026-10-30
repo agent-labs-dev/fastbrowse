@@ -437,11 +437,26 @@ fn normalized(mut outcome: Value) -> Value {
 /// Replays `case`, or with `log` records it: the case comes back with the calls made, the result and the events.
 async fn replay(mut case: Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> Value {
     let name = case["name"].as_str().unwrap().to_string();
-    let jev = Replies::new(&case, "jev", log.clone(), |r| {
+    let (result, events) = play(&case, log.clone()).await;
+    let events = Value::Array(events);
+    if let Some(log) = log {
+        case["calls"] = Value::Array(log.lock().unwrap().clone());
+        case["outcome"] = normalized(result);
+        case["events"] = events;
+        return case;
+    }
+    assert_eq!(normalized(result), normalized(case["outcome"].clone()), "{name}: result");
+    assert_eq!(events, case["events"], "{name}: step events");
+    case
+}
+
+/// The result and step events of a run against the case's scripted site and recorded model replies.
+async fn play(case: &Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> (Value, Vec<Value>) {
+    let jev = Replies::new(case, "jev", log.clone(), |r| {
         jev_key(r["state"].as_str().unwrap(), r["questions"].as_str().unwrap())
     });
     let jev = Arc::new(ReplayJev(jev, case["jev"].clone()));
-    let llm = Replies::new(&case, "llm", log.clone(), |r| {
+    let llm = Replies::new(case, "llm", log.clone(), |r| {
         llm_key(
             r["purpose"].as_str().unwrap(),
             r["messages"].as_str().unwrap(),
@@ -501,16 +516,8 @@ async fn replay(mut case: Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> Value {
     // A request left unmade explains a differing result better than the result does.
     jev.0.finish();
     llm.0.finish();
-    let events = Value::Array(events.lock().unwrap().clone());
-    if let Some(log) = log {
-        case["calls"] = Value::Array(log.lock().unwrap().clone());
-        case["outcome"] = normalized(result.dump());
-        case["events"] = events;
-        return case;
-    }
-    assert_eq!(normalized(result.dump()), normalized(case["outcome"].clone()), "{name}: result");
-    assert_eq!(events, case["events"], "{name}: step events");
-    case
+    let events = events.lock().unwrap().clone();
+    (result.dump(), events)
 }
 
 #[tokio::test(start_paused = true)]
@@ -573,4 +580,42 @@ async fn transient_site_failures_are_retried_and_never_answer() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Asking for the choices adds them to the steps Jev decided and changes nothing else about the run: not the steps, the
+/// events, nor which control Jev picked, which is the one marked chosen.
+#[tokio::test(start_paused = true)]
+async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
+    let names = [
+        "a select asks Jev which option, then a step limit ends the run",
+        "a stored secret is typed at fill time and never shown to a model",
+    ];
+    let picked: Vec<Value> =
+        cases().into_iter().filter(|case| names.iter().any(|name| case["name"].as_str() == Some(name))).collect();
+    assert_eq!(picked.len(), names.len());
+    for mut case in picked {
+        let name = case["name"].as_str().unwrap().to_string();
+        if case["config"].is_null() {
+            case["config"] = serde_json::json!({});
+        }
+        case["config"]["step_choices"] = true.into();
+        let (mut result, mut events) = play(&case, None).await;
+        let mut listed = 0;
+        let steps = result["steps"].as_array_mut().unwrap().iter_mut();
+        for step in steps.chain(events.iter_mut().map(|event| &mut event["step"])) {
+            let Some(choices) = step.as_object_mut().unwrap().remove("choices") else { continue };
+            listed += 1;
+            let chosen: Vec<&Value> = choices.as_array().unwrap().iter().filter(|c| c["chosen"] == true).collect();
+            // A read or DONE takes no target, so its list has nothing chosen; a drag marks its destination too.
+            assert!(chosen.len() <= 2, "{name}: {choices}");
+            if let Some(target) = step["target"].as_str().filter(|_| step["decided_by"] == "jev") {
+                let labels = chosen.iter().map(|choice| choice["label"].as_str().unwrap());
+                assert!(labels.into_iter().any(|label| target.contains(label)), "{name}: {step}");
+            }
+            assert!(!choices.to_string().contains("hunter2"), "{name}: {choices}");
+        }
+        assert!(listed > 0, "{name}: no step listed its choices");
+        assert_eq!(normalized(result), normalized(case["outcome"].clone()), "{name}: result");
+        assert_eq!(Value::Array(events), case["events"], "{name}: step events");
+    }
 }

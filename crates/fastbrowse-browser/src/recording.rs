@@ -567,6 +567,7 @@ mod tests {
             facts: vec![],
             page_changed: None,
             duration_ms: 10,
+            choices: Vec::new(),
         };
         assert_eq!(describe(&step), "switch tab Docs \u{b7} picked by Jev");
         let paged =

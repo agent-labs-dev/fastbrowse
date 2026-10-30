@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use fastbrowse_core::decision::jev_takes_png;
 use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
-use fastbrowse_core::models::{Decider, Event, Image, Operation, Status, StepEvent, StepOutcome, StepResult, WallKind};
+use fastbrowse_core::models::{
+    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepOutcome, StepResult, WallKind,
+};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
@@ -119,6 +121,7 @@ impl Agent {
                     decision
                 }
             };
+            state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
             let mut decided_by = Decider::Jev;
             let thresholds = &self.config.thresholds;
@@ -187,6 +190,28 @@ impl Agent {
                 other => other?,
             }
         }
+    }
+
+    /// Jev's offered controls as a step reports them. Their labels come from the masked observation already, and are
+    /// masked again so a label that reaches a step can never carry a secret whatever it was read from.
+    fn choices(&self, decision: &Decision) -> Vec<StepChoice> {
+        let chosen: Vec<&str> = [&decision.target, &decision.destination]
+            .into_iter()
+            .flatten()
+            .map(|control| control.id.as_str())
+            .collect();
+        decision
+            .offered
+            .iter()
+            .map(|control| StepChoice {
+                id: control.id.clone(),
+                role: control.role.clone(),
+                label: self.mask(&control.label),
+                context: control.context.as_deref().map(|context| self.mask(context)),
+                operations: control.operations.iter().copied().collect(),
+                chosen: chosen.contains(&control.id.as_str()),
+            })
+            .collect()
     }
 
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
@@ -629,6 +654,7 @@ impl Agent {
             facts,
             page_changed: (decision.operation != Operation::Read).then_some(changed),
             duration_ms: started.elapsed().as_millis() as i64,
+            choices: Vec::new(),
         };
         self.record_step(state, step, false, frame).await?;
         match progressed {
@@ -917,6 +943,7 @@ impl Agent {
             url: self.redact(&step.url),
             target: step.target.as_deref().map(|target| self.redact(target)),
             note: step.note.as_deref().map(|note| self.redact(note)),
+            choices: std::mem::take(&mut state.choices),
             ..step
         };
         state.steps.push(step.clone());
@@ -954,6 +981,7 @@ impl Agent {
             facts: Vec::new(),
             page_changed,
             duration_ms: 0,
+            choices: Vec::new(),
         };
         self.record_step(state, step, true, None).await
     }

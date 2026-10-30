@@ -137,6 +137,9 @@ reloads it when the status can clear, goes back, picks another link or escalates
 `on_event` receives a `BrowserEvent` followed by `StepEvent` objects. Each step includes added facts,
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
 `Config(step_frames=True)` adds a PNG after each step unless a fresh observation shows a resolved secret.
+`Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
+out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too). The list is taken by the next step recorded, so
+when recovery or the LLM overrides an unsure decision, the step it records still shows what Jev had.
 
 `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after the async handler returns;
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from

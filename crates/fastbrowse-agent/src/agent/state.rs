@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::decision::{DecisionError, NoulQuestion};
 use fastbrowse_core::llm::{Generation, LLMError};
-use fastbrowse_core::models::{Attachment, Authorization, Evidence, Operation, Status, StepResult, WallKind};
+use fastbrowse_core::models::{
+    Attachment, Authorization, Evidence, Operation, Status, StepChoice, StepResult, WallKind,
+};
 use fastbrowse_core::page::{BrowserError, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
@@ -302,6 +304,8 @@ pub(crate) struct RunState {
     pub rejected_answer_evidence: Option<BTreeSet<EvidenceKey>>,
     pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
+    /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
+    pub choices: Vec<StepChoice>,
     pub history: Vec<HistoryEntry>,
     pub site_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
@@ -417,6 +421,7 @@ impl RunState {
             rejected_answer_evidence: None,
             relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
+            choices: Vec::new(),
             history: Vec::new(),
             site_failure: None,
             http_seen: HashSet::new(),

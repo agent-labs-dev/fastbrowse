@@ -658,6 +658,7 @@ impl ObjectType {
                 description: field.description.clone(),
                 factory: false,
                 exclude: false,
+                omitted_when_empty: false,
             })
             .collect();
         ModelTy {

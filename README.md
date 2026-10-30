@@ -211,6 +211,10 @@ scrolls to the quote; it may not resolve on a page that changes or needs a sessi
 
 - `on_event=` gets a `BrowserEvent` with a cloud browser's live-view URL, then a `StepEvent` per step, carrying the
   facts that step added. `Config(step_frames=True)` adds a PNG of each step's page.
+- `Config(step_choices=True)` adds `choices` to each step Jev decided: the controls it was offered, each with its
+  `id`, `role`, masked `label` and `context` (the card or row that tells twins apart) and `operations`, and the one
+  it picked marked `chosen` (a drag marks its destination too). It shows whether the element
+  a run should have used was there to pick. Off, a step has no `choices` key.
 - `on_frame=` gets JPEG frames of the active tab as they render. The handler runs on your event loop, so it
   must honour cancellation: one that swallows `CancelledError` keeps `asyncio.run` waiting at shutdown.
 - `with traced() as events:` collects the run's trace in-process, as `--trace` writes it.
