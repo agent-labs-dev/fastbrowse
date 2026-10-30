@@ -1,7 +1,7 @@
 name: Official benchmarks
 
-# Runs the upstream browser benchmarks, BU Bench and Online-Mind2Web, on one fastbrowse build, for fastbrowse, the
-# hosted Browser Use agent or both, with Parallax's official runner (`parallax browser official`). Each suite is graded by its own upstream judge at a pinned
+# Runs the upstream browser benchmarks, BU Bench and Online-Mind2Web, on one fastbrowse build with Parallax's
+# official runner (`parallax browser official`). Each suite is graded by its own upstream judge at a pinned
 # commit, run from that checkout's own virtualenv; Parallax only meters the judge's provider calls. Dispatch only, by
 # hand or by the release workflow on a minor release: every task drives a real browser and real model calls, so it
 # spends money and is never triggered by a push or a pull request.
@@ -13,7 +13,7 @@ name: Official benchmarks
 # public rows (`parallax browser official-rows`): opaque task ids, scores, seconds, dollars and protocol facts, and
 # nothing else. Pass this run's id to benchmark-campaign.yml as `official_runs`, with the same `fastbrowse_ref` and
 # `parallax_sha`, to publish them: the site reads one candidate, so every group in it must come from one build.
-# `campaign_id` does that itself: when every suite and arm has passed, this workflow dispatches the campaign with this
+# `campaign_id` does that itself: when every suite has passed, this workflow dispatches the campaign with this
 # run's id, which is how a release publishes every group from one candidate. A failed run dispatches nothing.
 #
 # No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
@@ -25,10 +25,10 @@ name: Official benchmarks
 #
 # Repository configuration this file needs (checked before any paid call):
 #   secrets: PARALLAX_DEPLOY_KEY (a read-only deploy key on agent-labs-dev/parallax)
-#            OPENROUTER_API_KEY (fastbrowse's LLM and Jev; not needed for the browser-use arm alone)
+#            OPENROUTER_API_KEY (the agent's LLM and Jev)
 #            PARALLAX_JUDGE_API_KEY (the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the run's record in the fastbrowse-evals project)
-#            BROWSER_USE_API_KEY (with `browser: cloud` or the browser-use arm)
+#            BROWSER_USE_API_KEY (only with `browser: cloud`)
 #            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
 #   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
 #   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
@@ -51,19 +51,14 @@ name: Official benchmarks
 # (docs/agents/publish-evals.md). Upstream labels results by their judge model, so figures judged by another model
 # than the upstream's are not directly comparable with the upstream's own.
 #
-# `arm` picks the agents: both run the same tasks under the same upstream judge, and each suite and arm is its own
-# job. The hosted Browser Use agent runs on its own browser, so `browser` applies only to fastbrowse. Ultrafast returns
-# no answer, so it is not run on these suites.
+# This runs fastbrowse alone. The site shows Browser Use's own published figures on these suites, labelled with their
+# judge, so its agent is not run again here. Ultrafast returns no answer, so it is not run on them.
 #
-# `budget` is the approved total of each suite and arm: `arm: all` on `suites: all` approves four times it. It only
-# gates whether the next task may start: a task holds its agent reserve (1 dollar), browser reserve (1, or 0 on local
-# Chrome) and the judge variable's `budget_usd` while in flight. The hosted agent bills its browser inside its session,
-# but Parallax holds a browser reserve for any run not on local Chrome, so its hold is the same as a cloud fastbrowse
-# run's. With the judge variables' 20 (BU Bench) and 60 (Online-Mind2Web) dollars, 8 workers hold at most 8 x 62 = 496
-# dollars on Online-Mind2Web. The 600 dollar default keeps all 8 workers running until 104 dollars is spent, and a suite
-# stops early only if its actual spend passes 538 dollars (BU Bench: 578). A stopped suite cannot be published, so size
-# `budget` for the arm: fastbrowse spends cents a run, while the hosted agent spent 0.32 dollars a run on the live suite,
-# and 3 repeats are 900 runs on Online-Mind2Web. `budget` less the holds must cover the agent and judge spend of them.
+# `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
+# reserve (1 dollar), browser reserve (1, or 0 on local Chrome) and the judge variable's `budget_usd` while in flight.
+# With the judge variables' 20 (BU Bench) and 60 (Online-Mind2Web) dollars, 8 workers on cloud browsers hold at
+# most 8 x 62 = 496 dollars on Online-Mind2Web. The 600 dollar default keeps all 8 workers running until 104
+# dollars is spent, and a suite stops early only if its actual spend passes 538 dollars (BU Bench: 578).
 
 on:
   workflow_dispatch:
@@ -82,14 +77,8 @@ on:
         type: choice
         options: [all, bu-bench, online-mind2web]
         default: all
-      arm:
-        description: Which agents to run, each on the same tasks and upstream judge
-        required: true
-        type: choice
-        options: [fastbrowse, browser-use, all]
-        default: fastbrowse
       browser:
-        description: Fastbrowse's browser, headless local Chrome or Browser Use Cloud; the hosted agent uses its own
+        description: Headless local Chrome on the runner, or Browser Use Cloud browsers
         required: true
         type: choice
         options: [local, cloud]
@@ -99,11 +88,11 @@ on:
         required: true
         default: "3"
       budget:
-        description: Approved total dollars for each suite and arm, agent and judge together; it only gates new tasks
+        description: Approved total dollars for each suite, agent and judge together; it only gates new tasks
         required: true
         default: "600"
       concurrency:
-        description: Task workers per suite and arm, sharing one start-gate ledger
+        description: Task workers per suite, sharing one start-gate ledger
         required: true
         default: "8"
       campaign_id:
@@ -188,7 +177,6 @@ jobs:
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           SUITE_SET: ${{ inputs.suites }}
-          ARM_SET: ${{ inputs.arm }}
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
@@ -199,23 +187,20 @@ jobs:
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
-          if test "$ARM_SET" != browser-use; then need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"; fi
-          if test "$BROWSER" = cloud || test "$ARM_SET" != fastbrowse; then
-            need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
-          fi
+          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
           # Online-Mind2Web is gated: HF_TOKEN's account must also have accepted the dataset's access conditions.
           if test "$SUITE_SET" != bu-bench; then need HF_TOKEN "$HF_TOKEN"; fi
           if test -n "$missing"; then
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
-      - name: Build the suite and arm matrix
+      - name: Build the suite matrix
         id: matrix
         # Runs after a credential failure too, so one dispatch names everything that is missing.
         if: ${{ !cancelled() && steps.pins.outcome == 'success' }}
         env:
           SUITE_SET: ${{ inputs.suites }}
-          ARM_SET: ${{ inputs.arm }}
           BU_BENCH_JUDGE: ${{ vars.PARALLAX_BU_BENCH_JUDGE }}
           MIND2WEB_JUDGE: ${{ vars.PARALLAX_MIND2WEB_JUDGE }}
         # Each entry carries its upstream pins and the judge flags built from its variable. A missing pin, digest
@@ -232,7 +217,6 @@ jobs:
               "online-mind2web": ("MIND2WEB", "PARALLAX_MIND2WEB_JUDGE"),
           }
           chosen = list(suites) if os.environ["SUITE_SET"] == "all" else [os.environ["SUITE_SET"]]
-          arms = ["fastbrowse", "browser-use"] if os.environ["ARM_SET"] == "all" else [os.environ["ARM_SET"]]
           missing, include = [], []
           for suite in chosen:
               prefix, variable = suites[suite]
@@ -261,7 +245,7 @@ jobs:
                        "--judge-pricing-checked", judge["pricing_checked"]]
               for key in (*PRICES, *tier):
                   flags += ["--judge-" + key.removesuffix("_usd").replace("_", "-"), str(judge[key])]
-              include += [{"suite": suite, "arm": arm, "prefix": prefix, "judge": json.dumps(flags)} for arm in arms]
+              include.append({"suite": suite, "prefix": prefix, "judge": json.dumps(flags)})
           if missing:
               for item in missing:
                   print(f"::error::missing {item}")
@@ -271,7 +255,7 @@ jobs:
           PY
 
   official:
-    name: ${{ matrix.suite }} ${{ matrix.arm }}
+    name: ${{ matrix.suite }}
     needs: resolve
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
@@ -283,9 +267,7 @@ jobs:
         include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     env:
       SUITE: ${{ matrix.suite }}
-      ARM: ${{ matrix.arm }}
-      RUN_NAME: ${{ matrix.suite }}-${{ matrix.arm }}
-      OUT: ${{ github.workspace }}/runs/${{ matrix.suite }}-${{ matrix.arm }}
+      OUT: ${{ github.workspace }}/runs/${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -376,7 +358,7 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
-          # The hosted arm's agent, or fastbrowse's cloud browser; a local fastbrowse run ignores it.
+          # Ignored with a local browser: the runner then drives the local Chrome alone.
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           JUDGE: ${{ matrix.judge }}
           DIGEST: ${{ env[format('{0}_DATASET_SHA256', matrix.prefix)] }}
@@ -386,14 +368,13 @@ jobs:
           cd parallax
           mapfile -t judge < <(jq -r '.[]' <<< "$JUDGE")
           browser=()
-          if test "$BROWSER" = local && test "$ARM" = fastbrowse; then
+          if test "$BROWSER" = local; then
             chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
             test -n "$chrome" || { echo "::error::browser local needs Chrome on the runner, and none was found"; exit 1; }
             browser=(--local-browser "$chrome" --browser-reserve-dollars 0)
           fi
           mkdir -p "$(dirname "$OUT")"
           uv run --no-sync parallax browser official "$SUITE" \
-            --arm "$ARM" \
             --upstream-root "$GITHUB_WORKSPACE/upstream" \
             --upstream-commit "$COMMIT" \
             --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
@@ -432,11 +413,11 @@ jobs:
             --dataset "$DATASET" \
             --upstream-root "$GITHUB_WORKSPACE/upstream" \
             --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
-            --out "$RUNNER_TEMP/$RUN_NAME.rows.json"
+            --out "$RUNNER_TEMP/$SUITE.rows.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: official-rows-${{ matrix.suite }}-${{ matrix.arm }}
-          path: ${{ runner.temp }}/${{ matrix.suite }}-${{ matrix.arm }}.rows.json
+          name: official-rows-${{ matrix.suite }}
+          path: ${{ runner.temp }}/${{ matrix.suite }}.rows.json
           if-no-files-found: error
           retention-days: 90
       - name: Encrypt the run directory
@@ -445,12 +426,12 @@ jobs:
           RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
         run: |
           test -d "$OUT" || { echo "::warning::no run directory was written"; exit 0; }
-          tar -C "$(dirname "$OUT")" -czf - "$RUN_NAME" | age -r "$RECIPIENT" -o "$RUNNER_TEMP/$RUN_NAME.tar.gz.age"
+          tar -C "$(dirname "$OUT")" -czf - "$SUITE" | age -r "$RECIPIENT" -o "$RUNNER_TEMP/$SUITE.tar.gz.age"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: official-${{ matrix.suite }}-${{ matrix.arm }}
-          path: ${{ runner.temp }}/${{ matrix.suite }}-${{ matrix.arm }}.tar.gz.age
+          name: official-${{ matrix.suite }}
+          path: ${{ runner.temp }}/${{ matrix.suite }}.tar.gz.age
           if-no-files-found: warn
           retention-days: 30
 
