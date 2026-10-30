@@ -1,5 +1,5 @@
-//! The scripts `page.py` evaluates in the page, transcribed from its constants piece by piece, with the comments
-//! that explain them. A script Python builds from arguments is built in `page` by a function of the same name.
+//! The scripts `CdpPage` evaluates in the page, with the comments that explain them. A script built from arguments
+//! is built in `page` by a function of the same name.
 
 use std::sync::LazyLock;
 
