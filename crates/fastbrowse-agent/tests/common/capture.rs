@@ -60,10 +60,26 @@ pub fn write_cases(name: &str, cases: &[Value]) {
         .iter()
         .map(|case| match before.get_mut(&case.to_string()).and_then(VecDeque::pop_front) {
             Some(line) => line.to_string(),
-            None => serde_json::to_string(case).expect("case JSON"),
+            None => ascii(&serde_json::to_string(case).expect("case JSON")),
         })
         .collect();
     fs::write(&path, format!("[\n{}\n]\n", lines.join(",\n"))).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+}
+
+/// Escapes every character outside ASCII as `\\uXXXX`, as the recorded lines are written. Serialized JSON holds
+/// such characters only inside strings, where the escape means the same character.
+fn ascii(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            for unit in c.encode_utf16(&mut [0; 2]) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        }
+    }
+    out
 }
 
 /// The calls a case made while re-recording, Jev and LLM requests in the order Rust sent them.
