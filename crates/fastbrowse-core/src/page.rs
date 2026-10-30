@@ -223,25 +223,22 @@ pub struct Observation {
 }
 
 impl Observation {
-    /// The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next Monday
-    /// strictly after today" as 2026-10-05 in three runs of three.
-    ///
-    /// The coming months are named too, each by its distance: told only the date in September, Jev took "the month
-    /// after next" as October in one run of four, and listed bare the last of three was taken for it in six of six.
+    /// The capture date with its weekday, then a calendar of the surrounding weeks, a week to a line and Monday first:
+    /// from the week before this one to the end of next month. A relative day is looked up in it rather than counted.
     pub fn today(&self) -> String {
-        let mut first = self.captured_at.first_of_month();
-        let mut months = Vec::new();
-        for _ in 0..2 {
-            first = first.add_days(32).first_of_month();
-            months.push(format!("{} {}", first.month_name(), first.year));
+        let today = self.captured_at;
+        let end = today.first_of_month().add_days(32).first_of_month().add_days(32).first_of_month().date_string();
+        let mut monday = today.add_days(-(today.weekday() as i64) - 7);
+        let mut weeks = Vec::new();
+        while monday.date_string() < end {
+            let days = (0..7).map(|offset| {
+                let day = monday.add_days(offset);
+                format!("{} {}", &day.weekday_name()[..3], day.date_string())
+            });
+            weeks.push(days.collect::<Vec<_>>().join(", "));
+            monday = monday.add_days(7);
         }
-        format!(
-            "{} ({}). In one month: {}; in two months: {}",
-            self.captured_at.date_string(),
-            self.captured_at.weekday_name(),
-            months[0],
-            months[1]
-        )
+        format!("{} ({})\n{}", today.date_string(), today.weekday_name(), weeks.join("\n"))
     }
 }
 
@@ -555,7 +552,14 @@ mod tests {
         };
         assert_eq!(
             observation.today(),
-            "2026-09-27 (Sunday). In one month: October 2026; in two months: November 2026"
+            "2026-09-27 (Sunday)\n\
+             Mon 2026-09-14, Tue 2026-09-15, Wed 2026-09-16, Thu 2026-09-17, Fri 2026-09-18, Sat 2026-09-19, Sun 2026-09-20\n\
+             Mon 2026-09-21, Tue 2026-09-22, Wed 2026-09-23, Thu 2026-09-24, Fri 2026-09-25, Sat 2026-09-26, Sun 2026-09-27\n\
+             Mon 2026-09-28, Tue 2026-09-29, Wed 2026-09-30, Thu 2026-10-01, Fri 2026-10-02, Sat 2026-10-03, Sun 2026-10-04\n\
+             Mon 2026-10-05, Tue 2026-10-06, Wed 2026-10-07, Thu 2026-10-08, Fri 2026-10-09, Sat 2026-10-10, Sun 2026-10-11\n\
+             Mon 2026-10-12, Tue 2026-10-13, Wed 2026-10-14, Thu 2026-10-15, Fri 2026-10-16, Sat 2026-10-17, Sun 2026-10-18\n\
+             Mon 2026-10-19, Tue 2026-10-20, Wed 2026-10-21, Thu 2026-10-22, Fri 2026-10-23, Sat 2026-10-24, Sun 2026-10-25\n\
+             Mon 2026-10-26, Tue 2026-10-27, Wed 2026-10-28, Thu 2026-10-29, Fri 2026-10-30, Sat 2026-10-31, Sun 2026-11-01"
         );
     }
 

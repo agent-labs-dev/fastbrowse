@@ -101,18 +101,18 @@ class Observation(Frozen):
 
     @property
     def today(self) -> str:
-        """The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next
-        Monday strictly after today" as 2026-10-05 in three runs of three.
-
-        The coming months are named too: told only the date in September, Jev took "the month after next" as
-        October, clicking a calendar's Next once, in one run of four. Each is named by its distance: listed bare
-        as "the next three months", the last of them was taken for it in six runs of six."""
-        first = self.captured_at.replace(day=1)
-        months = []
-        for _ in range(2):
-            first = (first + timedelta(days=32)).replace(day=1)
-            months.append(f"{first:%B %Y}")
-        return f"{self.captured_at:%Y-%m-%d (%A)}. In one month: {months[0]}; in two months: {months[1]}"
+        """The capture date with its weekday, then a calendar of the surrounding weeks, a week to a line and Monday
+        first: from the week before this one to the end of next month. A relative day is looked up in it rather than
+        counted."""
+        today = self.captured_at
+        end = ((today.replace(day=1) + timedelta(days=32)).replace(day=1) + timedelta(days=32)).replace(day=1)
+        monday = today - timedelta(days=today.weekday() + 7)
+        weeks = []
+        while monday.date() < end.date():
+            days = (monday + timedelta(days=offset) for offset in range(7))
+            weeks.append(", ".join(f"{day:%a %Y-%m-%d}" for day in days))
+            monday += timedelta(days=7)
+        return "\n".join([f"{today:%Y-%m-%d (%A)}", *weeks])
 
 
 class BlockKind(StrEnum):

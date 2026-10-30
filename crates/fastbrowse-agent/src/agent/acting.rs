@@ -89,7 +89,7 @@ impl Schema for FormText {
 
 fn field_rules() -> String {
     format!(
-        "Infer its meaning from the task, current value, page context and recent actions. A validation message may replace the displayed label. Use input_type, input_name and autocomplete to distinguish the field from nearby fields; an email address and phone number are not interchangeable. Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). A day named relative to today (tomorrow, the next Friday) is the first matching entry of page.next_days, never a date you count yourself. A fact the task states in another shape is given, not missing: take the part of a stated name, address or date this field asks for and write it in the field's shape. A field for a name as a whole takes the whole name as stated; only a field for one part, such as a first name, takes that part. The requirements, or the task itself when no requirements are given, list its steps in the order it wants them done. When more than one gives this field a value (enter one, later change it), list every such value in values, in that order, and write in text the earliest one no recent action has already typed into this field.\n\n# Trust\n{UNTRUSTED}"
+        "Infer its meaning from the task, current value, page context and recent actions. A validation message may replace the displayed label. Use input_type, input_name and autocomplete to distinguish the field from nearby fields; an email address and phone number are not interchangeable. Use the field's displayed format for dates, except in a field whose input_type is date, datetime-local, month, week or time, which takes ISO 8601 (2026-09-25, 2026-09-25T14:30, 2026-09, 2026-W39, 14:30). A day named relative to today (tomorrow, the next Friday) is the first matching day after today in the calendar under page.date, never a date you count yourself. A fact the task states in another shape is given, not missing: take the part of a stated name, address or date this field asks for and write it in the field's shape. A field for a name as a whole takes the whole name as stated; only a field for one part, such as a first name, takes that part. The requirements, or the task itself when no requirements are given, list its steps in the order it wants them done. When more than one gives this field a value (enter one, later change it), list every such value in values, in that order, and write in text the earliest one no recent action has already typed into this field.\n\n# Trust\n{UNTRUSTED}"
     )
 }
 
@@ -557,14 +557,6 @@ impl Agent {
             })
             .collect();
         context.insert("other_fields".into(), Value::Array(others));
-        // Told only that today was Sunday, the writer still booked "the next Monday" a week late in one run of four: a
-        // relative day is looked up here rather than counted.
-        let next_days: Vec<String> = (1..8)
-            .map(|ahead| {
-                let day = observation.captured_at.add_days(ahead);
-                format!("{} {}", day.weekday_name(), day.date_string())
-            })
-            .collect();
         context.insert(
             "page".into(),
             json!({
@@ -572,7 +564,6 @@ impl Agent {
                 "title": observation.title,
                 "text": observation.viewport_text,
                 "date": observation.today(),
-                "next_days": next_days,
             }),
         );
         let recent: Vec<Value> = state.history.iter().map(Dump::dump_exclude_none).collect();

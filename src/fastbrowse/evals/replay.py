@@ -57,21 +57,17 @@ class Latency(StrEnum):
 
 
 _WEEKDAY = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
-_MONTH = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+_DAY = r"[A-Z][a-z]{2} \d{4}-\d{2}-\d{2}"
+_WEEK = rf"{_DAY}(?:, {_DAY}){{6}}"
+_NEWLINE = r"(?:\n|\\+n)"
+"""A line break as it reads in a plain string or inside JSON a prompt carries as text."""
 
 CANONICAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # Fixture sites are served on fixed ports, but a port is never what tells two questions apart.
     (re.compile(r"(?<=//127\.0\.0\.1:)\d{1,5}|(?<=//localhost:)\d{1,5}|(?<=//\[::1\]:)\d{1,5}"), "<port>"),
     (re.compile(r"(?<=\b127\.0\.0\.1:)\d{1,5}|(?<=\blocalhost:)\d{1,5}"), "<port>"),
-    # `Observation.today`: the capture date, its weekday and the two months after it.
-    (
-        re.compile(
-            rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)\. In one month: {_MONTH} \d{{4}}; in two months: {_MONTH} \d{{4}}"
-        ),
-        "<today>",
-    ),
-    # `page.next_days`: the week after the capture date.
-    (re.compile(rf"\b{_WEEKDAY} \d{{4}}-\d{{2}}-\d{{2}}\b"), "<next day>"),
+    # `Observation.today`: the capture date, its weekday and the calendar under it.
+    (re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)(?:{_NEWLINE}{_WEEK})+"), "<today>"),
     # A screenshot sent to Jev as an asset is named by its pixels' digest, which differs from run to run.
     (re.compile(r"\bscreenshot-[0-9a-f]{64}\b"), "screenshot-<image>"),
     # A capture time, should one reach a prompt.

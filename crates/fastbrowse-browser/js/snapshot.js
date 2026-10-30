@@ -808,10 +808,9 @@
     });
   }
 
-  // A date field's own label ("Start Date") rarely says which picker it belongs to when a page offers several
-  // ("Date Picker 3"): unlike a colliding label, a uniquely named one never reaches the loop above, so the
-  // nearest ancestor that names a section is attached here on its own, without the twin-avoidance `contextOf`
-  // needs to keep a card from naming its neighbour.
+  // A control's own label rarely says which section it belongs to when a page repeats a form or widget: unlike a
+  // colliding label, a uniquely named one never reaches the loop above, so the nearest ancestor that names a section
+  // is attached here on its own, without the twin-avoidance `contextOf` needs to keep a card from naming its neighbour.
   const nearestHeading = (element, label) => {
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
@@ -822,7 +821,7 @@
     return '';
   };
   for (const c of controls) {
-    if (!c.context && DATE_TYPES.includes(c.input_type)) {
+    if (!c.context) {
       const context = nearestHeading(registry.nodes.get(c.id), c.label);
       if (context) c.context = context;
     }
