@@ -30,7 +30,7 @@ GroupId = Literal[
     "bu-bench",
     "online-mind2web",
 ]
-Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "browserbase"]
+Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "browserbase", "browser-harness"]
 FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
 PUBLISHED = RESULTS / "benchmarks.json"
@@ -100,13 +100,16 @@ class Coverage(NamedTuple):
 #
 # The head-to-head (internal-hosted) is one Parallax invocation over one task set, the tasks fastbrowse, the hosted
 # Browser Use agent and Browserbase's agent all run, with rows from whichever of its four arms ran. Browser Use
-# Ultrafast returns no answer, so it runs only the tasks of that set graded without one. The official suites publish
+# Ultrafast returns no answer, so it runs only the tasks of that set graded without one; Browser Harness, a coding agent
+# given no credentials, runs only its credential-free completion tasks. The official suites publish
 # the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks them publishable.
-HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browserbase")
+HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browserbase", "browser-harness")
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use", "browserbase")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
-    "internal-hosted": Coverage(frozenset({46, 47, 52}), 3, "task-success", HEAD_TO_HEAD, (), ("jev-ultrafast",)),
+    "internal-hosted": Coverage(
+        frozenset({46, 47, 52}), 3, "task-success", HEAD_TO_HEAD, (), ("jev-ultrafast", "browser-harness")
+    ),
     "internal-ultrafast": Coverage(frozenset({6}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
     "bu-bench": Coverage(frozenset({200}), None, "weighted-rubric", OFFICIAL, ("fastbrowse",)),

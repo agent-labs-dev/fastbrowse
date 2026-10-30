@@ -17,6 +17,9 @@ name: Benchmark campaign
 #                 under one recorded protocol (published as internal-hosted). Ultrafast runs only the tasks of that
 #                 set graded without an answer. Without Browserbase credentials the group runs without browserbase,
 #                 and the site shows it as not measured; Browserbase reports no cost, so its rows carry none.
+#                 Browser Harness (browser-harness: Codex CLI 0.163.0 with browser-harness 0.1.13 as its CLI and
+#                 skill, GPT-6 Luna via OpenRouter, on a Browser Use Cloud browser) runs only the set's credential-free
+#                 completion tasks; it needs no secret beyond BROWSER_USE_API_KEY and OPENROUTER_API_KEY.
 #   all           both.
 # `browser` picks the fastbrowse arm's browser: headless Chrome on the runner (local) or a Browser Use Cloud browser.
 # The vendor arms always run on their own hosted browsers.
@@ -206,7 +209,7 @@ jobs:
           GROUP_SET: ${{ inputs.groups }}
           BROWSERBASE: ${{ steps.credentials.outputs.browserbase }}
         run: |
-          vendors="browser-use jev-ultrafast"
+          vendors="browser-use jev-ultrafast browser-harness"
           if test "$BROWSERBASE" = true; then vendors="$vendors browserbase"; fi
           fastbrowse='{"label":"fastbrowse","key":"fastbrowse","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}'
           head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"fastbrowse $vendors\",\"out\":\"head-to-head.jsonl\"}"
@@ -264,6 +267,10 @@ jobs:
           # a syncing `uv run` would reinstall the pinned build over this one.
           uv pip install "$GITHUB_WORKSPACE/fastbrowse"
           uv run --no-sync python -c "import fastbrowse, parallax"
+      # The browser-harness arm's agent; the arm checks this exact version before each attempt.
+      - name: Install Codex for the Browser Harness arm
+        if: ${{ matrix.key == 'head-to-head' }}
+        run: npm install --global @openai/codex@0.163.0
       - name: Run the group
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
