@@ -110,6 +110,7 @@ async fn test_the_version_and_the_json_result_name_the_commit_that_ran() {
     );
     // A release knows only its version, and says so rather than naming a commit.
     let release = cli(&["--version"]).await;
+    assert_eq!(release.code, 0);
     assert_eq!(release.out, format!("fastbrowse {}\n", env!("CARGO_PKG_VERSION")));
     assert_eq!(cli(&["t", "--json"]).await.json()["build"]["git_sha"], Value::Null);
 }
@@ -248,13 +249,6 @@ async fn test_cdp_url_requires_a_websocket_url() {
     let ran =
         cli(&["t", "--start", "https://example.com", "--json", "--cdp-url", "https://browser.test/devtools"]).await;
     assert!(ran.json()["error"].as_str().unwrap().contains("ws://"));
-}
-
-#[tokio::test]
-async fn test_version_prints_the_installed_version_without_a_task() {
-    let ran = cli(&["--version"]).await;
-    assert_eq!(ran.code, 0);
-    assert!(ran.out.starts_with("fastbrowse 0."));
 }
 
 #[test]
