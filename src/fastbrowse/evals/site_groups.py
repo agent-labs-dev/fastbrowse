@@ -28,7 +28,6 @@ SYSTEMS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "browser-use",
     "jev-ultrafast": "browser-use-ultrafast",
-    "browserbase": "browserbase",
     "browser-harness": "browser-harness",
 }
 """The site system each candidate arm is shown as (`SYSTEM_ARMS` in the site's benchmark-groups.ts)."""
