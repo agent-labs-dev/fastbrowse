@@ -139,7 +139,8 @@ The run loop is [crates/fastbrowse-agent/src/agent](crates/fastbrowse-agent/src/
 - **[retrieval](crates/fastbrowse-agent/src/retrieval)** routes short facts through Jev and other reads through the LLM. A read claim cites source
   blocks and code copies its quote from them; a count the page does not state rests on its basis facts; [memory.rs](crates/fastbrowse-agent/src/memory.rs) holds notes with citation ids, and [citations.rs](crates/fastbrowse-core/src/citations.rs) builds deep links.
 - **[verification](crates/fastbrowse-agent/src/verification)** decides whether a run may finish: one Jev done check against the plan's
-  requirements, which accepts when every information requirement is evidenced and Jev sees every action requirement met.
+  requirements, which accepts only when Jev judges every requirement met. Jev picks DONE; code never finishes a run
+  on its own, and states what it knows, such as a requirement no note cites, in the question instead of vetoing.
 - **[safety.rs](crates/fastbrowse-core/src/safety.rs)** owns secrets and irreversible actions. **[effects.rs](crates/fastbrowse-core/src/effects.rs)** says what an action actually did,
   which is how a no-op is told from progress. **[telemetry.rs](crates/fastbrowse-core/src/telemetry.rs)** is the ledger: steps, calls, dollars.
 - **[cli.rs](crates/fastbrowse-cli/src/cli.rs)**, **[mcp](crates/fastbrowse-cli/src/mcp)**, **[serve.rs](crates/fastbrowse-cli/src/serve.rs)** and **`run_task`** are the four entry points; [options.rs](crates/fastbrowse-cli/src/options.rs) holds the rules

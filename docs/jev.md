@@ -144,8 +144,8 @@ and where fastbrowse follows it:
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
   operation and target choices, read assessment and applicable sign-in and bot checks. Grouped targets need
-  a second choice; code-selected pagination needs no policy call. The done check batches completion,
-  unmet actions and whether a draft needs rewriting.
+  a second choice; code-selected pagination needs no policy call. The done check batches one
+  question per requirement, information and action alike, and whether a draft needs rewriting.
 - **Filter before choosing on a dense page.** The Jev 1.13 jaggedness notes say accuracy falls with a large
   state full of irrelevant detail, and suggest a Noul to filter for relevance. When a page has more controls than
   one group step can offer (`group_size` times the model's options per Choice) or its request does not fit Jev's

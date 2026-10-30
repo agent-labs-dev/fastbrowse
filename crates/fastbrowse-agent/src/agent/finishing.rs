@@ -24,7 +24,9 @@ use crate::planner::{Plan, RunReport, partition_plan};
 use crate::retrieval::{
     AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, names_subject,
 };
-use crate::verification::{DoneOptions, DoneVerdict, ExtractOptions, Extraction, RecordSchema, check_done, extract};
+use crate::verification::{
+    DoneOptions, DoneVerdict, ExtractOptions, Extraction, RecordSchema, WHOLE_TASK, check_done, extract,
+};
 
 impl Agent {
     async fn observe_if_changed(&self, observation: &Observation) -> Step<Observation> {
@@ -103,8 +105,11 @@ impl Agent {
         if !state.open_answer_outputs.is_empty()
             && state.rejected_answer_evidence.as_ref() == Some(&answer_evidence(&state.notes, true))
         {
+            // A spend guard: the same notes would be checked again and rejected again.
             let fresh = self.observe().await?;
             let reason = format!("DONE rejected, no new output evidence: {}", state.open_answer_outputs.join("; "));
+            let reason = self.redact(&reason);
+            rejected(state, &reason);
             Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
             return Ok(None);
         }
@@ -239,6 +244,8 @@ impl Agent {
                 return Ok(Some(self.stopping_result(&notes, state, &ledger, Status::Unverified, Some(error)).await));
             }
             state.rejected_answer_evidence = Some(answer_evidence(&state.notes, true));
+            let reason = self.redact(&reason);
+            rejected(state, &reason);
             let fresh = self.observe().await?;
             self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Llm).await?;
             Box::pin(self.recover(state, &fresh, &reason, Status::Unverified, DONE)).await?;
@@ -286,14 +293,6 @@ impl Agent {
         partition: bool,
     ) -> Step<Option<RunResult>> {
         let mut fresh = self.observe().await?;
-        let inspect_wall = matches!(fresh.response_status, Some(401 | 403))
-            && super::helpers::access_inspection(&state.await_plan().await?);
-        if let Some(status) = fresh.response_status
-            && status >= 400
-            && !inspect_wall
-        {
-            return Err(HttpFailure { url: fresh.url.clone(), status }.stop().into());
-        }
         if let Some(failed) = self.failed_submission(state).await? {
             return Err(failed.stop().into());
         }
@@ -309,6 +308,7 @@ impl Agent {
             tokens: self.config.tokens.clone(),
             history: &history,
             visited: &shown,
+            changed_since_read: state.owes_read,
             ledger: Some(&state.ledger),
             trace: self.trace.clone(),
         };
@@ -335,16 +335,15 @@ impl Agent {
         if partition {
             return Ok(Some(self.result(Some(state), &state.ledger.clone(), Status::Unverified, Outcome::default())));
         }
-        let requirements: IndexMap<String, String> =
-            plan.requirements.iter().map(|r| (r.id.clone(), r.text.clone())).collect();
-        let unmet: Vec<String> =
-            check.unmet.iter().map(|key| format!("{key}: {}", requirements.get(key).unwrap_or(key))).collect();
+        let mut requirements: IndexMap<&str, &str> =
+            plan.requirements.iter().map(|r| (r.id.as_str(), r.text.as_str())).collect();
+        requirements.insert(WHOLE_TASK, &state.task);
+        let named = |key: &String| format!("{key}: {}", requirements.get(key.as_str()).copied().unwrap_or(key));
+        let mut unmet: Vec<String> = check.unmet.iter().map(named).collect();
+        unmet.extend(check.unanswered.iter().map(|key| format!("{} (Jev gave no answer)", named(key))));
         let joined = if unmet.is_empty() { "completion not confirmed".to_string() } else { unmet.join("; ") };
         let reason = self.redact(&format!("DONE rejected: {joined}"));
-        state.history.push(crate::policy::HistoryEntry {
-            effect: Some(reason.clone()),
-            ..crate::policy::HistoryEntry::new(Some(Operation::Done), None, StepOutcome::Failed, false)
-        });
+        rejected(state, &reason);
         self.record_failure(state, &fresh, Operation::Done, &reason, None, None, None, Decider::Jev).await?;
         Box::pin(self.recover(state, &fresh, &reason, Status::Stuck, DONE)).await?;
         Ok(None)
@@ -610,6 +609,14 @@ impl Agent {
         let _ = Bytes(Vec::new());
         Ok(result)
     }
+}
+
+/// Record a rejected DONE in the history the next decision reads, so Jev sees what is still unmet.
+fn rejected(state: &mut RunState, reason: &str) {
+    state.history.push(crate::policy::HistoryEntry {
+        effect: Some(reason.to_string()),
+        ..crate::policy::HistoryEntry::new(Some(Operation::Done), None, StepOutcome::Failed, false)
+    });
 }
 
 /// The fields a partition's finish has to itself, swapped into the run and back.

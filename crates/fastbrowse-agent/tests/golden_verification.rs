@@ -110,6 +110,7 @@ fn replay(case: &Value) -> Result<(), String> {
                 tokens: tokens.clone(),
                 history: &history,
                 visited: &visited,
+                changed_since_read: false,
                 ledger: None,
                 trace: trace.clone(),
             };

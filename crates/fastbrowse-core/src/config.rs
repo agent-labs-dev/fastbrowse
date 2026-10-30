@@ -24,7 +24,7 @@ pub struct Thresholds {
     /// Jev's agreement that the task asks for an authorized commit, above which it proceeds under `sensitive_act_from`.
     #[serde(deserialize_with = "lax::float")]
     pub requested_above: f64,
-    /// An action requirement's "not satisfied" answer above this keeps the run working.
+    /// A requirement's "not satisfied" answer above this keeps the run working.
     #[serde(deserialize_with = "lax::float")]
     pub claim_problem_above: f64,
     /// Jev's agreement that the task or notes hold a field's value, under which a NEEDS_INPUT stop stands.

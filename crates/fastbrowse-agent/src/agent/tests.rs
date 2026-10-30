@@ -29,8 +29,7 @@ use serde_json::json;
 use super::Agent;
 use super::driving::edit_progress;
 use super::helpers::{
-    access_inspection, answer_evidence, answered, code_decision, follow_recovery, next_page_control, next_value,
-    unread, visited,
+    access_inspection, answer_evidence, code_decision, follow_recovery, next_page_control, next_value, unread, visited,
 };
 use super::reading::covered;
 use super::state::{RunState, Spawned, TransactionCandidate};
@@ -158,15 +157,6 @@ fn link(key: &str, label: &str, href: &str) -> Control {
 
 fn draggable() -> Control {
     Control::new("drag1", "generic", "Card A", [Operation::Click, Operation::Drag])
-}
-
-/// tests/test_memory.py's `evidence`.
-fn evidence(sha: &str, start: i64, end: i64) -> Evidence {
-    serde_json::from_value(json!({
-        "source_id": "s1", "url": "https://example.test", "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": sha, "start": start, "end": end, "quote": "fact",
-    }))
-    .unwrap()
 }
 
 /// tests/test_retrieval.py's `block_evidence`: one whole block, as the reader's cite of it copies.
@@ -303,30 +293,6 @@ fn test_a_pager_the_page_marks_rel_next_is_followed_whatever_its_label() {
         Control { label: "Weiter".into(), next_page: Some(true), ..link("n", "\u{2192}\u{2192}\u{2192}", "/page/2/") };
     let found = next_page_control(&at("https://example.test/list/", &[icon]));
     assert_eq!(found.map(|c| c.id), Some("n".to_string()));
-}
-
-#[test]
-fn test_a_plan_is_answered_when_what_it_asks_to_find_is_evidenced_whatever_actions_it_lists() {
-    let plan = Plan::new(
-        vec![
-            Requirement::new("r1", "Count the books on the first page", INFO),
-            Requirement::new("r2", "Open the next page", RequirementKind::Action),
-            Requirement::new("r3", "Count the books on the next page", INFO),
-        ],
-        true,
-    );
-    let mut notes = Notes::default();
-    assert!(!answered(&plan, &notes));
-    notes.add(Fact::read(Some("r1"), "20 books", evidence("capture", 0, 4), FactReader::Llm));
-    assert!(!answered(&plan, &notes));
-    notes.add(Fact::read(Some("r3"), "20 books", evidence("capture", 10, 14), FactReader::Llm));
-    assert!(answered(&plan, &notes));
-}
-
-#[test]
-fn test_a_task_of_only_actions_is_never_answered() {
-    let plan = Plan::new(vec![Requirement::new("r1", "Open page 3 of the results", RequirementKind::Action)], false);
-    assert!(!answered(&plan, &Notes::default()));
 }
 
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
@@ -1113,6 +1079,21 @@ async fn test_a_cited_read_claim_finishes_after_one_done_check() {
     assert_eq!(result.status, Status::Complete);
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
+}
+
+#[tokio::test]
+async fn test_a_done_jev_does_not_answer_is_rejected_and_the_history_says_why() {
+    let mut state = run_state().await;
+    state.task = "Report the answer.".into();
+    state.ready_plan = Some(Plan::new(vec![Requirement::new("r1", "Report the answer", INFO)], true));
+    state.recoveries = 99;
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), Arc::new(Receipts(None)), Arc::new(ScriptedLLM));
+
+    // With the recovery budget spent, the rejection ends the run; what matters is that nothing finished it.
+    let finished = agent.finish(&mut state, None, None).await;
+    assert!(!matches!(finished, Ok(Some(ref result)) if result.status == Status::Complete));
+    let effect = state.history.last().and_then(|entry| entry.effect.clone()).unwrap_or_default();
+    assert_eq!(effect, "DONE rejected: r1: Report the answer (Jev gave no answer)");
 }
 
 /// A Jev that answers every yes/no with one probability, or with nothing.

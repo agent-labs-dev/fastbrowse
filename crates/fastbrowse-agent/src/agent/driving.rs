@@ -15,11 +15,10 @@ use fastbrowse_core::safety::{origin_of, starts_download};
 use serde_json::Map;
 
 use super::helpers::{
-    STALE_LINK_FAILURES, access_inspection, answer_evidence, answered, caller_link, code_decision, decision_label,
-    describe, dialog_question, drew_something, follow_recovery, join, link_key, lookup, navigation_question, netloc_of,
-    not_acting, paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, stale_link_key, unread,
+    STALE_LINK_FAILURES, access_inspection, answer_evidence, caller_link, code_decision, decision_label, describe,
+    dialog_question, drew_something, follow_recovery, join, link_key, navigation_question, netloc_of, not_acting,
+    paging, path_of, read_exhausted, redrawn_read, scheme_of, seen, signature, stale_link_key, unread,
 };
-use super::reading::covered;
 use super::recovery::{READ, withheld};
 use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, REPEATS_BEFORE_CYCLE, SHORTCUT_WAIT_SECONDS};
@@ -89,32 +88,9 @@ impl Agent {
             // none of the gates below, which is safe only because of what it can be: a pager link to another address.
             if state.next_page && state.through_end && !state.paging_failed {
                 Box::pin(self.pipeline_pages(state, &observation)).await?;
-                if !state.paging_failed
-                    && !state.owes_read
-                    && lookup(state.plan())
-                    && state.open_answer_outputs.is_empty()
-                    && answered(state.plan(), &state.notes)
-                    && self.observed().is_some()
-                    && let Some(result) = Box::pin(self.finish(state, output_schema, until)).await?
-                {
-                    return Ok(result);
-                }
                 continue;
             }
             if Box::pin(self.reread_if_changed(state, &observation)).await? {
-                continue;
-            }
-            if !state.open_answer_outputs.is_empty()
-                && !state.owes_read
-                && state.rejected_answer_evidence.as_ref() != Some(&answer_evidence(&state.notes, true))
-                && state.history.last().is_some_and(|entry| entry.read_progress)
-                && state.ready_plan.as_ref().is_some_and(|plan| lookup(plan) && answered(plan, &state.notes))
-            {
-                // Recovery's missing-output list describes the rejected draft. New quoted support needs another
-                // finish check before that stale list sends the browser back to content it has already read.
-                if let Some(result) = Box::pin(self.finish(state, output_schema, until)).await? {
-                    return Ok(result);
-                }
                 continue;
             }
             if let Some(decision) = paging(state, &observation) {
@@ -213,107 +189,44 @@ impl Agent {
                 (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
             }
             if Box::pin(self.read_before_interaction(state, &observation, &decision)).await? {
-                let done = state.ready_plan.as_ref().is_some_and(|plan| {
-                    lookup(plan) && state.open_answer_outputs.is_empty() && answered(plan, &state.notes)
-                });
-                if !done {
-                    continue;
-                }
-                // The read answered a lookup, and deciding again on the same page only arrived at DONE: a shortlist and
-                // a decision, 1 to 2s, in 11 of 138 0.5.7 runs. `finish` still judges whether DONE holds.
-                (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Code);
+                continue;
             }
             let pager = decision.operation == Operation::Click
                 && decision.target.as_ref().is_some_and(fastbrowse_core::page::pager_link);
             // Only a pager waits for the plan: the clicks that set a search up run while it is still being written.
-            let plan = if pager { Some(state.await_plan().await?) } else { state.ready_plan.clone() };
-            if decision.operation == Operation::Click
-                && let Some(plan) = &plan
-            {
-                if pager && state.open_answer_outputs.is_empty() && answered(plan, &state.notes) {
-                    // Everything asked to be found is evidenced, so another page is wandering. DONE is judged again by
-                    // `finish`, which carries on if it does not hold.
-                    (decision, uncertain, decided_by) = (code_decision(Operation::Done, None), false, Decider::Code);
-                } else if pager && !state.read_here && unread(plan, &state.notes) {
-                    // Turning the page of a list nobody has read loses that page. Read here first, which also tells
-                    // code whether the list goes on.
-                    decision = Decision { operation: Operation::Read, target: None, ..decision };
-                    (uncertain, decided_by) = (false, Decider::Code);
-                }
+            if pager && !state.read_here && unread(&state.await_plan().await?, &state.notes) {
+                // Turning the page of a list nobody has read loses that page. Read here first, which also tells code
+                // whether the list goes on.
+                decision = Decision { operation: Operation::Read, target: None, ..decision };
+                (uncertain, decided_by) = (false, Decider::Code);
             }
             if uncertain && state.ready_plan.is_none() {
                 // Unsure without the requirements: the plan is already in flight and costs less than recovery.
                 state.await_plan().await?;
                 continue;
             }
-            if not_acting(decision.operation) {
-                let plan = state.await_plan().await?;
-                // Notes that evidence every requirement can still describe the page before the last interaction
-                // redrew it, so an answer owed after one is read off what it drew. A plan that only acts has nothing
-                // to read, and finishes without waiting.
-                let unread_plan = unread(&plan, &state.notes);
-                let mut reading_owed = unread_plan || (state.owes_read && plan.page_answer_expected());
-                // Only the interaction's own claim is in question here: an unread requirement needs a read whatever the
-                // page shows, and a direction the reader named behind a control is carried out rather than traded for
-                // a read of the page that named it.
-                let capture = if reading_owed && !unread_plan && state.directed.is_none() {
-                    Some(self.capture().await?)
+            if decision.operation == Operation::Done {
+                state.directed = None;
+            } else if decision.operation == Operation::Read {
+                state.await_plan().await?;
+                // A read that ran spends the direction it was sent on, but may leave one of its own. A skipped read
+                // spends nothing.
+                let held = state.directed.take();
+                if !Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await? {
+                    continue;
+                }
+                state.directed = held;
+                let directed = if decision.directed {
+                    Some(decision.clone())
                 } else {
-                    None
+                    follow_recovery(state, &observation, &decision, true)
                 };
-                if capture.as_ref().is_some_and(|capture| covered(state, &observation, capture)) {
-                    // The interaction redrew the page and the notes still describe it: everything they quote is still
-                    // shown and nothing on it is unread. A read would re-buy what they hold.
-                    state.owes_read = false;
-                    state.read_here = true;
-                    self.event("read_not_owed", || {
-                        Map::from_iter([("url".into(), self.redact(&observation.url).into())])
-                    });
-                    reading_owed = false;
-                }
-                if reading_owed {
-                    let reading = Decision { operation: Operation::Read, target: None, ..decision.clone() };
-                    // A read that ran spends the direction it was sent on, but may leave one of its own. A skipped
-                    // read spends nothing.
-                    let held = state.directed.take();
-                    let recoveries = state.recoveries;
-                    let options = StepOptions { capture, ..StepOptions::default() };
-                    // A DONE that still owes a read is read by rule; a READ is its decider's.
-                    let by = if decision.operation == Operation::Read { decided_by } else { Decider::Code };
-                    if !Box::pin(self.step(state, &observation, &reading, by, options)).await? {
-                        if !(lookup(&plan)
-                            && state.open_answer_outputs.is_empty()
-                            && answered(&plan, &state.notes)
-                            && state.recoveries == recoveries)
-                        {
-                            continue;
-                        }
-                        // A read does not change the page, so observing it again and deciding only arrived at DONE,
-                        // 1.5 to 2s a lookup. A tripwire that sent the read to recovery left it work to do.
-                        decision = Decision { operation: Operation::Done, target: None, ..decision };
-                    } else if !unread(&plan, &state.notes) {
-                        state.directed = held;
-                        // Only an owed read gets here: a scroll changes the page but not its text, so the read found
-                        // content already read, and the notes already describe what the interaction drew.
-                        decision = Decision { operation: Operation::Done, target: None, ..decision };
-                    } else {
-                        state.directed = held;
-                        let directed = if decision.directed {
-                            Some(decision.clone())
-                        } else {
-                            follow_recovery(state, &observation, &decision, true)
-                        };
-                        let Some(directed) = directed else {
-                            let reason = read_exhausted(state);
-                            Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
-                            continue;
-                        };
-                        (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
-                    }
-                } else {
-                    state.directed = None;
-                    decision = Decision { operation: Operation::Done, target: None, ..decision };
-                }
+                let Some(directed) = directed else {
+                    let reason = read_exhausted(state);
+                    Box::pin(self.recover(state, &observation, &reason, Status::Stuck, READ)).await?;
+                    continue;
+                };
+                (decision, uncertain, decided_by) = (directed, false, Decider::Llm);
             }
             // The confidence gate exists to stop the agent acting on a page it does not understand. READ and DONE do
             // not act: a read changes nothing, and DONE is judged again by `finish`.

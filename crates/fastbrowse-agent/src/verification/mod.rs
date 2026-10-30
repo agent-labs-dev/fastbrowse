@@ -1,23 +1,14 @@
-//! Port of `src/fastbrowse/verification.py`: deciding whether a run is actually finished, and whether its answer and
-//! extracted data hold up.
+//! Whether a run is finished, and whether its answer and extracted data hold up.
 //!
-//! Jev checks completion, individual action requirements and draft quality. An LLM looks at a screenshot when those
-//! answers leave completion uncertain.
-//!
-//! # Concurrency
-//!
-//! Python sends the transaction question beside the claim questions with `asyncio.gather(..., return_exceptions=True)`.
-//! A replay keys each request on its body, so what has to match Python is the set of requests and every decision, not
-//! the order they leave in. Here such a group runs through [`crate::support::join2`], which polls both to their end
-//! before any error is looked at, so a failure never leaves a request Python sent unsent. Errors are then raised in the
-//! order Python raises them: the claim questions before the transaction question.
+//! Jev judges completion in one call: one question per requirement, against the page, the run's actions and the cited
+//! notes, and whether the drafted answer needs rewriting.
 
 mod prompts;
 
 use fastbrowse_core::config::{Thresholds, TokenBudget};
 use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::LLMClient;
-use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Evidence};
+use fastbrowse_core::models::{CostComponent, CostLine, Evidence};
 use fastbrowse_core::output_schema::OutputModel;
 use fastbrowse_core::page::{Capture, Control, Observation, cut_text};
 use fastbrowse_core::py::dump::{Dump, include};
@@ -44,11 +35,16 @@ str_enum! {
     }
 }
 
+/// The id the done check reports the task under when the plan holds no requirement to ask about.
+pub const WHOLE_TASK: &str = "task";
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DoneCheck {
     pub verdict: DoneVerdict,
-    /// Requirement ids that are not satisfied or not evidenced.
+    /// Requirement ids Jev judged not satisfied.
     pub unmet: Vec<String>,
+    /// Requirement ids Jev gave no answer for: not judged, so not satisfied.
+    pub unanswered: Vec<String>,
     /// The offered draft when Jev judged it already answers the task, so no composer needs to run.
     pub answer: Option<ComposedAnswer>,
     pub cost: CostLine,
@@ -187,19 +183,18 @@ pub struct DoneOptions<'a> {
     pub history: &'a [HistoryEntry],
     /// Every address the run has been on, first the one it began on, which no action records.
     pub visited: &'a [String],
-    /// Reserves the one Jev call, made only when the check reaches Jev.
+    /// Whether an action changed the page after its notes were last read: what the notes quote may no longer show.
+    pub changed_since_read: bool,
+    /// Reserves the one Jev call.
     pub ledger: Option<&'a Ledger>,
     pub trace: Trace,
 }
 
-fn probability(answers: &IndexMap<String, Answer>, key: &str) -> f64 {
-    match answers.get(key) {
-        Some(Answer::Noul(answer)) => answer.probability,
-        _ => 0.0,
-    }
-}
-
 /// Judge completion, and whether `draft` answers the task as written, in the one Jev call.
+///
+/// Every requirement is a question to Jev, information requirements included, so a run never ends complete on code's
+/// say-so. Code's facts are stated in the question: an information requirement no note cites, and a page that changed
+/// after its notes were read.
 #[allow(clippy::too_many_arguments)]
 pub async fn check_done(
     jev: &dyn DecisionClient,
@@ -212,26 +207,36 @@ pub async fn check_done(
     options: &DoneOptions<'_>,
 ) -> Result<DoneCheck> {
     let mut questions: IndexMap<String, Question> = IndexMap::new();
-    let mut unmet: Vec<String> = plan
-        .requirements
-        .iter()
-        .filter(|r| r.kind == RequirementKind::Information && !notes.evidenced(&r.id))
-        .map(|r| r.id.clone())
-        .collect();
-    unmet.sort();
-    for requirement in plan.requirements.iter().filter(|r| r.kind == RequirementKind::Action) {
-        questions.insert(
-            format!("unmet_{}", requirement.id),
-            NoulQuestion::new(
+    for requirement in &plan.requirements {
+        let (question, unmet, met) = match requirement.kind {
+            RequirementKind::Action => (
                 prompts::unmet_action(&requirement.text),
-                Some("It is not satisfied, or there is no visible confirmation."),
-                Some("The page visibly confirms it is satisfied."),
+                "It is not satisfied, or there is no visible confirmation.",
+                "The page visibly confirms it is satisfied.",
+            ),
+            RequirementKind::Information => (
+                prompts::unmet_information(&requirement.text, notes.evidenced(&requirement.id)),
+                "It is not answered, or no cited note supports the answer.",
+                "A cited note answers it.",
+            ),
+        };
+        questions
+            .insert(format!("unmet_{}", requirement.id), NoulQuestion::new(question, Some(unmet), Some(met)).into());
+    }
+    if plan.requirements.is_empty() {
+        // A plan of run reports alone has no requirement to ask about, and the task itself is still Jev's to judge.
+        questions.insert(
+            format!("unmet_{WHOLE_TASK}"),
+            NoulQuestion::new(
+                prompts::unmet_task(),
+                Some("It is not done, or there is no visible confirmation."),
+                Some("The page and the actions show it is done."),
             )
             .into(),
         );
     }
     let mut draft = draft;
-    if draft.is_some() && unmet.is_empty() {
+    if draft.is_some() {
         // Asked here rather than on its own because this call is already being paid for: judging the draft costs one
         // more answer in a request the run makes anyway, where a composer costs seconds.
         questions.insert(
@@ -247,6 +252,12 @@ pub async fn check_done(
     let mut context = Map::new();
     context.insert("task".into(), task.into());
     context.insert("run_reports".into(), json!(plan.run_reports));
+    if let Some(status) = observation.response_status {
+        context.insert("http_status".into(), status.into());
+    }
+    if options.changed_since_read {
+        context.insert("page_changed_since_read".into(), true.into());
+    }
     let steps: Vec<String> = options.history.iter().map(step).collect();
     if !steps.is_empty() {
         context.insert("actions".into(), steps.join("\n").into());
@@ -272,26 +283,26 @@ pub async fn check_done(
         }
         Err(other) => return Err(other),
     };
-    if !unmet.is_empty() || questions.is_empty() {
-        let verdict = if unmet.is_empty() { DoneVerdict::Accept } else { DoneVerdict::Reject };
-        return Ok(DoneCheck {
-            verdict,
-            unmet,
-            answer: None,
-            cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
-        });
-    }
     if let Some(ledger) = options.ledger {
         ledger.reserve(CostComponent::Jev, 0.0, 1)?;
     }
     let evaluation = jev.evaluate(&state, &questions).await?;
     let answers = &evaluation.answers;
-    for requirement in &plan.requirements {
-        if probability(answers, &format!("unmet_{}", requirement.id)) > thresholds.claim_problem_above {
-            unmet.push(requirement.id.clone());
+    let mut unmet: Vec<String> = Vec::new();
+    let mut unanswered: Vec<String> = Vec::new();
+    let mut ids: Vec<&str> = plan.requirements.iter().map(|r| r.id.as_str()).collect();
+    if ids.is_empty() {
+        ids.push(WHOLE_TASK);
+    }
+    for id in ids {
+        let id = id.to_string();
+        match answers.get(&format!("unmet_{id}")) {
+            Some(Answer::Noul(answer)) if answer.probability <= thresholds.claim_problem_above => {}
+            Some(Answer::Noul(_)) => unmet.push(id),
+            _ => unanswered.push(id),
         }
     }
-    let verdict = if unmet.is_empty() { DoneVerdict::Accept } else { DoneVerdict::Reject };
+    let verdict = if unmet.is_empty() && unanswered.is_empty() { DoneVerdict::Accept } else { DoneVerdict::Reject };
     // An answer Jev did not give is not a yes: only a present, confident "no rewrite needed" skips the composer.
     let rewrite = match answers.get("draft_needs_writing") {
         Some(Answer::Noul(doubt)) => Some(doubt.probability),
@@ -307,7 +318,13 @@ pub async fn check_done(
             fields
         });
     }
-    Ok(DoneCheck { verdict, unmet, answer: if ready { draft.cloned() } else { None }, cost: evaluation.cost })
+    Ok(DoneCheck {
+        verdict,
+        unmet,
+        unanswered,
+        answer: if ready { draft.cloned() } else { None },
+        cost: evaluation.cost,
+    })
 }
 
 /// One action as the run recorded it: the value typed and what it visibly did, both already redacted.
@@ -492,7 +509,14 @@ mod tests {
     }
 
     /// `_Jev` in tests/test_done_check.py: answers each question it is asked from a table of probabilities.
-    struct TableJev(Vec<(&'static str, f64)>);
+    /// Answers from a table, keeping the instructions of every question asked.
+    struct TableJev(Vec<(&'static str, f64)>, std::sync::Mutex<IndexMap<String, String>>);
+
+    impl TableJev {
+        fn new(answers: Vec<(&'static str, f64)>) -> TableJev {
+            TableJev(answers, Default::default())
+        }
+    }
 
     impl DecisionClient for TableJev {
         fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
@@ -507,6 +531,12 @@ mod tests {
             'a,
             std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
         > {
+            let mut asked = self.1.lock().unwrap();
+            for (key, question) in questions {
+                if let Question::Noul(noul) = question {
+                    asked.insert(key.clone(), noul.instructions.clone());
+                }
+            }
             let answers: Map<String, Value> = self
                 .0
                 .iter()
@@ -551,7 +581,7 @@ mod tests {
     }
 
     fn done(answers: Vec<(&'static str, f64)>, notes: &Notes) -> DoneCheck {
-        let jev = TableJev(answers);
+        let jev = TableJev::new(answers);
         let options = DoneOptions::default();
         block_on(check_done(&jev, "Count them.", &count_plan(), &page(), notes, &Thresholds::default(), None, &options))
             .expect("check")
@@ -560,39 +590,80 @@ mod tests {
     #[test]
     fn an_unconfirmed_browsing_step_is_asked_like_any_other_action() {
         // A requirement the planner wrote is asked of Jev whatever its wording, and an unmet one is never skipped.
-        let check = done(vec![("unmet_r1", 0.9)], &counted_notes());
+        let check = done(vec![("unmet_r1", 0.9), ("unmet_r2", 0.1)], &counted_notes());
         assert_eq!(check.verdict, DoneVerdict::Reject);
         assert_eq!(check.unmet, ["r1"]);
     }
 
     #[test]
-    fn an_unevidenced_answer_still_keeps_the_run_working() {
-        assert_eq!(done(vec![("unmet_r1", 0.1)], &Notes::default()).verdict, DoneVerdict::Reject);
+    fn jev_judges_every_requirement_and_its_yes_finishes() {
+        let check = done(vec![("unmet_r1", 0.1), ("unmet_r2", 0.1)], &counted_notes());
+        assert_eq!(check.verdict, DoneVerdict::Accept);
     }
 
     #[test]
-    fn a_check_that_never_reaches_jev_spends_no_jev_call() {
-        let ledger = Ledger::new(Limits { max_jev_calls: Some(0), ..Limits::default() });
-        let options = DoneOptions { ledger: Some(&ledger), ..DoneOptions::default() };
-        let jev = TableJev(vec![("unmet_r1", 0.1)]);
-        let notes = Notes::default();
+    fn a_requirement_jev_did_not_answer_is_not_satisfied() {
+        let check = done(vec![("unmet_r1", 0.1)], &counted_notes());
+        assert_eq!(check.verdict, DoneVerdict::Reject);
+        assert!(check.unmet.is_empty());
+        assert_eq!(check.unanswered, ["r2"]);
+    }
+
+    #[test]
+    fn an_uncited_information_requirement_is_stated_to_jev_as_a_fact() {
+        let fact = "No note in state cites evidence for this requirement.";
+        let asked = |notes: &Notes| {
+            let jev = TableJev::new(Vec::new());
+            let options = DoneOptions::default();
+            let check = block_on(check_done(
+                &jev,
+                "Count them.",
+                &count_plan(),
+                &page(),
+                notes,
+                &Thresholds::default(),
+                None,
+                &options,
+            ));
+            assert_eq!(check.expect("check").unanswered, ["r1", "r2"]);
+            jev.1.lock().unwrap()["unmet_r2"].clone()
+        };
+        assert!(asked(&Notes::default()).contains(fact));
+        assert!(!asked(&counted_notes()).contains(fact));
+    }
+
+    #[test]
+    fn a_plan_of_run_reports_alone_still_asks_jev_about_the_task() {
+        let plan: Plan = serde_json::from_value(json!({"requirements": [], "answer_expected": false,
+            "run_reports": ["final_url"]}))
+        .expect("plan");
+        let jev = TableJev::new(vec![("unmet_task", 0.1)]);
+        let options = DoneOptions::default();
         let check = block_on(check_done(
             &jev,
-            "Count them.",
-            &count_plan(),
+            "Report the URL.",
+            &plan,
             &page(),
-            &notes,
+            &Notes::default(),
             &Thresholds::default(),
             None,
             &options,
-        ));
-        assert_eq!(check.expect("check").verdict, DoneVerdict::Reject);
+        ))
+        .expect("check");
+        assert_eq!(check.verdict, DoneVerdict::Accept);
+    }
+
+    #[test]
+    fn every_check_reaches_jev() {
+        let ledger = Ledger::new(Limits { max_jev_calls: Some(0), ..Limits::default() });
+        let options = DoneOptions { ledger: Some(&ledger), ..DoneOptions::default() };
+        let jev = TableJev::new(vec![("unmet_r1", 0.1), ("unmet_r2", 0.1)]);
         let reached = block_on(check_done(
             &jev,
             "Count them.",
             &count_plan(),
             &page(),
-            &counted_notes(),
+            &Notes::default(),
             &Thresholds::default(),
             None,
             &options,

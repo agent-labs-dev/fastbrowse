@@ -1,5 +1,4 @@
-//! The verifier's prompts, copied character for character from verification.py's literals: a request differing
-//! from Python's by one byte is a replay miss.
+//! The done check's questions to Jev.
 
 use fastbrowse_core::models::UNTRUSTED;
 
@@ -9,6 +8,17 @@ pub(super) fn unmet_action(requirement_text: &str) -> String {
     format!(
         "{UNTRUSTED}\nIs this requirement not visibly satisfied? The actions in state are the run's own record; a requirement that orders actions is satisfied only when they show that order. {REACHED}\n\n{requirement_text}"
     )
+}
+
+pub(super) fn unmet_information(requirement_text: &str, cited: bool) -> String {
+    let fact = if cited { "" } else { " No note in state cites evidence for this requirement." };
+    format!(
+        "{UNTRUSTED}\nIs this requirement not answered by the cited notes in state? It is answered only when a note quotes the page supporting it, for every entity and constraint it names.{fact}\n\n{requirement_text}"
+    )
+}
+
+pub(super) fn unmet_task() -> String {
+    format!("{UNTRUSTED}\nIs the task in state not yet done? The actions in state are the run's own record. {REACHED}")
 }
 
 pub(super) fn draft_needs_writing() -> String {

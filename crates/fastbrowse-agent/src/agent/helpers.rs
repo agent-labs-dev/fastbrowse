@@ -144,13 +144,6 @@ pub(crate) fn lookup(plan: &Plan) -> bool {
     !plan.requirements.is_empty() && plan.requirements.iter().all(|r| r.kind == RequirementKind::Information)
 }
 
-/// Whether the plan asks to find something and every such requirement is evidenced.
-pub(crate) fn answered(plan: &Plan, notes: &Notes) -> bool {
-    let asked: Vec<&Requirement> =
-        plan.requirements.iter().filter(|r| r.kind == RequirementKind::Information).collect();
-    !asked.is_empty() && asked.iter().all(|r| notes.evidenced(&r.id))
-}
-
 /// Whether this page has anything on it for a run to act on or read.
 pub(crate) fn drew_something(observation: &Observation) -> bool {
     !observation.controls.is_empty() || !text::strip(&observation.viewport_text).is_empty()
@@ -164,8 +157,13 @@ pub(crate) fn read_exhausted(state: &RunState) -> String {
         .filter(|r| r.kind == RequirementKind::Information)
         .map(|r| format!("{}: {}", r.id, r.text))
         .collect();
-    let missing = if missing.is_empty() { state.task.clone() } else { missing.join("; ") };
-    format!("Still missing evidence for {missing}.")
+    let asks = state.plan().requirements.iter().any(|r| r.kind == RequirementKind::Information);
+    match (missing.is_empty(), asks) {
+        // Jev picks DONE from this history, so a lookup whose notes cite every requirement is told so.
+        (true, true) => "Every information requirement has cited evidence.".to_string(),
+        (true, false) => format!("Still missing evidence for {}.", state.task),
+        (false, _) => format!("Still missing evidence for {}.", missing.join("; ")),
+    }
 }
 
 /// Name which one was chosen, not just what it read: a label alone cannot identify one of six identically labelled

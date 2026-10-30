@@ -17,7 +17,7 @@ class Thresholds(Frozen):
     requested_above: float = 0.50
     """Jev's agreement that the task asks for an authorized commit, above which it proceeds under sensitive_act_from."""
     claim_problem_above: float = 0.70
-    """An action requirement's "not satisfied" answer above this keeps the run working."""
+    """A requirement's "not satisfied" answer above this keeps the run working."""
     value_stated_above: float = 0.50
     """Jev's agreement that the task or notes hold a field's value, under which a NEEDS_INPUT stop stands."""
     rewrite_from: float = 0.30
