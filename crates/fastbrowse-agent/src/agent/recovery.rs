@@ -229,8 +229,7 @@ impl Agent {
             generate::<Recovery>(&*self.llm, LLMPurpose::Recover, &messages, Some(&state.ledger)).await?;
         state.ledger.record([generation.cost.clone()])?;
         let data = generation.data;
-        // Giving up is the LLM's diagnosis of why the run cannot go on, kept as the status it ends with, but it is
-        // one more recovery rather than the end: Jev is asked again with the subgoal until the budget runs out.
+        // Giving up says the task cannot progress without the user, so the run ends here with that diagnosis.
         // Asked of the model rather than carried from the step that raised it: a missing value can surface
         // recoveries later, after an attempt to go on without it has failed for its absence.
         state.gave_up = data.give_up.then(|| GaveUp {
@@ -245,10 +244,7 @@ impl Agent {
             diagnosis: self.redact(&data.diagnosis),
         });
         if data.give_up {
-            state.recoveries += 1;
-            if state.recoveries > self.config.stall.max_recoveries {
-                return Err(self.stop_recovering(state, observation, gives_up_as, detail).await?);
-            }
+            return Err(self.stop_recovering(state, observation, gives_up_as, detail).await?);
         }
         let diagnosis = self.redact(&data.diagnosis);
         let hint = self.redact(&data.next_subgoal);

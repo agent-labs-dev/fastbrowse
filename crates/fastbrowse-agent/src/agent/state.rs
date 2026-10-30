@@ -339,17 +339,10 @@ pub(crate) struct RunState {
     pub downloads_forbidden: Option<bool>,
     /// Documents read, by key, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<String, bool>,
-    /// Open this page's next page, set when the reader says a list the run needs goes on past the page it read.
-    pub next_page: bool,
-    /// The page state a next-page click left, so the page it opens is read without a decision.
-    pub paged_from: Option<String>,
-    /// Next pages opened by code this run.
-    pub pages: i64,
-    /// Every unresolved requirement needs the entire list, so intermediate pages can be read concurrently.
+    /// Every unresolved requirement needs the entire list, so its later pages are read by their records alone.
     pub through_end: bool,
     pub tally_readers: Vec<TallyReader>,
     pub comparisons: IndexMap<String, NumericComparison>,
-    pub paging_failed: bool,
     /// The initial address, retained even when an HTTP failure removes it from completion evidence.
     pub started_url: Option<String>,
     pub caller_start: Option<String>,
@@ -446,13 +439,9 @@ impl RunState {
             invented: HashSet::new(),
             downloads_forbidden: None,
             read_documents: HashMap::new(),
-            next_page: false,
-            paged_from: None,
-            pages: 0,
             through_end: false,
             tally_readers: Vec::new(),
             comparisons: IndexMap::new(),
-            paging_failed: false,
             started_url: None,
             caller_start: None,
             start_landing_url: None,

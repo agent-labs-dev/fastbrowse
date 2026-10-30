@@ -19,7 +19,7 @@ use super::notes_room;
 use super::reading::source_basis;
 use crate::error::{AgentError, Result};
 use crate::memory::{Notes, RenderOptions, fact_id, unique};
-use crate::planner::{FIELD_CATEGORIES, Plan, Requirement, RequirementKind};
+use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::pyre::{Pat, is_digit, is_word};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -313,9 +313,7 @@ pub async fn compose(
         system.push_str("fields or unmentioned citations cannot stand in for it. For an absence, cite the collection_for note marked complete=true and retain its bounded scope. Identify the collection from quoted context and check every member's identity and relevant fields. Incomplete collections and selected excerpts cannot establish absence.");
     }
     if !fields.is_empty() && options.independent_fields {
-        system.push_str("\n\n");
-        system.push_str(FIELD_CATEGORIES);
-        system.push_str(" A requested link needs a quoted destination in the source evidence. A heading or navigation label without its destination cannot fill a links field. A quoted hostname or hostname/path is a destination even without a URL scheme. Report those written destinations as quoted, separately from labels whose destinations are missing. Leave that output slot empty when no destination is quoted; do not claim there are no links from missing text.");
+        system.push_str("\n\nA requested link needs a quoted destination in the source evidence. A heading or navigation label without its destination cannot fill a links field. A quoted hostname or hostname/path is a destination even without a URL scheme. Report those written destinations as quoted, separately from labels whose destinations are missing. Leave that output slot empty when no destination is quoted; do not claim there are no links from missing text.");
     }
     let mut messages = vec![Message::system(system), Message::user(format!("{prefix}# Notes\n"))];
     let render = RenderOptions {

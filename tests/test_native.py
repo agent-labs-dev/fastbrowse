@@ -98,7 +98,7 @@ def test_arguments_become_the_run_task_the_core_reads() -> None:
             downloads=Path("/tmp/downloads"),
             allowed_origins=("https://pypi.org",),
             viewport=(1280, 800),
-            config=Config(max_pages=3),
+            config=Config(step_frames=False),
             fetch=False,
         ),
     )
@@ -242,7 +242,7 @@ async def test_the_callers_own_clients_serve_the_rust_run() -> None:
             jev=counted.jev,
             llm=counted.llm,
             http=counted.http,
-            config=Config(max_pages=3),
+            config=Config(step_frames=False),
         )
     assert result.status is Status.COMPLETE, result.error
     assert counted.requests == ["https://pypi.example/httpx"]

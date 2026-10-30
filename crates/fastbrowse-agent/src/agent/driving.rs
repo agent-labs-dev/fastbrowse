@@ -15,9 +15,10 @@ use fastbrowse_core::safety::{origin_of, starts_download};
 use serde_json::Map;
 
 use super::helpers::{
-    caller_link, decision_label, describe, dialog_question, drew_something, follow_recovery, join, navigation_question,
-    netloc_of, not_acting, paging, path_of, read_exhausted, scheme_of, unread,
+    caller_link, decision_label, describe, dialog_question, drew_something, follow_recovery, navigation_question,
+    netloc_of, not_acting, path_of, read_exhausted, scheme_of, unread,
 };
+use super::reading::leaves_unread_page;
 use super::recovery::{Withheld, withheld, withhold};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, TransactionCandidate, Unsure};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, SHORTCUT_WAIT_SECONDS};
@@ -61,29 +62,14 @@ impl Agent {
                     },
                     status,
                 );
-                if state.http_seen.insert(document) {
-                    if matches!(status, 403 | 429 | 503)
-                        && self.outwait(&self.raw().unwrap_or_else(|| observation.clone())).await?
-                    {
-                        continue;
-                    }
-                    state.paging_failed |= state.next_page || state.paged_from.is_some();
-                    state.next_page = false;
+                if state.http_seen.insert(document)
+                    && matches!(status, 403 | 429 | 503)
+                    && self.outwait(&self.raw().unwrap_or_else(|| observation.clone())).await?
+                {
+                    continue;
                 }
             }
             self.settle(state, &observation).await?;
-            // Walking a list is dispatched before Jev is asked, because not asking is the point: the reader asked for
-            // the rest of the list and the link is already found, so a decision would buy nothing. It therefore passes
-            // none of the gates below, which is safe only because of what it can be: a pager link to another address.
-            if state.next_page && state.through_end && !state.paging_failed {
-                Box::pin(self.pipeline_pages(state, &observation)).await?;
-                continue;
-            }
-            if let Some(decision) = paging(state, &observation) {
-                let options = StepOptions { gate: false, ..StepOptions::default() };
-                Box::pin(self.step(state, &observation, &decision, Decider::Code, options)).await?;
-                continue;
-            }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
             if !drew_something(&raw) && self.settle_blank_opening(state, &raw).await? {
                 continue;
@@ -177,7 +163,7 @@ impl Agent {
             }
             if decision.operation == Operation::Read {
                 state.await_plan().await?;
-                Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await?;
+                Box::pin(self.step(state, &observation, &decision, decided_by)).await?;
                 continue;
             }
             // The confidence gate exists to stop the agent acting on a page it does not understand. READ and DONE do
@@ -193,7 +179,7 @@ impl Agent {
                 }
                 continue;
             }
-            match Box::pin(self.step(state, &observation, &decision, decided_by, StepOptions::default())).await {
+            match Box::pin(self.step(state, &observation, &decision, decided_by)).await {
                 Err(Flow::Unsure(unsure)) => {
                     let left_out = withheld(&decision);
                     Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as, left_out)).await?;
@@ -429,9 +415,17 @@ impl Agent {
         observation: &Observation,
         decision: &Decision,
         decided_by: Decider,
-        options: StepOptions,
     ) -> Step {
         let started = Instant::now();
+        let read_first;
+        let mut decision = decision;
+        if leaves_unread_page(state, observation, decision) {
+            let capture = self.capture().await?;
+            if self.on_open_list(state, &capture).await? {
+                read_first = Decision { operation: Operation::Read, target: None, url: None, ..decision.clone() };
+                decision = &read_first;
+            }
+        }
         if !matches!(decision.operation, Operation::Fill | Operation::Read) && !decision.operation.is_scrolling() {
             state.form_values.clear();
         }
@@ -449,12 +443,8 @@ impl Agent {
         let frame: Option<Vec<u8>>;
         if decision.operation == Operation::Read {
             frame = if frames { self.frame().await? } else { None };
-            let capture = match options.capture {
-                Some(capture) => capture,
-                None => self.capture().await?,
-            };
-            let read_progress =
-                Box::pin(self.read(state, Some(capture), Some(observation), options.require_all_evidence)).await?;
+            let capture = self.capture().await?;
+            let read_progress = Box::pin(self.read(state, Some(capture), Some(observation))).await?;
             progressed = Some(read_progress);
             if read_progress {
                 renew(state);
@@ -471,7 +461,7 @@ impl Agent {
         } else {
             let redecided = state.redecided;
             let target = decision.target.as_ref().map(|target| target.id.clone());
-            let building = self.action(state, observation, decision, decided_by, options.gate);
+            let building = self.action(state, observation, decision, decided_by);
             let action = match self.unless_redrawn(redecided, building, observation, target.as_deref()).await? {
                 Watched::Done(action) => action,
                 Watched::Redrawn => {
@@ -496,11 +486,7 @@ impl Agent {
                 self.page.withhold_frames(true);
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            let mut result = if options.follow_pager {
-                self.follow_pager(&action, &raw).await?
-            } else {
-                self.page.act(&action, &raw).await?
-            };
+            let mut result = self.page.act(&action, &raw).await?;
             if result.outcome == StepOutcome::Stale
                 && let Some(target) = &decision.target
                 && let Some(retried) = self.act_on_twin(&action, observation, target).await?
@@ -678,28 +664,6 @@ impl Agent {
             Box::pin(self.recover(state, observation, &reason, gives_up_as, stalled)).await?;
         }
         Ok(())
-    }
-
-    pub(super) async fn follow_pager(&self, action: &Action, observation: &Observation) -> Step<ActResult> {
-        let target = super::helpers::next_page_control(observation);
-        let stale = ActResult { outcome: StepOutcome::Stale, page_changed: false, detail: None, moved: false };
-        let Some(target) = target else { return Ok(stale) };
-        if action.operation != Operation::Click
-            || action.target_id.as_deref() != Some(target.id.as_str())
-            || self.page.address().await? != observation.url
-        {
-            return Ok(stale);
-        }
-        // A known pager address needs no pointer events, whose guards and settling cost a cloud round trip each.
-        let href = target.href.as_deref().unwrap_or_default();
-        let url = join(&observation.url, href).unwrap_or_else(|| href.to_string());
-        self.page.navigate(&url, None).await?;
-        Ok(ActResult {
-            outcome: StepOutcome::Executed,
-            page_changed: self.page.address().await? != observation.url,
-            detail: Some("Followed next-page link by URL.".into()),
-            moved: false,
-        })
     }
 
     /// Act on the one control now standing where `target` stood, if the page redrew it since it was observed.
@@ -1014,20 +978,6 @@ fn renew(state: &mut RunState) {
     state.recoveries = 0;
     state.recovery_log.clear();
     state.gave_up = None;
-}
-
-/// `_step`'s keyword arguments.
-pub(super) struct StepOptions {
-    pub capture: Option<Capture>,
-    pub gate: bool,
-    pub require_all_evidence: bool,
-    pub follow_pager: bool,
-}
-
-impl Default for StepOptions {
-    fn default() -> Self {
-        StepOptions { capture: None, gate: true, require_all_evidence: false, follow_pager: false }
-    }
 }
 
 /// Rewriting the observed field value vetoes progress even when the page changes, and the first new value a field

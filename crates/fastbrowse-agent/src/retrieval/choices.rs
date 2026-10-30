@@ -1,6 +1,8 @@
 //! Jev's short-fact read: a bounded set of quoted spans, one choice per requirement, and the relevance pass that
 //! narrows a page too large to offer whole.
 
+use std::collections::BTreeMap;
+
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, MAX_CHOICE_OPTIONS, NoulQuestion, Question};
 use fastbrowse_core::models::{CostComponent, CostLine, FactReader, UNTRUSTED};
@@ -30,9 +32,6 @@ use crate::planner::Requirement;
 pub(super) const READ_CONFIDENCE: f64 = 0.90;
 // Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
 const FOCUS_WINDOW_CHARS: i64 = 1500;
-// Ours. Near even odds is Jev unable to tell, not relevance: on PyPI's release history the window holding the asked
-// version scored 0.95 and its neighbor 0.73, while every other window, site navigation included, scored 0.44 to 0.54.
-const FOCUS_KEEP_FROM: f64 = 0.6;
 
 fn focus_rules() -> String {
     format!(
@@ -130,7 +129,8 @@ fn read_request(
             instructions.push_str(" Repeated values share one candidate with all their source contexts. A value answers only when a source states it for the requested record and field.");
         }
         if blocks.is_some() {
-            instructions.push_str(" Only passages judged relevant are shown; other passages have been omitted.");
+            instructions
+                .push_str(" The passages that fit are shown, most relevant first; other passages have been omitted.");
         }
         let mut offered = criteria.clone();
         offered.insert(
@@ -162,7 +162,8 @@ fn read_fits(state: &Value, questions: &IndexMap<String, Question>, tokens: &Tok
     text::len(&dumps(state)) as i64 <= tokens.input_chars(&written)
 }
 
-/// `_focus`: the blocks Jev should choose from, or none when the page cannot be narrowed without risking the answer.
+/// `_focus`: the passages Jev should choose from, best scored first and as many as a choice can hold, or none when a
+/// window went unjudged or no candidate fits.
 async fn focus<'a>(
     jev: &dyn DecisionClient,
     page: &Page<'a>,
@@ -212,31 +213,48 @@ async fn focus<'a>(
         Some(answered) => (answered.answers, answered.cost),
         None => (IndexMap::new(), Vec::new()),
     };
-    let scores: IndexMap<&String, f64> =
-        answers.iter().filter_map(|(key, answer)| answer.probability().map(|p| (key, p))).collect();
-    let relevant: Vec<usize> = scores
-        .iter()
-        .filter(|(_, score)| **score >= FOCUS_KEEP_FROM)
-        .filter_map(|(key, _)| key[1..].split('.').next()?.parse::<usize>().ok())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let mut kept: Vec<&'a Block> = relevant.iter().flat_map(|i| windows[*i].iter().copied()).collect();
-    let mut candidates = page_read_candidates(page, &kept, jev.profile().max_choice_options);
-    // Choosing among what fits would leave out a passage judged relevant, or one never judged, and a choice made without
-    // it can close the requirement on an outdated value; the LLM reader reads the whole page instead.
-    let fits = || {
-        let (state, questions) = read_request(page, requirements, &candidates, Some(&kept));
-        read_fits(&state, &questions, tokens)
+    // A window is as relevant as its most relevant piece.
+    let mut best: BTreeMap<usize, f64> = BTreeMap::new();
+    let mut scored = 0;
+    for (key, answer) in &answers {
+        let window = key[1..].split('.').next().and_then(|i| i.parse().ok());
+        if let (Some(window), Some(score)) = (window, answer.probability()) {
+            let entry = best.entry(window).or_insert(score);
+            *entry = entry.max(score);
+            scored += 1;
+        }
+    }
+    let mut ranked: Vec<usize> = best.keys().copied().collect();
+    ranked.sort_by(|a, b| best[b].total_cmp(&best[a]).then(a.cmp(b)));
+    let passages =
+        |shown: usize| -> Vec<&'a Block> { ranked[..shown].iter().flat_map(|i| windows[*i].iter().copied()).collect() };
+    let max_options = jev.profile().max_choice_options;
+    let fits = |shown: usize| {
+        let blocks = passages(shown);
+        let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
+        let (state, questions) = read_request(page, requirements, &candidates, Some(&blocks));
+        candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
     };
-    if candidates.is_empty() || scores.len() < questions.len() || !fits() {
+    let (mut shown, mut high) = (0, ranked.len());
+    while shown < high {
+        let middle = (shown + high).div_ceil(2);
+        if fits(middle) {
+            shown = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    let mut kept = passages(shown);
+    let mut candidates = page_read_candidates(page, &kept, max_options);
+    // A window never judged could hold the answer at any rank, so the LLM reader reads the whole page instead.
+    if candidates.is_empty() || scored < questions.len() {
         kept = Vec::new();
         candidates = Vec::new();
     }
     trace.event("read_focus", || {
         let mut fields = Map::new();
         fields.insert("windows".into(), windows.len().into());
-        fields.insert("relevant".into(), relevant.len().into());
+        fields.insert("shown".into(), shown.into());
         fields.insert("candidates".into(), candidates.len().into());
         fields.insert("requests".into(), cost.len().into());
         fields
@@ -465,7 +483,76 @@ mod tests {
     use super::*;
     use crate::planner::RequirementKind;
     use crate::retrieval::testing::capture;
-    use fastbrowse_core::models::SourceControl;
+    use crate::support::testing::block_on;
+    use fastbrowse_core::BoxFuture;
+    use fastbrowse_core::decision::{DecisionError, DecisionProfile, Evaluation, NoulAnswer, NoulTag};
+    use fastbrowse_core::models::{CostBasis, SourceControl};
+
+    /// Scores each passage by the number at its start.
+    struct Scorer;
+
+    impl DecisionClient for Scorer {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let answers = questions
+                .iter()
+                .map(|(key, question)| {
+                    let Question::Noul(question) = question else { panic!("a yes/no question") };
+                    let passage = question.instructions.rsplit("requirements? ").next().unwrap();
+                    let score: f64 = passage.split(' ').next().unwrap().parse().unwrap();
+                    (key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability: score }))
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    fn passage(score: &str, length: usize) -> String {
+        format!("{score} {}", "word ".repeat(length / 5))
+    }
+
+    fn focused(captured: &Capture, tokens: &TokenBudget) -> Vec<String> {
+        let page = Page::new(captured);
+        let requirement = Requirement::new("r", "Find the version", RequirementKind::Information);
+        let (kept, _, _) = block_on(focus(&Scorer, &page, &[requirement], tokens, None, &Trace::disabled())).unwrap();
+        kept.iter().map(|block| block.source_id.clone()).collect()
+    }
+
+    #[test]
+    fn passages_reach_the_choice_best_scored_first_whatever_their_score() {
+        let parts = [passage("0.2", 1400), passage("0.5", 1400), passage("0.3", 1400)];
+        let parts: Vec<_> = parts.iter().map(|part| (BlockKind::Paragraph, part.as_str())).collect();
+        assert_eq!(focused(&capture(&parts), &TokenBudget::default()), ["s1", "s2", "s0"]);
+    }
+
+    #[test]
+    fn the_passages_that_do_not_fit_are_the_lowest_scored() {
+        let tokens = TokenBudget::default();
+        let count = (tokens.input_chars(&[] as &[&str]) as usize / 1400) + 2;
+        let scores: Vec<String> =
+            (0..count).map(|i| format!("{:.3}", 0.1 + (i as f64) / (2.0 * count as f64))).collect();
+        let parts: Vec<String> = scores.iter().map(|score| passage(score, 1400)).collect();
+        let parts: Vec<_> = parts.iter().map(|part| (BlockKind::Paragraph, part.as_str())).collect();
+        let kept = focused(&capture(&parts), &tokens);
+        assert!(!kept.is_empty() && kept.len() < count);
+        let expected: Vec<String> = (0..count).rev().take(kept.len()).map(|i| format!("s{i}")).collect();
+        assert_eq!(kept, expected);
+    }
 
     #[test]
     fn short_fact_choice_preserves_equal_captions_control_positions() {

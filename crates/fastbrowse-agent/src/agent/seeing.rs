@@ -27,7 +27,7 @@ impl Agent {
     ) -> Step<Option<ActResult>> {
         let Some(png) = self.viewport().await? else { return Ok(None) };
         let reference = screenshot_reference(&png);
-        let seen = json!({"task": state.task, "control": element(target, false), "viewport_screenshot": reference});
+        let seen = json!({"task": state.task, "control": element(target), "viewport_screenshot": reference});
         let questions: IndexMap<String, Question> = IndexMap::from([
             (
                 "shown".to_string(),
