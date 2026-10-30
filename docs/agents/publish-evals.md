@@ -6,30 +6,40 @@ The file contains sanitized per-run grades, completion, time, cost, LLM and Jev 
 throughput. Official rubric scores retain their source meaning. Internal hosted and Ultrafast comparisons use
 separate matched task groups.
 
-A candidate is written under schema 5; schemas 3 and 4 are read only so that the approved figures and a staged
-candidate written under them keep validating. A candidate holds one or more of the groups. `internal-fastbrowse`
-is every supported internal task in the current catalog (53 since `stretch-wizard-correction` was retired;
-figures approved earlier ran 54), three repeats each, with fastbrowse alone, so it needs no comparator reruns.
-Official fastbrowse suites do not require new comparator runs either. Previously published comparator figures
-can be linked as references with their task and build differences stated. `internal-backend` is fastbrowse on a
-Browser Use Cloud browser against fastbrowse on its own browser pool. `internal-ultrafast` pairs fastbrowse on its
-own pool with `jev-ultrafast`; figures approved under schema 3 or 4 keep fastbrowse on a Browser Use Cloud browser
-there. Every group records its agent and runner commits, which must match the candidate's build: adding a suite
-must retain the published groups and their regression checks, and results from different builds cannot be
-combined under one build receipt.
-`internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse and the hosted Browser
-Use agent both run, the navigation tasks included, read on each hosted agent's final page
-through its browser; figures approved at 46 or 47 tasks still read. It holds rows from whichever of `fastbrowse`,
-`browser-use`, `jev-ultrafast` and `browser-harness` ran, each with every repeat of every task it runs. Ultrafast returns
-no answer, so it runs only the tasks of the set graded without one. An arm that did not run has no rows and the site
-shows it as not measured. An arm that reports neither its model nor its spend carries `"dollars": null`
-and the site shows its pass rate and seconds with "cost not reported"; fastbrowse rows always carry a cost. The
-official suites publish the fastbrowse arm, with a vendor arm's rows only where Parallax marks them publishable, and
-accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
-defines it, the group records the repeat count, and a task's figure is the mean of its repeats' scores.
+## What may be published
 
-CI validates the candidate's exact coverage and compares matched scores, completion, LLM calls, model
-throughput and cost with the previous approved candidate, using the release gate's own efficiency comparison; wall time and Jev calls are recorded but not compared. A group whose
+- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
+  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
+- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
+  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
+  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
+
+## The candidate contract
+
+Three programs share the candidate's schema: Parallax's `parallax browser publish-candidate` writes it,
+`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
+(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
+the changed writer through both readers.
+
+## Schemas
+
+Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
+Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
+`stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
+fastbrowse alone. The fastbrowse-only group does not require comparator reruns. Official
+fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
+as references with their task and build differences stated. Every group inside one candidate still comes
+from the same measured agent and runner build. Adding a suite must retain the published groups and their
+regression checks; results from different builds cannot be combined under one build receipt.
+Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser against fastbrowse on its own
+browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
+approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
+Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
+
+## Validation and approval
+
+CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
+throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
 catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
 is compared on the tasks both ran; the earlier catalog is found in Git history by its digest. Any other catalog,
 task or limit difference is a protocol change, published only as described
