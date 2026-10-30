@@ -1,9 +1,8 @@
-//! What the dispatch and form suites share (`eval_value`, `find`, `observe_until`, `wait_until`), plus a CDP proxy that stands in for the monkeypatched `page._input` and `page._evaluate`.
+//! What the dispatch and form suites share (`eval_value`, `find`, `observe_until`), plus a CDP proxy that stands in for the monkeypatched `page._input` and `page._evaluate`.
 
 #![allow(dead_code)]
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -39,21 +38,6 @@ pub fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
             observation.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
         )
     })
-}
-
-pub async fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64)
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(timeout_seconds);
-    while tokio::time::Instant::now() < deadline {
-        if predicate().await {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("condition was not met in time");
 }
 
 /// `observe_until`: observe until a control is actually there, since an attached frame session predates its document.
