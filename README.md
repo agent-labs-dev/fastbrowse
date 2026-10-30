@@ -410,6 +410,12 @@ and [docs/jev.md](docs/jev.md) for the Jev assumptions checked against Typesafe'
 [CHANGELOG.md](CHANGELOG.md) records each release, and every
 [GitHub release](https://github.com/agent-labs-dev/fastbrowse/releases) publishes its entry.
 
+## Credits
+
+Thanks to Dhaiwat10, jmclark-lab and imranye for code, to Adam13y for the known-answer safety scenarios, and to
+everyone who reported a bug or asked for a feature, here or on Product Hunt. [CREDITS.md](CREDITS.md) has the full
+list.
+
 ## License
 
 MIT, copyright Agent Labs. Adapted third-party code is credited in [NOTICE](NOTICE).
