@@ -13,8 +13,8 @@
 //! behind for `stop` to wait on, and a browser still known when this value drops is stopped by a task spawned then.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{BrowserConnection, CostBasis, CostComponent, CostLine};
@@ -147,7 +147,7 @@ pub struct BrowserUseCloudBrowser {
 impl BrowserUseCloudBrowser {
     /// Validate the options and build the create body; nothing is sent until `start`.
     pub fn new(api_key: &str, options: BrowserUseCloudOptions) -> Result<Self, BrowserUseCloudError> {
-        let clock: Clock = Arc::new(monotonic);
+        let clock: Clock = Arc::new(fastbrowse_core::telemetry::monotonic);
         let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
         Self::with_seams(api_key, options, API_ORIGIN, clock, sleep)
     }
@@ -307,11 +307,6 @@ impl Drop for BrowserUseCloudBrowser {
             runtime.spawn(finish(self.api.clone(), self.state.clone(), self.creating.take()));
         }
     }
-}
-
-fn monotonic() -> f64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
 /// A JSON object with its keys in the order given, as Python's dict keeps them; serde_json's map sorts them.
