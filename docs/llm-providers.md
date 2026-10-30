@@ -21,8 +21,8 @@ from, how the schema is asked for and where a reasoning effort goes. The table i
 
 | `FASTBROWSE_LLM_PROVIDER` | Address | Key | Schema | Reasoning effort | Default model |
 |:--|:--|:--|:--|:--|:--|
-| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `none` for DeepSeek, otherwise only when set | `deepseek/deepseek-v4.1-flash-1017` |
-| `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `none` for DeepSeek, otherwise only when set | `deepseek/deepseek-v4.1-flash-1017` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `google/gemini-3.8-flash` |
+| `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `google/gemini-3.8-flash` |
 | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
 | `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
@@ -47,10 +47,10 @@ Rules that hold across the table:
   https.
 - **A model is named, or the run does not start.** Without a default, the run stops before its first request and
   asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on the first plan instead.
-- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` is set**, except for DeepSeek on OpenRouter
-  and the gateway, which defaults to `none`, and Anthropic, which defaults to `low` since Claude refuses `none`. A
-  provider whose OpenAI-compatible API takes no effort stops the run with a configuration error, rather than drop a
-  setting you asked for.
+- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` is set**, except on OpenRouter and the
+  gateway, where Gemini 3.8 Flash defaults to `low` and DeepSeek to `none`. Anthropic refuses `none`, since Claude
+  takes `low`, `medium` or `high`. A provider whose OpenAI-compatible API takes no effort stops the run with a
+  configuration error, rather than drop a setting you asked for.
 - **`FASTBROWSE_LLM_STRICT` overrides the preset's strictness, and `FASTBROWSE_LLM_EXTRA_BODY` applies to every
   preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, such as
   `reasoning_effort` where the preset sends it, or an output cap: `max_tokens` and `max_completion_tokens` are never

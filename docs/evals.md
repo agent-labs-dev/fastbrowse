@@ -60,9 +60,10 @@ Read [the eval workflow](agents/evals.md) before changing agent behavior or runn
 
 ## Default LLM measurements
 
-`DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` stays on `google/gemini-3.8-flash` because it
-passes the live suite: `google/gemini-3.5-flash-lite` is two to three times faster a call but scored 8/12 live
-against 12/12, so it serves only purposes whose output is checked downstream.
+`DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` is `google/gemini-3.8-flash` for every purpose,
+at low reasoning. On the live fixture suite, the same build completed 110 of 111 runs on it and 86 of 95 on
+DeepSeek V4.1 Flash. `google/gemini-3.5-flash-lite` is two to three times faster a call but scored 8/12 live
+against 12/12.
 
 Gemini 3.5 Flash Lite at low reasoning was also measured as a candidate default against DeepSeek V4.1 Flash
 1017 on the Sauce Demo checkout: one task, 3 repeats per arm, identical prompt and limits, local Chrome.

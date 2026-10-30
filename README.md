@@ -167,8 +167,9 @@ restart it without the flag, when you are done.
 
 ### Models
 
-The LLM defaults to `deepseek/deepseek-v4.1-flash-1017` for every purpose. No reasoning effort is sent unless
-`FASTBROWSE_LLM_REASONING` sets one, so each model keeps its provider's default.
+The LLM defaults to `google/gemini-3.8-flash` for every purpose, at `low` reasoning effort. Through OpenRouter and
+the gateway, DeepSeek models default to `none`, and any other model is sent no effort unless
+`FASTBROWSE_LLM_REASONING` sets one, so it keeps its provider's default.
 
 | Setting | Effect |
 |:--|:--|

@@ -51,17 +51,28 @@ use crate::system_one::{
 };
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
-/// The default LLM is DeepSeek V4.1 Flash 1017, and it is the only model any LLM purpose uses: field text and the
-/// shortcut address run on it too, because a second model in the loop is a second set of failure modes to explain.
-/// Jev is the decision model and is separate (crates/fastbrowse-core/src/decision.rs). FASTBROWSE_LLM_MODEL overrides
-/// every purpose (docs/evals.md has the measurements).
-pub const DEFAULT_LLM: &str = "deepseek/deepseek-v4.1-flash-1017";
+/// The default LLM is Gemini 3.8 Flash, and it is the only model any LLM purpose uses: field text and the shortcut
+/// address run on it too, because a second model in the loop is a second set of failure modes to explain. On the live
+/// fixture suite it completed 110 of 111 runs at low reasoning, where DeepSeek V4.1 Flash completed 86 of 95 on the
+/// same code. Jev is the decision model and is separate (crates/fastbrowse-core/src/decision.rs). FASTBROWSE_LLM_MODEL
+/// overrides every purpose (docs/evals.md has the measurements).
+pub const DEFAULT_LLM: &str = "google/gemini-3.8-flash";
 
-/// DeepSeek through OpenRouter or the gateway answers with reasoning off unless FASTBROWSE_LLM_REASONING says
-/// otherwise. With it on, a greedy reasoning trace can repeat the same lines until the model's own output maximum: one
-/// read spent 131,072 reasoning tokens, 312 seconds and $0.16 restating one paragraph, and returned no answer.
+/// Through OpenRouter or the gateway, a model with a known best effort gets it unless FASTBROWSE_LLM_REASONING says
+/// otherwise; any other model gets no reasoning field and keeps its provider's default.
+///
+/// Gemini 3.8 Flash rejects disabled reasoning but accepts less of it: `low` took plan 4.6s to 3.2s and read 2.4s to
+/// 2.1s. DeepSeek answers with reasoning off: with it on, a greedy reasoning trace can repeat the same lines until the
+/// model's own output maximum, and one read spent 131,072 reasoning tokens, 312 seconds and $0.16 restating one
+/// paragraph, and returned no answer.
 fn default_reasoning(model: &str) -> Option<ReasoningEffort> {
-    model.starts_with("deepseek/").then_some(ReasoningEffort::None)
+    if model.starts_with("deepseek/") {
+        Some(ReasoningEffort::None)
+    } else if model == "google/gemini-3.8-flash" {
+        Some(ReasoningEffort::Low)
+    } else {
+        None
+    }
 }
 
 pub const LLM_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
