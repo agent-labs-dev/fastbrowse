@@ -11,12 +11,12 @@ Add the client and the binary for each platform you run on (`natives-darwin-arm6
 <dependency>
   <groupId>dev.agentlabs</groupId>
   <artifactId>fastbrowse</artifactId>
-  <version>0.9.0</version>
+  <version>0.9.1</version>
 </dependency>
 <dependency>
   <groupId>dev.agentlabs</groupId>
   <artifactId>fastbrowse</artifactId>
-  <version>0.9.0</version>
+  <version>0.9.1</version>
   <classifier>natives-linux-x64</classifier>
   <scope>runtime</scope>
 </dependency>
@@ -24,8 +24,8 @@ Add the client and the binary for each platform you run on (`natives-darwin-arm6
 
 ```kotlin
 // Gradle
-implementation("dev.agentlabs:fastbrowse:0.9.0")
-runtimeOnly("dev.agentlabs:fastbrowse:0.9.0:natives-linux-x64")
+implementation("dev.agentlabs:fastbrowse:0.9.1")
+runtimeOnly("dev.agentlabs:fastbrowse:0.9.1:natives-linux-x64")
 ```
 
 ```java

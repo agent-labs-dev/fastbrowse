@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "fastbrowse-core",
  "fastbrowse-run",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-agent"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "fastbrowse-clients",
  "fastbrowse-core",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-browser"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "data-encoding",
  "fastbrowse-core",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bytes",
  "fastbrowse-agent",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-clients"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bytes",
  "fastbrowse-core",
@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "indexmap",
  "percent-encoding",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-node"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "fastbrowse-cli",
  "fastbrowse-core",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-py"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "fastbrowse-agent",
  "fastbrowse-browser",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-run"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "encoding_rs",
  "fastbrowse-agent",
