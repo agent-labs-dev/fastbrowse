@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 use super::state::RunState;
-use crate::memory::{Notes, fact_id};
+use crate::memory::{Notes, fact_id, unique};
 use crate::planner::{Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry, Reduction};
 
@@ -196,14 +196,7 @@ pub(crate) fn next_value(values: &[String], entries: &[HistoryEntry], label: Opt
 
 /// Where the run began, then every address it has been on since, each once.
 pub(crate) fn visited(addresses: &IndexMap<String, ()>, redact: impl Fn(&str) -> String) -> Vec<String> {
-    let mut urls: Vec<String> = Vec::new();
-    for url in addresses.keys() {
-        let shown = redact(url);
-        if !urls.contains(&shown) {
-            urls.push(shown);
-        }
-    }
-    urls
+    unique(addresses.keys().map(|url| redact(url)))
 }
 
 pub(crate) fn recovery_text(value: &str) -> String {

@@ -45,7 +45,7 @@ use helpers::{partition_proof, recovery_memory};
 use state::{Flow, RunState, Spawned, Step};
 
 use crate::error::AgentError;
-use crate::memory::{Fact, Notes};
+use crate::memory::{Fact, Notes, unique};
 use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
 use crate::policy::StepContext;
 use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
@@ -683,12 +683,7 @@ impl Agent {
                 }
             }
             if !verified.is_empty() {
-                let mut claims = Vec::new();
-                for claim in verified.iter().flat_map(|answer| answer.claims.iter()) {
-                    if !claims.contains(claim) {
-                        claims.push(claim.clone());
-                    }
-                }
+                let claims = unique(verified.iter().flat_map(|answer| answer.claims.iter().cloned()));
                 partial = assemble_answer(&claims, notes, &[], 0);
                 let mut notice = String::from("Partial answer.");
                 let missing =

@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
+use std::hash::Hash;
 
 use fastbrowse_core::models::{Evidence, FactReader};
 use fastbrowse_core::page::Capture;
@@ -1090,9 +1091,9 @@ fn tally_requirement(fact: &Fact) -> String {
     fact.tally.as_ref().map_or_else(String::new, |tally| tally.requirement_id.clone())
 }
 
-/// Each string once, in first-seen order: `tuple(dict.fromkeys(...))`.
-pub(crate) fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
-    let set: IndexSet<String> = values.into_iter().collect();
+/// Each value once, in first-seen order.
+pub(crate) fn unique<T: Eq + Hash>(values: impl IntoIterator<Item = T>) -> Vec<T> {
+    let set: IndexSet<T> = values.into_iter().collect();
     set.into_iter().collect()
 }
 

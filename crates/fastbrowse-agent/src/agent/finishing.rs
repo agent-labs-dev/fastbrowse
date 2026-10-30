@@ -17,9 +17,9 @@ use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate
 use super::{Agent, Outcome};
 use crate::batches::evaluate_batches;
 use crate::error::AgentError;
-use crate::memory::{Fact, Notes};
+use crate::memory::{Fact, Notes, unique};
 use crate::planner::{Plan, RunReport, partition_plan};
-use crate::retrieval::{Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, names_subject};
+use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, names_subject};
 use crate::verification::{
     DoneOptions, DoneVerdict, ExtractOptions, Extraction, RecordSchema, WHOLE_TASK, check_done, extract,
 };
@@ -159,12 +159,7 @@ impl Agent {
                     // Separate source reads can leave a bundled requirement unbound. Only a fully checked field answer
                     // can bind their combined quotes before the normal completion check.
                     let answer = Box::pin(self.answer(state, None)).await?;
-                    let mut basis: Vec<String> = Vec::new();
-                    for key in answer.claims.iter().flat_map(|c| c.evidence_ids.iter()) {
-                        if !basis.contains(key) {
-                            basis.push(key.clone());
-                        }
-                    }
+                    let basis = unique(answer.claims.iter().flat_map(|c| c.evidence_ids.iter().cloned()));
                     for requirement in &plan.requirements {
                         let fact =
                             Fact::derived(Some(&requirement.id), &answer.answer, basis.clone(), FactReader::Llm)?;
@@ -193,16 +188,11 @@ impl Agent {
                 missing.extend(plan.requirements.iter().map(|r| r.text.clone()));
             }
         }
-        let mut unique: Vec<String> = Vec::new();
-        for item in missing {
-            if !unique.contains(&item) {
-                unique.push(item);
-            }
-        }
-        state.open_answer_outputs = unique.clone();
-        if !unique.is_empty() {
+        let missing = unique(missing);
+        state.open_answer_outputs = missing.clone();
+        if !missing.is_empty() {
             let reasons: Vec<String> =
-                unique.iter().map(|item| format!("Answer output not verified: {item}")).collect();
+                missing.iter().map(|item| format!("Answer output not verified: {item}")).collect();
             let reason = format!("DONE rejected: {}", reasons.join("; "));
             if !oversized.is_empty() {
                 let notes = state.notes.clone();
@@ -218,12 +208,7 @@ impl Agent {
             Box::pin(self.count_progress(state, false, &fresh, DONE, Status::Unverified)).await?;
             return Ok(None);
         }
-        let mut claims: Vec<Claim> = Vec::new();
-        for claim in verified_parts.iter().flat_map(|part| part.claims.iter()) {
-            if !claims.contains(claim) {
-                claims.push(claim.clone());
-            }
-        }
+        let claims = unique(verified_parts.iter().flat_map(|part| part.claims.iter().cloned()));
         let answer = assemble_answer(&claims, &state.notes, &state.plan().requirements, 0);
         let result = match Box::pin(self.conclude(state, output_schema, Some(answer), true)).await {
             Err(Flow::Agent(AgentError::NotesTooLarge(message))) => {
@@ -407,15 +392,10 @@ impl Agent {
             return Ok(());
         }
         let candidates: &[TransactionCandidate] = &state.transaction_candidates;
-        let mut pages: Vec<&String> = Vec::new();
-        for (_, index) in pending {
+        let pages = unique(pending.iter().flat_map(|(_, index)| {
             let candidate = &candidates[*index];
-            for url in std::iter::once(&candidate.from_url).chain(candidate.landed_url.as_ref()) {
-                if !pages.contains(&url) {
-                    pages.push(url);
-                }
-            }
-        }
+            std::iter::once(&candidate.from_url).chain(candidate.landed_url.as_ref())
+        }));
         let page_state = json!({"pages": pages.iter().map(|url| json!({"url": url})).collect::<Vec<_>>()});
         let questions: IndexMap<String, Question> = pending
             .iter()
