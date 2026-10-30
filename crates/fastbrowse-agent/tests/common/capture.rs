@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::memory::{Notes, NotesState};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question, RetriesExhausted};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostLine, LLMPurpose, Limits};
 use fastbrowse_core::py::dump::Dump;
@@ -29,24 +29,14 @@ use fastbrowse_core::telemetry::{BudgetExceeded, Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
-use super::parse;
-
-/// Every case in a capture file, one JSON object per line inside a list.
-pub fn capture_cases(name: &str) -> Vec<Value> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    match serde_json::from_str(&text).expect("capture JSON") {
-        Value::Array(cases) => cases,
-        other => panic!("expected a list of cases, got {other}"),
-    }
-}
+use super::{cases, jev_response, parse};
 
 /// Whether this run re-records the cases instead of checking them.
 pub fn updating() -> bool {
     std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some()
 }
 
-/// Writes cases back as `capture_cases` reads them, one compact object per line inside a list. A case that did not
+/// Writes cases back as `cases` reads them, one compact object per line inside a list. A case that did not
 /// change keeps its recorded line, so the diff holds only what did.
 pub fn write_cases(name: &str, cases: &[Value]) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
@@ -173,7 +163,7 @@ pub fn replay_files(
     let (mut failures, mut skipped, mut passed, mut total) = (Vec::new(), Vec::new(), 0, 0);
     for file in files {
         let mut written = Vec::new();
-        for case in capture_cases(file) {
+        for case in cases(file) {
             total += 1;
             let name = case["name"].as_str().unwrap_or("?").to_string();
             if only.as_deref().is_some_and(|only| !name.contains(only)) {
@@ -411,25 +401,6 @@ fn fresh_jev(questions: &IndexMap<String, Question>, recorded: &[Value]) -> Valu
                       "input_tokens": 0, "output_tokens": 0, "seconds": null});
     json!({"response": {"evaluation": {"model": "test", "answers": answers, "input_tokens": 10, "cost": cost,
                                        "requests": 1}}})
-}
-
-fn jev_response(response: &Value) -> Result<Evaluation, DecisionError> {
-    if let Some(evaluation) = response.get("evaluation") {
-        return Ok(parse(evaluation));
-    }
-    let message = response["message"].as_str().unwrap_or_default().to_string();
-    Err(match response["error"].as_str() {
-        Some("input_too_large") => DecisionError::InputTooLarge(message),
-        Some("retries_exhausted") => DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
-            message,
-            seconds: response["seconds"].as_f64().unwrap_or_default(),
-            unaccounted_requests: response["unaccounted_requests"].as_i64().unwrap_or_default(),
-            requests: response["requests"].as_i64().unwrap_or_default(),
-            answered: Vec::new(),
-            last: String::new(),
-        })),
-        _ => DecisionError::Failed(message),
-    })
 }
 
 fn llm_body(purpose: &str, messages: &str, name: &str, schema: &str) -> String {
