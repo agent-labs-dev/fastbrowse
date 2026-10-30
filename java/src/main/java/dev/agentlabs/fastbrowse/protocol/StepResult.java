@@ -9,6 +9,8 @@ import java.util.List;
  * @param target Human-readable label of the chosen element; never contains a secret value.
  * @param facts Facts added to the notes by this step, with resolved secrets redacted.
  * @param pageChanged Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
+ * @param fallback The fallback that decided this step instead of Jev's pick, when {@code Config.step_choices} asked for it.
+ * @param choices The controls Jev was offered for this step's decision, when {@code Config.step_choices} asked for them.
  */
 public record StepResult(
     @JsonProperty("index") long index,
@@ -21,7 +23,9 @@ public record StepResult(
     @JsonProperty("note") String note,
     @JsonProperty("facts") List<StepFact> facts,
     @JsonProperty("page_changed") Boolean pageChanged,
-    @JsonProperty("duration_ms") long durationMs) {
+    @JsonProperty("duration_ms") long durationMs,
+    @JsonProperty("fallback") StepFallback fallback,
+    @JsonProperty("choices") List<StepChoice> choices) {
 
     /** A builder for a {@code StepResult}, every field unset. */
     public static Builder builder() {
@@ -41,6 +45,8 @@ public record StepResult(
         private List<StepFact> facts;
         private Boolean pageChanged;
         private long durationMs;
+        private StepFallback fallback;
+        private List<StepChoice> choices;
 
         private Builder() {}
 
@@ -99,8 +105,18 @@ public record StepResult(
             return this;
         }
 
+        public Builder fallback(StepFallback fallback) {
+            this.fallback = fallback;
+            return this;
+        }
+
+        public Builder choices(List<StepChoice> choices) {
+            this.choices = choices;
+            return this;
+        }
+
         public StepResult build() {
-            return new StepResult(index, operation, decidedBy, outcome, url, target, confidence, note, facts, pageChanged, durationMs);
+            return new StepResult(index, operation, decidedBy, outcome, url, target, confidence, note, facts, pageChanged, durationMs, fallback, choices);
         }
     }
 }
