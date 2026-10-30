@@ -68,3 +68,35 @@ def test_a_campaign_id_that_cannot_name_a_site_file_is_refused() -> None:
     candidate["campaign_id"] = "release:0.8.0"
     with pytest.raises(ValueError, match="cannot name a site data file"):
         group_files(json.dumps(candidate).encode(), FACTS, CURRENT)
+
+
+def test_a_measured_official_group_keeps_only_vendor_rows_on_its_task_set() -> None:
+    candidate = json.loads(STAGED.read_bytes())
+    hosted = next(g for g in candidate["groups"] if g["id"] == "internal-hosted")
+    tasks = [f"m2w-{i}" for i in range(300)]
+    row = {"status": "complete", "completed": True, "seconds": 2.0, "dollars": 0.1, "physical_runs": 1}
+    candidate["groups"] = [
+        {
+            **{k: hosted[k] for k in ("agent_sha", "runner_sha", "source_sha256", "limits")},
+            "id": "online-mind2web",
+            "metric": "full-task-success",
+            "task_ids": tasks,
+            "repeats": 1,
+            "rows": [{**row, "task": t, "repeat": 0, "arm": "fastbrowse", "score": i % 2} for i, t in enumerate(tasks)],
+        }
+    ]
+    same = {"system": "browser-use", "rows": [{"task": t, "score": 1} for t in reversed(tasks)]}
+    other = {"system": "browser-use", "rows": [{"task": f"x-{t}", "score": 1} for t in tasks]}
+    summary = {"system": "browser-use", "rows": None, "summary": {"attempts": 100, "passed": 78}}
+
+    def published(*entries: dict) -> list:
+        current = {
+            **CURRENT,
+            "live-suite": PUBLISHED_ONLY,
+            "online-mind2web": {"measured": None, "published": list(entries)},
+        }
+        files = group_files(json.dumps(candidate).encode(), FACTS, current)
+        return json.loads(files["data/benchmarks/online-mind2web.json"])["published"]
+
+    assert published(same) == [same]
+    assert published(other, summary) == []

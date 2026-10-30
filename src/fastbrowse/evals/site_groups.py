@@ -8,6 +8,7 @@ beside it as `data/benchmark-<campaign>.json`, byte for byte. A group the candid
 Every site system has one of three states in a measured group file: `systems` maps it to the arm whose rows it shows,
 `cost_not_reported` lists the shown systems whose rows carry no cost (`"dollars": null`), so the site shows their pass
 rate and seconds with "cost not reported", and `not_measured` lists the systems with no rows, shown as "Not measured".
+A vendor figure the site already shows for the group is kept only as per-task rows over exactly the campaign's tasks.
 """
 
 import argparse
@@ -74,6 +75,16 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
         if unmapped := [arm for arm in arms if arm not in SYSTEMS]:
             raise ValueError(f"{source.id} has arms the site shows as no system: {', '.join(unmapped)}")
         unpriced = {r.arm for r in source.rows if r.dollars is None}
+        # A vendor's published per-task rows on exactly this task set stay beside ours; any other published figure
+        # (a run summary, another task set, or a system now measured) is not on this task set and is dropped.
+        shown = {SYSTEMS[arm] for arm in arms}
+        published = [
+            p
+            for p in current[site_group].get("published", [])
+            if p["system"] not in shown
+            and p.get("rows")
+            and sorted(r["task"] for r in p["rows"]) == sorted(source.task_ids)
+        ]
         group = {
             "schema_version": 1,
             "id": site_group,
@@ -92,7 +103,7 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
                 "cost_not_reported": [SYSTEMS[arm] for arm in arms if arm in unpriced],
                 "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms],
             },
-            "published": [],
+            "published": published,
         }
         files[f"data/benchmarks/{site_group}.json"] = (json.dumps(group, indent=2) + "\n").encode()
     return files
