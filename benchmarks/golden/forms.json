@@ -1717,6 +1717,7 @@
   ]
  },
  "inaccessible_frames": 0,
+ "offscreen_text": 0,
  "title": "Forms",
  "url": "http://fixture/forms.html?n=4",
  "viewport_text": "Booking 0\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 0\nApply\nBooking 1\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 1\nApply\nBooking 2\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 2\nApply\nBooking 3\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 3\nApply",

@@ -197,9 +197,10 @@ impl Agent {
         let started = self.redact(state.started_url.as_deref().or(state.first_url.as_deref()).unwrap_or_default());
         let status = observation.response_status.map_or("None".to_string(), |s| s.to_string());
         let mut content = format!(
-            "## Controls\n{}\n\n## Page\n{}\nHTTP status: {status}\n{}{secrets}\n\n## Caller start page\n{started}\n\n## Caller-supplied addresses\n{}\n\n",
+            "## Controls\n{}\n\n## Page\n{}\nHTTP status: {status}\nPage text outside the viewport, which a read takes in: {} characters\n{}{secrets}\n\n## Caller start page\n{started}\n\n## Caller-supplied addresses\n{}\n\n",
             controls_text(observation),
             observation.url,
+            observation.offscreen_text,
             observation.viewport_text,
             dumps_strings(&caller_destinations),
         );

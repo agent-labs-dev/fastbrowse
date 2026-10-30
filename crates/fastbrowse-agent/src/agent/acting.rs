@@ -11,7 +11,7 @@ use fastbrowse_core::py::dump::{Dump, include, to_value};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question,
+    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password,
     may_be_irreversible, requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
@@ -376,7 +376,7 @@ impl Agent {
         // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
         // page was never going to get, where needs_login says what the caller can fix.
         let secrets = self.secret_names(&origin);
-        if target.sensitive {
+        if is_password(target) {
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
         let mut criteria: IndexMap<String, Value> = state
