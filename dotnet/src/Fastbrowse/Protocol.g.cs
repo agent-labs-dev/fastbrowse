@@ -703,6 +703,27 @@ public sealed record StepFact
     public string? DeepLink { get; init; }
 }
 
+public sealed record StepFallback
+{
+    /// <summary>
+    /// The reason the run stopped following Jev, as recovery was told it.
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public required string Reason { get; init; }
+
+    /// <summary>
+    /// Jev's certainty on the step it gave up, on the weakest link of its choices.
+    /// </summary>
+    [JsonPropertyName("confidence")]
+    public required double Confidence { get; init; }
+
+    /// <summary>
+    /// The control Jev chose, by its label, when it chose one.
+    /// </summary>
+    [JsonPropertyName("target")]
+    public string? Target { get; init; }
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<StepOutcome>))]
 public enum StepOutcome
 {
@@ -759,6 +780,12 @@ public sealed record StepResult
 
     [JsonPropertyName("duration_ms")]
     public required long DurationMs { get; init; }
+
+    /// <summary>
+    /// The fallback that decided this step instead of Jev's pick, when <c>Config.step_choices</c> asked for it.
+    /// </summary>
+    [JsonPropertyName("fallback")]
+    public StepFallback? Fallback { get; init; }
 
     /// <summary>
     /// The controls Jev was offered for this step's decision, when <c>Config.step_choices</c> asked for them.

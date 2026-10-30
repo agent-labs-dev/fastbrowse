@@ -6611,7 +6611,12 @@
      "note": "uncertain next step (0.30)\nUnsure which control\nSelect business class",
      "facts": [],
      "page_changed": null,
-     "duration_ms": 0
+     "duration_ms": 0,
+     "fallback": {
+      "reason": "uncertain next step (0.30)",
+      "confidence": 0.3,
+      "target": "Class"
+     }
     }
    ],
    "cost": {
@@ -6674,7 +6679,12 @@
      "note": "uncertain next step (0.30)\nUnsure which control\nSelect business class",
      "facts": [],
      "page_changed": null,
-     "duration_ms": 0
+     "duration_ms": 0,
+     "fallback": {
+      "reason": "uncertain next step (0.30)",
+      "confidence": 0.3,
+      "target": "Class"
+     }
     },
     "frame": false
    }

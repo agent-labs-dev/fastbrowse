@@ -152,6 +152,17 @@ class StepChoice(Frozen):
     """Whether Jev chose this control: the target, and for a drag the destination too."""
 
 
+class StepFallback(Frozen):
+    """Why a step acted on a recovery rather than on Jev's pick: the fallback that fired, and the pick it set aside."""
+
+    reason: str
+    """The reason the run stopped following Jev, as recovery was told it."""
+    confidence: float = Field(ge=0, le=1)
+    """Jev's certainty on the step it gave up, on the weakest link of its choices."""
+    target: str | None = None
+    """The control Jev chose, by its label, when it chose one."""
+
+
 class ArtifactKind(StrEnum):
     DOWNLOAD = "download"
 
@@ -246,6 +257,8 @@ class StepResult(Frozen):
     page_changed: bool | None = None
     """Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."""
     duration_ms: int = Field(ge=0)
+    fallback: StepFallback | None = Field(default=None, exclude_if=lambda fallback: fallback is None)
+    """The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."""
     choices: tuple[StepChoice, ...] = Field(default=(), exclude_if=lambda choices: not choices)
     """The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them."""
 
