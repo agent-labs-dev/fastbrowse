@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_clients::http::{Http, Request, Response, Transport, TransportError};
 use fastbrowse_clients::validation::{errors_json, line_error};
 use fastbrowse_core::BoxFuture;
@@ -108,6 +109,21 @@ where
     F: Fn(&Request) -> BoxFuture<'static, Result<Response, TransportError>> + Send + Sync + 'static,
 {
     Http::new(Arc::new(move |request: Request| answer(&request)))
+}
+
+pub fn settings(env: &[(&str, &str)]) -> Settings {
+    Settings::from_sources(env, None).unwrap()
+}
+
+pub fn config_error<T>(built: Result<T, ConfigurationError>) -> String {
+    match built {
+        Ok(_) => panic!("expected a configuration error"),
+        Err(error) => error.to_string(),
+    }
+}
+
+pub fn body(request: &Request) -> Value {
+    serde_json::from_slice(&request.body).unwrap()
 }
 
 /// A response model whose schema is pydantic's for `ty` and whose validation reports pydantic's errors.

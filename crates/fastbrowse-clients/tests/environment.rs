@@ -6,18 +6,14 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use common::{Script, answer_model, answering};
-use fastbrowse_clients::environment::{ConfigurationError, DEFAULT_LLM, DecisionSource, LLMProvider, Settings};
+use common::{Script, answer_model, answering, body, config_error, settings};
+use fastbrowse_clients::environment::{DEFAULT_LLM, DecisionSource, LLMProvider, Settings};
 use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::decision::{DecisionError, NoulQuestion, Question};
 use fastbrowse_core::llm::{Generation, Message};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, LLMPurpose};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
-
-fn settings(env: &[(&str, &str)]) -> Settings {
-    Settings::from_sources(env, None).unwrap()
-}
 
 fn question() -> IndexMap<String, Question> {
     IndexMap::from([("q".to_string(), NoulQuestion::new("Is it?", None, None).into())])
@@ -32,13 +28,6 @@ fn urls(status: u16) -> (Http, Arc<Mutex<Vec<String>>>) {
         Box::pin(async move { Ok(Response::json(status, &json!({"error": "stop"}))) })
     });
     (http, seen)
-}
-
-fn config_error<T>(built: Result<T, ConfigurationError>) -> String {
-    match built {
-        Ok(_) => panic!("expected a configuration error"),
-        Err(error) => error.to_string(),
-    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -323,10 +312,6 @@ async fn llm_requests(env: &[(&str, &str)], cost: Option<f64>) -> (Vec<Request>,
     let llm = settings(env).llm(&script.http()).unwrap();
     let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await.unwrap();
     (script.requests(), result)
-}
-
-fn body(request: &Request) -> Value {
-    serde_json::from_slice(&request.body).unwrap()
 }
 
 #[tokio::test]
