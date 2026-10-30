@@ -281,6 +281,13 @@ def test_matched_regressions_block_publication(candidate, field, value):
         regressions(Candidate.model_validate(candidate), before)
 
 
+def test_more_jev_calls_are_not_a_regression(candidate):
+    before = Candidate.model_validate(copy.deepcopy(candidate))
+    for row in candidate["groups"][0]["rows"]:
+        row["jev_calls"] = 400
+    regressions(Candidate.model_validate(candidate), before)
+
+
 def test_changed_protocol_cannot_silently_skip_regressions(candidate):
     before = Candidate.model_validate(copy.deepcopy(candidate))
     candidate["groups"][0]["limits"] = ["Different limits"]

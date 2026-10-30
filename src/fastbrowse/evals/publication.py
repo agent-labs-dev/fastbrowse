@@ -734,27 +734,27 @@ def _moves(
 ) -> list[Finding]:
     """Efficiency moves gate a release; wall time does not.
 
-    Wall time and cloud load move together, so a median wall-time comparison is noise across releases. The calls a
-    run made and its model throughput are properties of the build, so those are what a release is compared on, and
-    wall time stays a diagnostic.
+    Wall time and cloud load move together, so a median wall-time comparison is noise across releases. LLM calls and
+    model throughput are properties of the build, so those are what a release is compared on, and wall time stays a
+    diagnostic. Jev calls are not compared: Jev decides every step, so asking it more is how the agent works, not a
+    regression.
     """
     findings = []
-    for field, label in (("llm_calls", "LLM calls"), ("jev_calls", "Jev calls")):
-        base_calls = _median_metric(measured_base, field)
-        candidate_calls = _median_metric(measured_candidate, field)
-        if (
-            base_calls is not None
-            and candidate_calls is not None
-            and _over(base_calls, candidate_calls, REGRESSION_CALL_FLOOR)
-        ):
-            findings.append(
-                _finding(
-                    REGRESS,
-                    "efficiency",
-                    f"{where}: median {candidate_calls:.0f} {label} against {release} {base_calls:.0f}; "
-                    f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_CALL_FLOOR:.0f}",
-                )
+    base_calls = _median_metric(measured_base, "llm_calls")
+    candidate_calls = _median_metric(measured_candidate, "llm_calls")
+    if (
+        base_calls is not None
+        and candidate_calls is not None
+        and _over(base_calls, candidate_calls, REGRESSION_CALL_FLOOR)
+    ):
+        findings.append(
+            _finding(
+                REGRESS,
+                "efficiency",
+                f"{where}: median {candidate_calls:.0f} LLM calls against {release} {base_calls:.0f}; "
+                f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_CALL_FLOOR:.0f}",
             )
+        )
     base_tps = _median_metric(measured_base, "tokens_per_second")
     candidate_tps = _median_metric(measured_candidate, "tokens_per_second")
     if (

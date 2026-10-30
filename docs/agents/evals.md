@@ -41,8 +41,8 @@ approved baselines and source identity receipts, not logs, recordings, decrypted
 Parallax exports the internal catalog into fastbrowse and checks it byte-for-byte. The fastbrowse publication
 gate requires the matching catalog digest, clean committed runner and agent builds, current task versions,
 complete task coverage, three measured repeats and every physical run in the ledger. Regressions in matched
-task success, completion, LLM and Jev calls, model throughput or cost block publication; wall time is recorded
-but moves with cloud load, so it never blocks. No result is published until complete runs are reviewed and
+task success, completion, LLM calls, model throughput or cost block publication; wall time is recorded
+but moves with cloud load, so it never blocks, and Jev calls are recorded but never block, since Jev decides every step. No result is published until complete runs are reviewed and
 the maintainer explicitly approves it.
 
 The fixture workflow must be green on the release build. A changed comparison must also be rerun on that

@@ -430,9 +430,10 @@ def regressions(
                 raise ValueError(f"source-score regression: {group.id}/{task}")
             if sum(r.completed for r in now) < sum(r.completed for r in before):
                 raise ValueError(f"completion regression: {group.id}/{task}")
-            # Wall time moves with cloud load, so it is not compared; the calls a run made and its model
-            # throughput are properties of the build. `dollars` is kept: it is a charge, not a duration.
-            for field, floor in (("llm_calls", 1.0), ("jev_calls", 1.0), ("dollars", 0.001)):
+            # Wall time moves with cloud load, so it is not compared; LLM calls and model throughput are
+            # properties of the build. Jev calls are not: Jev decides every step, so more of them is not a
+            # regression. `dollars` is kept: it is a charge, not a duration.
+            for field, floor in (("llm_calls", 1.0), ("dollars", 0.001)):
                 a = statistics.median(getattr(r, field) for r in now)
                 b = statistics.median(getattr(r, field) for r in before)
                 if a > b * REGRESSION_FACTOR and a - b > floor:

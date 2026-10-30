@@ -19,8 +19,8 @@ browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own po
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
 
-CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
-throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
+CI validates the candidate's exact coverage and compares matched scores, completion, LLM calls, model
+throughput and cost with the previous approved candidate; wall time and Jev calls are recorded but not compared. A group whose
 catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
 is compared on the tasks both ran; the earlier catalog is found in Git history by its digest. Any other catalog,
 task or limit difference is a protocol change, published only as described
