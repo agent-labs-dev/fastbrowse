@@ -310,6 +310,7 @@ impl<'a> Reader<'a> {
             self.close_cell();
             self.tables -= 1;
             if self.tables == 0 {
+                self.close_row();
                 self.emit_table();
             }
             return;
@@ -368,6 +369,7 @@ impl<'a> Reader<'a> {
         }
         if tag == "tr" {
             self.close_cell();
+            self.close_row();
             self.row = Some(Vec::new());
             return;
         }
@@ -517,6 +519,13 @@ mod tests {
     fn clean_collapses_what_a_browser_would() {
         assert_eq!(clean("  a \t b \n  c\n\n\n\nd  "), "a b\nc\n\nd");
         assert_eq!(clean("a\u{a0}b"), "a\u{a0}b");
+    }
+
+    #[test]
+    fn a_row_with_no_closing_tag_still_reaches_the_table() {
+        let (_, found) = blocks("<table><tr><td>a<td>1<tr><td>b<td>2</table>", "https://a.example/");
+        let texts: Vec<&str> = found.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, ["| a | 1 |", "| b | 2 |"]);
     }
 
     #[test]
