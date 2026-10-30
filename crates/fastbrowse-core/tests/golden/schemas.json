@@ -1,396 +1,396 @@
 [
- {
-  "type": "SourceControl",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Context\"}}, \"required\": [\"role\", \"label\"], \"title\": \"SourceControl\", \"type\": \"object\"}",
-  "strict": "{\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Context\"}}, \"required\": [\"role\", \"label\", \"context\"], \"title\": \"SourceControl\", \"type\": \"object\"}"
- },
- {
-  "type": "Evidence",
-  "schema": "{\"$defs\": {\"SourceControl\": {\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Context\"}}, \"required\": [\"role\", \"label\"], \"title\": \"SourceControl\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"source_id\": {\"title\": \"Source Id\", \"type\": \"string\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"frame_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Frame Id\"}, \"captured_at\": {\"format\": \"date-time\", \"title\": \"Captured At\", \"type\": \"string\"}, \"capture_sha256\": {\"title\": \"Capture Sha256\", \"type\": \"string\"}, \"start\": {\"minimum\": 0, \"title\": \"Start\", \"type\": \"integer\"}, \"end\": {\"minimum\": 0, \"title\": \"End\", \"type\": \"integer\"}, \"quote\": {\"title\": \"Quote\", \"type\": \"string\"}, \"complete_source\": {\"default\": false, \"description\": \"The quote covers an entire downloaded text file, apart from surrounding whitespace.\", \"title\": \"Complete Source\", \"type\": \"boolean\"}, \"control_context\": {\"anyOf\": [{\"$ref\": \"#/$defs/SourceControl\"}, {\"type\": \"null\"}], \"default\": null}, \"rendered_text\": {\"default\": true, \"description\": \"False for typed DOM observations whose quote is not literal rendered page text.\", \"title\": \"Rendered Text\", \"type\": \"boolean\"}, \"heading_path\": {\"default\": [], \"description\": \"The headings the quote sits under on the page: which record a bare \\\"\\u00a310.69\\\" is the price of.\", \"items\": {\"type\": \"string\"}, \"title\": \"Heading Path\", \"type\": \"array\"}}, \"required\": [\"source_id\", \"url\", \"frame_id\", \"captured_at\", \"capture_sha256\", \"start\", \"end\", \"quote\"], \"title\": \"Evidence\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"SourceControl\": {\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Context\"}}, \"required\": [\"role\", \"label\", \"context\"], \"title\": \"SourceControl\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"source_id\": {\"title\": \"Source Id\", \"type\": \"string\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"frame_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Frame Id\"}, \"captured_at\": {\"format\": \"date-time\", \"title\": \"Captured At\", \"type\": \"string\"}, \"capture_sha256\": {\"title\": \"Capture Sha256\", \"type\": \"string\"}, \"start\": {\"minimum\": 0, \"title\": \"Start\", \"type\": \"integer\"}, \"end\": {\"minimum\": 0, \"title\": \"End\", \"type\": \"integer\"}, \"quote\": {\"title\": \"Quote\", \"type\": \"string\"}, \"complete_source\": {\"description\": \"The quote covers an entire downloaded text file, apart from surrounding whitespace.\", \"title\": \"Complete Source\", \"type\": \"boolean\"}, \"control_context\": {\"anyOf\": [{\"$ref\": \"#/$defs/SourceControl\"}, {\"type\": \"null\"}]}, \"rendered_text\": {\"description\": \"False for typed DOM observations whose quote is not literal rendered page text.\", \"title\": \"Rendered Text\", \"type\": \"boolean\"}, \"heading_path\": {\"description\": \"The headings the quote sits under on the page: which record a bare \\\"\\u00a310.69\\\" is the price of.\", \"items\": {\"type\": \"string\"}, \"title\": \"Heading Path\", \"type\": \"array\"}}, \"required\": [\"source_id\", \"url\", \"frame_id\", \"captured_at\", \"capture_sha256\", \"start\", \"end\", \"quote\", \"complete_source\", \"control_context\", \"rendered_text\", \"heading_path\"], \"title\": \"Evidence\", \"type\": \"object\"}"
- },
- {
-  "type": "CostLine",
-  "schema": "{\"$defs\": {\"CostBasis\": {\"enum\": [\"metered\", \"estimated\", \"bounded\", \"unknown\"], \"title\": \"CostBasis\", \"type\": \"string\"}, \"CostComponent\": {\"enum\": [\"jev\", \"llm\", \"browser\", \"proxy\"], \"title\": \"CostComponent\", \"type\": \"string\"}, \"LLMPurpose\": {\"enum\": [\"plan\", \"read\", \"field_text\", \"recover\", \"verify\", \"compose\", \"shortcut\"], \"title\": \"LLMPurpose\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"component\": {\"$ref\": \"#/$defs/CostComponent\"}, \"basis\": {\"$ref\": \"#/$defs/CostBasis\"}, \"dollars\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Dollars\"}, \"purpose\": {\"anyOf\": [{\"$ref\": \"#/$defs/LLMPurpose\"}, {\"type\": \"null\"}], \"default\": null}, \"input_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"output_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Output Tokens\", \"type\": \"integer\"}, \"seconds\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Wall time of the call, retries included. None for a line that is not one call, such as browser time.\", \"title\": \"Seconds\"}}, \"required\": [\"component\", \"basis\"], \"title\": \"CostLine\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"CostBasis\": {\"enum\": [\"metered\", \"estimated\", \"bounded\", \"unknown\"], \"title\": \"CostBasis\", \"type\": \"string\"}, \"CostComponent\": {\"enum\": [\"jev\", \"llm\", \"browser\", \"proxy\"], \"title\": \"CostComponent\", \"type\": \"string\"}, \"LLMPurpose\": {\"enum\": [\"plan\", \"read\", \"field_text\", \"recover\", \"verify\", \"compose\", \"shortcut\"], \"title\": \"LLMPurpose\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"component\": {\"$ref\": \"#/$defs/CostComponent\"}, \"basis\": {\"$ref\": \"#/$defs/CostBasis\"}, \"dollars\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Dollars\"}, \"purpose\": {\"anyOf\": [{\"$ref\": \"#/$defs/LLMPurpose\"}, {\"type\": \"null\"}]}, \"input_tokens\": {\"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"output_tokens\": {\"minimum\": 0, \"title\": \"Output Tokens\", \"type\": \"integer\"}, \"seconds\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"description\": \"Wall time of the call, retries included. None for a line that is not one call, such as browser time.\", \"title\": \"Seconds\"}}, \"required\": [\"component\", \"basis\", \"dollars\", \"purpose\", \"input_tokens\", \"output_tokens\", \"seconds\"], \"title\": \"CostLine\", \"type\": \"object\"}"
- },
- {
-  "type": "BudgetStop",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"resource\": {\"enum\": [\"steps\", \"dollars\", \"seconds\", \"jev_calls\", \"llm_calls\"], \"title\": \"Resource\", \"type\": \"string\"}, \"limit\": {\"title\": \"Limit\", \"type\": \"number\"}}, \"required\": [\"resource\", \"limit\"], \"title\": \"BudgetStop\", \"type\": \"object\"}",
-  "strict": "{\"additionalProperties\": false, \"properties\": {\"resource\": {\"enum\": [\"steps\", \"dollars\", \"seconds\", \"jev_calls\", \"llm_calls\"], \"title\": \"Resource\", \"type\": \"string\"}, \"limit\": {\"title\": \"Limit\", \"type\": \"number\"}}, \"required\": [\"resource\", \"limit\"], \"title\": \"BudgetStop\", \"type\": \"object\"}"
- },
- {
-  "type": "StepFact",
-  "schema": "{\"$defs\": {\"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"reader\"], \"title\": \"StepFact\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"requirement_id\", \"quote\", \"url\", \"reader\", \"deep_link\"], \"title\": \"StepFact\", \"type\": \"object\"}"
- },
- {
-  "type": "StepResult",
-  "schema": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"reader\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Note\"}, \"facts\": {\"default\": [], \"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"duration_ms\"], \"title\": \"StepResult\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"requirement_id\", \"quote\", \"url\", \"reader\", \"deep_link\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Note\"}, \"facts\": {\"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"target\", \"confidence\", \"note\", \"facts\", \"page_changed\", \"duration_ms\"], \"title\": \"StepResult\", \"type\": \"object\"}"
- },
- {
-  "type": "StepEvent",
-  "schema": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"reader\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}, \"StepResult\": {\"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Note\"}, \"facts\": {\"default\": [], \"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"duration_ms\"], \"title\": \"StepResult\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"step\", \"default\": \"step\", \"title\": \"Type\", \"type\": \"string\"}, \"step\": {\"$ref\": \"#/$defs/StepResult\"}, \"frame\": {\"anyOf\": [{\"format\": \"binary\", \"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.\", \"title\": \"Frame\"}}, \"required\": [\"step\"], \"title\": \"StepEvent\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"requirement_id\", \"quote\", \"url\", \"reader\", \"deep_link\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}, \"StepResult\": {\"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Note\"}, \"facts\": {\"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"target\", \"confidence\", \"note\", \"facts\", \"page_changed\", \"duration_ms\"], \"title\": \"StepResult\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"step\", \"title\": \"Type\", \"type\": \"string\"}, \"step\": {\"$ref\": \"#/$defs/StepResult\"}, \"frame\": {\"anyOf\": [{\"format\": \"binary\", \"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.\", \"title\": \"Frame\"}}, \"required\": [\"type\", \"step\", \"frame\"], \"title\": \"StepEvent\", \"type\": \"object\"}"
- },
- {
-  "type": "Limits",
-  "schema": "{\"additionalProperties\": false, \"properties\": {\"max_steps\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is\\nnot counted; the stall budget ends a page that keeps redrawing.\", \"title\": \"Max Steps\"}, \"max_jev_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Logical Jev evaluations. A retried request adds cost but not a call.\", \"title\": \"Max Jev Calls\"}, \"max_llm_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Max Llm Calls\"}, \"max_dollars\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its\\ncost is reported in the result but cannot stop the run that incurred it.\", \"title\": \"Max Dollars\"}, \"max_seconds\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Stops active work at the time budget. Returning also waits for owned request and browser cleanup.\", \"title\": \"Max Seconds\"}}, \"title\": \"Limits\", \"type\": \"object\"}",
-  "strict": "{\"additionalProperties\": false, \"properties\": {\"max_steps\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"description\": \"Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is\\nnot counted; the stall budget ends a page that keeps redrawing.\", \"title\": \"Max Steps\"}, \"max_jev_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"description\": \"Logical Jev evaluations. A retried request adds cost but not a call.\", \"title\": \"Max Jev Calls\"}, \"max_llm_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"title\": \"Max Llm Calls\"}, \"max_dollars\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"description\": \"Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its\\ncost is reported in the result but cannot stop the run that incurred it.\", \"title\": \"Max Dollars\"}, \"max_seconds\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"description\": \"Stops active work at the time budget. Returning also waits for owned request and browser cleanup.\", \"title\": \"Max Seconds\"}}, \"title\": \"Limits\", \"type\": \"object\", \"required\": [\"max_steps\", \"max_jev_calls\", \"max_llm_calls\", \"max_dollars\", \"max_seconds\"]}"
- },
- {
-  "type": "Evaluation",
-  "schema": "{\"$defs\": {\"Answer\": {\"discriminator\": {\"mapping\": {\"choice\": \"#/$defs/ChoiceAnswer\", \"noul\": \"#/$defs/NoulAnswer\", \"score\": \"#/$defs/ScoreAnswer\"}, \"propertyName\": \"type\"}, \"oneOf\": [{\"$ref\": \"#/$defs/ChoiceAnswer\"}, {\"$ref\": \"#/$defs/NoulAnswer\"}, {\"$ref\": \"#/$defs/ScoreAnswer\"}]}, \"ChoiceAnswer\": {\"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"choice\", \"default\": \"choice\", \"title\": \"Type\", \"type\": \"string\"}, \"choice\": {\"title\": \"Choice\", \"type\": \"string\"}, \"probabilities\": {\"additionalProperties\": {\"type\": \"number\"}, \"title\": \"Probabilities\", \"type\": \"object\"}, \"confidence\": {\"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}}, \"required\": [\"choice\", \"probabilities\", \"confidence\"], \"title\": \"ChoiceAnswer\", \"type\": \"object\"}, \"CostBasis\": {\"enum\": [\"metered\", \"estimated\", \"bounded\", \"unknown\"], \"title\": \"CostBasis\", \"type\": \"string\"}, \"CostComponent\": {\"enum\": [\"jev\", \"llm\", \"browser\", \"proxy\"], \"title\": \"CostComponent\", \"type\": \"string\"}, \"CostLine\": {\"additionalProperties\": false, \"properties\": {\"component\": {\"$ref\": \"#/$defs/CostComponent\"}, \"basis\": {\"$ref\": \"#/$defs/CostBasis\"}, \"dollars\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Dollars\"}, \"purpose\": {\"anyOf\": [{\"$ref\": \"#/$defs/LLMPurpose\"}, {\"type\": \"null\"}], \"default\": null}, \"input_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"output_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Output Tokens\", \"type\": \"integer\"}, \"seconds\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Wall time of the call, retries included. None for a line that is not one call, such as browser time.\", \"title\": \"Seconds\"}}, \"required\": [\"component\", \"basis\"], \"title\": \"CostLine\", \"type\": \"object\"}, \"LLMPurpose\": {\"enum\": [\"plan\", \"read\", \"field_text\", \"recover\", \"verify\", \"compose\", \"shortcut\"], \"title\": \"LLMPurpose\", \"type\": \"string\"}, \"NoulAnswer\": {\"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"noul\", \"default\": \"noul\", \"title\": \"Type\", \"type\": \"string\"}, \"probability\": {\"maximum\": 1, \"minimum\": 0, \"title\": \"Probability\", \"type\": \"number\"}}, \"required\": [\"probability\"], \"title\": \"NoulAnswer\", \"type\": \"object\"}, \"ScoreAnswer\": {\"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"score\", \"default\": \"score\", \"title\": \"Type\", \"type\": \"string\"}, \"score\": {\"description\": \"Probability-weighted mean over the levels, so fractional (e.g. 1.3).\", \"title\": \"Score\", \"type\": \"number\"}, \"probabilities\": {\"additionalProperties\": {\"type\": \"number\"}, \"title\": \"Probabilities\", \"type\": \"object\"}, \"confidence\": {\"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}}, \"required\": [\"score\", \"probabilities\", \"confidence\"], \"title\": \"ScoreAnswer\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"model\": {\"title\": \"Model\", \"type\": \"string\"}, \"answers\": {\"additionalProperties\": {\"$ref\": \"#/$defs/Answer\"}, \"title\": \"Answers\", \"type\": \"object\"}, \"input_tokens\": {\"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"cost\": {\"$ref\": \"#/$defs/CostLine\"}, \"requests\": {\"default\": 1, \"description\": \"HTTP requests, including retries, made to obtain these answers.\", \"minimum\": 0, \"title\": \"Requests\", \"type\": \"integer\"}}, \"required\": [\"model\", \"answers\", \"input_tokens\", \"cost\"], \"title\": \"Evaluation\", \"type\": \"object\"}",
-  "strict": "error: a strict schema cannot hold a map with free keys; use a list of keyed entries"
- },
- {
-  "output": {
-   "$schema": "https://json-schema.org/draft/2020-12/schema",
-   "type": "object",
-   "properties": {
-    "id": {
-     "type": "string"
-    },
-    "customer": {
-     "type": "object",
-     "properties": {
-      "name": {
-       "type": "string"
-      },
-      "vip": {
-       "type": "boolean"
-      }
-     },
-     "required": [
-      "name",
-      "vip"
-     ]
-    },
-    "lines": {
-     "type": "array",
-     "items": {
+  {
+    "type": "SourceControl",
+    "schema": "{\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Context\"}}, \"required\": [\"role\", \"label\"], \"title\": \"SourceControl\", \"type\": \"object\"}",
+    "strict": "{\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Context\"}}, \"required\": [\"role\", \"label\", \"context\"], \"title\": \"SourceControl\", \"type\": \"object\"}"
+  },
+  {
+    "type": "Evidence",
+    "schema": "{\"$defs\": {\"SourceControl\": {\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Context\"}}, \"required\": [\"role\", \"label\"], \"title\": \"SourceControl\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"source_id\": {\"title\": \"Source Id\", \"type\": \"string\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"frame_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Frame Id\"}, \"captured_at\": {\"format\": \"date-time\", \"title\": \"Captured At\", \"type\": \"string\"}, \"capture_sha256\": {\"title\": \"Capture Sha256\", \"type\": \"string\"}, \"start\": {\"minimum\": 0, \"title\": \"Start\", \"type\": \"integer\"}, \"end\": {\"minimum\": 0, \"title\": \"End\", \"type\": \"integer\"}, \"quote\": {\"title\": \"Quote\", \"type\": \"string\"}, \"complete_source\": {\"default\": false, \"description\": \"The quote covers an entire downloaded text file, apart from surrounding whitespace.\", \"title\": \"Complete Source\", \"type\": \"boolean\"}, \"control_context\": {\"anyOf\": [{\"$ref\": \"#/$defs/SourceControl\"}, {\"type\": \"null\"}], \"default\": null}, \"rendered_text\": {\"default\": true, \"description\": \"False for typed DOM observations whose quote is not literal rendered page text.\", \"title\": \"Rendered Text\", \"type\": \"boolean\"}, \"heading_path\": {\"default\": [], \"description\": \"The headings the quote sits under on the page: which record a bare \\\"\\u00a310.69\\\" is the price of.\", \"items\": {\"type\": \"string\"}, \"title\": \"Heading Path\", \"type\": \"array\"}}, \"required\": [\"source_id\", \"url\", \"frame_id\", \"captured_at\", \"capture_sha256\", \"start\", \"end\", \"quote\"], \"title\": \"Evidence\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"SourceControl\": {\"additionalProperties\": false, \"properties\": {\"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Context\"}}, \"required\": [\"role\", \"label\", \"context\"], \"title\": \"SourceControl\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"source_id\": {\"title\": \"Source Id\", \"type\": \"string\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"frame_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Frame Id\"}, \"captured_at\": {\"format\": \"date-time\", \"title\": \"Captured At\", \"type\": \"string\"}, \"capture_sha256\": {\"title\": \"Capture Sha256\", \"type\": \"string\"}, \"start\": {\"minimum\": 0, \"title\": \"Start\", \"type\": \"integer\"}, \"end\": {\"minimum\": 0, \"title\": \"End\", \"type\": \"integer\"}, \"quote\": {\"title\": \"Quote\", \"type\": \"string\"}, \"complete_source\": {\"description\": \"The quote covers an entire downloaded text file, apart from surrounding whitespace.\", \"title\": \"Complete Source\", \"type\": \"boolean\"}, \"control_context\": {\"anyOf\": [{\"$ref\": \"#/$defs/SourceControl\"}, {\"type\": \"null\"}]}, \"rendered_text\": {\"description\": \"False for typed DOM observations whose quote is not literal rendered page text.\", \"title\": \"Rendered Text\", \"type\": \"boolean\"}, \"heading_path\": {\"description\": \"The headings the quote sits under on the page: which record a bare \\\"\\u00a310.69\\\" is the price of.\", \"items\": {\"type\": \"string\"}, \"title\": \"Heading Path\", \"type\": \"array\"}}, \"required\": [\"source_id\", \"url\", \"frame_id\", \"captured_at\", \"capture_sha256\", \"start\", \"end\", \"quote\", \"complete_source\", \"control_context\", \"rendered_text\", \"heading_path\"], \"title\": \"Evidence\", \"type\": \"object\"}"
+  },
+  {
+    "type": "CostLine",
+    "schema": "{\"$defs\": {\"CostBasis\": {\"enum\": [\"metered\", \"estimated\", \"bounded\", \"unknown\"], \"title\": \"CostBasis\", \"type\": \"string\"}, \"CostComponent\": {\"enum\": [\"jev\", \"llm\", \"browser\", \"proxy\"], \"title\": \"CostComponent\", \"type\": \"string\"}, \"LLMPurpose\": {\"enum\": [\"plan\", \"read\", \"field_text\", \"recover\", \"verify\", \"compose\", \"shortcut\"], \"title\": \"LLMPurpose\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"component\": {\"$ref\": \"#/$defs/CostComponent\"}, \"basis\": {\"$ref\": \"#/$defs/CostBasis\"}, \"dollars\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Dollars\"}, \"purpose\": {\"anyOf\": [{\"$ref\": \"#/$defs/LLMPurpose\"}, {\"type\": \"null\"}], \"default\": null}, \"input_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"output_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Output Tokens\", \"type\": \"integer\"}, \"seconds\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Wall time of the call, retries included. None for a line that is not one call, such as browser time.\", \"title\": \"Seconds\"}}, \"required\": [\"component\", \"basis\"], \"title\": \"CostLine\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"CostBasis\": {\"enum\": [\"metered\", \"estimated\", \"bounded\", \"unknown\"], \"title\": \"CostBasis\", \"type\": \"string\"}, \"CostComponent\": {\"enum\": [\"jev\", \"llm\", \"browser\", \"proxy\"], \"title\": \"CostComponent\", \"type\": \"string\"}, \"LLMPurpose\": {\"enum\": [\"plan\", \"read\", \"field_text\", \"recover\", \"verify\", \"compose\", \"shortcut\"], \"title\": \"LLMPurpose\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"component\": {\"$ref\": \"#/$defs/CostComponent\"}, \"basis\": {\"$ref\": \"#/$defs/CostBasis\"}, \"dollars\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Dollars\"}, \"purpose\": {\"anyOf\": [{\"$ref\": \"#/$defs/LLMPurpose\"}, {\"type\": \"null\"}]}, \"input_tokens\": {\"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"output_tokens\": {\"minimum\": 0, \"title\": \"Output Tokens\", \"type\": \"integer\"}, \"seconds\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"description\": \"Wall time of the call, retries included. None for a line that is not one call, such as browser time.\", \"title\": \"Seconds\"}}, \"required\": [\"component\", \"basis\", \"dollars\", \"purpose\", \"input_tokens\", \"output_tokens\", \"seconds\"], \"title\": \"CostLine\", \"type\": \"object\"}"
+  },
+  {
+    "type": "BudgetStop",
+    "schema": "{\"additionalProperties\": false, \"properties\": {\"resource\": {\"enum\": [\"steps\", \"dollars\", \"seconds\", \"jev_calls\", \"llm_calls\"], \"title\": \"Resource\", \"type\": \"string\"}, \"limit\": {\"title\": \"Limit\", \"type\": \"number\"}}, \"required\": [\"resource\", \"limit\"], \"title\": \"BudgetStop\", \"type\": \"object\"}",
+    "strict": "{\"additionalProperties\": false, \"properties\": {\"resource\": {\"enum\": [\"steps\", \"dollars\", \"seconds\", \"jev_calls\", \"llm_calls\"], \"title\": \"Resource\", \"type\": \"string\"}, \"limit\": {\"title\": \"Limit\", \"type\": \"number\"}}, \"required\": [\"resource\", \"limit\"], \"title\": \"BudgetStop\", \"type\": \"object\"}"
+  },
+  {
+    "type": "StepFact",
+    "schema": "{\"$defs\": {\"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"reader\"], \"title\": \"StepFact\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"requirement_id\", \"quote\", \"url\", \"reader\", \"deep_link\"], \"title\": \"StepFact\", \"type\": \"object\"}"
+  },
+  {
+    "type": "StepResult",
+    "schema": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepChoice\": {\"additionalProperties\": false, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"description\": \"The label as Jev read it, with resolved secrets masked.\", \"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.\", \"title\": \"Context\"}, \"operations\": {\"items\": {\"$ref\": \"#/$defs/Operation\"}, \"title\": \"Operations\", \"type\": \"array\"}, \"chosen\": {\"default\": false, \"description\": \"Whether Jev chose this control: the target, and for a drag the destination too.\", \"title\": \"Chosen\", \"type\": \"boolean\"}}, \"required\": [\"id\", \"role\", \"label\", \"operations\"], \"title\": \"StepChoice\", \"type\": \"object\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"reader\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepFallback\": {\"additionalProperties\": false, \"properties\": {\"reason\": {\"description\": \"The reason the run stopped following Jev, as recovery was told it.\", \"title\": \"Reason\", \"type\": \"string\"}, \"confidence\": {\"description\": \"Jev's certainty on the step it gave up, on the weakest link of its choices.\", \"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"The control Jev chose, by its label, when it chose one.\", \"title\": \"Target\"}}, \"required\": [\"reason\", \"confidence\"], \"title\": \"StepFallback\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Note\"}, \"facts\": {\"default\": [], \"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}, \"fallback\": {\"anyOf\": [{\"$ref\": \"#/$defs/StepFallback\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.\"}, \"choices\": {\"default\": [], \"description\": \"The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.\", \"items\": {\"$ref\": \"#/$defs/StepChoice\"}, \"title\": \"Choices\", \"type\": \"array\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"duration_ms\"], \"title\": \"StepResult\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepChoice\": {\"additionalProperties\": false, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"description\": \"The label as Jev read it, with resolved secrets masked.\", \"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.\", \"title\": \"Context\"}, \"operations\": {\"items\": {\"$ref\": \"#/$defs/Operation\"}, \"title\": \"Operations\", \"type\": \"array\"}, \"chosen\": {\"description\": \"Whether Jev chose this control: the target, and for a drag the destination too.\", \"title\": \"Chosen\", \"type\": \"boolean\"}}, \"required\": [\"id\", \"role\", \"label\", \"context\", \"operations\", \"chosen\"], \"title\": \"StepChoice\", \"type\": \"object\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"requirement_id\", \"quote\", \"url\", \"reader\", \"deep_link\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepFallback\": {\"additionalProperties\": false, \"properties\": {\"reason\": {\"description\": \"The reason the run stopped following Jev, as recovery was told it.\", \"title\": \"Reason\", \"type\": \"string\"}, \"confidence\": {\"description\": \"Jev's certainty on the step it gave up, on the weakest link of its choices.\", \"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"The control Jev chose, by its label, when it chose one.\", \"title\": \"Target\"}}, \"required\": [\"reason\", \"confidence\", \"target\"], \"title\": \"StepFallback\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}}, \"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Note\"}, \"facts\": {\"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}, \"fallback\": {\"anyOf\": [{\"$ref\": \"#/$defs/StepFallback\"}, {\"type\": \"null\"}], \"description\": \"The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.\"}, \"choices\": {\"description\": \"The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.\", \"items\": {\"$ref\": \"#/$defs/StepChoice\"}, \"title\": \"Choices\", \"type\": \"array\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"target\", \"confidence\", \"note\", \"facts\", \"page_changed\", \"duration_ms\", \"fallback\", \"choices\"], \"title\": \"StepResult\", \"type\": \"object\"}"
+  },
+  {
+    "type": "StepEvent",
+    "schema": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepChoice\": {\"additionalProperties\": false, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"description\": \"The label as Jev read it, with resolved secrets masked.\", \"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.\", \"title\": \"Context\"}, \"operations\": {\"items\": {\"$ref\": \"#/$defs/Operation\"}, \"title\": \"Operations\", \"type\": \"array\"}, \"chosen\": {\"default\": false, \"description\": \"Whether Jev chose this control: the target, and for a drag the destination too.\", \"title\": \"Chosen\", \"type\": \"boolean\"}}, \"required\": [\"id\", \"role\", \"label\", \"operations\"], \"title\": \"StepChoice\", \"type\": \"object\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"reader\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepFallback\": {\"additionalProperties\": false, \"properties\": {\"reason\": {\"description\": \"The reason the run stopped following Jev, as recovery was told it.\", \"title\": \"Reason\", \"type\": \"string\"}, \"confidence\": {\"description\": \"Jev's certainty on the step it gave up, on the weakest link of its choices.\", \"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"The control Jev chose, by its label, when it chose one.\", \"title\": \"Target\"}}, \"required\": [\"reason\", \"confidence\"], \"title\": \"StepFallback\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}, \"StepResult\": {\"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Note\"}, \"facts\": {\"default\": [], \"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}, \"fallback\": {\"anyOf\": [{\"$ref\": \"#/$defs/StepFallback\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.\"}, \"choices\": {\"default\": [], \"description\": \"The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.\", \"items\": {\"$ref\": \"#/$defs/StepChoice\"}, \"title\": \"Choices\", \"type\": \"array\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"duration_ms\"], \"title\": \"StepResult\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"step\", \"default\": \"step\", \"title\": \"Type\", \"type\": \"string\"}, \"step\": {\"$ref\": \"#/$defs/StepResult\"}, \"frame\": {\"anyOf\": [{\"format\": \"binary\", \"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.\", \"title\": \"Frame\"}}, \"required\": [\"step\"], \"title\": \"StepEvent\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"Decider\": {\"description\": \"The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\\nreader's, because the reader asked for the rest of the list.\", \"enum\": [\"jev\", \"llm\"], \"title\": \"Decider\", \"type\": \"string\"}, \"FactReader\": {\"enum\": [\"jev_choice\", \"llm\"], \"title\": \"FactReader\", \"type\": \"string\"}, \"Operation\": {\"enum\": [\"click\", \"hover\", \"drag\", \"fill\", \"select\", \"enter\", \"escape\", \"scroll\", \"scroll_up\", \"back\", \"switch_tab\", \"upload\", \"dialog\", \"read\", \"done\", \"escalate\", \"navigate\"], \"title\": \"Operation\", \"type\": \"string\"}, \"StepChoice\": {\"additionalProperties\": false, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"role\": {\"title\": \"Role\", \"type\": \"string\"}, \"label\": {\"description\": \"The label as Jev read it, with resolved secrets masked.\", \"title\": \"Label\", \"type\": \"string\"}, \"context\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.\", \"title\": \"Context\"}, \"operations\": {\"items\": {\"$ref\": \"#/$defs/Operation\"}, \"title\": \"Operations\", \"type\": \"array\"}, \"chosen\": {\"description\": \"Whether Jev chose this control: the target, and for a drag the destination too.\", \"title\": \"Chosen\", \"type\": \"boolean\"}}, \"required\": [\"id\", \"role\", \"label\", \"context\", \"operations\", \"chosen\"], \"title\": \"StepChoice\", \"type\": \"object\"}, \"StepFact\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"requirement_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Requirement Id\"}, \"quote\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"None for a count, total or winner derived from other facts rather than read from the page.\", \"title\": \"Quote\"}, \"url\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Url\"}, \"reader\": {\"$ref\": \"#/$defs/FactReader\"}, \"deep_link\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Deep Link\"}}, \"required\": [\"text\", \"requirement_id\", \"quote\", \"url\", \"reader\", \"deep_link\"], \"title\": \"StepFact\", \"type\": \"object\"}, \"StepFallback\": {\"additionalProperties\": false, \"properties\": {\"reason\": {\"description\": \"The reason the run stopped following Jev, as recovery was told it.\", \"title\": \"Reason\", \"type\": \"string\"}, \"confidence\": {\"description\": \"Jev's certainty on the step it gave up, on the weakest link of its choices.\", \"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"The control Jev chose, by its label, when it chose one.\", \"title\": \"Target\"}}, \"required\": [\"reason\", \"confidence\", \"target\"], \"title\": \"StepFallback\", \"type\": \"object\"}, \"StepOutcome\": {\"enum\": [\"executed\", \"covered\", \"stale\", \"failed\"], \"title\": \"StepOutcome\", \"type\": \"string\"}, \"StepResult\": {\"additionalProperties\": false, \"properties\": {\"index\": {\"minimum\": 0, \"title\": \"Index\", \"type\": \"integer\"}, \"operation\": {\"$ref\": \"#/$defs/Operation\"}, \"decided_by\": {\"$ref\": \"#/$defs/Decider\"}, \"outcome\": {\"$ref\": \"#/$defs/StepOutcome\"}, \"url\": {\"title\": \"Url\", \"type\": \"string\"}, \"target\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"Human-readable label of the chosen element; never contains a secret value.\", \"title\": \"Target\"}, \"confidence\": {\"anyOf\": [{\"maximum\": 1, \"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Confidence\"}, \"note\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"Note\"}, \"facts\": {\"description\": \"Facts added to the notes by this step, with resolved secrets redacted.\", \"items\": {\"$ref\": \"#/$defs/StepFact\"}, \"title\": \"Facts\", \"type\": \"array\"}, \"page_changed\": {\"anyOf\": [{\"type\": \"boolean\"}, {\"type\": \"null\"}], \"description\": \"Whether the page's fingerprint changed; None for steps that do not act (read, escalate).\", \"title\": \"Page Changed\"}, \"duration_ms\": {\"minimum\": 0, \"title\": \"Duration Ms\", \"type\": \"integer\"}, \"fallback\": {\"anyOf\": [{\"$ref\": \"#/$defs/StepFallback\"}, {\"type\": \"null\"}], \"description\": \"The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.\"}, \"choices\": {\"description\": \"The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.\", \"items\": {\"$ref\": \"#/$defs/StepChoice\"}, \"title\": \"Choices\", \"type\": \"array\"}}, \"required\": [\"index\", \"operation\", \"decided_by\", \"outcome\", \"url\", \"target\", \"confidence\", \"note\", \"facts\", \"page_changed\", \"duration_ms\", \"fallback\", \"choices\"], \"title\": \"StepResult\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"step\", \"title\": \"Type\", \"type\": \"string\"}, \"step\": {\"$ref\": \"#/$defs/StepResult\"}, \"frame\": {\"anyOf\": [{\"format\": \"binary\", \"type\": \"string\"}, {\"type\": \"null\"}], \"description\": \"A PNG of the page this step acted on, when `Config.step_frames` asked for one. None when it did not,\\nand also when a resolved secret was showing as page text: pixels cannot be masked the way text is.\", \"title\": \"Frame\"}}, \"required\": [\"type\", \"step\", \"frame\"], \"title\": \"StepEvent\", \"type\": \"object\"}"
+  },
+  {
+    "type": "Limits",
+    "schema": "{\"additionalProperties\": false, \"properties\": {\"max_steps\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is\\nnot counted; the stall budget ends a page that keeps redrawing.\", \"title\": \"Max Steps\"}, \"max_jev_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Logical Jev evaluations. A retried request adds cost but not a call.\", \"title\": \"Max Jev Calls\"}, \"max_llm_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Max Llm Calls\"}, \"max_dollars\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its\\ncost is reported in the result but cannot stop the run that incurred it.\", \"title\": \"Max Dollars\"}, \"max_seconds\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Stops active work at the time budget. Returning also waits for owned request and browser cleanup.\", \"title\": \"Max Seconds\"}}, \"title\": \"Limits\", \"type\": \"object\"}",
+    "strict": "{\"additionalProperties\": false, \"properties\": {\"max_steps\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"description\": \"Steps that reached the page. A click whose element was redrawn before it landed dispatched nothing and is\\nnot counted; the stall budget ends a page that keeps redrawing.\", \"title\": \"Max Steps\"}, \"max_jev_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"description\": \"Logical Jev evaluations. A retried request adds cost but not a call.\", \"title\": \"Max Jev Calls\"}, \"max_llm_calls\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"integer\"}, {\"type\": \"null\"}], \"title\": \"Max Llm Calls\"}, \"max_dollars\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"description\": \"Bounds Jev and LLM spend as it happens. A cloud browser bills when it stops, after the run, so its\\ncost is reported in the result but cannot stop the run that incurred it.\", \"title\": \"Max Dollars\"}, \"max_seconds\": {\"anyOf\": [{\"exclusiveMinimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"description\": \"Stops active work at the time budget. Returning also waits for owned request and browser cleanup.\", \"title\": \"Max Seconds\"}}, \"title\": \"Limits\", \"type\": \"object\", \"required\": [\"max_steps\", \"max_jev_calls\", \"max_llm_calls\", \"max_dollars\", \"max_seconds\"]}"
+  },
+  {
+    "type": "Evaluation",
+    "schema": "{\"$defs\": {\"Answer\": {\"discriminator\": {\"mapping\": {\"choice\": \"#/$defs/ChoiceAnswer\", \"noul\": \"#/$defs/NoulAnswer\", \"score\": \"#/$defs/ScoreAnswer\"}, \"propertyName\": \"type\"}, \"oneOf\": [{\"$ref\": \"#/$defs/ChoiceAnswer\"}, {\"$ref\": \"#/$defs/NoulAnswer\"}, {\"$ref\": \"#/$defs/ScoreAnswer\"}]}, \"ChoiceAnswer\": {\"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"choice\", \"default\": \"choice\", \"title\": \"Type\", \"type\": \"string\"}, \"choice\": {\"title\": \"Choice\", \"type\": \"string\"}, \"probabilities\": {\"additionalProperties\": {\"type\": \"number\"}, \"title\": \"Probabilities\", \"type\": \"object\"}, \"confidence\": {\"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}}, \"required\": [\"choice\", \"probabilities\", \"confidence\"], \"title\": \"ChoiceAnswer\", \"type\": \"object\"}, \"CostBasis\": {\"enum\": [\"metered\", \"estimated\", \"bounded\", \"unknown\"], \"title\": \"CostBasis\", \"type\": \"string\"}, \"CostComponent\": {\"enum\": [\"jev\", \"llm\", \"browser\", \"proxy\"], \"title\": \"CostComponent\", \"type\": \"string\"}, \"CostLine\": {\"additionalProperties\": false, \"properties\": {\"component\": {\"$ref\": \"#/$defs/CostComponent\"}, \"basis\": {\"$ref\": \"#/$defs/CostBasis\"}, \"dollars\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Dollars\"}, \"purpose\": {\"anyOf\": [{\"$ref\": \"#/$defs/LLMPurpose\"}, {\"type\": \"null\"}], \"default\": null}, \"input_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"output_tokens\": {\"default\": 0, \"minimum\": 0, \"title\": \"Output Tokens\", \"type\": \"integer\"}, \"seconds\": {\"anyOf\": [{\"minimum\": 0, \"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Wall time of the call, retries included. None for a line that is not one call, such as browser time.\", \"title\": \"Seconds\"}}, \"required\": [\"component\", \"basis\"], \"title\": \"CostLine\", \"type\": \"object\"}, \"LLMPurpose\": {\"enum\": [\"plan\", \"read\", \"field_text\", \"recover\", \"verify\", \"compose\", \"shortcut\"], \"title\": \"LLMPurpose\", \"type\": \"string\"}, \"NoulAnswer\": {\"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"noul\", \"default\": \"noul\", \"title\": \"Type\", \"type\": \"string\"}, \"probability\": {\"maximum\": 1, \"minimum\": 0, \"title\": \"Probability\", \"type\": \"number\"}}, \"required\": [\"probability\"], \"title\": \"NoulAnswer\", \"type\": \"object\"}, \"ScoreAnswer\": {\"additionalProperties\": false, \"properties\": {\"type\": {\"const\": \"score\", \"default\": \"score\", \"title\": \"Type\", \"type\": \"string\"}, \"score\": {\"description\": \"Probability-weighted mean over the levels, so fractional (e.g. 1.3).\", \"title\": \"Score\", \"type\": \"number\"}, \"probabilities\": {\"additionalProperties\": {\"type\": \"number\"}, \"title\": \"Probabilities\", \"type\": \"object\"}, \"confidence\": {\"maximum\": 1, \"minimum\": 0, \"title\": \"Confidence\", \"type\": \"number\"}}, \"required\": [\"score\", \"probabilities\", \"confidence\"], \"title\": \"ScoreAnswer\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"model\": {\"title\": \"Model\", \"type\": \"string\"}, \"answers\": {\"additionalProperties\": {\"$ref\": \"#/$defs/Answer\"}, \"title\": \"Answers\", \"type\": \"object\"}, \"input_tokens\": {\"minimum\": 0, \"title\": \"Input Tokens\", \"type\": \"integer\"}, \"cost\": {\"$ref\": \"#/$defs/CostLine\"}, \"requests\": {\"default\": 1, \"description\": \"HTTP requests, including retries, made to obtain these answers.\", \"minimum\": 0, \"title\": \"Requests\", \"type\": \"integer\"}}, \"required\": [\"model\", \"answers\", \"input_tokens\", \"cost\"], \"title\": \"Evaluation\", \"type\": \"object\"}",
+    "strict": "error: a strict schema cannot hold a map with free keys; use a list of keyed entries"
+  },
+  {
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "properties": {
-       "sku": {
-        "type": "string"
-       },
-       "quantity": {
-        "type": "integer"
-       }
+        "id": {
+          "type": "string"
+        },
+        "customer": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "vip": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "name",
+            "vip"
+          ]
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sku": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sku",
+              "quantity"
+            ]
+          }
+        }
       },
       "required": [
-       "sku",
-       "quantity"
+        "id",
+        "customer",
+        "lines"
       ]
-     }
-    }
-   },
-   "required": [
-    "id",
-    "customer",
-    "lines"
-   ]
+    },
+    "type": "order",
+    "schema": "{\"$defs\": {\"customer\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}, \"vip\": {\"title\": \"Vip\", \"type\": \"boolean\"}}, \"required\": [\"name\", \"vip\"], \"title\": \"customer\", \"type\": \"object\"}, \"linesItem\": {\"properties\": {\"sku\": {\"title\": \"Sku\", \"type\": \"string\"}, \"quantity\": {\"title\": \"Quantity\", \"type\": \"integer\"}}, \"required\": [\"sku\", \"quantity\"], \"title\": \"linesItem\", \"type\": \"object\"}}, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"customer\": {\"$ref\": \"#/$defs/customer\"}, \"lines\": {\"items\": {\"$ref\": \"#/$defs/linesItem\"}, \"title\": \"Lines\", \"type\": \"array\"}}, \"required\": [\"id\", \"customer\", \"lines\"], \"title\": \"Output\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"customer\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}, \"vip\": {\"title\": \"Vip\", \"type\": \"boolean\"}}, \"required\": [\"name\", \"vip\"], \"title\": \"customer\", \"type\": \"object\"}, \"linesItem\": {\"properties\": {\"sku\": {\"title\": \"Sku\", \"type\": \"string\"}, \"quantity\": {\"title\": \"Quantity\", \"type\": \"integer\"}}, \"required\": [\"sku\", \"quantity\"], \"title\": \"linesItem\", \"type\": \"object\"}}, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"customer\": {\"$ref\": \"#/$defs/customer\"}, \"lines\": {\"items\": {\"$ref\": \"#/$defs/linesItem\"}, \"title\": \"Lines\", \"type\": \"array\"}}, \"required\": [\"id\", \"customer\", \"lines\"], \"title\": \"Output\", \"type\": \"object\"}"
   },
-  "type": "order",
-  "schema": "{\"$defs\": {\"customer\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}, \"vip\": {\"title\": \"Vip\", \"type\": \"boolean\"}}, \"required\": [\"name\", \"vip\"], \"title\": \"customer\", \"type\": \"object\"}, \"linesItem\": {\"properties\": {\"sku\": {\"title\": \"Sku\", \"type\": \"string\"}, \"quantity\": {\"title\": \"Quantity\", \"type\": \"integer\"}}, \"required\": [\"sku\", \"quantity\"], \"title\": \"linesItem\", \"type\": \"object\"}}, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"customer\": {\"$ref\": \"#/$defs/customer\"}, \"lines\": {\"items\": {\"$ref\": \"#/$defs/linesItem\"}, \"title\": \"Lines\", \"type\": \"array\"}}, \"required\": [\"id\", \"customer\", \"lines\"], \"title\": \"Output\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"customer\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}, \"vip\": {\"title\": \"Vip\", \"type\": \"boolean\"}}, \"required\": [\"name\", \"vip\"], \"title\": \"customer\", \"type\": \"object\"}, \"linesItem\": {\"properties\": {\"sku\": {\"title\": \"Sku\", \"type\": \"string\"}, \"quantity\": {\"title\": \"Quantity\", \"type\": \"integer\"}}, \"required\": [\"sku\", \"quantity\"], \"title\": \"linesItem\", \"type\": \"object\"}}, \"properties\": {\"id\": {\"title\": \"Id\", \"type\": \"string\"}, \"customer\": {\"$ref\": \"#/$defs/customer\"}, \"lines\": {\"items\": {\"$ref\": \"#/$defs/linesItem\"}, \"title\": \"Lines\", \"type\": \"array\"}}, \"required\": [\"id\", \"customer\", \"lines\"], \"title\": \"Output\", \"type\": \"object\"}"
- },
- {
-  "output": {
-   "$schema": "https://json-schema.org/draft/2020-12/schema",
-   "type": "object",
-   "properties": {
-    "name": {
-     "type": "string",
-     "description": "The product name"
-    },
-    "count": {
-     "type": "integer",
-     "minimum": -9007199254740991,
-     "maximum": 9007199254740991
-    },
-    "rating": {
-     "type": [
-      "number",
-      "null"
-     ]
-    },
-    "size": {
-     "type": "string",
-     "enum": [
-      "small",
-      "large"
-     ]
-    },
-    "currency": {
-     "default": "EUR",
-     "type": "string"
-    },
-    "seller": {
-     "$ref": "#/$defs/Seller"
-    }
-   },
-   "required": [
-    "name",
-    "count",
-    "rating",
-    "size",
-    "seller"
-   ],
-   "title": "Product",
-   "$defs": {
-    "Seller": {
-     "type": "object",
-     "properties": {
-      "name": {
-       "type": "string"
-      }
-     },
-     "required": [
-      "name"
-     ]
-    }
-   }
-  },
-  "type": "zod",
-  "schema": "{\"$defs\": {\"Seller\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}}, \"required\": [\"name\"], \"title\": \"Seller\", \"type\": \"object\"}}, \"properties\": {\"name\": {\"description\": \"The product name\", \"title\": \"Name\", \"type\": \"string\"}, \"count\": {\"title\": \"Count\", \"type\": \"integer\"}, \"rating\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Rating\"}, \"size\": {\"enum\": [\"small\", \"large\"], \"title\": \"Size\", \"type\": \"string\"}, \"currency\": {\"default\": null, \"title\": \"Currency\", \"type\": \"string\"}, \"seller\": {\"$ref\": \"#/$defs/Seller\"}}, \"required\": [\"name\", \"count\", \"rating\", \"size\", \"seller\"], \"title\": \"Output\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"Seller\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}}, \"required\": [\"name\"], \"title\": \"Seller\", \"type\": \"object\"}}, \"properties\": {\"name\": {\"description\": \"The product name\", \"title\": \"Name\", \"type\": \"string\"}, \"count\": {\"title\": \"Count\", \"type\": \"integer\"}, \"rating\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Rating\"}, \"size\": {\"enum\": [\"small\", \"large\"], \"title\": \"Size\", \"type\": \"string\"}, \"currency\": {\"title\": \"Currency\", \"type\": \"string\"}, \"seller\": {\"$ref\": \"#/$defs/Seller\"}}, \"required\": [\"name\", \"count\", \"rating\", \"size\", \"currency\", \"seller\"], \"title\": \"Output\", \"type\": \"object\"}"
- },
- {
-  "output": {
-   "type": "object",
-   "properties": {
-    "billing": {
-     "$ref": "#/$defs/address"
-    },
-    "shipping": {
-     "$ref": "#/$defs/address",
-     "description": "Where it goes"
-    },
-    "history": {
-     "type": "array",
-     "items": {
-      "$ref": "#/$defs/address"
-     }
-    }
-   },
-   "required": [
-    "billing",
-    "shipping",
-    "history"
-   ],
-   "$defs": {
-    "address": {
-     "type": "object",
-     "properties": {
-      "city": {
-       "type": "string"
-      },
-      "country": {
-       "$ref": "#/$defs/country"
-      }
-     },
-     "required": [
-      "city",
-      "country"
-     ]
-    },
-    "country": {
-     "enum": [
-      "nl",
-      "de"
-     ]
-    }
-   }
-  },
-  "type": "references",
-  "schema": "{\"$defs\": {\"address\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}, \"country\": {\"enum\": [\"nl\", \"de\"], \"title\": \"Country\", \"type\": \"string\"}}, \"required\": [\"city\", \"country\"], \"title\": \"address\", \"type\": \"object\"}}, \"properties\": {\"billing\": {\"$ref\": \"#/$defs/address\"}, \"shipping\": {\"$ref\": \"#/$defs/address\", \"description\": \"Where it goes\"}, \"history\": {\"items\": {\"$ref\": \"#/$defs/address\"}, \"title\": \"History\", \"type\": \"array\"}}, \"required\": [\"billing\", \"shipping\", \"history\"], \"title\": \"Output\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"address\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}, \"country\": {\"enum\": [\"nl\", \"de\"], \"title\": \"Country\", \"type\": \"string\"}}, \"required\": [\"city\", \"country\"], \"title\": \"address\", \"type\": \"object\"}}, \"properties\": {\"billing\": {\"$ref\": \"#/$defs/address\"}, \"shipping\": {\"$ref\": \"#/$defs/address\", \"description\": \"Where it goes\"}, \"history\": {\"items\": {\"$ref\": \"#/$defs/address\"}, \"title\": \"History\", \"type\": \"array\"}}, \"required\": [\"billing\", \"shipping\", \"history\"], \"title\": \"Output\", \"type\": \"object\"}"
- },
- {
-  "output": {
-   "type": "object",
-   "properties": {
-    "a": {
-     "type": "object",
-     "properties": {
-      "item": {
-       "type": "object",
-       "properties": {
-        "n": {
-         "type": "string"
+  {
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The product name"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "rating": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "small",
+            "large"
+          ]
+        },
+        "currency": {
+          "default": "EUR",
+          "type": "string"
+        },
+        "seller": {
+          "$ref": "#/$defs/Seller"
         }
-       }
+      },
+      "required": [
+        "name",
+        "count",
+        "rating",
+        "size",
+        "seller"
+      ],
+      "title": "Product",
+      "$defs": {
+        "Seller": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
       }
-     }
     },
-    "b": {
-     "type": "object",
-     "properties": {
-      "item": {
-       "type": "object",
-       "properties": {
+    "type": "zod",
+    "schema": "{\"$defs\": {\"Seller\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}}, \"required\": [\"name\"], \"title\": \"Seller\", \"type\": \"object\"}}, \"properties\": {\"name\": {\"description\": \"The product name\", \"title\": \"Name\", \"type\": \"string\"}, \"count\": {\"title\": \"Count\", \"type\": \"integer\"}, \"rating\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Rating\"}, \"size\": {\"enum\": [\"small\", \"large\"], \"title\": \"Size\", \"type\": \"string\"}, \"currency\": {\"default\": null, \"title\": \"Currency\", \"type\": \"string\"}, \"seller\": {\"$ref\": \"#/$defs/Seller\"}}, \"required\": [\"name\", \"count\", \"rating\", \"size\", \"seller\"], \"title\": \"Output\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"Seller\": {\"properties\": {\"name\": {\"title\": \"Name\", \"type\": \"string\"}}, \"required\": [\"name\"], \"title\": \"Seller\", \"type\": \"object\"}}, \"properties\": {\"name\": {\"description\": \"The product name\", \"title\": \"Name\", \"type\": \"string\"}, \"count\": {\"title\": \"Count\", \"type\": \"integer\"}, \"rating\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"Rating\"}, \"size\": {\"enum\": [\"small\", \"large\"], \"title\": \"Size\", \"type\": \"string\"}, \"currency\": {\"title\": \"Currency\", \"type\": \"string\"}, \"seller\": {\"$ref\": \"#/$defs/Seller\"}}, \"required\": [\"name\", \"count\", \"rating\", \"size\", \"currency\", \"seller\"], \"title\": \"Output\", \"type\": \"object\"}"
+  },
+  {
+    "output": {
+      "type": "object",
+      "properties": {
+        "billing": {
+          "$ref": "#/$defs/address"
+        },
+        "shipping": {
+          "$ref": "#/$defs/address",
+          "description": "Where it goes"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          }
+        }
+      },
+      "required": [
+        "billing",
+        "shipping",
+        "history"
+      ],
+      "$defs": {
+        "address": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "country": {
+              "$ref": "#/$defs/country"
+            }
+          },
+          "required": [
+            "city",
+            "country"
+          ]
+        },
+        "country": {
+          "enum": [
+            "nl",
+            "de"
+          ]
+        }
+      }
+    },
+    "type": "references",
+    "schema": "{\"$defs\": {\"address\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}, \"country\": {\"enum\": [\"nl\", \"de\"], \"title\": \"Country\", \"type\": \"string\"}}, \"required\": [\"city\", \"country\"], \"title\": \"address\", \"type\": \"object\"}}, \"properties\": {\"billing\": {\"$ref\": \"#/$defs/address\"}, \"shipping\": {\"$ref\": \"#/$defs/address\", \"description\": \"Where it goes\"}, \"history\": {\"items\": {\"$ref\": \"#/$defs/address\"}, \"title\": \"History\", \"type\": \"array\"}}, \"required\": [\"billing\", \"shipping\", \"history\"], \"title\": \"Output\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"address\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}, \"country\": {\"enum\": [\"nl\", \"de\"], \"title\": \"Country\", \"type\": \"string\"}}, \"required\": [\"city\", \"country\"], \"title\": \"address\", \"type\": \"object\"}}, \"properties\": {\"billing\": {\"$ref\": \"#/$defs/address\"}, \"shipping\": {\"$ref\": \"#/$defs/address\", \"description\": \"Where it goes\"}, \"history\": {\"items\": {\"$ref\": \"#/$defs/address\"}, \"title\": \"History\", \"type\": \"array\"}}, \"required\": [\"billing\", \"shipping\", \"history\"], \"title\": \"Output\", \"type\": \"object\"}"
+  },
+  {
+    "output": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "n": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "b": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "m": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "c": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "n": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "type": "twins",
+    "schema": "{\"$defs\": {\"a\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__1\", \"default\": null}}, \"title\": \"a\", \"type\": \"object\"}, \"b\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__2\", \"default\": null}}, \"title\": \"b\", \"type\": \"object\"}, \"cItem\": {\"properties\": {\"n\": {\"default\": null, \"title\": \"N\", \"type\": \"string\"}}, \"title\": \"cItem\", \"type\": \"object\"}, \"fastbrowse__output_schema__item__1\": {\"properties\": {\"n\": {\"default\": null, \"title\": \"N\", \"type\": \"string\"}}, \"title\": \"item\", \"type\": \"object\"}, \"fastbrowse__output_schema__item__2\": {\"properties\": {\"m\": {\"default\": null, \"title\": \"M\", \"type\": \"integer\"}}, \"title\": \"item\", \"type\": \"object\"}}, \"properties\": {\"a\": {\"$ref\": \"#/$defs/a\", \"default\": null}, \"b\": {\"$ref\": \"#/$defs/b\", \"default\": null}, \"c\": {\"default\": null, \"items\": {\"$ref\": \"#/$defs/cItem\"}, \"title\": \"C\", \"type\": \"array\"}}, \"title\": \"Output\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"a\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__1\"}}, \"title\": \"a\", \"type\": \"object\", \"required\": [\"item\"]}, \"b\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__2\"}}, \"title\": \"b\", \"type\": \"object\", \"required\": [\"item\"]}, \"cItem\": {\"properties\": {\"n\": {\"title\": \"N\", \"type\": \"string\"}}, \"title\": \"cItem\", \"type\": \"object\", \"required\": [\"n\"]}, \"fastbrowse__output_schema__item__1\": {\"properties\": {\"n\": {\"title\": \"N\", \"type\": \"string\"}}, \"title\": \"item\", \"type\": \"object\", \"required\": [\"n\"]}, \"fastbrowse__output_schema__item__2\": {\"properties\": {\"m\": {\"title\": \"M\", \"type\": \"integer\"}}, \"title\": \"item\", \"type\": \"object\", \"required\": [\"m\"]}}, \"properties\": {\"a\": {\"$ref\": \"#/$defs/a\"}, \"b\": {\"$ref\": \"#/$defs/b\"}, \"c\": {\"items\": {\"$ref\": \"#/$defs/cItem\"}, \"title\": \"C\", \"type\": \"array\"}}, \"title\": \"Output\", \"type\": \"object\", \"required\": [\"a\", \"b\", \"c\"]}"
+  },
+  {
+    "output": {
+      "type": "object",
+      "properties": {
+        "first": {
+          "type": [
+            "number",
+            "integer"
+          ]
+        },
+        "second": {
+          "type": [
+            "integer",
+            "number"
+          ]
+        }
+      },
+      "required": [
+        "first",
+        "second"
+      ]
+    },
+    "type": "unions",
+    "schema": "{\"properties\": {\"first\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"integer\"}], \"title\": \"First\"}, \"second\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}], \"title\": \"Second\"}}, \"required\": [\"first\", \"second\"], \"title\": \"Output\", \"type\": \"object\"}",
+    "strict": "{\"properties\": {\"first\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"integer\"}], \"title\": \"First\"}, \"second\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}], \"title\": \"Second\"}}, \"required\": [\"first\", \"second\"], \"title\": \"Output\", \"type\": \"object\"}"
+  },
+  {
+    "output": {
+      "type": "object",
+      "properties": {
+        "order-id": {
+          "type": "string",
+          "description": "d"
+        },
+        "class": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "x": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "e": {
+          "enum": [
+            "small",
+            3,
+            null
+          ]
+        },
+        "f": {
+          "enum": [
+            1.5
+          ]
+        },
+        "g": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "h": {
+          "enum": [
+            true
+          ]
+        },
+        "i": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {}
+          ]
+        },
+        "arr": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "z": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "j": {
+          "type": [
+            "integer",
+            "number",
+            "null"
+          ]
+        },
+        "k": {
+          "type": "array"
+        },
+        "l": {
+          "const": "kettle"
+        },
         "m": {
-         "type": "integer"
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "na\u00efve": {
+          "type": "boolean"
+        },
+        "copy": {
+          "type": "string"
+        },
+        "2fa": {
+          "type": "string"
+        },
+        "default": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "a": {
+              "type": "string"
+            }
+          }
         }
-       }
-      }
-     }
-    },
-    "c": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "n": {
-        "type": "string"
-       }
-      }
-     }
-    }
-   }
-  },
-  "type": "twins",
-  "schema": "{\"$defs\": {\"a\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__1\", \"default\": null}}, \"title\": \"a\", \"type\": \"object\"}, \"b\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__2\", \"default\": null}}, \"title\": \"b\", \"type\": \"object\"}, \"cItem\": {\"properties\": {\"n\": {\"default\": null, \"title\": \"N\", \"type\": \"string\"}}, \"title\": \"cItem\", \"type\": \"object\"}, \"fastbrowse__output_schema__item__1\": {\"properties\": {\"n\": {\"default\": null, \"title\": \"N\", \"type\": \"string\"}}, \"title\": \"item\", \"type\": \"object\"}, \"fastbrowse__output_schema__item__2\": {\"properties\": {\"m\": {\"default\": null, \"title\": \"M\", \"type\": \"integer\"}}, \"title\": \"item\", \"type\": \"object\"}}, \"properties\": {\"a\": {\"$ref\": \"#/$defs/a\", \"default\": null}, \"b\": {\"$ref\": \"#/$defs/b\", \"default\": null}, \"c\": {\"default\": null, \"items\": {\"$ref\": \"#/$defs/cItem\"}, \"title\": \"C\", \"type\": \"array\"}}, \"title\": \"Output\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"a\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__1\"}}, \"title\": \"a\", \"type\": \"object\", \"required\": [\"item\"]}, \"b\": {\"properties\": {\"item\": {\"$ref\": \"#/$defs/fastbrowse__output_schema__item__2\"}}, \"title\": \"b\", \"type\": \"object\", \"required\": [\"item\"]}, \"cItem\": {\"properties\": {\"n\": {\"title\": \"N\", \"type\": \"string\"}}, \"title\": \"cItem\", \"type\": \"object\", \"required\": [\"n\"]}, \"fastbrowse__output_schema__item__1\": {\"properties\": {\"n\": {\"title\": \"N\", \"type\": \"string\"}}, \"title\": \"item\", \"type\": \"object\", \"required\": [\"n\"]}, \"fastbrowse__output_schema__item__2\": {\"properties\": {\"m\": {\"title\": \"M\", \"type\": \"integer\"}}, \"title\": \"item\", \"type\": \"object\", \"required\": [\"m\"]}}, \"properties\": {\"a\": {\"$ref\": \"#/$defs/a\"}, \"b\": {\"$ref\": \"#/$defs/b\"}, \"c\": {\"items\": {\"$ref\": \"#/$defs/cItem\"}, \"title\": \"C\", \"type\": \"array\"}}, \"title\": \"Output\", \"type\": \"object\", \"required\": [\"a\", \"b\", \"c\"]}"
- },
- {
-  "output": {
-   "type": "object",
-   "properties": {
-    "first": {
-     "type": [
-      "number",
-      "integer"
-     ]
-    },
-    "second": {
-     "type": [
-      "integer",
-      "number"
-     ]
-    }
-   },
-   "required": [
-    "first",
-    "second"
-   ]
-  },
-  "type": "unions",
-  "schema": "{\"properties\": {\"first\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"integer\"}], \"title\": \"First\"}, \"second\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}], \"title\": \"Second\"}}, \"required\": [\"first\", \"second\"], \"title\": \"Output\", \"type\": \"object\"}",
-  "strict": "{\"properties\": {\"first\": {\"anyOf\": [{\"type\": \"number\"}, {\"type\": \"integer\"}], \"title\": \"First\"}, \"second\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}], \"title\": \"Second\"}}, \"required\": [\"first\", \"second\"], \"title\": \"Output\", \"type\": \"object\"}"
- },
- {
-  "output": {
-   "type": "object",
-   "properties": {
-    "order-id": {
-     "type": "string",
-     "description": "d"
-    },
-    "class": {
-     "type": "integer",
-     "minimum": 0
-    },
-    "x": {
-     "type": "object",
-     "properties": {
-      "a": {
-       "type": "number"
-      }
-     },
-     "additionalProperties": false
-    },
-    "e": {
-     "enum": [
-      "small",
-      3,
-      null
-     ]
-    },
-    "f": {
-     "enum": [
-      1.5
-     ]
-    },
-    "g": {
-     "type": [
-      "null",
-      "string"
-     ]
-    },
-    "h": {
-     "enum": [
-      true
-     ]
-    },
-    "i": {
-     "anyOf": [
-      {
-       "type": "null"
       },
-      {}
-     ]
+      "required": [
+        "order-id"
+      ]
     },
-    "arr": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "z": {
-        "type": "string"
-       }
-      }
-     }
-    },
-    "j": {
-     "type": [
-      "integer",
-      "number",
-      "null"
-     ]
-    },
-    "k": {
-     "type": "array"
-    },
-    "l": {
-     "const": "kettle"
-    },
-    "m": {
-     "type": "integer",
-     "enum": [
-      1,
-      2
-     ]
-    },
-    "na\u00efve": {
-     "type": "boolean"
-    },
-    "copy": {
-     "type": "string"
-    },
-    "2fa": {
-     "type": "string"
-    },
-    "default": {
-     "type": "object",
-     "properties": {
-      "title": {
-       "type": "string"
-      },
-      "a": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "required": [
-    "order-id"
-   ]
-  },
-  "type": "every_type",
-  "schema": "{\"$defs\": {\"arrItem\": {\"properties\": {\"z\": {\"default\": null, \"title\": \"Z\", \"type\": \"string\"}}, \"title\": \"arrItem\", \"type\": \"object\"}, \"default\": {\"type\": \"object\", \"properties\": {\"title\": {\"default\": null, \"title\": \"Title\", \"type\": \"string\"}, \"a\": {\"default\": null, \"title\": \"A\", \"type\": \"string\"}}, \"title\": \"default\"}, \"x\": {\"additionalProperties\": false, \"properties\": {\"a\": {\"default\": null, \"title\": \"A\", \"type\": \"number\"}}, \"title\": \"x\", \"type\": \"object\"}}, \"properties\": {\"order-id\": {\"description\": \"d\", \"title\": \"Order-Id\", \"type\": \"string\"}, \"class\": {\"default\": null, \"title\": \"Class\", \"type\": \"integer\"}, \"x\": {\"$ref\": \"#/$defs/x\", \"default\": null}, \"e\": {\"default\": null, \"enum\": [\"small\", 3, null], \"title\": \"E\"}, \"f\": {\"default\": null, \"title\": \"F\"}, \"g\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"G\"}, \"h\": {\"const\": true, \"default\": null, \"title\": \"H\", \"type\": \"boolean\"}, \"i\": {\"anyOf\": [{}, {\"type\": \"null\"}], \"default\": null, \"title\": \"I\"}, \"arr\": {\"default\": null, \"items\": {\"$ref\": \"#/$defs/arrItem\"}, \"title\": \"Arr\", \"type\": \"array\"}, \"j\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"J\"}, \"k\": {\"default\": null, \"items\": {}, \"title\": \"K\", \"type\": \"array\"}, \"l\": {\"const\": \"kettle\", \"default\": null, \"title\": \"L\", \"type\": \"string\"}, \"m\": {\"default\": null, \"enum\": [1, 2], \"title\": \"M\", \"type\": \"integer\"}, \"na\\u00efve\": {\"default\": null, \"title\": \"Na\\u00efve\", \"type\": \"boolean\"}, \"copy\": {\"default\": null, \"title\": \"Copy\", \"type\": \"string\"}, \"2fa\": {\"default\": null, \"title\": \"2Fa\", \"type\": \"string\"}, \"default\": {\"$ref\": \"#/$defs/default\", \"default\": null}}, \"required\": [\"order-id\"], \"title\": \"Output\", \"type\": \"object\"}",
-  "strict": "{\"$defs\": {\"arrItem\": {\"properties\": {\"z\": {\"title\": \"Z\", \"type\": \"string\"}}, \"title\": \"arrItem\", \"type\": \"object\", \"required\": [\"z\"]}, \"default\": {\"type\": \"object\", \"properties\": {\"title\": {\"title\": \"Title\", \"type\": \"string\"}, \"a\": {\"title\": \"A\", \"type\": \"string\"}}, \"title\": \"default\", \"required\": [\"title\", \"a\"]}, \"x\": {\"additionalProperties\": false, \"properties\": {\"a\": {\"title\": \"A\", \"type\": \"number\"}}, \"title\": \"x\", \"type\": \"object\", \"required\": [\"a\"]}}, \"properties\": {\"order-id\": {\"description\": \"d\", \"title\": \"Order-Id\", \"type\": \"string\"}, \"class\": {\"title\": \"Class\", \"type\": \"integer\"}, \"x\": {\"$ref\": \"#/$defs/x\"}, \"e\": {\"enum\": [\"small\", 3, null], \"title\": \"E\"}, \"f\": {\"title\": \"F\"}, \"g\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"G\"}, \"h\": {\"const\": true, \"title\": \"H\", \"type\": \"boolean\"}, \"i\": {\"anyOf\": [{}, {\"type\": \"null\"}], \"title\": \"I\"}, \"arr\": {\"items\": {\"$ref\": \"#/$defs/arrItem\"}, \"title\": \"Arr\", \"type\": \"array\"}, \"j\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"J\"}, \"k\": {\"items\": {}, \"title\": \"K\", \"type\": \"array\"}, \"l\": {\"const\": \"kettle\", \"title\": \"L\", \"type\": \"string\"}, \"m\": {\"enum\": [1, 2], \"title\": \"M\", \"type\": \"integer\"}, \"na\\u00efve\": {\"title\": \"Na\\u00efve\", \"type\": \"boolean\"}, \"copy\": {\"title\": \"Copy\", \"type\": \"string\"}, \"2fa\": {\"title\": \"2Fa\", \"type\": \"string\"}, \"default\": {\"$ref\": \"#/$defs/default\"}}, \"required\": [\"order-id\", \"class\", \"x\", \"e\", \"f\", \"g\", \"h\", \"i\", \"arr\", \"j\", \"k\", \"l\", \"m\", \"na\\u00efve\", \"copy\", \"2fa\", \"default\"], \"title\": \"Output\", \"type\": \"object\"}"
- }
+    "type": "every_type",
+    "schema": "{\"$defs\": {\"arrItem\": {\"properties\": {\"z\": {\"default\": null, \"title\": \"Z\", \"type\": \"string\"}}, \"title\": \"arrItem\", \"type\": \"object\"}, \"default\": {\"type\": \"object\", \"properties\": {\"title\": {\"default\": null, \"title\": \"Title\", \"type\": \"string\"}, \"a\": {\"default\": null, \"title\": \"A\", \"type\": \"string\"}}, \"title\": \"default\"}, \"x\": {\"additionalProperties\": false, \"properties\": {\"a\": {\"default\": null, \"title\": \"A\", \"type\": \"number\"}}, \"title\": \"x\", \"type\": \"object\"}}, \"properties\": {\"order-id\": {\"description\": \"d\", \"title\": \"Order-Id\", \"type\": \"string\"}, \"class\": {\"default\": null, \"title\": \"Class\", \"type\": \"integer\"}, \"x\": {\"$ref\": \"#/$defs/x\", \"default\": null}, \"e\": {\"default\": null, \"enum\": [\"small\", 3, null], \"title\": \"E\"}, \"f\": {\"default\": null, \"title\": \"F\"}, \"g\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"G\"}, \"h\": {\"const\": true, \"default\": null, \"title\": \"H\", \"type\": \"boolean\"}, \"i\": {\"anyOf\": [{}, {\"type\": \"null\"}], \"default\": null, \"title\": \"I\"}, \"arr\": {\"default\": null, \"items\": {\"$ref\": \"#/$defs/arrItem\"}, \"title\": \"Arr\", \"type\": \"array\"}, \"j\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"J\"}, \"k\": {\"default\": null, \"items\": {}, \"title\": \"K\", \"type\": \"array\"}, \"l\": {\"const\": \"kettle\", \"default\": null, \"title\": \"L\", \"type\": \"string\"}, \"m\": {\"default\": null, \"enum\": [1, 2], \"title\": \"M\", \"type\": \"integer\"}, \"na\\u00efve\": {\"default\": null, \"title\": \"Na\\u00efve\", \"type\": \"boolean\"}, \"copy\": {\"default\": null, \"title\": \"Copy\", \"type\": \"string\"}, \"2fa\": {\"default\": null, \"title\": \"2Fa\", \"type\": \"string\"}, \"default\": {\"$ref\": \"#/$defs/default\", \"default\": null}}, \"required\": [\"order-id\"], \"title\": \"Output\", \"type\": \"object\"}",
+    "strict": "{\"$defs\": {\"arrItem\": {\"properties\": {\"z\": {\"title\": \"Z\", \"type\": \"string\"}}, \"title\": \"arrItem\", \"type\": \"object\", \"required\": [\"z\"]}, \"default\": {\"type\": \"object\", \"properties\": {\"title\": {\"title\": \"Title\", \"type\": \"string\"}, \"a\": {\"title\": \"A\", \"type\": \"string\"}}, \"title\": \"default\", \"required\": [\"title\", \"a\"]}, \"x\": {\"additionalProperties\": false, \"properties\": {\"a\": {\"title\": \"A\", \"type\": \"number\"}}, \"title\": \"x\", \"type\": \"object\", \"required\": [\"a\"]}}, \"properties\": {\"order-id\": {\"description\": \"d\", \"title\": \"Order-Id\", \"type\": \"string\"}, \"class\": {\"title\": \"Class\", \"type\": \"integer\"}, \"x\": {\"$ref\": \"#/$defs/x\"}, \"e\": {\"enum\": [\"small\", 3, null], \"title\": \"E\"}, \"f\": {\"title\": \"F\"}, \"g\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"title\": \"G\"}, \"h\": {\"const\": true, \"title\": \"H\", \"type\": \"boolean\"}, \"i\": {\"anyOf\": [{}, {\"type\": \"null\"}], \"title\": \"I\"}, \"arr\": {\"items\": {\"$ref\": \"#/$defs/arrItem\"}, \"title\": \"Arr\", \"type\": \"array\"}, \"j\": {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"number\"}, {\"type\": \"null\"}], \"title\": \"J\"}, \"k\": {\"items\": {}, \"title\": \"K\", \"type\": \"array\"}, \"l\": {\"const\": \"kettle\", \"title\": \"L\", \"type\": \"string\"}, \"m\": {\"enum\": [1, 2], \"title\": \"M\", \"type\": \"integer\"}, \"na\\u00efve\": {\"title\": \"Na\\u00efve\", \"type\": \"boolean\"}, \"copy\": {\"title\": \"Copy\", \"type\": \"string\"}, \"2fa\": {\"title\": \"2Fa\", \"type\": \"string\"}, \"default\": {\"$ref\": \"#/$defs/default\"}}, \"required\": [\"order-id\", \"class\", \"x\", \"e\", \"f\", \"g\", \"h\", \"i\", \"arr\", \"j\", \"k\", \"l\", \"m\", \"na\\u00efve\", \"copy\", \"2fa\", \"default\"], \"title\": \"Output\", \"type\": \"object\"}"
+  }
 ]
