@@ -305,8 +305,15 @@ impl Agent {
         self.seen().observed.clone()
     }
 
+    /// Trace events are written out of the process as the run goes, to a file a user replays, so every string in them
+    /// is redacted here rather than at each event that might carry page text.
     fn event(&self, event: &str, fields: impl FnOnce() -> Map<String, Value>) {
-        self.trace.event(event, fields);
+        self.trace.event(event, || {
+            let mut fields = fields();
+            let seen = self.seen();
+            fields.values_mut().for_each(|value| redact_strings(value, &seen.redactor));
+            fields
+        });
     }
 
     /// Pursue `task`. A head start is the plan and shortcut already asked for with this task and start; it carries the
@@ -1010,4 +1017,13 @@ fn blocked_without_browser(message: String) -> RunResult {
 fn now_ms() -> i64 {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+}
+
+fn redact_strings(value: &mut Value, redactor: &Redactor) {
+    match value {
+        Value::String(text) => *text = redactor.redact(text),
+        Value::Array(items) => items.iter_mut().for_each(|item| redact_strings(item, redactor)),
+        Value::Object(fields) => fields.values_mut().for_each(|item| redact_strings(item, redactor)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }

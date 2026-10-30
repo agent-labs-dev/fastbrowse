@@ -309,9 +309,7 @@ impl Agent {
                     // shown and nothing on it is unread. A read would re-buy what they hold.
                     state.owes_read = false;
                     state.read_here = true;
-                    self.event("read_not_owed", || {
-                        Map::from_iter([("url".into(), self.redact(&observation.url).into())])
-                    });
+                    self.event("read_not_owed", || Map::from_iter([("url".into(), observation.url.clone().into())]));
                     reading_owed = false;
                 }
                 if reading_owed {
@@ -391,7 +389,7 @@ impl Agent {
     }
 
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
-        self.event("redecide", || Map::from_iter([("url".into(), self.redact(&observation.url).into())]));
+        self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
     }
 
@@ -979,7 +977,7 @@ impl Agent {
         if twins.len() != 1 {
             return Ok(None);
         }
-        self.event("retarget", || Map::from_iter([("target".into(), self.redact(&target.label).into())]));
+        self.event("retarget", || Map::from_iter([("target".into(), target.label.clone().into())]));
         let retargeted = Action { target_id: Some(twins[0].id.clone()), ..action.clone() };
         let raw = self.raw().unwrap_or(fresh);
         Ok(Some(self.page.act(&retargeted, &raw).await?))
@@ -1239,6 +1237,14 @@ impl Agent {
         capture_frame: bool,
         frame: Option<Vec<u8>>,
     ) -> Step {
+        // The step is what a caller replays the run from, as the result's steps and as the step event, so a secret a
+        // step's builder did not think to redact is caught on its way out.
+        let step = StepResult {
+            url: self.redact(&step.url),
+            target: step.target.as_deref().map(|target| self.redact(target)),
+            note: step.note.as_deref().map(|note| self.redact(note)),
+            ..step
+        };
         state.steps.push(step.clone());
         // A stale step dispatched nothing; the stall budget bounds redraw loops.
         if step.outcome != StepOutcome::Stale {
