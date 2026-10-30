@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Cloud browsers start on the Browser Use V4 API.** Every Browser Use Cloud browser is created on V4 with its residential US proxy and CAPTCHA solving asked for by name, so a run no longer depends on the service's defaults or an older API.
 - **Jev picks a list's next page.** The agent no longer works out a numbered next page or clicks a pager itself. A next-page link is shown to Jev as a fact beside the other links, Jev picks the step, and Jev places each page of a list it reads, so a page outside the list gets an ordinary read. Page caps are gone with it, and `Config.max_pages` no longer exists.
 - **A date is given with its calendar.** Each run sees today's date and weekday and a plain calendar from this month to the same month next year, the span where a month or weekday named without a year next falls, so a relative date is read off the calendar rather than worked out.
 - **A failed `until` condition is told as the caller's check.** A run that met its completion check but failed the caller's `until` condition reported that Jev had rejected DONE. It now says the `until` check failed.
