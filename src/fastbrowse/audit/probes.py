@@ -117,8 +117,6 @@ def repeat_status() -> dict[str, Any]:
 
 def structured_output() -> dict[str, Any]:
     """T2.8: a structured-output run validates data against its schema."""
-    from pydantic import ValidationError
-
     from fastbrowse.evals.live_tasks import Release
     from fastbrowse.run import run_task
 
