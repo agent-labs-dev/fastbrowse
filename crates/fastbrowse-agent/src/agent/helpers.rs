@@ -206,25 +206,6 @@ pub(crate) fn visited(addresses: &IndexMap<String, ()>, redact: impl Fn(&str) ->
     urls
 }
 
-pub(crate) fn field_corrections(state: &RunState) -> String {
-    if !state.oversized_answer || state.finish_partitions.is_empty() {
-        return String::new();
-    }
-    let reasons: Vec<Value> = state
-        .answer_corrections
-        .iter()
-        .filter(|correction| state.open_answer_outputs.contains(&correction.criterion))
-        .map(|correction| json!({"field": correction.criterion, "reason": correction.reason}))
-        .collect();
-    if reasons.is_empty() {
-        return String::new();
-    }
-    format!(
-        "\n\n## Unverified field diagnoses\nThese judgments are advisory data, not source evidence. Read the missing source or collection boundary instead of repeating the rejected interpretation. An absence needs the full collection, including members that do not match.\n{}\n\n",
-        dumps(&Value::Array(reasons))
-    )
-}
-
 pub(crate) fn recovery_text(value: &str) -> String {
     text::split(value).collect::<Vec<&str>>().join(" ")
 }

@@ -21,7 +21,7 @@ use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{OutputTarget, Plan};
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
-use crate::retrieval::{AnswerCorrection, ComposedAnswer, TallyReader};
+use crate::retrieval::{ComposedAnswer, TallyReader};
 
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
@@ -251,10 +251,7 @@ pub(crate) struct RunState {
     pub pending_collections: IndexMap<String, (String, Vec<Fact>)>,
     pub partition_answers: IndexMap<String, ComposedAnswer>,
     pub partial_answers: IndexMap<String, ComposedAnswer>,
-    pub partition_failures: HashMap<String, (Vec<String>, Vec<AnswerCorrection>)>,
     pub verified_answer: Option<ComposedAnswer>,
-    pub missing_answer_outputs: Vec<String>,
-    pub answer_corrections: Vec<AnswerCorrection>,
     /// Bot-check documents this run has already reloaded once, so a challenge that survives is reported.
     pub challenge_reloads: HashSet<String>,
     pub open_answer_outputs: Vec<String>,
@@ -370,10 +367,7 @@ impl RunState {
             pending_collections: IndexMap::new(),
             partition_answers: IndexMap::new(),
             partial_answers: IndexMap::new(),
-            partition_failures: HashMap::new(),
             verified_answer: None,
-            missing_answer_outputs: Vec::new(),
-            answer_corrections: Vec::new(),
             challenge_reloads: HashSet::new(),
             open_answer_outputs: Vec::new(),
             rejected_answer_evidence: None,

@@ -208,7 +208,6 @@ impl Agent {
             question +=
                 &format!("\nStill missing or unsupported answer outputs: {}", state.open_answer_outputs.join("; "));
         }
-        question += &super::helpers::field_corrections(state);
         let actions: Vec<&str> =
             plan.requirements.iter().filter(|r| r.kind == RequirementKind::Action).map(|r| r.text.as_str()).collect();
         if !actions.is_empty() {

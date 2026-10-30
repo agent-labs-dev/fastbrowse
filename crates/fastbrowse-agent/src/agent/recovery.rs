@@ -14,7 +14,7 @@ use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use super::helpers::{controls_text, decision_label, describe, field_corrections, recovery_memory, recovery_text};
+use super::helpers::{controls_text, decision_label, describe, recovery_memory, recovery_text};
 use super::state::{Flow, GaveUp, RunState, Step, Stop};
 use super::{Agent, dumps_strings};
 use crate::policy::{Decision, decide};
@@ -190,7 +190,6 @@ impl Agent {
                 state.open_answer_outputs.join("; ")
             },
         );
-        content += &field_corrections(state);
         let background = background_section(state.context.as_deref(), "##");
         content += &format!("## Task\n{}{background}\n\n## Problem\n{reason}", state.task);
         let images: Vec<Bytes> = self.screenshots().await?.into_iter().map(Bytes).collect();

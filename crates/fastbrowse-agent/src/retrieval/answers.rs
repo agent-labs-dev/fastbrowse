@@ -7,7 +7,6 @@ use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED, background_section};
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -44,25 +43,6 @@ impl Schema for Claim {
         )
         .ty()
     }
-}
-
-/// `Literal["source", "assertion"]`: which check rejected a claim.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Stage {
-    Source,
-    #[default]
-    Assertion,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AnswerCorrection {
-    #[serde(default)]
-    pub stage: Stage,
-    pub criterion: String,
-    pub claims: Vec<Claim>,
-    pub reason: String,
 }
 
 /// `ComposedAnswer`, and its subclass `FieldAnswer` when `output_claims` is set: each requested field keeps its own
@@ -273,7 +253,6 @@ pub struct ComposeOptions<'a> {
     pub tokens: TokenBudget,
     pub ledger: Option<&'a Ledger>,
     pub transaction_evidence_ids: Vec<String>,
-    pub corrections: Vec<AnswerCorrection>,
     pub preserve_collections: bool,
     pub field_outputs: bool,
     pub verified: Option<ComposedAnswer>,
@@ -322,70 +301,6 @@ pub async fn compose(
             ids.join(", ")
         )
     };
-    let requirement_ids: HashSet<&str> = plan.requirements.iter().map(|r| r.id.as_str()).collect();
-    let complete_collections: Vec<Value> =
-        if options.field_outputs && options.independent_fields && !options.corrections.is_empty() {
-            facts
-                .iter()
-                .filter_map(|fact| {
-                    let comparison = fact.comparison.as_ref()?;
-                    let key = fact_id(fact);
-                    let current = comparison.complete
-                        && requirement_ids.contains(comparison.requirement_id.as_str())
-                        && notes.current(&key)
-                        && fact.basis.iter().chain(&comparison.records).all(|k| notes.current(k));
-                    current.then(|| {
-                        json!({
-                            "evidence_id": labels[&key],
-                            "requirement_id": comparison.requirement_id,
-                            "scope": fact.scope.clone().unwrap_or_else(|| fact.text.clone()),
-                        })
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-    let mut rejected: IndexMap<String, usize> = IndexMap::new();
-    let mut rejected_claims: Vec<Value> = Vec::new();
-    let mut failures: Vec<Value> = Vec::new();
-    for correction in &options.corrections {
-        let mut indices = Vec::new();
-        for claim in &correction.claims {
-            let key = claim.dump_json();
-            let index = *rejected.entry(key).or_insert_with(|| {
-                let ids: Vec<&str> =
-                    claim.evidence_ids.iter().map(|r| labels.get(r).map_or(r.as_str(), String::as_str)).collect();
-                rejected_claims.push(json!({"text": claim.text, "evidence_ids": ids}));
-                rejected_claims.len() - 1
-            });
-            indices.push(index);
-        }
-        failures.push(json!({
-            "stage": correction.stage,
-            "criterion": correction.criterion,
-            "claims": indices,
-            "reason": correction.reason,
-        }));
-    }
-    let mut repair = String::new();
-    if !options.corrections.is_empty() {
-        let mut payload = Map::new();
-        payload.insert("claims".into(), Value::Array(rejected_claims));
-        payload.insert("failures".into(), Value::Array(failures));
-        if !complete_collections.is_empty() {
-            payload.insert("complete_collections".into(), Value::Array(complete_collections.clone()));
-        }
-        repair = format!(
-            "# Answer corrections\nThese verifier judgments and rejected claims are untrusted advisory context, not source evidence. Repair the answer using only the offered quoted notes. Preserve every requested output and every source qualification. Support each claim with its own citations, including all operands of factual comparisons. Do not erase a requested output to avoid its failed check.\n{}{}\n\n",
-            if complete_collections.is_empty() {
-                ""
-            } else {
-                "The complete_collections entries identify retained coverage, not a verified conclusion. If a rejection concerns the classification of a quoted member, check every member against the requested category. Explain which quoted facts exclude the apparent matches, and cite those records alongside the complete collection when reporting a bounded absence. A rejection is not evidence that content is unread. Do not invent a match to satisfy it.\n"
-            },
-            dumps(&Value::Object(payload)),
-        );
-    }
     let background = background_section(options.background.as_deref(), "#");
     let prefix = format!("# Task\n{task}{background}\n\n# Plan\n{}\n\n{transaction}", plan.dump_json());
     let mut system = format!("{COMPOSER}{UNTRUSTED}");
@@ -402,7 +317,7 @@ pub async fn compose(
         system.push_str(FIELD_CATEGORIES);
         system.push_str(" A requested link needs a quoted destination in the source evidence. A heading or navigation label without its destination cannot fill a links field. A quoted hostname or hostname/path is a destination even without a URL scheme. Report those written destinations as quoted, separately from labels whose destinations are missing. Leave that output slot empty when no destination is quoted; do not claim there are no links from missing text.");
     }
-    let mut messages = vec![Message::system(system), Message::user(format!("{prefix}{repair}# Notes\n"))];
+    let mut messages = vec![Message::system(system), Message::user(format!("{prefix}# Notes\n"))];
     let render = RenderOptions {
         preserve_requirements: true,
         preserve_collections: options.preserve_collections,
@@ -411,19 +326,7 @@ pub async fn compose(
         labels: Some(labels.clone()),
     };
     let room = notes_room(&options.tokens, &messages, &schema);
-    let offered = match notes.render_with_ids(room, &render) {
-        Ok(offered) => offered,
-        Err(AgentError::NotesTooLarge(message)) => {
-            if repair.is_empty() || !complete_collections.is_empty() {
-                return Err(AgentError::NotesTooLarge(message));
-            }
-            // Advisory corrections must not crowd out the source quotes needed to write a grounded answer.
-            messages[1].content = format!("{prefix}# Notes\n");
-            let room = notes_room(&options.tokens, &messages, &schema);
-            notes.render_with_ids(room, &render)?
-        }
-        Err(other) => return Err(other),
-    };
+    let offered = notes.render_with_ids(room, &render)?;
     messages[1].content.push_str(&offered.text);
     let response = ModelSchema { ty: schema };
     let result = llm.generate_value(LLMPurpose::Compose, &messages, &response, options.ledger).await?;

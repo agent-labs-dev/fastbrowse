@@ -19,9 +19,7 @@ use crate::batches::evaluate_batches;
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{Plan, RunReport, partition_plan};
-use crate::retrieval::{
-    AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, names_subject,
-};
+use crate::retrieval::{Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, names_subject};
 use crate::verification::{
     DoneOptions, DoneVerdict, ExtractOptions, Extraction, RecordSchema, WHOLE_TASK, check_done, extract,
 };
@@ -112,7 +110,6 @@ impl Agent {
             return Ok(None);
         }
         let mut missing: Vec<String> = Vec::new();
-        let mut corrections: Vec<AnswerCorrection> = Vec::new();
         let mut verified_parts: Vec<ComposedAnswer> = Vec::new();
         let mut oversized: Vec<String> = Vec::new();
         let transactions = self.transaction_evidence_ids(state).await?;
@@ -124,14 +121,6 @@ impl Agent {
                 && let Some(cached) = state.partition_answers.get(&proof)
             {
                 verified_parts.push(cached.clone());
-                continue;
-            }
-            if state.oversized_answer
-                && lookup(&plan)
-                && let Some((rejected, fixes)) = state.partition_failures.get(&proof)
-            {
-                missing.extend(rejected.iter().cloned());
-                corrections.extend(fixes.iter().cloned());
                 continue;
             }
             let texts: Vec<&str> = plan.requirements.iter().map(|r| r.text.as_str()).collect();
@@ -151,12 +140,6 @@ impl Agent {
             } else {
                 None
             };
-            let child_corrections: Vec<AnswerCorrection> = state
-                .answer_corrections
-                .iter()
-                .filter(|c| plan.answer_checks.contains(&c.criterion) || texts.contains(&c.criterion.as_str()))
-                .cloned()
-                .collect();
             // Python finishes a partition on a shallow copy of the run: the fields below are its own, and everything
             // else (the steps, the candidates, the caches) is shared with the run. They are swapped in and back.
             let saved = Child::swap(
@@ -167,9 +150,7 @@ impl Agent {
                     notes,
                     finish_partitions: vec![plan.clone()],
                     verified_answer: carried,
-                    missing_answer_outputs: Vec::new(),
                     open_answer_outputs: Vec::new(),
-                    answer_corrections: child_corrections,
                     rejected_answer_evidence: None,
                 },
             );
@@ -209,17 +190,7 @@ impl Agent {
                 }
                 verified_parts.push(answer.clone());
             } else if !complete {
-                if child.missing_answer_outputs.is_empty() {
-                    missing.extend(plan.requirements.iter().map(|r| r.text.clone()));
-                } else {
-                    missing.extend(child.missing_answer_outputs.iter().cloned());
-                }
-                corrections.extend(child.answer_corrections.iter().cloned());
-                if state.oversized_answer && lookup(&plan) && !child.missing_answer_outputs.is_empty() {
-                    state
-                        .partition_failures
-                        .insert(proof, (child.missing_answer_outputs.clone(), child.answer_corrections.clone()));
-                }
+                missing.extend(plan.requirements.iter().map(|r| r.text.clone()));
             }
         }
         let mut unique: Vec<String> = Vec::new();
@@ -228,9 +199,7 @@ impl Agent {
                 unique.push(item);
             }
         }
-        state.missing_answer_outputs = unique.clone();
         state.open_answer_outputs = unique.clone();
-        state.answer_corrections = corrections;
         if !unique.is_empty() {
             let reasons: Vec<String> =
                 unique.iter().map(|item| format!("Answer output not verified: {item}")).collect();
@@ -295,8 +264,6 @@ impl Agent {
             return Err(failed.stop().into());
         }
         state.await_checks().await?;
-        state.missing_answer_outputs.clear();
-        state.answer_corrections.clear();
         let plan = state.plan().clone();
         let draft = if plan.page_answer_expected() { draft_answer(&plan, &state.notes) } else { None };
         let notes = state.notes.clone();
@@ -358,8 +325,7 @@ impl Agent {
             tokens: self.config.tokens.clone(),
             ledger: None,
             transaction_evidence_ids: transactions,
-            corrections: state.answer_corrections.clone(),
-            preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
+            preserve_collections: !state.finish_partitions.is_empty(),
             field_outputs: !state.finish_partitions.is_empty(),
             verified,
             independent_fields: state.oversized_answer,
@@ -553,7 +519,6 @@ impl Agent {
             (None, extracting.await)
         };
         let extraction = extraction.transpose()?;
-        let mut verified_ok = true;
         let mut answer_text = None;
         let mut citations = Vec::new();
         if let Some(composed) = answered {
@@ -563,12 +528,14 @@ impl Agent {
             state.verified_answer = Some(composed);
         }
         let mut data = Value::Null;
+        let mut status = Status::Complete;
         if let Some(extraction) = extraction {
             data = extraction.data.unwrap_or(Value::Null);
             evidence.extend(extraction.evidence);
-            verified_ok = verified_ok && extraction.problem.is_none();
+            if extraction.problem.is_some() {
+                status = Status::Unverified;
+            }
         }
-        let status = if verified_ok { Status::Complete } else { Status::Unverified };
         // The answer's notes and each schema field cite independently; the same words on the same page are one
         // citation.
         let mut cited: IndexMap<(String, String), Evidence> = IndexMap::new();
@@ -582,8 +549,7 @@ impl Agent {
             citations,
             ..Outcome::default()
         };
-        if !finalize || (!verified_ok && !state.missing_answer_outputs.is_empty()) {
-            // Rejected answer outputs return to browsing; taking their ending frame added a discarded round trip.
+        if !finalize {
             return Ok(self.result(Some(state), &state.ledger.clone(), status, outcome));
         }
         if let Some(observed) = self.observed() {
@@ -623,9 +589,7 @@ struct Child {
     notes: Notes,
     finish_partitions: Vec<Plan>,
     verified_answer: Option<ComposedAnswer>,
-    missing_answer_outputs: Vec<String>,
     open_answer_outputs: Vec<String>,
-    answer_corrections: Vec<AnswerCorrection>,
     rejected_answer_evidence: Option<BTreeSet<EvidenceKey>>,
 }
 
@@ -638,9 +602,7 @@ impl Child {
         swap(&mut state.notes, &mut child.notes);
         swap(&mut state.finish_partitions, &mut child.finish_partitions);
         swap(&mut state.verified_answer, &mut child.verified_answer);
-        swap(&mut state.missing_answer_outputs, &mut child.missing_answer_outputs);
         swap(&mut state.open_answer_outputs, &mut child.open_answer_outputs);
-        swap(&mut state.answer_corrections, &mut child.answer_corrections);
         swap(&mut state.rejected_answer_evidence, &mut child.rejected_answer_evidence);
         child
     }

@@ -274,7 +274,6 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
             options.tokens = tokens.clone();
             options.ledger = ledger.as_ref();
             options.transaction_evidence_ids = strings(args.get("transaction_evidence_ids").unwrap_or(&Value::Null));
-            options.corrections = opt(args, "corrections").unwrap_or_default();
             options.preserve_collections = flag(args, "preserve_collections");
             options.field_outputs = flag(args, "field_outputs");
             options.verified = opt(args, "verified");

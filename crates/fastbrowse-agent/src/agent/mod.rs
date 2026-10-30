@@ -623,7 +623,7 @@ impl Agent {
             tokens: self.config.tokens.clone(),
             ledger: Some(&ledger),
             transaction_evidence_ids: transactions,
-            preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
+            preserve_collections: !state.finish_partitions.is_empty(),
             background: state.context.clone(),
             trace: self.trace.clone(),
             ..ComposeOptions::new()
