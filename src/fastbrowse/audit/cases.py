@@ -4,6 +4,9 @@ Every case is a record: an id, a tier, the command to run, the exit code and sta
 and the assertions that decide whether it passed. The runner in `fastbrowse.audit.runner` executes them,
 so no case is written as loose shell.
 
+Tier 0 is the contract and static checks, tier 1 local fixtures, tier 2 live sites and tier 3 integration
+surfaces. Tiers 1 to 3 call paid models.
+
 A command's tokens may stand in for a resolved path. `{python}` is the interpreter running the suite,
 `{cli}` is the `fastbrowse` console script, `{mcp}` is `fastbrowse-mcp`, and `{base_url}` is the local
 fixture server's address, substituted only for a case with `fixture=True`.
@@ -32,8 +35,8 @@ from fastbrowse.models import RunResult
 # RunResult field cannot slip past T0.2 unnoticed.
 _RUN_RESULT_KEYS: tuple[str, ...] = tuple(RunResult.model_json_schema(mode="serialization")["properties"])
 
-# The task texts come from the repository's own local eval tasks, so a fixture case asks for the same
-# thing the eval suite grades.
+# The contact, login and price task texts come from the repository's own local eval tasks, so a fixture
+# case asks for the same thing the eval suite grades. The download task is the audit's own.
 CONTACT_TASK = (
     "Tell support, as Ada Lovelace (ada@example.com), that my kettle arrived broken. Use the damaged item topic."
 )
@@ -100,7 +103,6 @@ CLI_FLAGS: tuple[str, ...] = (
 )
 
 CASES: tuple[AuditCase, ...] = (
-    # ------------------------------------------------------------------ tier 0: contract and static
     AuditCase(
         id="T0.1",
         tier=0,
@@ -230,7 +232,6 @@ CASES: tuple[AuditCase, ...] = (
         expect_status="refused",
         timeout_s=30,
     ),
-    # ------------------------------------------------------------------ tier 1: local fixtures (paid models)
     AuditCase(
         id="T1.1",
         tier=1,
@@ -418,7 +419,6 @@ CASES: tuple[AuditCase, ...] = (
         timeout_s=300,
         budget_usd=0.05,
     ),
-    # ------------------------------------------------------------------ tier 2: live sites (paid models)
     AuditCase(
         id="T2.1",
         tier=2,
@@ -587,7 +587,6 @@ CASES: tuple[AuditCase, ...] = (
         timeout_s=300,
         budget_usd=0.10,
     ),
-    # ------------------------------------------------------------------ tier 3: integration surfaces
     AuditCase(
         id="T3.5",
         tier=3,
