@@ -355,8 +355,8 @@ async fn test_cdp_port_must_be_a_port() {
 #[test]
 fn test_only_serve_as_the_first_argument_is_the_subcommand() {
     // `serve` is taken as a subcommand in one position only, so every other command line is still a task. The
-    // binary has no agent to run it yet, so a task ends as a configuration error, exit 1, where `serve` would have
-    // been a usage error, exit 2.
+    // preflight refuses a run with no model key, so a task ends as a configuration error, exit 1, where `serve` would
+    // have been a usage error, exit 2.
     for argv in [
         &["serve the invoices page", "--cdp-url", "ws://b.test/x"][..],
         &["server", "--cdp-url", "ws://b.test/x"],
