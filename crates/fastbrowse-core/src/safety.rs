@@ -112,11 +112,7 @@ pub fn requested_question(task: &str, operation: Operation, control: &Control) -
     );
     describe_control(&mut instructions, operation, control, None);
     instructions.push_str("Does the task ask the agent to do this?");
-    NoulQuestion::new(
-        instructions,
-        Some("The task asks for this action."),
-        Some("The task asks for something else."),
-    )
+    NoulQuestion::new(instructions, Some("The task asks for this action."), Some("The task asks for something else."))
 }
 
 // File types a browser saves rather than shows. Chrome renders a page, an image or a PDF; an archive, an installer, a
