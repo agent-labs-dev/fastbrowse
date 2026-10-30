@@ -94,7 +94,7 @@ uvx fastbrowse "Log in as standard_user with the saved password and add the back
   --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --local
 ```
 
-The [command-line reference](docs/cli.md) has every flag, signed-in profiles and Bitwarden logins, driving open
+The [command-line reference](docs/cli.md#flags) has every flag, signed-in profiles and Bitwarden logins, driving open
 windows and Electron apps, model and provider settings, and every status with its exit code.
 
 ## How it compares
