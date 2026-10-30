@@ -31,6 +31,11 @@ The operation choice can open another literal HTTP(S) address from the caller's 
 closed choice, revalidated before dispatch, and uses the browser's origin grant and live access checks.
 Page instructions cannot add addresses to that choice. Recovery can select the same supplied addresses;
 addresses inferred by the startup shortcut retain their separate verification rules.
+When a site failure that can clear stands on the current page (an HTTP 408, 419, 429 or 5xx status, an address
+the browser could not open, or a page Jev judges to report that the site failed), the page's own address joins
+that choice, so Jev can reload it. Code states the failure and how many steps it has stood in the step state's
+`page_facts` and to the done check, where an answer drawn from it is not the task's; Jev picks the reload, a retry
+control, or another route. A run whose recovery runs out on such a failure ends `unavailable` with its address.
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
@@ -114,11 +119,13 @@ not seen before or a read that adds evidence resets the count and renews the `ma
 Recovery asks Jev first: its state names what failed, and the stalled action is left out of its options,
 which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
 `recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover. Its
-subgoal reaches Jev with the next step, and the action it names is taken only when Jev is unsure again or
-escalates. When the LLM gives up, that counts as one more recovery: its diagnosis becomes the run's status
+subgoal reaches Jev with the next step on that page, asked with the same problem and with the stalled action
+still left out, so a refused DONE cannot undo it; the action recovery names is taken only when Jev is unsure
+again or escalates. When the LLM gives up, that counts as one more recovery: its diagnosis becomes the run's status
 once `max_recoveries` is spent, and a sign-in it names ends `needs_login` only when Jev agrees the page is a
 wall. An HTTP error page goes to Jev like any other, with its status among the step's page facts, so Jev
-goes back, picks another link or escalates; code only waits out a 403, 429 or 503 once per document.
+reloads it when the status can clear, goes back, picks another link or escalates; code only waits out a 403,
+429 or 503 once per document.
 
 ## Run events and images
 

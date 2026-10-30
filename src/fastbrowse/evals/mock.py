@@ -386,6 +386,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/notice": self._notice,
             "/promo/claim": self._claim_form,
             "/list": self._list,
+            "/flights": self._flights,
         }.get(path)
         if route is None:
             if path.startswith("/product/"):
@@ -1066,6 +1067,21 @@ class _Handler(BaseHTTPRequestHandler):
         self._html(
             "Saved list",
             f"<ul>{items}</ul><p>Keep your list neat.</p>" + _form("/list/delete", "", "Tidy up list"),
+        )
+
+    def _flights(self, _: dict[str, str]) -> None:
+        """A search whose first load fails the way a busy site does, with an empty result beside the error."""
+        if self.site.paths.count("/flights") == 1:
+            self._html(
+                "Flight search",
+                "<h2>Search results</h2><p>No results returned.</p><p>Oops, something went wrong.</p>"
+                "<button type='button' onclick='location.reload()'>Reload</button>",
+            )
+            return
+        self._html(
+            "Flight search",
+            "<h2>Search results</h2><ul><li>London to Paris, 08:10, GBP 74</li>"
+            "<li>London to Paris, 12:45, GBP 59</li><li>London to Paris, 18:30, GBP 91</li></ul>",
         )
 
     def _list_delete(self, _: dict[str, str]) -> None:

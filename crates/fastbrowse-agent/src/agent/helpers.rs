@@ -425,6 +425,7 @@ pub(crate) fn code_decision(operation: Operation, target: Option<Control>) -> De
         cost: Vec::new(),
         input_tokens: 0,
         bot_check: None,
+        site_failure: None,
         read_assessment: crate::policy::ReadAssessment::Absent,
         directed: false,
         destination: None,
@@ -447,7 +448,7 @@ pub(crate) fn follow_recovery(
     if operation == Operation::Navigate {
         let control_id = control_id?;
         if observation.dialog.is_some()
-            || !navigation_urls(
+            || (!navigation_urls(
                 &state.task,
                 &observation.url,
                 state.caller_start.as_deref(),
@@ -455,6 +456,7 @@ pub(crate) fn follow_recovery(
                 true,
             )
             .contains(&control_id)
+                && state.reload_target(&observation.url).as_ref() != Some(&control_id))
         {
             return None;
         }

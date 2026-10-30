@@ -1,0 +1,825 @@
+[
+ {
+  "name": "an error page in place of results is reloaded through the recovery's subgoal, not finished on",
+  "task": "Show the search results for flights from London to New York.",
+  "start": "https://flights.test/search?from=LON&to=NYC",
+  "site": {
+   "start": "blank",
+   "screens": {
+    "blank": {
+     "observation": {
+      "url": "about:blank",
+      "title": "",
+      "page_key": "b0",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "b0",
+      "controls": [],
+      "viewport_text": "",
+      "tabs": []
+     },
+     "capture": {
+      "url": "about:blank",
+      "title": "",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 0
+       }
+      ]
+     }
+    },
+    "error": {
+     "observation": {
+      "url": "https://flights.test/search?from=LON&to=NYC",
+      "title": "Flights",
+      "page_key": "e1",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "e1",
+      "controls": [
+       {
+        "id": "reload",
+        "frame_id": null,
+        "role": "button",
+        "label": "Reload",
+        "operations": [
+         "click"
+        ]
+       }
+      ],
+      "viewport_text": "Flight search\n\nSearch results\n\nNo results returned.\n\nOops, something went wrong.\n\nReload",
+      "tabs": [],
+      "response_status": 200
+     },
+     "capture": {
+      "url": "https://flights.test/search?from=LON&to=NYC",
+      "title": "Flights",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "997c74915d797f8cdf23a1edb1047432f35082d93c350b85d5e4e482bf643bf9",
+      "text": "Flight search\n\nSearch results\n\nNo results returned.\n\nOops, something went wrong.\n\nReload",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 13
+       },
+       {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 15,
+        "end": 29
+       },
+       {
+        "source_id": "s2",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 31,
+        "end": 51
+       },
+       {
+        "source_id": "s3",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 53,
+        "end": 80
+       },
+       {
+        "source_id": "s4",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 82,
+        "end": 88
+       }
+      ]
+     }
+    },
+    "results": {
+     "observation": {
+      "url": "https://flights.test/search?from=LON&to=NYC",
+      "title": "Flights",
+      "page_key": "r1",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "r1",
+      "controls": [
+       {
+        "id": "stops",
+        "frame_id": null,
+        "role": "button",
+        "label": "Stops",
+        "operations": [
+         "click"
+        ]
+       }
+      ],
+      "viewport_text": "Flight search\n\nSearch results\n\n3 results returned.\n\nJetBlue nonstop 8:05 AM, $523\n\nBritish Airways nonstop 11:20 AM, $998",
+      "tabs": [],
+      "response_status": 200
+     },
+     "capture": {
+      "url": "https://flights.test/search?from=LON&to=NYC",
+      "title": "Flights",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "664542285f4d6247b4e0c8c6d6bfcc8b91a38e119cd0ae7fa3f1d179174d203c",
+      "text": "Flight search\n\nSearch results\n\n3 results returned.\n\nJetBlue nonstop 8:05 AM, $523\n\nBritish Airways nonstop 11:20 AM, $998",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 13
+       },
+       {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 15,
+        "end": 29
+       },
+       {
+        "source_id": "s2",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 31,
+        "end": 50
+       },
+       {
+        "source_id": "s3",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 52,
+        "end": 81
+       },
+       {
+        "source_id": "s4",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 83,
+        "end": 121
+       }
+      ]
+     }
+    }
+   },
+   "urls": {
+    "https://flights.test/search?from=LON&to=NYC": "error"
+   },
+   "actions": [
+    {
+     "screen": "error",
+     "operation": "click",
+     "target": "reload",
+     "next": "results"
+    }
+   ]
+  },
+  "llm": {
+   "Plan": [
+    {
+     "requirements": [
+      {
+       "id": "a1",
+       "text": "Show the search results for flights from London to New York",
+       "kind": "action"
+      }
+     ],
+     "answer_expected": false,
+     "answer_checks": []
+    }
+   ],
+   "Shortcut": [
+    {
+     "url": null
+    }
+   ],
+   "_AnswerDraft": [
+    {
+     "claims": []
+    }
+   ],
+   "_Recovery": [
+    {
+     "diagnosis": "The search failed and the page offers Reload.",
+     "next_subgoal": "Click Reload to retry the search.",
+     "control": 0,
+     "operation": "click",
+     "give_up": false
+    }
+   ]
+  },
+  "jev": {
+   "pick": {
+    "operation": "done"
+   },
+   "noul": 0.1,
+   "nouls": {
+    "site_failure": 0.95,
+    "unmet_a1": [
+     0.9,
+     0.9,
+     0.9,
+     0.1
+    ]
+   }
+  },
+  "limits": {
+   "max_steps": 12
+  },
+  "calls": [],
+  "expect": {
+   "status": "complete",
+   "steps": [
+    "done",
+    "escalate",
+    "click Reload"
+   ],
+   "final_url": "https://flights.test/search?from=LON&to=NYC"
+  }
+ },
+ {
+  "name": "a 503 page is reloaded at its own address and the 200 it then answers is finished on",
+  "task": "Open the price list and show it.",
+  "start": "https://shop.test/",
+  "site": {
+   "start": "blank",
+   "screens": {
+    "blank": {
+     "observation": {
+      "url": "about:blank",
+      "title": "",
+      "page_key": "b0",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "b0",
+      "controls": [],
+      "viewport_text": "",
+      "tabs": []
+     },
+     "capture": {
+      "url": "about:blank",
+      "title": "",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 0
+       }
+      ]
+     }
+    },
+    "home": {
+     "observation": {
+      "url": "https://shop.test/",
+      "title": "Shop",
+      "page_key": "h1",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "h1",
+      "controls": [
+       {
+        "id": "prices",
+        "frame_id": null,
+        "role": "link",
+        "label": "Prices",
+        "operations": [
+         "click"
+        ],
+        "href": "/prices"
+       }
+      ],
+      "viewport_text": "Shop\n\nWelcome.",
+      "tabs": [],
+      "response_status": 200
+     },
+     "capture": {
+      "url": "https://shop.test/",
+      "title": "Shop",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "370924d2214613ae34f3b24034147d942e3bda77579e47c9a079a672288699a0",
+      "text": "Shop\n\nWelcome.",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 4
+       },
+       {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 6,
+        "end": 14
+       }
+      ]
+     }
+    },
+    "down": {
+     "observation": {
+      "url": "https://shop.test/prices",
+      "title": "Service Unavailable",
+      "page_key": "d1",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "d1",
+      "controls": [
+       {
+        "id": "home",
+        "frame_id": null,
+        "role": "link",
+        "label": "Home",
+        "operations": [
+         "click"
+        ],
+        "href": "/"
+       }
+      ],
+      "viewport_text": "Service Unavailable\n\nTry again later.",
+      "tabs": [],
+      "response_status": 503
+     },
+     "capture": {
+      "url": "https://shop.test/prices",
+      "title": "Service Unavailable",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "8fa874204f862bf9d87d6c7f9d146dd8352b341ff9e89c9efcd22a737a04714b",
+      "text": "Service Unavailable\n\nTry again later.",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 19
+       },
+       {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 21,
+        "end": 37
+       }
+      ]
+     }
+    },
+    "prices": {
+     "observation": {
+      "url": "https://shop.test/prices",
+      "title": "Prices",
+      "page_key": "p1",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "p1",
+      "controls": [
+       {
+        "id": "home",
+        "frame_id": null,
+        "role": "link",
+        "label": "Home",
+        "operations": [
+         "click"
+        ],
+        "href": "/"
+       }
+      ],
+      "viewport_text": "Prices\n\nKettle $20\n\nMug $5",
+      "tabs": [],
+      "response_status": 200
+     },
+     "capture": {
+      "url": "https://shop.test/prices",
+      "title": "Prices",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "f56ffc316d9187640e6b7aa1c951276acd335e6a055f8b73719452d93f002d19",
+      "text": "Prices\n\nKettle $20\n\nMug $5",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 6
+       },
+       {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 8,
+        "end": 18
+       },
+       {
+        "source_id": "s2",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 20,
+        "end": 26
+       }
+      ]
+     }
+    }
+   },
+   "urls": {
+    "https://shop.test/": "home",
+    "https://shop.test/prices": "prices"
+   },
+   "actions": [
+    {
+     "screen": "home",
+     "operation": "click",
+     "target": "prices",
+     "next": "down"
+    }
+   ]
+  },
+  "llm": {
+   "Plan": [
+    {
+     "requirements": [
+      {
+       "id": "a1",
+       "text": "Show the price list",
+       "kind": "action"
+      }
+     ],
+     "answer_expected": false,
+     "answer_checks": []
+    }
+   ],
+   "Shortcut": [
+    {
+     "url": null
+    }
+   ],
+   "_AnswerDraft": [
+    {
+     "claims": []
+    }
+   ],
+   "_Recovery": [
+    {
+     "diagnosis": "The site answered 503.",
+     "next_subgoal": "Reload the price list.",
+     "operation": "navigate",
+     "url": "https://shop.test/prices",
+     "give_up": false
+    }
+   ]
+  },
+  "jev": {
+   "pick": {
+    "operation": [
+     "click",
+     "navigate",
+     "done"
+    ]
+   },
+   "noul": 0.1,
+   "nouls": {
+    "unmet_a1": 0.1
+   }
+  },
+  "limits": {
+   "max_steps": 10
+  },
+  "calls": [],
+  "expect": {
+   "status": "complete",
+   "steps": [
+    "click Prices",
+    "navigate https://shop.test/prices"
+   ],
+   "final_url": "https://shop.test/prices"
+  }
+ },
+ {
+  "name": "an error page that survives every retry ends the run unavailable at its address",
+  "task": "Show the search results for flights from London to New York.",
+  "start": "https://flights.test/search?from=LON&to=NYC",
+  "site": {
+   "start": "blank",
+   "screens": {
+    "blank": {
+     "observation": {
+      "url": "about:blank",
+      "title": "",
+      "page_key": "b0",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "b0",
+      "controls": [],
+      "viewport_text": "",
+      "tabs": []
+     },
+     "capture": {
+      "url": "about:blank",
+      "title": "",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 0
+       }
+      ]
+     }
+    },
+    "error": {
+     "observation": {
+      "url": "https://flights.test/search?from=LON&to=NYC",
+      "title": "Flights",
+      "page_key": "e1",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "e1",
+      "controls": [
+       {
+        "id": "reload",
+        "frame_id": null,
+        "role": "button",
+        "label": "Reload",
+        "operations": [
+         "click"
+        ]
+       }
+      ],
+      "viewport_text": "Flight search\n\nSearch results\n\nNo results returned.\n\nOops, something went wrong.\n\nReload",
+      "tabs": [],
+      "response_status": 200
+     },
+     "capture": {
+      "url": "https://flights.test/search?from=LON&to=NYC",
+      "title": "Flights",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "997c74915d797f8cdf23a1edb1047432f35082d93c350b85d5e4e482bf643bf9",
+      "text": "Flight search\n\nSearch results\n\nNo results returned.\n\nOops, something went wrong.\n\nReload",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 13
+       },
+       {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 15,
+        "end": 29
+       },
+       {
+        "source_id": "s2",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 31,
+        "end": 51
+       },
+       {
+        "source_id": "s3",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 53,
+        "end": 80
+       },
+       {
+        "source_id": "s4",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 82,
+        "end": 88
+       }
+      ]
+     }
+    }
+   },
+   "urls": {
+    "https://flights.test/search?from=LON&to=NYC": "error"
+   },
+   "actions": [
+    {
+     "screen": "error",
+     "operation": "click",
+     "target": "reload",
+     "next": "error",
+     "result": {
+      "outcome": "executed",
+      "page_changed": false
+     }
+    }
+   ]
+  },
+  "llm": {
+   "Plan": [
+    {
+     "requirements": [
+      {
+       "id": "a1",
+       "text": "Show the search results for flights from London to New York",
+       "kind": "action"
+      }
+     ],
+     "answer_expected": false,
+     "answer_checks": []
+    }
+   ],
+   "Shortcut": [
+    {
+     "url": null
+    }
+   ],
+   "_AnswerDraft": [
+    {
+     "claims": []
+    }
+   ],
+   "_Recovery": [
+    {
+     "diagnosis": "The search keeps failing.",
+     "next_subgoal": "Stop.",
+     "give_up": true
+    }
+   ]
+  },
+  "jev": {
+   "pick": {
+    "operation": "click"
+   },
+   "noul": 0.1,
+   "nouls": {
+    "site_failure": 0.95,
+    "unmet_a1": 0.9
+   }
+  },
+  "limits": {
+   "max_steps": 30
+  },
+  "calls": [],
+  "expect": {
+   "status": "unavailable",
+   "error": "https://flights.test/search?from=LON&to=NYC"
+  }
+ },
+ {
+  "name": "a navigation the browser cannot complete is stated to Jev, and when it never completes the run ends unavailable",
+  "task": "Read the status page at https://down.test/status.",
+  "start": "https://shop.test/",
+  "site": {
+   "start": "blank",
+   "screens": {
+    "blank": {
+     "observation": {
+      "url": "about:blank",
+      "title": "",
+      "page_key": "b0",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "b0",
+      "controls": [],
+      "viewport_text": "",
+      "tabs": []
+     },
+     "capture": {
+      "url": "about:blank",
+      "title": "",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 0
+       }
+      ]
+     }
+    },
+    "home": {
+     "observation": {
+      "url": "https://shop.test/",
+      "title": "Shop",
+      "page_key": "h1",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "document_key": "h1",
+      "controls": [
+       {
+        "id": "prices",
+        "frame_id": null,
+        "role": "link",
+        "label": "Prices",
+        "operations": [
+         "click"
+        ],
+        "href": "/prices"
+       }
+      ],
+      "viewport_text": "Shop\n\nWelcome.",
+      "tabs": [],
+      "response_status": 200
+     },
+     "capture": {
+      "url": "https://shop.test/",
+      "title": "Shop",
+      "captured_at": "2026-09-26T20:00:00Z",
+      "sha256": "370924d2214613ae34f3b24034147d942e3bda77579e47c9a079a672288699a0",
+      "text": "Shop\n\nWelcome.",
+      "blocks": [
+       {
+        "source_id": "s0",
+        "kind": "heading",
+        "frame_id": null,
+        "start": 0,
+        "end": 4
+       },
+       {
+        "source_id": "s1",
+        "kind": "paragraph",
+        "frame_id": null,
+        "start": 6,
+        "end": 14
+       }
+      ]
+     }
+    }
+   },
+   "urls": {
+    "https://shop.test/": "home"
+   },
+   "actions": [
+    {
+     "screen": "home",
+     "operation": "navigate",
+     "result": {
+      "outcome": "failed",
+      "page_changed": false,
+      "detail": "Page.navigate failed (net::ERR_CONNECTION_RESET)"
+     }
+    }
+   ]
+  },
+  "llm": {
+   "Plan": [
+    {
+     "requirements": [
+      {
+       "id": "a1",
+       "text": "Open the status page",
+       "kind": "action"
+      }
+     ],
+     "answer_expected": false,
+     "answer_checks": []
+    }
+   ],
+   "Shortcut": [
+    {
+     "url": null
+    }
+   ],
+   "_AnswerDraft": [
+    {
+     "claims": []
+    }
+   ],
+   "_Recovery": [
+    {
+     "diagnosis": "The status site does not answer.",
+     "next_subgoal": "Stop.",
+     "give_up": true
+    }
+   ]
+  },
+  "jev": {
+   "pick": {
+    "operation": "navigate"
+   },
+   "noul": 0.1,
+   "nouls": {
+    "unmet_a1": 0.9
+   }
+  },
+  "limits": {
+   "max_steps": 30
+  },
+  "calls": [],
+  "expect": {
+   "status": "unavailable",
+   "steps": [
+    "navigate https://down.test/status"
+   ],
+   "error": "net::ERR_CONNECTION_RESET"
+  }
+ }
+]

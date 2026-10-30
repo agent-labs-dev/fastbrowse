@@ -219,6 +219,12 @@ def _report_total(result: MockResult, site: Site) -> str | None:
     return _status(result, Status.COMPLETE)
 
 
+def _flights_reloaded(result: MockResult, site: Site) -> str | None:
+    if site.paths.count("/flights") < 2:
+        return "the run never reloaded the flight search after it failed"
+    return _status(result, Status.COMPLETE)
+
+
 def _drag_card(result: MockResult, site: Site) -> str | None:
     columns = [fields.get("column") for fields in site.drops if fields.get("card") == "Card A"]
     if not columns or columns[-1] != "Done":
@@ -484,6 +490,13 @@ TASKS: tuple[MockTask, ...] = (
         "Open the orders report and tell me the total of the orders in it.",
         _report_total,
         claims=(Claim("The answer gives the total of the orders as 139.79."),),
+    ),
+    MockTask(
+        "mock-transient-error",
+        "/flights",
+        "Tell me the cheapest London to Paris fare in the flight search results.",
+        _flights_reloaded,
+        claims=(Claim("The answer gives the cheapest London to Paris fare as GBP 59."),),
     ),
     MockTask(
         "mock-drag-card",

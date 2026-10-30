@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::helpers::{controls_text, decision_label, describe, recovery_memory, recovery_text};
-use super::state::{Flow, GaveUp, RunState, Step, Stop};
+use super::state::{Flow, GaveUp, Recovering, RunState, Step, Stop};
 use super::{Agent, dumps_strings};
-use crate::policy::{Decision, decide};
+use crate::policy::{Decision, StepContext, decide};
 use crate::support::generate;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,13 +62,39 @@ impl Schema for Recovery {
     }
 }
 
-const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. When the notes answer every open requirement and no unverified outputs remain, the next subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
+const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. When the notes answer every open requirement and no unverified outputs remain, the next subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. A site failure (an error shown in place of content, an outage, a load that never finished, a navigation the browser could not complete) is not the task's answer, even where the page also shows an empty result: retry it with a retry control the page offers or by navigating to the page's own address when it is listed, or take another route, before finishing or giving up. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
 pub(super) type Withheld = Option<(Operation, Option<String>)>;
 
 /// A refused DONE, withheld from the ask that follows it.
 pub(super) const DONE: Withheld = Some((Operation::Done, None));
+
+/// Ask Jev about `problem` on `offered`, with the action it is about left out of the options.
+pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, problem: &str, withheld: Withheld) {
+    let mut problem = problem.to_string();
+    if let Some((operation, label)) = withheld {
+        let mut left_out = false;
+        match &label {
+            Some(label) => {
+                for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
+                    left_out |= control.operations.remove(&operation);
+                }
+                offered.controls.retain(|control| !control.operations.is_empty());
+            }
+            None => {
+                context.withheld.push(operation);
+                left_out = true;
+            }
+        }
+        if left_out {
+            let what =
+                label.map_or_else(|| operation.to_string(), |label| format!("{operation} {}", text::repr(&label)));
+            problem += &format!("\n{what} did not move the task on from this page, so it is not offered this time.");
+        }
+    }
+    context.problem = Some(problem);
+}
 
 /// `decision`'s action, withheld from the ask that follows it.
 pub(super) fn withheld(decision: &Decision) -> Withheld {
@@ -137,16 +163,17 @@ impl Agent {
         if stalled && state.recoveries > self.config.stall.max_recoveries {
             return Err(self.stop_recovering(state, observation, gives_up_as, detail).await?);
         }
-        if self.ask_jev_again(state, observation, &reason, withheld).await? {
+        if self.ask_jev_again(state, observation, &reason, withheld.clone()).await? {
             return Ok(());
         }
-        let caller_destinations = navigation_urls(
+        let mut caller_destinations = navigation_urls(
             &state.task,
             &observation.url,
             state.caller_start.as_deref(),
             state.start_landing_url.as_deref(),
             true,
         );
+        caller_destinations.extend(state.reload_target(&observation.url));
         let steps = state
             .history
             .iter()
@@ -178,8 +205,8 @@ impl Agent {
         );
         let proposed = if state.invented.contains(&observation.url) { "True" } else { "False" };
         content += &format!(
-            "## Current address was proposed\n{proposed}\n\n## HTTP failure\n{}\n\n## Notes read so far\n{}\n\n## Recent steps\n{steps}\n\n## Recovery memory\n{}\n\n## Current date\n{}\n\n## Still to find\n{}\n\n## Unverified answer outputs\n{}\n\n",
-            state.http_failure.as_ref().map_or("none".to_string(), |f| f.message()),
+            "## Current address was proposed\n{proposed}\n\n## Site failure\n{}\n\n## Notes read so far\n{}\n\n## Recent steps\n{steps}\n\n## Recovery memory\n{}\n\n## Current date\n{}\n\n## Still to find\n{}\n\n## Unverified answer outputs\n{}\n\n",
+            state.site_failure.as_ref().map_or("none".to_string(), |f| f.message()),
             if notes.is_empty() { "none" } else { &notes },
             recovery_memory(state, self.config.stall.max_recoveries, |value| self.redact(value)),
             observation.today(),
@@ -240,6 +267,7 @@ impl Agent {
             ])
         });
         state.directed = None;
+        state.recovering = Some(Recovering { key: state_key(observation), problem: reason.clone(), withheld });
         match (data.operation, data.control) {
             (Some(Operation::Navigate), _)
                 if data.url.as_ref().is_some_and(|url| caller_destinations.contains(url)) =>
@@ -284,7 +312,7 @@ impl Agent {
         let status =
             gave_up.as_ref().map_or(gives_up_as, |g| if g.status == Status::Stuck { gives_up_as } else { g.status });
         if status != Status::NeedsInput
-            && let Some(failure) = &state.http_failure
+            && let Some(failure) = &state.site_failure
         {
             return Ok(failure.stop().into());
         }
@@ -306,29 +334,7 @@ impl Agent {
         let secrets = self.secret_names(&origin_of(&observation.url));
         let mut context = self.context(state, observation, secrets, false, false)?;
         let mut offered = observation.clone();
-        let mut problem = reason.to_string();
-        if let Some((operation, label)) = withheld {
-            let mut left_out = false;
-            match &label {
-                Some(label) => {
-                    for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
-                        left_out |= control.operations.remove(&operation);
-                    }
-                    offered.controls.retain(|control| !control.operations.is_empty());
-                }
-                None => {
-                    context.withheld.push(operation);
-                    left_out = true;
-                }
-            }
-            if left_out {
-                let what =
-                    label.map_or_else(|| operation.to_string(), |label| format!("{operation} {}", text::repr(&label)));
-                problem +=
-                    &format!("\n{what} did not move the task on from this page, so it is not offered this time.");
-            }
-        }
-        context.problem = Some(problem);
+        withhold(&mut offered, &mut context, reason, withheld);
         context.screenshot = self.viewport().await?;
         let decision = decide(
             &*self.jev,

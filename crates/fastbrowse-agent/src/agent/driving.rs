@@ -18,8 +18,8 @@ use super::helpers::{
     caller_link, decision_label, describe, dialog_question, drew_something, follow_recovery, join, navigation_question,
     netloc_of, not_acting, paging, path_of, read_exhausted, scheme_of, unread,
 };
-use super::recovery::{Withheld, withheld};
-use super::state::{Flow, HttpFailure, RunState, Step, Stop, TransactionCandidate, Unsure};
+use super::recovery::{Withheld, withheld, withhold};
+use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, TransactionCandidate, Unsure};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS, SHORTCUT_WAIT_SECONDS};
 use crate::policy::{Decision, HistoryEntry, StepContext, decide};
 use crate::retrieval::page_quotes;
@@ -111,9 +111,17 @@ impl Agent {
             let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
-                    let context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    // The step after an LLM recovery is asked the recovery's problem again, beside its subgoal, so
+                    // the action that problem refused is not offered to undo it.
+                    let mut offered = observation.clone();
+                    if let Some(recovering) =
+                        state.recovering.take().filter(|recovering| recovering.key == state_key(&observation))
+                    {
+                        withhold(&mut offered, &mut context, &recovering.problem, recovering.withheld);
+                    }
                     let redecided = state.redecided;
-                    let deciding = self.decide_looking(state, &observation, &context);
+                    let deciding = self.decide_looking(state, &offered, &context);
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(decision) = decided else {
                         self.redecide(state, &observation);
@@ -125,6 +133,7 @@ impl Agent {
                     decision
                 }
             };
+            judge_site(state, &observation, &decision);
             let mut decided_by = Decider::Jev;
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
@@ -506,6 +515,19 @@ impl Agent {
                 result = clicked;
             }
             let executed = result.outcome == StepOutcome::Executed;
+            if action.operation == Operation::Navigate
+                && result.outcome == StepOutcome::Failed
+                && let (Some(url), Some(error)) = (&action.url, &result.detail)
+            {
+                // The browser retried the address before it gave up, and what it gave is the site failure stated to
+                // Jev: it may open the address again, or take another route.
+                let since = match &state.site_failure {
+                    Some(failure) if failure.url == *url => failure.since,
+                    _ => state.steps.len(),
+                };
+                let cause = FailureCause::Navigation(self.redact(error));
+                state.site_failure = Some(SiteFailure { url: url.clone(), cause, since });
+            }
             if executed && state.authorization.irreversible_actions {
                 let question = match &decision.target {
                     Some(target) if fastbrowse_core::safety::may_be_irreversible(decision.operation) => {
@@ -722,11 +744,13 @@ impl Agent {
     pub(super) async fn settle(&self, state: &mut RunState, observation: &Observation) -> Step {
         let last = state.reached.insert(state_key(observation), state.evidence_reads);
         if last.is_none() {
-            if let Some(failure) = &state.http_failure
-                && ((observation.response_status.is_none() && observation.url != failure.url)
-                    || observation.response_status.is_some_and(|status| (200..400).contains(&status)))
+            if let Some(failure) = &state.site_failure
+                && (observation.url != failure.url
+                    || (failure.cause != FailureCause::Reported
+                        && observation.response_status.is_some_and(|status| (200..400).contains(&status))))
+                && observation.response_status.is_none_or(|status| status < 400)
             {
-                state.http_failure = None;
+                state.site_failure = None;
             }
             renew(state);
         }
@@ -753,10 +777,18 @@ impl Agent {
         }
         if let Some(status) = observation.response_status {
             if status >= 400 {
-                state.http_failure = Some(HttpFailure { url: observation.url.clone(), status });
-            } else if status >= 200 && state.http_failure.as_ref().is_some_and(|failure| failure.url == observation.url)
+                let since = match &state.site_failure {
+                    Some(failure) if failure.url == observation.url => failure.since,
+                    _ => state.steps.len(),
+                };
+                state.site_failure = Some(SiteFailure::http(&observation.url, status, since));
+            } else if status >= 200
+                && state.site_failure.as_ref().is_some_and(|failure| {
+                    failure.url == observation.url && !matches!(failure.cause, FailureCause::Reported)
+                })
             {
-                state.http_failure = None;
+                // A page that loads can still report the site failed; only Jev, reading it, clears that.
+                state.site_failure = None;
             }
         }
         let Some(before) = state.acted_from.take() else { return };
@@ -1018,4 +1050,23 @@ pub(super) fn require(target: Option<&Control>) -> Step<&Control> {
             "operation needs a target and Jev offered none".into(),
         ))
     })
+}
+
+/// Jev's word on whether the page reports that the site failed, kept as the run's site failure on this address while
+/// Jev holds it, and cleared when Jev reads the same address as working again. A status or navigation error the
+/// browser gave is the more exact cause, and stays.
+fn judge_site(state: &mut RunState, observation: &Observation, decision: &Decision) {
+    let Some(probability) = decision.site_failure else { return };
+    let here = state.site_failure.as_ref().filter(|failure| failure.url == observation.url);
+    let reported = here.is_some_and(|failure| failure.cause == FailureCause::Reported);
+    // Jev's answer is the more probable one, as in the done check.
+    if probability >= 0.5 {
+        if here.is_none() || reported {
+            let since = here.map_or(state.steps.len(), |failure| failure.since);
+            let url = observation.url.clone();
+            state.site_failure = Some(SiteFailure { url, cause: FailureCause::Reported, since });
+        }
+    } else if reported {
+        state.site_failure = None;
+    }
 }

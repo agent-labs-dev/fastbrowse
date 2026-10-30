@@ -2,7 +2,7 @@
 
 use fastbrowse_core::models::UNTRUSTED;
 
-pub(super) const REACHED: &str = "When the requested outcome is to open or reach a page, that destination must be showing now. An earlier visit followed by Back does not satisfy it. An executed click proves only the interaction, not that its destination loaded; an HTTP error is not a successful visit. For a search or filter, set fields and executed clicks do not prove the resulting content loaded. Require current matching results or an explicit empty-result state, not a pending search or loading view. A starting address or an intermediate visit in a longer task may be evidenced by the visited addresses, the first of which is where the run began; it does not have to remain open.";
+pub(super) const REACHED: &str = "When the requested outcome is to open or reach a page, that destination must be showing now. An earlier visit followed by Back does not satisfy it. An executed click proves only the interaction, not that its destination loaded; an HTTP error is not a successful visit. For a search or filter, set fields and executed clicks do not prove the resulting content loaded. Require current matching results or an explicit empty-result state, not a pending search or loading view. A page reporting that the site failed (an error in place of results, an outage, a load that never finished) is not the outcome, and an empty result shown beside such a failure is not an empty-result state. A starting address or an intermediate visit in a longer task may be evidenced by the visited addresses, the first of which is where the run began; it does not have to remain open.";
 
 pub(super) fn unmet_action(requirement_text: &str) -> String {
     format!(
@@ -13,7 +13,7 @@ pub(super) fn unmet_action(requirement_text: &str) -> String {
 pub(super) fn unmet_information(requirement_text: &str, cited: bool) -> String {
     let fact = if cited { "" } else { " No note in state cites evidence for this requirement." };
     format!(
-        "{UNTRUSTED}\nIs this requirement not answered by the cited notes in state? It is answered only when a note quotes the page supporting it, for every entity and constraint it names. A tally note is a count code made of the records its basis names, and those records' quotes support it.{fact}\n\n{requirement_text}"
+        "{UNTRUSTED}\nIs this requirement not answered by the cited notes in state? It is answered only when a note quotes the page supporting it, for every entity and constraint it names. A tally note is a count code made of the records its basis names, and those records' quotes support it. A note quoting a site failure, such as an error shown in place of results or a temporary outage, does not answer it, and neither does an empty result quoted beside that failure.{fact}\n\n{requirement_text}"
     )
 }
 

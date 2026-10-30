@@ -123,11 +123,10 @@ impl Agent {
         let target = decision.target.as_ref();
         match decision.operation {
             Operation::Navigate => {
-                let Some(url) = decision
-                    .url
-                    .clone()
-                    .filter(|url| task_urls(&state.task, state.caller_start.as_deref(), true).contains(url))
-                else {
+                let Some(url) = decision.url.clone().filter(|url| {
+                    task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
+                        || state.reload_target(&observation.url).as_ref() == Some(url)
+                }) else {
                     return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
                 };
                 if self.reveals_text(&url) {
