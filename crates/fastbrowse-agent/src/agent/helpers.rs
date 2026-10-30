@@ -1,5 +1,4 @@
-//! The loop's module-level helpers in `agent.py`: judgements over the plan, the notes and a page that hold no state of
-//! their own.
+//! The loop's stateless helpers: judgements over the plan, the notes and a page that hold no state of their own.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -548,7 +547,6 @@ pub(crate) fn partition_proof(plan: &Plan, notes: &Notes, invented: &HashSet<Str
         "inactive": inactive,
         "collections": collections.into_iter().collect::<Vec<_>>(),
         "invented": guessed,
-        "refused": notes.refused_ids(),
     });
     sha256_hex(write(&proof, Style::DUMPS.sorted()).as_bytes())
 }

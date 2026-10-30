@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -128,16 +128,6 @@ struct Inner {
 
 #[derive(Clone)]
 pub struct Cdp(Arc<Inner>);
-
-/// A handler holds this, not a `Cdp`, so the connection does not own a reference to itself.
-#[derive(Clone)]
-pub struct WeakCdp(Weak<Inner>);
-
-impl WeakCdp {
-    pub fn upgrade(&self) -> Option<Cdp> {
-        self.0.upgrade().map(Cdp)
-    }
-}
 
 /// `_unreachable`: a connection the browser's endpoint dropped or refused for now, as a cloud browser still starting
 /// does. A malformed reply, such as a proxy's bare 401, and a TLS failure both need the configuration changed.
@@ -272,10 +262,6 @@ impl Cdp {
         Ok(Self(inner))
     }
 
-    pub fn downgrade(&self) -> WeakCdp {
-        WeakCdp(Arc::downgrade(&self.0))
-    }
-
     /// One command with no deadline of its own: the reply, or why there is none.
     pub async fn call(&self, method: &str, params: Value, session: Option<&str>) -> Reply {
         let (tx, rx) = oneshot::channel();
@@ -407,10 +393,6 @@ impl Cdp {
     /// Calls still waiting for a reply.
     pub fn pending(&self) -> usize {
         self.0.state.lock().unwrap().pending.len()
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.0.state.lock().unwrap().closed.is_some()
     }
 
     /// `_BrowserClient.stop`: close the socket; every call still pending fails, and so does every later one.

@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/options.py`: the rules an entry point applies to what its operator asked for, written once
+//! The rules an entry point applies to what its operator asked for, written once
 //! for the CLI, the MCP server and `serve`.
 //!
 //! A rule with two copies is a rule that can come to mean two things: the MCP server would keep letting `--headed`

@@ -122,15 +122,11 @@
        "before:0:24:f1e2c7da767e6e0f": {
         "current": false,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "after:0:24:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -149,7 +145,6 @@
         "supporting_evidence": [
          "after:0:24:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -164,10 +159,8 @@
       "current": [
        "after:0:24:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:24:f1e2c7da767e6e0f",
        "after:0:24:f1e2c7da767e6e0f"
@@ -300,8 +293,6 @@
        "before:0:24:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -309,8 +300,6 @@
        "after:0:24:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -331,7 +320,6 @@
          "before:0:24:f1e2c7da767e6e0f",
          "after:0:24:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -348,10 +336,8 @@
        "before:0:24:f1e2c7da767e6e0f",
        "after:0:24:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:24:f1e2c7da767e6e0f",
        "after:0:24:f1e2c7da767e6e0f"
@@ -484,8 +470,6 @@
        "before:0:24:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -493,8 +477,6 @@
        "after:0:24:64725940b4fb9706": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -515,7 +497,6 @@
          "before:0:24:f1e2c7da767e6e0f",
          "after:0:24:64725940b4fb9706"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -532,10 +513,8 @@
        "before:0:24:f1e2c7da767e6e0f",
        "after:0:24:64725940b4fb9706"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:24:f1e2c7da767e6e0f",
        "after:0:24:64725940b4fb9706"
@@ -668,15 +647,11 @@
        "before:0:12:f1e2c7da767e6e0f": {
         "current": false,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "after:0:13:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -695,7 +670,6 @@
         "supporting_evidence": [
          "after:0:13:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -710,10 +684,8 @@
       "current": [
        "after:0:13:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:12:f1e2c7da767e6e0f",
        "after:0:13:f1e2c7da767e6e0f"
@@ -846,15 +818,11 @@
        "before:0:19:f1e2c7da767e6e0f": {
         "current": false,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "after:0:19:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -872,7 +840,6 @@
         "supporting_evidence": [
          "after:0:19:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -887,10 +854,8 @@
       "current": [
        "after:0:19:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:19:f1e2c7da767e6e0f",
        "after:0:19:f1e2c7da767e6e0f"
@@ -987,15 +952,11 @@
        "before:0:19:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "after:0:19:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -1013,7 +974,6 @@
         "supporting_evidence": [
          "after:0:19:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -1030,10 +990,8 @@
        "before:0:19:f1e2c7da767e6e0f",
        "after:0:19:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:19:f1e2c7da767e6e0f",
        "after:0:19:f1e2c7da767e6e0f"
@@ -1233,22 +1191,16 @@
        "before:0:11:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "after:0:10:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:41b397ea38f597f3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -1268,7 +1220,6 @@
          "before:0:11:f1e2c7da767e6e0f",
          "after:0:10:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        },
@@ -1277,7 +1228,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [
          "before:0:11:f1e2c7da767e6e0f"
         ],
@@ -1296,7 +1246,6 @@
        "before:0:11:f1e2c7da767e6e0f",
        "after:0:10:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [
        "before:0:11:f1e2c7da767e6e0f"
       ],
@@ -1309,9 +1258,6 @@
          "after:0:10:f1e2c7da767e6e0f"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "before:0:11:f1e2c7da767e6e0f",
@@ -1512,22 +1458,16 @@
        "before:0:16:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "before:0:2:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:def2d6a00a583ed8": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -1535,8 +1475,6 @@
        "after:0:16:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -1559,7 +1497,6 @@
          "before:0:2:f1e2c7da767e6e0f",
          "after:0:16:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -1579,10 +1516,8 @@
        "before:0:2:f1e2c7da767e6e0f",
        "after:0:16:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:16:f1e2c7da767e6e0f",
        "before:0:2:f1e2c7da767e6e0f",
@@ -1703,29 +1638,21 @@
        "before:0:16:f1e2c7da767e6e0f": {
         "current": false,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "before:0:2:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:def2d6a00a583ed8": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "after:0:16:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -1745,7 +1672,6 @@
         "supporting_evidence": [
          "after:0:16:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -1763,10 +1689,8 @@
        "before:0:2:f1e2c7da767e6e0f",
        "after:0:16:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:16:f1e2c7da767e6e0f",
        "before:0:2:f1e2c7da767e6e0f",
@@ -1967,22 +1891,16 @@
        "before:0:16:2860d97d85db4cc0": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "before:0:2:2860d97d85db4cc0": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:44e91b4f6b7d1620": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -1990,8 +1908,6 @@
        "after:0:16:2860d97d85db4cc0": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -2014,7 +1930,6 @@
          "before:0:2:2860d97d85db4cc0",
          "after:0:16:2860d97d85db4cc0"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -2034,10 +1949,8 @@
        "before:0:2:2860d97d85db4cc0",
        "after:0:16:2860d97d85db4cc0"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:16:2860d97d85db4cc0",
        "before:0:2:2860d97d85db4cc0",
@@ -2158,29 +2071,21 @@
        "before:0:16:2860d97d85db4cc0": {
         "current": false,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "before:0:2:2860d97d85db4cc0": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:44e91b4f6b7d1620": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "after:0:16:2860d97d85db4cc0": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -2200,7 +2105,6 @@
         "supporting_evidence": [
          "after:0:16:2860d97d85db4cc0"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -2218,10 +2122,8 @@
        "before:0:2:2860d97d85db4cc0",
        "after:0:16:2860d97d85db4cc0"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "before:0:16:2860d97d85db4cc0",
        "before:0:2:2860d97d85db4cc0",
@@ -2460,8 +2362,6 @@
        "capture:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1",
          "r2"
@@ -2470,15 +2370,11 @@
        "different:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture:10:14:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -2494,7 +2390,6 @@
         "supporting_evidence": [
          "capture:0:4:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        },
@@ -2509,7 +2404,6 @@
         "supporting_evidence": [
          "capture:0:4:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        },
@@ -2518,7 +2412,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -2538,10 +2431,8 @@
        "different:0:4:f1e2c7da767e6e0f",
        "capture:10:14:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "capture:0:4:f1e2c7da767e6e0f",
        "different:0:4:f1e2c7da767e6e0f",
@@ -3309,8 +3200,6 @@
        "A:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -3318,15 +3207,11 @@
        "B:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "C:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -3346,7 +3231,6 @@
          "B:0:4:f1e2c7da767e6e0f",
          "C:0:4:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -3366,10 +3250,8 @@
        "B:0:4:f1e2c7da767e6e0f",
        "C:0:4:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "A:0:4:f1e2c7da767e6e0f",
        "B:0:4:f1e2c7da767e6e0f",
@@ -6058,155 +5940,111 @@
        "page-0:0:197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:96341847cb5a4b83": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-0:1000:1197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-0:2000:2197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-0:3000:3197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-0:4000:4197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:0:197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:1000:1197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:2000:2197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:3000:3197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:4000:4197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:0:198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:1000:1198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:2000:2198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:3000:3198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:4000:4198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:0:198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:1000:1198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:2000:2198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:3000:3198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:4000:4198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -6216,7 +6054,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -6287,7 +6124,6 @@
        "page-3:3000:3198:558717067f42189d",
        "page-3:4000:4198:558717067f42189d"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -6321,48 +6157,6 @@
          "page-3:1000:1198:558717067f42189d",
          "page-3:3000:3198:558717067f42189d"
         ]
-       }
-      ],
-      "standings": [
-       {
-        "rank": 1,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Grace",
-          "count": 12,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 8,
-          "complete": false
-         }
-        ],
-        "group_count": 2,
-        "complete": false
-       },
-       {
-        "rank": 2,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Grace",
-          "count": 12,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 8,
-          "complete": false
-         }
-        ],
-        "group_count": 2,
-        "complete": false
        }
       ],
       "expanded": [
@@ -6986,15 +6780,11 @@
        "page-0:0:197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:96341847cb5a4b83": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -7002,15 +6792,11 @@
        "page-0:1000:1197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -7018,127 +6804,91 @@
        "page-0:2000:2197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-0:3000:3197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-0:4000:4197:026ac4f1391995f2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:0:197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:1000:1197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:2000:2197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:3000:3197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-1:4000:4197:856b115b651c3efe": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:0:198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:1000:1198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:2000:2198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:3000:3198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-2:4000:4198:9dc6b69e7568e4b9": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:0:198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:1000:1198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:2000:2198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:3000:3198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "page-3:4000:4198:558717067f42189d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -7193,7 +6943,6 @@
          "page-3:3000:3198:558717067f42189d",
          "page-3:4000:4198:558717067f42189d"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -7264,7 +7013,6 @@
        "page-3:3000:3198:558717067f42189d",
        "page-3:4000:4198:558717067f42189d"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -7298,48 +7046,6 @@
          "page-3:1000:1198:558717067f42189d",
          "page-3:3000:3198:558717067f42189d"
         ]
-       }
-      ],
-      "standings": [
-       {
-        "rank": 1,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Grace",
-          "count": 12,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 8,
-          "complete": true
-         }
-        ],
-        "group_count": 2,
-        "complete": true
-       },
-       {
-        "rank": 2,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Grace",
-          "count": 12,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 8,
-          "complete": true
-         }
-        ],
-        "group_count": 2,
-        "complete": true
        }
       ],
       "expanded": [
@@ -8115,43 +7821,31 @@
        "first:0:13:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "first:30:43:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "reread:10:24:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "reread:40:54:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "overlap:20:34:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -8161,7 +7855,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -8187,7 +7880,6 @@
        "reread:40:54:f1e2c7da767e6e0f",
        "overlap:20:34:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -8198,9 +7890,6 @@
          "first:30:43:f1e2c7da767e6e0f"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "first:0:13:f1e2c7da767e6e0f",
@@ -8509,15 +8198,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -8525,15 +8210,11 @@
        "capture-1:0:18:f7e7aa5dfedb9623": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:f7e7aa5dfedb9623": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -8551,7 +8232,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:f7e7aa5dfedb9623"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -8571,7 +8251,6 @@
        "capture-1:0:18:f7e7aa5dfedb9623",
        "capture-2:0:18:f7e7aa5dfedb9623"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -8582,9 +8261,6 @@
          "capture-1:0:18:f7e7aa5dfedb9623"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -8891,15 +8567,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -8907,15 +8579,11 @@
        "capture-1:0:18:846b523a9edd8647": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:846b523a9edd8647": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -8933,7 +8601,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:846b523a9edd8647"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -8953,7 +8620,6 @@
        "capture-1:0:18:846b523a9edd8647",
        "capture-2:0:18:846b523a9edd8647"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -8964,9 +8630,6 @@
          "capture-1:0:18:846b523a9edd8647"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -9267,15 +8930,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -9283,15 +8942,11 @@
        "capture-1:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -9307,7 +8962,6 @@
         "supporting_evidence": [
          "capture-0:0:18:70c4931237acfe0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -9327,7 +8981,6 @@
        "capture-1:0:18:70c4931237acfe0f",
        "capture-2:0:18:70c4931237acfe0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -9337,9 +8990,6 @@
          "capture-0:0:18:70c4931237acfe0f"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -9646,15 +9296,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -9662,15 +9308,11 @@
        "capture-1:0:18:19af104bb5f4483d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:19af104bb5f4483d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -9688,7 +9330,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:19af104bb5f4483d"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -9708,7 +9349,6 @@
        "capture-1:0:18:19af104bb5f4483d",
        "capture-2:0:18:19af104bb5f4483d"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -9719,9 +9359,6 @@
          "capture-1:0:18:19af104bb5f4483d"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -10028,15 +9665,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -10044,15 +9677,11 @@
        "capture-1:0:18:108f2dfcbbc9a11b": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:108f2dfcbbc9a11b": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -10070,7 +9699,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:108f2dfcbbc9a11b"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -10090,7 +9718,6 @@
        "capture-1:0:18:108f2dfcbbc9a11b",
        "capture-2:0:18:108f2dfcbbc9a11b"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -10101,9 +9728,6 @@
          "capture-1:0:18:108f2dfcbbc9a11b"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -10410,15 +10034,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -10426,15 +10046,11 @@
        "capture-1:0:18:2b69f960696e5393": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:2b69f960696e5393": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -10452,7 +10068,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:2b69f960696e5393"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -10472,7 +10087,6 @@
        "capture-1:0:18:2b69f960696e5393",
        "capture-2:0:18:2b69f960696e5393"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -10483,9 +10097,6 @@
          "capture-1:0:18:2b69f960696e5393"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -10792,15 +10403,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -10808,15 +10415,11 @@
        "capture-1:0:18:97d9c331a0270f3d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:97d9c331a0270f3d": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -10834,7 +10437,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:97d9c331a0270f3d"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -10854,7 +10456,6 @@
        "capture-1:0:18:97d9c331a0270f3d",
        "capture-2:0:18:97d9c331a0270f3d"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -10865,9 +10466,6 @@
          "capture-1:0:18:97d9c331a0270f3d"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -11174,15 +10772,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -11190,15 +10784,11 @@
        "capture-1:0:18:108f2dfcbbc9a11b": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:108f2dfcbbc9a11b": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -11216,7 +10806,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:108f2dfcbbc9a11b"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -11236,7 +10825,6 @@
        "capture-1:0:18:108f2dfcbbc9a11b",
        "capture-2:0:18:108f2dfcbbc9a11b"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -11247,9 +10835,6 @@
          "capture-1:0:18:108f2dfcbbc9a11b"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -11556,15 +11141,11 @@
        "capture-0:0:18:70c4931237acfe0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -11572,15 +11153,11 @@
        "capture-1:0:18:fdc1a528a508c827": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "capture-2:0:18:fdc1a528a508c827": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -11598,7 +11175,6 @@
          "capture-0:0:18:70c4931237acfe0f",
          "capture-1:0:18:fdc1a528a508c827"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -11618,7 +11194,6 @@
        "capture-1:0:18:fdc1a528a508c827",
        "capture-2:0:18:fdc1a528a508c827"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -11629,9 +11204,6 @@
          "capture-1:0:18:fdc1a528a508c827"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "capture-0:0:18:70c4931237acfe0f",
@@ -11895,22 +11467,16 @@
        "ada:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "context:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:ebe20c390b93fce6": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -11918,8 +11484,6 @@
        "derived:6cf4232ae9b5a4ee": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r2"
         ]
@@ -11937,7 +11501,6 @@
         "supporting_evidence": [
          "ada:0:4:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        },
@@ -11954,7 +11517,6 @@
          "ada:0:4:f1e2c7da767e6e0f",
          "context:0:4:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -11971,7 +11533,6 @@
        "ada:0:4:f1e2c7da767e6e0f",
        "context:0:4:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -11981,9 +11542,6 @@
          "ada:0:4:f1e2c7da767e6e0f"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "ada:0:4:f1e2c7da767e6e0f",
@@ -12577,8 +12135,6 @@
        "first:0:15:c9ff4563933a0c26": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -12586,8 +12142,6 @@
        "second:0:23:c9ff4563933a0c26": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -12595,8 +12149,6 @@
        "derived:aa2960b29b607bdb": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "comparison"
         ]
@@ -12604,8 +12156,6 @@
        "other:0:15:4bd58a001e5faf62": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -12613,8 +12163,6 @@
        "last:0:22:4bd58a001e5faf62": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r1"
         ]
@@ -12634,7 +12182,6 @@
          "first:0:15:c9ff4563933a0c26",
          "other:0:15:4bd58a001e5faf62"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -12657,10 +12204,8 @@
        "other:0:15:4bd58a001e5faf62",
        "last:0:22:4bd58a001e5faf62"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "first:0:15:c9ff4563933a0c26",
        "second:0:23:c9ff4563933a0c26",
@@ -12848,22 +12393,16 @@
        "review:0:29:12e2bc89db2474d8": {
         "current": false,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "submitted:0:23:12e2bc89db2474d8": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "submitted:0:30:12e2bc89db2474d8": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": [
          "msg"
         ]
@@ -12883,7 +12422,6 @@
          "submitted:0:23:12e2bc89db2474d8",
          "submitted:0:30:12e2bc89db2474d8"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -12901,10 +12439,8 @@
        "submitted:0:23:12e2bc89db2474d8",
        "submitted:0:30:12e2bc89db2474d8"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "review:0:29:12e2bc89db2474d8",
        "submitted:0:23:12e2bc89db2474d8",
@@ -12912,4260 +12448,6 @@
       ],
       "rendered": "# Source URL: \"https://qa.test/#lab\"\n- [review:0:29:12e2bc89db2474d8] requirements=- quote=\"3. Review\\n\\nName: Ada Lovelace\"\n- [submitted:0:23:12e2bc89db2474d8] requirements=- quote=\"Automation Practice Lab\"\n- [submitted:0:30:12e2bc89db2474d8] requirements=msg quote=\"Wizard submitted successfully!\" basis=[\"submitted:0:23:12e2bc89db2474d8\"]",
       "navigation": "\"Wizard submitted successfully!\" requirements=msg source=1 url=\"https://qa.test/#lab\" quote=\"Wizard submitted successfully!\"\n\"Automation Practice Lab\" requirements=- source=1 quote=\"Automation Practice Lab\"\n\"3. Review\\n\\nName: Ada Lovelace\" requirements=- source=1 quote=\"3. Review\\n\\nName: Ada Lovelace\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "a refused count and a recount",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "Order A",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess-A",
-        "start": 0,
-        "end": 7,
-        "quote": "Order A",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "Order B",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess-B",
-        "start": 0,
-        "end": 7,
-        "quote": "Order B",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Orders",
-      "records": [
-       "guess-A:0:7:38ee3ec1fe111fd2",
-       "guess-B:0:7:38ee3ec1fe111fd2"
-      ]
-     },
-     "result": {
-      "id": "tally:41b397ea38f597f3",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Orders",
-        "records": [
-         "guess-A:0:7:38ee3ec1fe111fd2",
-         "guess-B:0:7:38ee3ec1fe111fd2"
-        ]
-       },
-       "comparison": null,
-       "text": "Orders: 2",
-       "evidence": null,
-       "basis": [
-        "guess-A:0:7:38ee3ec1fe111fd2",
-        "guess-B:0:7:38ee3ec1fe111fd2"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [
-      "https://example.test/search?q=guess"
-     ],
-     "shas": [],
-     "result": null
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess-A:0:7:38ee3ec1fe111fd2",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order A",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess-A",
-          "start": 0,
-          "end": 7,
-          "quote": "Order A",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "guess-B:0:7:38ee3ec1fe111fd2",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order B",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess-B",
-          "start": 0,
-          "end": 7,
-          "quote": "Order B",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "tally:41b397ea38f597f3",
-        {
-         "requirement_id": "r1",
-         "tally": {
-          "requirement_id": "r1",
-          "key": "Orders",
-          "records": [
-           "guess-A:0:7:38ee3ec1fe111fd2",
-           "guess-B:0:7:38ee3ec1fe111fd2"
-          ]
-         },
-         "comparison": null,
-         "text": "Orders: 2",
-         "evidence": null,
-         "basis": [
-          "guess-A:0:7:38ee3ec1fe111fd2",
-          "guess-B:0:7:38ee3ec1fe111fd2"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess-A:0:7:38ee3ec1fe111fd2": {
-        "current": true,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "guess-B:0:7:38ee3ec1fe111fd2": {
-        "current": true,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "tally:41b397ea38f597f3": {
-        "current": false,
-        "derived": true,
-        "refused": true,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [
-         "guess-A:0:7:38ee3ec1fe111fd2",
-         "guess-B:0:7:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess-A:0:7:38ee3ec1fe111fd2",
-       "guess-B:0:7:38ee3ec1fe111fd2"
-      ],
-      "usable": [],
-      "current": [],
-      "refused_ids": [
-       "guess-A:0:7:38ee3ec1fe111fd2",
-       "guess-B:0:7:38ee3ec1fe111fd2",
-       "tally:41b397ea38f597f3"
-      ],
-      "comparison_records": [],
-      "tallies": [
-       {
-        "requirement_id": "r1",
-        "key": "Orders",
-        "records": [
-         "guess-A:0:7:38ee3ec1fe111fd2",
-         "guess-B:0:7:38ee3ec1fe111fd2"
-        ]
-       }
-      ],
-      "standings": [
-       null
-      ],
-      "expanded": [
-       "guess-A:0:7:38ee3ec1fe111fd2",
-       "guess-B:0:7:38ee3ec1fe111fd2",
-       "tally:41b397ea38f597f3"
-      ],
-      "rendered": "",
-      "navigation": "\"Orders: 2\" requirements=-\n\"Order B\" requirements=- source=1 url=\"https://example.test/search?q=guess\" quote=\"Order B\"\n\"Order A\" requirements=- source=1 quote=\"Order A\""
-     }
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Orders",
-      "records": [
-       "guess-A:0:7:38ee3ec1fe111fd2"
-      ]
-     },
-     "result": {
-      "id": "tally:41b397ea38f597f3",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Orders",
-        "records": [
-         "guess-A:0:7:38ee3ec1fe111fd2"
-        ]
-       },
-       "comparison": null,
-       "text": "Orders: 1",
-       "evidence": null,
-       "basis": [
-        "guess-A:0:7:38ee3ec1fe111fd2"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": null,
-      "tally": null,
-      "comparison": null,
-      "text": "Order C",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?tfs=set",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "right-C",
-       "start": 0,
-       "end": 7,
-       "quote": "Order C",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": null,
-      "tally": null,
-      "comparison": null,
-      "text": "Order D",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?tfs=set",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "right-D",
-       "start": 0,
-       "end": 7,
-       "quote": "Order D",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": null,
-      "tally": null,
-      "comparison": null,
-      "text": "Order E",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?tfs=set",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "right-E",
-       "start": 0,
-       "end": 7,
-       "quote": "Order E",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Orders",
-      "records": [
-       "right-C:0:7:aa5057f30c200c0f",
-       "right-D:0:7:aa5057f30c200c0f",
-       "right-E:0:7:aa5057f30c200c0f"
-      ]
-     },
-     "result": {
-      "id": "tally:41b397ea38f597f3",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Orders",
-        "records": [
-         "right-C:0:7:aa5057f30c200c0f",
-         "right-D:0:7:aa5057f30c200c0f",
-         "right-E:0:7:aa5057f30c200c0f"
-        ]
-       },
-       "comparison": null,
-       "text": "Orders: 3",
-       "evidence": null,
-       "basis": [
-        "right-C:0:7:aa5057f30c200c0f",
-        "right-D:0:7:aa5057f30c200c0f",
-        "right-E:0:7:aa5057f30c200c0f"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "add_collection_page",
-     "requirement_id": "r1",
-     "url": "https://example.test/search?q=guess",
-     "capture_sha256": "guess-A",
-     "result": null
-    },
-    {
-     "op": "add_collection_page",
-     "requirement_id": "r1",
-     "url": "https://example.test/search?tfs=set",
-     "capture_sha256": "right-C",
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess-A:0:7:38ee3ec1fe111fd2",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order A",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess-A",
-          "start": 0,
-          "end": 7,
-          "quote": "Order A",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "guess-B:0:7:38ee3ec1fe111fd2",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order B",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess-B",
-          "start": 0,
-          "end": 7,
-          "quote": "Order B",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "tally:41b397ea38f597f3",
-        {
-         "requirement_id": "r1",
-         "tally": {
-          "requirement_id": "r1",
-          "key": "Orders",
-          "records": [
-           "right-C:0:7:aa5057f30c200c0f",
-           "right-D:0:7:aa5057f30c200c0f",
-           "right-E:0:7:aa5057f30c200c0f"
-          ]
-         },
-         "comparison": null,
-         "text": "Orders: 3",
-         "evidence": null,
-         "basis": [
-          "right-C:0:7:aa5057f30c200c0f",
-          "right-D:0:7:aa5057f30c200c0f",
-          "right-E:0:7:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ],
-       [
-        "right-C:0:7:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order C",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "right-C",
-          "start": 0,
-          "end": 7,
-          "quote": "Order C",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "right-D:0:7:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order D",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "right-D",
-          "start": 0,
-          "end": 7,
-          "quote": "Order D",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "right-E:0:7:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order E",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "right-E",
-          "start": 0,
-          "end": 7,
-          "quote": "Order E",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess-A:0:7:38ee3ec1fe111fd2": {
-        "current": true,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "guess-B:0:7:38ee3ec1fe111fd2": {
-        "current": true,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "tally:41b397ea38f597f3": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       },
-       "right-C:0:7:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "right-D:0:7:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "right-E:0:7:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "tally:41b397ea38f597f3"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "right-C:0:7:aa5057f30c200c0f",
-         "right-D:0:7:aa5057f30c200c0f",
-         "right-E:0:7:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "right-C:0:7:aa5057f30c200c0f",
-         "right-D:0:7:aa5057f30c200c0f",
-         "right-E:0:7:aa5057f30c200c0f"
-        ],
-        "collection_pages": [
-         {
-          "url": "https://example.test/search?q=guess",
-          "capture_sha256": "guess-A"
-         },
-         {
-          "url": "https://example.test/search?tfs=set",
-          "capture_sha256": "right-C"
-         }
-        ],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess-A:0:7:38ee3ec1fe111fd2",
-       "guess-B:0:7:38ee3ec1fe111fd2",
-       "right-C:0:7:aa5057f30c200c0f",
-       "right-D:0:7:aa5057f30c200c0f",
-       "right-E:0:7:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "right-C:0:7:aa5057f30c200c0f",
-       "right-D:0:7:aa5057f30c200c0f",
-       "right-E:0:7:aa5057f30c200c0f"
-      ],
-      "current": [
-       "right-C:0:7:aa5057f30c200c0f",
-       "right-D:0:7:aa5057f30c200c0f",
-       "right-E:0:7:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess-A:0:7:38ee3ec1fe111fd2",
-       "guess-B:0:7:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [
-       {
-        "requirement_id": "r1",
-        "key": "Orders",
-        "records": [
-         "right-C:0:7:aa5057f30c200c0f",
-         "right-D:0:7:aa5057f30c200c0f",
-         "right-E:0:7:aa5057f30c200c0f"
-        ]
-       }
-      ],
-      "standings": [
-       null
-      ],
-      "expanded": [
-       "guess-A:0:7:38ee3ec1fe111fd2",
-       "guess-B:0:7:38ee3ec1fe111fd2",
-       "tally:41b397ea38f597f3",
-       "right-C:0:7:aa5057f30c200c0f",
-       "right-D:0:7:aa5057f30c200c0f",
-       "right-E:0:7:aa5057f30c200c0f"
-      ],
-      "rendered": "Tally r1: 3 distinct records in shown groups, descending counts.\n[tally:41b397ea38f597f3] \"Orders: 3\" requirements=r1 tally_for=r1 basis=records(4,5,6) urls=[\"https://example.test/search?tfs=set\"]",
-      "navigation": "\"Order E\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"Order E\"\n\"Orders: 3\" requirements=r1\n\"Order B\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"Order B\"\n\"Order D\" requirements=- source=1 quote=\"Order D\"\n\"Order A\" requirements=- source=2 quote=\"Order A\"\n\"Order C\" requirements=- source=1 quote=\"Order C\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "a refusal holds only guessed quotes",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "Fare $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 9,
-        "quote": "Fare $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "Fare $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "right",
-        "start": 0,
-        "end": 9,
-        "quote": "Fare $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [
-      "https://example.test/search?q=guess"
-     ],
-     "shas": [],
-     "result": null
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "Fare $320",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?q=guess",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "guess",
-       "start": 0,
-       "end": 9,
-       "quote": "Fare $320",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": false
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "Fare $305",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?tfs=set",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "right",
-       "start": 0,
-       "end": 9,
-       "quote": "Fare $305",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": false
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "$305",
-      "evidence": null,
-      "basis": [
-       "right:0:9:aa5057f30c200c0f"
-      ],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "$320",
-      "evidence": null,
-      "basis": [
-       "guess:0:9:38ee3ec1fe111fd2"
-      ],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "Fare $320",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?q=guess#x",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "guess",
-       "start": 0,
-       "end": 9,
-       "quote": "Fare $320",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": false
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:9:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "Fare $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess#x",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 9,
-          "quote": "Fare $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "right:0:9:aa5057f30c200c0f",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "Fare $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "right",
-          "start": 0,
-          "end": 9,
-          "quote": "Fare $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "derived:6bbeb19b590220ae",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "$305",
-         "evidence": null,
-         "basis": [
-          "right:0:9:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ],
-       [
-        "derived:d76fd7f14346a98a",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "$320",
-         "evidence": null,
-         "basis": [
-          "guess:0:9:38ee3ec1fe111fd2"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:9:38ee3ec1fe111fd2": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       },
-       "right:0:9:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       },
-       "derived:6bbeb19b590220ae": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       },
-       "derived:d76fd7f14346a98a": {
-        "current": false,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "guess:0:9:38ee3ec1fe111fd2",
-         "right:0:9:aa5057f30c200c0f",
-         "derived:6bbeb19b590220ae"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "guess:0:9:38ee3ec1fe111fd2",
-         "right:0:9:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "guess:0:9:38ee3ec1fe111fd2",
-         "right:0:9:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:9:38ee3ec1fe111fd2",
-       "right:0:9:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "guess:0:9:38ee3ec1fe111fd2",
-       "right:0:9:aa5057f30c200c0f"
-      ],
-      "current": [
-       "guess:0:9:38ee3ec1fe111fd2",
-       "right:0:9:aa5057f30c200c0f"
-      ],
-      "refused_ids": [],
-      "comparison_records": [],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "guess:0:9:38ee3ec1fe111fd2",
-       "right:0:9:aa5057f30c200c0f",
-       "derived:6bbeb19b590220ae",
-       "derived:d76fd7f14346a98a"
-      ],
-      "rendered": "[guess:0:9:38ee3ec1fe111fd2] requirements=r1 url=\"https://example.test/search?q=guess#x\" quote=\"Fare $320\"\n[right:0:9:aa5057f30c200c0f] requirements=r1 url=\"https://example.test/search?tfs=set\" quote=\"Fare $305\"\n[derived:6bbeb19b590220ae] \"$305\" requirements=r1 derived basis=[\"right:0:9:aa5057f30c200c0f\"]\n[derived:d76fd7f14346a98a] \"$320\" requirements=- derived basis=[\"guess:0:9:38ee3ec1fe111fd2\"]",
-      "navigation": "\"$320\" requirements=-\n\"Fare $305\" requirements=r1 source=1 url=\"https://example.test/search?tfs=set\" quote=\"Fare $305\"\n\"Fare $320\" requirements=r1 source=2 url=\"https://example.test/search?q=guess#x\" quote=\"Fare $320\"\n\"$305\" requirements=r1"
-     }
-    },
-    {
-     "op": "usable_citations",
-     "keys": [
-      "guess:0:9:38ee3ec1fe111fd2",
-      "right:0:9:aa5057f30c200c0f",
-      "right:0:9:aa5057f30c200c0f",
-      "missing"
-     ],
-     "result": [
-      "guess:0:9:38ee3ec1fe111fd2",
-      "right:0:9:aa5057f30c200c0f"
-     ]
-    },
-    {
-     "op": "render_with_ids",
-     "max_chars": 1000000,
-     "options": {},
-     "result": {
-      "text": "[guess:0:9:38ee3ec1fe111fd2] requirements=r1 url=\"https://example.test/search?q=guess#x\" quote=\"Fare $320\"\n[right:0:9:aa5057f30c200c0f] requirements=r1 url=\"https://example.test/search?tfs=set\" quote=\"Fare $305\"\n[derived:6bbeb19b590220ae] \"$305\" requirements=r1 derived basis=[\"right:0:9:aa5057f30c200c0f\"]\n[derived:d76fd7f14346a98a] \"$320\" requirements=- derived basis=[\"guess:0:9:38ee3ec1fe111fd2\"]",
-      "evidence_ids": [
-       "guess:0:9:38ee3ec1fe111fd2",
-       "right:0:9:aa5057f30c200c0f",
-       "derived:6bbeb19b590220ae",
-       "derived:d76fd7f14346a98a"
-      ]
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: quote on guessed",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "BA: $320",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?q=guess",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "guess",
-       "start": 0,
-       "end": 8,
-       "quote": "BA: $320",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": false
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "rendered": "[own:0:8:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"",
-      "navigation": "\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: quote on own",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "VS: $305",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?tfs=set",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "own",
-       "start": 0,
-       "end": 8,
-       "quote": "VS: $305",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": false
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2",
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "rendered": "[own:0:8:aa5057f30c200c0f] requirements=r1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"",
-      "navigation": "\"VS: $305\" requirements=r1 source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: conclusion on guessed",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "Cheapest",
-      "evidence": null,
-      "basis": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "derived:635205c4991a1f44",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "Cheapest",
-         "evidence": null,
-         "basis": [
-          "guess:0:8:38ee3ec1fe111fd2"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "derived:635205c4991a1f44": {
-        "current": false,
-        "derived": true,
-        "refused": true,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "derived:635205c4991a1f44",
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "derived:635205c4991a1f44"
-      ],
-      "rendered": "[own:0:8:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"",
-      "navigation": "\"Cheapest\" requirements=-\n\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: conclusion on own",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": "r1",
-      "tally": null,
-      "comparison": null,
-      "text": "Cheapest",
-      "evidence": null,
-      "basis": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "derived:aa1bff7481e15444",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "Cheapest",
-         "evidence": null,
-         "basis": [
-          "own:0:8:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "derived:aa1bff7481e15444": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "derived:aa1bff7481e15444"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2",
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "derived:aa1bff7481e15444"
-      ],
-      "rendered": "[own:0:8:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n[derived:aa1bff7481e15444] \"Cheapest\" requirements=r1 derived basis=[\"own:0:8:aa5057f30c200c0f\"]",
-      "navigation": "\"Cheapest\" requirements=r1\n\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: tally on guessed",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Fares",
-      "records": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ]
-     },
-     "result": {
-      "id": "tally:432fd5b6ca10edf8",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ]
-       },
-       "comparison": null,
-       "text": "Fares: 1",
-       "evidence": null,
-       "basis": [
-        "guess:0:8:38ee3ec1fe111fd2"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "tally:432fd5b6ca10edf8",
-        {
-         "requirement_id": null,
-         "tally": {
-          "requirement_id": "r1",
-          "key": "Fares",
-          "records": [
-           "guess:0:8:38ee3ec1fe111fd2"
-          ]
-         },
-         "comparison": null,
-         "text": "Fares: 1",
-         "evidence": null,
-         "basis": [
-          "guess:0:8:38ee3ec1fe111fd2"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "tally:432fd5b6ca10edf8": {
-        "current": true,
-        "derived": true,
-        "refused": true,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "tally:432fd5b6ca10edf8"
-      ],
-      "comparison_records": [],
-      "tallies": [
-       {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ]
-       }
-      ],
-      "standings": [
-       null
-      ],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "tally:432fd5b6ca10edf8"
-      ],
-      "rendered": "[own:0:8:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"",
-      "navigation": "\"Fares: 1\" requirements=-\n\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: tally on own",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Fares",
-      "records": [
-       "own:0:8:aa5057f30c200c0f"
-      ]
-     },
-     "result": {
-      "id": "tally:432fd5b6ca10edf8",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "own:0:8:aa5057f30c200c0f"
-        ]
-       },
-       "comparison": null,
-       "text": "Fares: 1",
-       "evidence": null,
-       "basis": [
-        "own:0:8:aa5057f30c200c0f"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "tally:432fd5b6ca10edf8",
-        {
-         "requirement_id": "r1",
-         "tally": {
-          "requirement_id": "r1",
-          "key": "Fares",
-          "records": [
-           "own:0:8:aa5057f30c200c0f"
-          ]
-         },
-         "comparison": null,
-         "text": "Fares: 1",
-         "evidence": null,
-         "basis": [
-          "own:0:8:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "tally:432fd5b6ca10edf8": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "tally:432fd5b6ca10edf8"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2",
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [
-       {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "own:0:8:aa5057f30c200c0f"
-        ]
-       }
-      ],
-      "standings": [
-       null
-      ],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "tally:432fd5b6ca10edf8"
-      ],
-      "rendered": "Tally r1: 1 distinct records in shown groups, descending counts.\n[tally:432fd5b6ca10edf8] \"Fares: 1\" requirements=r1 tally_for=r1 basis=records(2) urls=[\"https://example.test/search?tfs=set\"]",
-      "navigation": "\"Fares: 1\" requirements=r1\n\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: comparison on guessed",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add_continuation",
-     "requirement_id": "r1",
-     "record_id": "guess:0:8:38ee3ec1fe111fd2",
-     "result": null
-    },
-    {
-     "op": "complete_comparison",
-     "requirement_id": "r1",
-     "comparison": {
-      "order": "lowest",
-      "limit": 1,
-      "label": {
-       "prefix": "",
-       "suffix": ": "
-      },
-      "value": {
-       "prefix": ": ",
-       "suffix": ""
-      }
-     },
-     "result": false
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [],
-        "collection_pages": [],
-        "comparison_records": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ],
-        "has_untallied_records": true
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "rendered": "[own:0:8:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"",
-      "navigation": "\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: comparison on own",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add_continuation",
-     "requirement_id": "r1",
-     "record_id": "own:0:8:aa5057f30c200c0f",
-     "result": null
-    },
-    {
-     "op": "complete_comparison",
-     "requirement_id": "r1",
-     "comparison": {
-      "order": "lowest",
-      "limit": 1,
-      "label": {
-       "prefix": "",
-       "suffix": ": "
-      },
-      "value": {
-       "prefix": ": ",
-       "suffix": ""
-      }
-     },
-     "result": true
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "derived:eced5b8c2fb3b2e6",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": {
-          "requirement_id": "r1",
-          "records": [
-           "own:0:8:aa5057f30c200c0f"
-          ],
-          "complete": true
-         },
-         "text": "Lowest 1:\nVS: $305",
-         "evidence": null,
-         "basis": [
-          "own:0:8:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "derived:eced5b8c2fb3b2e6": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "derived:eced5b8c2fb3b2e6"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2",
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "has_untallied_records": true
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [
-       "own:0:8:aa5057f30c200c0f"
-      ],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "derived:eced5b8c2fb3b2e6"
-      ],
-      "rendered": "[own:0:8:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n[derived:eced5b8c2fb3b2e6] \"Lowest 1:\\nVS: $305\" requirements=r1 derived collection_for=r1 complete=true basis=[\"own:0:8:aa5057f30c200c0f\"]",
-      "navigation": "\"Lowest 1:\\nVS: $305\" requirements=r1\n\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: recount on guessed",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Fares",
-      "records": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ]
-     },
-     "result": {
-      "id": "tally:432fd5b6ca10edf8",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "guess:0:8:38ee3ec1fe111fd2"
-        ]
-       },
-       "comparison": null,
-       "text": "Fares: 1",
-       "evidence": null,
-       "basis": [
-        "guess:0:8:38ee3ec1fe111fd2"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": null,
-      "tally": null,
-      "comparison": null,
-      "text": "BA: $320",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?q=guess",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "recount",
-       "start": 0,
-       "end": 8,
-       "quote": "BA: $320",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Fares",
-      "records": [
-       "recount:0:8:38ee3ec1fe111fd2"
-      ]
-     },
-     "result": {
-      "id": "tally:432fd5b6ca10edf8",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "recount:0:8:38ee3ec1fe111fd2"
-        ]
-       },
-       "comparison": null,
-       "text": "Fares: 1",
-       "evidence": null,
-       "basis": [
-        "recount:0:8:38ee3ec1fe111fd2"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "tally:432fd5b6ca10edf8",
-        {
-         "requirement_id": "r1",
-         "tally": {
-          "requirement_id": "r1",
-          "key": "Fares",
-          "records": [
-           "recount:0:8:38ee3ec1fe111fd2"
-          ]
-         },
-         "comparison": null,
-         "text": "Fares: 1",
-         "evidence": null,
-         "basis": [
-          "recount:0:8:38ee3ec1fe111fd2"
-         ],
-         "reader": "llm"
-        }
-       ],
-       [
-        "recount:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "recount",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "tally:432fd5b6ca10edf8": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       },
-       "recount:0:8:38ee3ec1fe111fd2": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "tally:432fd5b6ca10edf8"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2",
-         "recount:0:8:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [
-         "recount:0:8:38ee3ec1fe111fd2"
-        ],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "recount:0:8:38ee3ec1fe111fd2"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f",
-       "recount:0:8:38ee3ec1fe111fd2"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f",
-       "recount:0:8:38ee3ec1fe111fd2"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [
-       {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "recount:0:8:38ee3ec1fe111fd2"
-        ]
-       }
-      ],
-      "standings": [
-       null
-      ],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "tally:432fd5b6ca10edf8",
-       "recount:0:8:38ee3ec1fe111fd2"
-      ],
-      "rendered": "Tally r1: 1 distinct records in shown groups, descending counts.\n[tally:432fd5b6ca10edf8] \"Fares: 1\" requirements=r1 tally_for=r1 basis=records(4) urls=[\"https://example.test/search?q=guess\"]\n[own:0:8:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"",
-      "navigation": "\"BA: $320\" requirements=- source=1 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\"\n\"Fares: 1\" requirements=r1\n\"VS: $305\" requirements=- source=2 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"BA: $320\" requirements=- source=1 quote=\"BA: $320\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "held readings build nothing: recount on own",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "BA: $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 8,
-        "quote": "BA: $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "VS: $305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 8,
-        "quote": "VS: $305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [],
-     "shas": [
-      "guess"
-     ],
-     "result": null
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Fares",
-      "records": [
-       "own:0:8:aa5057f30c200c0f"
-      ]
-     },
-     "result": {
-      "id": "tally:432fd5b6ca10edf8",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "own:0:8:aa5057f30c200c0f"
-        ]
-       },
-       "comparison": null,
-       "text": "Fares: 1",
-       "evidence": null,
-       "basis": [
-        "own:0:8:aa5057f30c200c0f"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "add",
-     "fact": {
-      "requirement_id": null,
-      "tally": null,
-      "comparison": null,
-      "text": "VS: $305",
-      "evidence": {
-       "source_id": "s1",
-       "url": "https://example.test/search?tfs=set",
-       "frame_id": null,
-       "captured_at": "2026-01-01T00:00:00Z",
-       "capture_sha256": "recount",
-       "start": 0,
-       "end": 8,
-       "quote": "VS: $305",
-       "complete_source": false,
-       "control_context": null,
-       "rendered_text": true,
-       "heading_path": []
-      },
-      "basis": [],
-      "reader": "llm"
-     },
-     "result": true
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "r1",
-      "key": "Fares",
-      "records": [
-       "recount:0:8:aa5057f30c200c0f"
-      ]
-     },
-     "result": {
-      "id": "tally:432fd5b6ca10edf8",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "own:0:8:aa5057f30c200c0f"
-        ]
-       },
-       "comparison": null,
-       "text": "Fares: 1",
-       "evidence": null,
-       "basis": [
-        "own:0:8:aa5057f30c200c0f"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "complete_tallies",
-     "requirement_id": "r1",
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1"
-     ],
-     "result": {
-      "facts": [
-       [
-        "guess:0:8:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "BA: $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 8,
-          "quote": "BA: $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "own:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "tally:432fd5b6ca10edf8",
-        {
-         "requirement_id": "r1",
-         "tally": {
-          "requirement_id": "r1",
-          "key": "Fares",
-          "records": [
-           "own:0:8:aa5057f30c200c0f"
-          ]
-         },
-         "comparison": null,
-         "text": "Fares: 1",
-         "evidence": null,
-         "basis": [
-          "own:0:8:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ],
-       [
-        "recount:0:8:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "VS: $305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "recount",
-          "start": 0,
-          "end": 8,
-          "quote": "VS: $305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "guess:0:8:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "own:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "tally:432fd5b6ca10edf8": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "r1"
-        ]
-       },
-       "recount:0:8:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [
-         "tally:432fd5b6ca10edf8"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "guess:0:8:38ee3ec1fe111fd2",
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "own:0:8:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "recount:0:8:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:8:aa5057f30c200c0f",
-       "recount:0:8:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:8:aa5057f30c200c0f",
-       "recount:0:8:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:8:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [
-       {
-        "requirement_id": "r1",
-        "key": "Fares",
-        "records": [
-         "own:0:8:aa5057f30c200c0f"
-        ]
-       }
-      ],
-      "standings": [
-       null
-      ],
-      "expanded": [
-       "guess:0:8:38ee3ec1fe111fd2",
-       "own:0:8:aa5057f30c200c0f",
-       "tally:432fd5b6ca10edf8",
-       "recount:0:8:aa5057f30c200c0f"
-      ],
-      "rendered": "Tally r1: 1 distinct records in shown groups, descending counts.\n[tally:432fd5b6ca10edf8] \"Fares: 1\" requirements=r1 tally_for=r1 basis=records(2) urls=[\"https://example.test/search?tfs=set\"]",
-      "navigation": "\"VS: $305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"VS: $305\"\n\"Fares: 1\" requirements=r1\n\"BA: $320\" requirements=- source=2 url=\"https://example.test/search?q=guess\" quote=\"BA: $320\"\n\"VS: $305\" requirements=- source=1 quote=\"VS: $305\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "refusing one requirement leaves another's ranking",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "Fare A: 305",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 11,
-        "quote": "Fare A: 305",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "Fare B: 340",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?tfs=set",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "own",
-        "start": 0,
-        "end": 11,
-        "quote": "Fare B: 340",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "Fare $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "guess",
-        "start": 0,
-        "end": 9,
-        "quote": "Fare $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "add_continuation",
-     "requirement_id": "cheapest",
-     "record_id": "own:0:11:aa5057f30c200c0f",
-     "result": null
-    },
-    {
-     "op": "add_continuation",
-     "requirement_id": "cheapest",
-     "record_id": "own:0:11:aa5057f30c200c0f",
-     "result": null
-    },
-    {
-     "op": "complete_comparison",
-     "requirement_id": "cheapest",
-     "comparison": {
-      "order": "lowest",
-      "limit": 1,
-      "label": {
-       "prefix": "",
-       "suffix": ": "
-      },
-      "value": {
-       "prefix": ": ",
-       "suffix": ""
-      }
-     },
-     "result": true
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [
-      "https://example.test/search?q=guess"
-     ],
-     "shas": [],
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1",
-      "cheapest"
-     ],
-     "result": {
-      "facts": [
-       [
-        "own:0:11:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Fare A: 305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 11,
-          "quote": "Fare A: 305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "guess:0:9:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "Fare $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "guess",
-          "start": 0,
-          "end": 9,
-          "quote": "Fare $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "derived:86a060e7d9bf6ba9",
-        {
-         "requirement_id": "cheapest",
-         "tally": null,
-         "comparison": {
-          "requirement_id": "cheapest",
-          "records": [
-           "own:0:11:aa5057f30c200c0f"
-          ],
-          "complete": true
-         },
-         "text": "Lowest 1:\nFare A: 305",
-         "evidence": null,
-         "basis": [
-          "own:0:11:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "own:0:11:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "guess:0:9:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "derived:86a060e7d9bf6ba9": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "cheapest"
-        ]
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [
-         "guess:0:9:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       },
-       "cheapest": {
-        "supporting": [
-         "derived:86a060e7d9bf6ba9"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "own:0:11:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "own:0:11:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [
-         "own:0:11:aa5057f30c200c0f"
-        ],
-        "has_untallied_records": true
-       }
-      },
-      "evidence": [
-       "own:0:11:aa5057f30c200c0f",
-       "guess:0:9:38ee3ec1fe111fd2"
-      ],
-      "usable": [
-       "own:0:11:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:11:aa5057f30c200c0f"
-      ],
-      "refused_ids": [
-       "guess:0:9:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [
-       "own:0:11:aa5057f30c200c0f"
-      ],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "own:0:11:aa5057f30c200c0f",
-       "guess:0:9:38ee3ec1fe111fd2",
-       "derived:86a060e7d9bf6ba9"
-      ],
-      "rendered": "[own:0:11:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"Fare A: 305\"\n[derived:86a060e7d9bf6ba9] \"Lowest 1:\\nFare A: 305\" requirements=cheapest derived collection_for=cheapest complete=true basis=[\"own:0:11:aa5057f30c200c0f\"]",
-      "navigation": "\"Lowest 1:\\nFare A: 305\" requirements=cheapest\n\"Fare $320\" requirements=- source=1 url=\"https://example.test/search?q=guess\" quote=\"Fare $320\"\n\"Fare A: 305\" requirements=- source=2 url=\"https://example.test/search?tfs=set\" quote=\"Fare A: 305\""
-     }
-    },
-    {
-     "op": "for_requirements",
-     "requirement_ids": [
-      "cheapest"
-     ],
-     "evidence_ids": [
-      "own:0:11:aa5057f30c200c0f"
-     ],
-     "result": {
-      "facts": [
-       [
-        "own:0:11:aa5057f30c200c0f",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Fare A: 305",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?tfs=set",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "own",
-          "start": 0,
-          "end": 11,
-          "quote": "Fare A: 305",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "derived:86a060e7d9bf6ba9",
-        {
-         "requirement_id": "cheapest",
-         "tally": null,
-         "comparison": {
-          "requirement_id": "cheapest",
-          "records": [
-           "own:0:11:aa5057f30c200c0f"
-          ],
-          "complete": true
-         },
-         "text": "Lowest 1:\nFare A: 305",
-         "evidence": null,
-         "basis": [
-          "own:0:11:aa5057f30c200c0f"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "own:0:11:aa5057f30c200c0f": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "derived:86a060e7d9bf6ba9": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": [
-         "cheapest"
-        ]
-       }
-      },
-      "requirements": {
-       "cheapest": {
-        "supporting": [
-         "derived:86a060e7d9bf6ba9"
-        ],
-        "evidenced": true,
-        "read_for": [
-         "own:0:11:aa5057f30c200c0f"
-        ],
-        "supporting_evidence": [
-         "own:0:11:aa5057f30c200c0f"
-        ],
-        "collection_pages": [],
-        "comparison_records": [
-         "own:0:11:aa5057f30c200c0f"
-        ],
-        "has_untallied_records": true
-       }
-      },
-      "evidence": [
-       "own:0:11:aa5057f30c200c0f"
-      ],
-      "usable": [
-       "own:0:11:aa5057f30c200c0f"
-      ],
-      "current": [
-       "own:0:11:aa5057f30c200c0f"
-      ],
-      "refused_ids": [],
-      "comparison_records": [
-       "own:0:11:aa5057f30c200c0f"
-      ],
-      "tallies": [],
-      "standings": [],
-      "expanded": [
-       "own:0:11:aa5057f30c200c0f",
-       "derived:86a060e7d9bf6ba9"
-      ],
-      "rendered": "[own:0:11:aa5057f30c200c0f] requirements=- url=\"https://example.test/search?tfs=set\" quote=\"Fare A: 305\"\n[derived:86a060e7d9bf6ba9] \"Lowest 1:\\nFare A: 305\" requirements=cheapest derived collection_for=cheapest complete=true basis=[\"own:0:11:aa5057f30c200c0f\"]",
-      "navigation": "\"Lowest 1:\\nFare A: 305\" requirements=cheapest\n\"Fare A: 305\" requirements=- source=1 url=\"https://example.test/search?tfs=set\" quote=\"Fare A: 305\""
-     }
-    }
-   ]
-  },
-  {
-   "name": "a list read stays read",
-   "ops": [
-    {
-     "op": "new",
-     "facts": [
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "Order A",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "shared",
-        "start": 0,
-        "end": 7,
-        "quote": "Order A",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": null,
-       "tally": null,
-       "comparison": null,
-       "text": "Order B",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "shared",
-        "start": 0,
-        "end": 7,
-        "quote": "Order B",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      },
-      {
-       "requirement_id": "r1",
-       "tally": null,
-       "comparison": null,
-       "text": "Fare $320",
-       "evidence": {
-        "source_id": "s1",
-        "url": "https://example.test/search?q=guess",
-        "frame_id": null,
-        "captured_at": "2026-01-01T00:00:00Z",
-        "capture_sha256": "shared",
-        "start": 0,
-        "end": 9,
-        "quote": "Fare $320",
-        "complete_source": false,
-        "control_context": null,
-        "rendered_text": true,
-        "heading_path": []
-       },
-       "basis": [],
-       "reader": "llm"
-      }
-     ]
-    },
-    {
-     "op": "add_tally",
-     "tally": {
-      "requirement_id": "orders",
-      "key": "Orders",
-      "records": [
-       "shared:0:7:38ee3ec1fe111fd2",
-       "shared:0:7:38ee3ec1fe111fd2"
-      ]
-     },
-     "result": {
-      "id": "tally:538a40d7610320e5",
-      "fact": {
-       "requirement_id": null,
-       "tally": {
-        "requirement_id": "orders",
-        "key": "Orders",
-        "records": [
-         "shared:0:7:38ee3ec1fe111fd2"
-        ]
-       },
-       "comparison": null,
-       "text": "Orders: 1",
-       "evidence": null,
-       "basis": [
-        "shared:0:7:38ee3ec1fe111fd2"
-       ],
-       "reader": "llm"
-      }
-     }
-    },
-    {
-     "op": "add_collection_page",
-     "requirement_id": "orders",
-     "url": "https://example.test/search?q=guess",
-     "capture_sha256": "shared",
-     "result": null
-    },
-    {
-     "op": "add_collection_page",
-     "requirement_id": "orders",
-     "url": "https://example.test/search?q=guess",
-     "capture_sha256": "shared",
-     "result": null
-    },
-    {
-     "op": "discredit",
-     "requirement_ids": [
-      "r1"
-     ],
-     "urls": [
-      "https://example.test/search?q=guess"
-     ],
-     "shas": [],
-     "result": null
-    },
-    {
-     "op": "snapshot",
-     "requirement_ids": [
-      "r1",
-      "orders"
-     ],
-     "result": {
-      "facts": [
-       [
-        "shared:0:7:38ee3ec1fe111fd2",
-        {
-         "requirement_id": null,
-         "tally": null,
-         "comparison": null,
-         "text": "Order A",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "shared",
-          "start": 0,
-          "end": 7,
-          "quote": "Order A",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "shared:0:9:38ee3ec1fe111fd2",
-        {
-         "requirement_id": "r1",
-         "tally": null,
-         "comparison": null,
-         "text": "Fare $320",
-         "evidence": {
-          "source_id": "s1",
-          "url": "https://example.test/search?q=guess",
-          "frame_id": null,
-          "captured_at": "2026-01-01T00:00:00Z",
-          "capture_sha256": "shared",
-          "start": 0,
-          "end": 9,
-          "quote": "Fare $320",
-          "complete_source": false,
-          "control_context": null,
-          "rendered_text": true,
-          "heading_path": []
-         },
-         "basis": [],
-         "reader": "llm"
-        }
-       ],
-       [
-        "tally:538a40d7610320e5",
-        {
-         "requirement_id": null,
-         "tally": {
-          "requirement_id": "orders",
-          "key": "Orders",
-          "records": [
-           "shared:0:7:38ee3ec1fe111fd2"
-          ]
-         },
-         "comparison": null,
-         "text": "Orders: 1",
-         "evidence": null,
-         "basis": [
-          "shared:0:7:38ee3ec1fe111fd2"
-         ],
-         "reader": "llm"
-        }
-       ]
-      ],
-      "per_fact": {
-       "shared:0:7:38ee3ec1fe111fd2": {
-        "current": true,
-        "derived": false,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       },
-       "shared:0:9:38ee3ec1fe111fd2": {
-        "current": false,
-        "derived": false,
-        "refused": true,
-        "held": true,
-        "requirements": []
-       },
-       "tally:538a40d7610320e5": {
-        "current": true,
-        "derived": true,
-        "refused": false,
-        "held": false,
-        "requirements": []
-       }
-      },
-      "requirements": {
-       "r1": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [
-         "shared:0:9:38ee3ec1fe111fd2"
-        ],
-        "supporting_evidence": [],
-        "collection_pages": [],
-        "comparison_records": [],
-        "has_untallied_records": false
-       },
-       "orders": {
-        "supporting": [],
-        "evidenced": false,
-        "read_for": [],
-        "supporting_evidence": [],
-        "collection_pages": [
-         {
-          "url": "https://example.test/search?q=guess",
-          "capture_sha256": "shared"
-         }
-        ],
-        "comparison_records": [],
-        "has_untallied_records": false
-       }
-      },
-      "evidence": [
-       "shared:0:7:38ee3ec1fe111fd2",
-       "shared:0:9:38ee3ec1fe111fd2"
-      ],
-      "usable": [
-       "shared:0:7:38ee3ec1fe111fd2"
-      ],
-      "current": [
-       "shared:0:7:38ee3ec1fe111fd2"
-      ],
-      "refused_ids": [
-       "shared:0:9:38ee3ec1fe111fd2"
-      ],
-      "comparison_records": [],
-      "tallies": [
-       {
-        "requirement_id": "orders",
-        "key": "Orders",
-        "records": [
-         "shared:0:7:38ee3ec1fe111fd2"
-        ]
-       }
-      ],
-      "standings": [
-       null
-      ],
-      "expanded": [
-       "shared:0:7:38ee3ec1fe111fd2",
-       "shared:0:9:38ee3ec1fe111fd2",
-       "tally:538a40d7610320e5"
-      ],
-      "rendered": "Tally orders: 1 distinct records in shown groups, descending counts.\n[tally:538a40d7610320e5] \"Orders: 1\" requirements=- tally_for=orders basis=records(1) urls=[\"https://example.test/search?q=guess\"]",
-      "navigation": "\"Orders: 1\" requirements=-\n\"Fare $320\" requirements=- source=1 url=\"https://example.test/search?q=guess\" quote=\"Fare $320\"\n\"Order A\" requirements=- source=1 quote=\"Order A\""
      }
     }
    ]
@@ -18703,29 +13985,21 @@
        "sha-0:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-1:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-2:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -18733,29 +14007,21 @@
        "sha-3:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-4:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-5:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:96341847cb5a4b83": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -18763,15 +14029,11 @@
        "sha-6:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:675f8c3ac656cb2d": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -18779,22 +14041,16 @@
        "sha-7:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-8:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:8f3345ad11530ec7": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -18802,15 +14058,11 @@
        "sha-9:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:70158928f657e455": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -18818,36 +14070,26 @@
        "sha-10:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-11:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-12:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-13:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:068cb10fde538d87": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -18855,15 +14097,11 @@
        "sha-14:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:7c1956c25a569d26": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "r"
         ]
@@ -18871,15 +14109,11 @@
        "lone:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:cd0e5a9eaa66aa8f": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -18929,7 +14163,6 @@
          "sha-13:0:6:f1e2c7da767e6e0f",
          "sha-14:0:6:f1e2c7da767e6e0f"
         ],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        },
@@ -18938,7 +14171,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -18997,7 +14229,6 @@
        "sha-14:0:6:f1e2c7da767e6e0f",
        "lone:0:4:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -19063,359 +14294,6 @@
         "records": [
          "sha-6:0:5:f1e2c7da767e6e0f"
         ]
-       }
-      ],
-      "standings": [
-       null,
-       {
-        "rank": 1,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": true
-         }
-        ],
-        "group_count": 7,
-        "complete": true
-       },
-       {
-        "rank": 2,
-        "tied": 1,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": true
-         }
-        ],
-        "group_count": 7,
-        "complete": true
-       },
-       {
-        "rank": 2,
-        "tied": 1,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": true
-         }
-        ],
-        "group_count": 7,
-        "complete": true
-       },
-       {
-        "rank": 4,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": true
-         }
-        ],
-        "group_count": 7,
-        "complete": true
-       },
-       {
-        "rank": 5,
-        "tied": 2,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": true
-         }
-        ],
-        "group_count": 7,
-        "complete": true
-       },
-       {
-        "rank": 5,
-        "tied": 2,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": true
-         }
-        ],
-        "group_count": 7,
-        "complete": true
-       },
-       {
-        "rank": 5,
-        "tied": 2,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": true
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": true
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": true
-         }
-        ],
-        "group_count": 7,
-        "complete": true
        }
       ],
       "expanded": [
@@ -20065,169 +14943,121 @@
        "sha-0:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-1:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-2:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:2f2c7b2d7580a8d3": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-3:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-4:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-5:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:96341847cb5a4b83": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-6:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:675f8c3ac656cb2d": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-7:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-8:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:8f3345ad11530ec7": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-9:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:70158928f657e455": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-10:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-11:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-12:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-13:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:068cb10fde538d87": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-14:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:7c1956c25a569d26": {
         "current": false,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "lone:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:cd0e5a9eaa66aa8f": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -20253,7 +15083,6 @@
          "sha-14:0:6:f1e2c7da767e6e0f"
         ],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -20312,7 +15141,6 @@
        "sha-14:0:6:f1e2c7da767e6e0f",
        "lone:0:4:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -20378,359 +15206,6 @@
         "records": [
          "sha-6:0:5:f1e2c7da767e6e0f"
         ]
-       }
-      ],
-      "standings": [
-       null,
-       {
-        "rank": 1,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": false
-         }
-        ],
-        "group_count": 7,
-        "complete": false
-       },
-       {
-        "rank": 2,
-        "tied": 1,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": false
-         }
-        ],
-        "group_count": 7,
-        "complete": false
-       },
-       {
-        "rank": 2,
-        "tied": 1,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": false
-         }
-        ],
-        "group_count": 7,
-        "complete": false
-       },
-       {
-        "rank": 4,
-        "tied": 0,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": false
-         }
-        ],
-        "group_count": 7,
-        "complete": false
-       },
-       {
-        "rank": 5,
-        "tied": 2,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": false
-         }
-        ],
-        "group_count": 7,
-        "complete": false
-       },
-       {
-        "rank": 5,
-        "tied": 2,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": false
-         }
-        ],
-        "group_count": 7,
-        "complete": false
-       },
-       {
-        "rank": 5,
-        "tied": 2,
-        "groups": [
-         {
-          "rank": 1,
-          "group": "Alan",
-          "count": 4,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Ada",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 2,
-          "group": "Grace",
-          "count": 3,
-          "complete": false
-         },
-         {
-          "rank": 4,
-          "group": "Barbara",
-          "count": 2,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Edsger",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Ken",
-          "count": 1,
-          "complete": false
-         },
-         {
-          "rank": 5,
-          "group": "Linus xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          "count": 1,
-          "complete": false
-         }
-        ],
-        "group_count": 7,
-        "complete": false
        }
       ],
       "expanded": [
@@ -21196,120 +15671,86 @@
        "sha-0:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-1:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-2:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-3:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-4:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-5:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-6:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-7:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-8:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-9:0:5:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-10:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-11:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-12:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-13:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "sha-14:0:6:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "lone:0:4:f1e2c7da767e6e0f": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "tally:cd0e5a9eaa66aa8f": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -21319,7 +15760,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [],
         "has_untallied_records": false
        }
@@ -21378,7 +15818,6 @@
        "sha-14:0:6:f1e2c7da767e6e0f",
        "lone:0:4:f1e2c7da767e6e0f"
       ],
-      "refused_ids": [],
       "comparison_records": [],
       "tallies": [
        {
@@ -21388,9 +15827,6 @@
          "lone:0:4:f1e2c7da767e6e0f"
         ]
        }
-      ],
-      "standings": [
-       null
       ],
       "expanded": [
        "sha-0:0:5:f1e2c7da767e6e0f",
@@ -21745,36 +16181,26 @@
        "list:0:10:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:13:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:12:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:11:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:6114bbba99ed8c8a": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -21784,7 +16210,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [
          "list:0:10:9ab775b9d9c00ef2",
          "list:0:13:9ab775b9d9c00ef2",
@@ -21812,7 +16237,6 @@
        "list:0:12:9ab775b9d9c00ef2",
        "list:0:11:9ab775b9d9c00ef2"
       ],
-      "refused_ids": [],
       "comparison_records": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -21820,7 +16244,6 @@
        "list:0:11:9ab775b9d9c00ef2"
       ],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -22206,36 +16629,26 @@
        "list:0:10:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:13:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:12:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:11:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:e27f4ab733d49068": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "cheap"
         ]
@@ -22243,8 +16656,6 @@
        "derived:6114bbba99ed8c8a": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -22266,7 +16677,6 @@
          "list:0:12:9ab775b9d9c00ef2",
          "list:0:11:9ab775b9d9c00ef2"
         ],
-        "collection_pages": [],
         "comparison_records": [
          "list:0:10:9ab775b9d9c00ef2",
          "list:0:13:9ab775b9d9c00ef2",
@@ -22294,7 +16704,6 @@
        "list:0:12:9ab775b9d9c00ef2",
        "list:0:11:9ab775b9d9c00ef2"
       ],
-      "refused_ids": [],
       "comparison_records": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -22302,7 +16711,6 @@
        "list:0:11:9ab775b9d9c00ef2"
       ],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -22690,36 +17098,26 @@
        "list:0:10:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:13:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:12:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:11:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:66d6ecf188ee5bea": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "cheap"
         ]
@@ -22727,8 +17125,6 @@
        "derived:6114bbba99ed8c8a": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -22750,7 +17146,6 @@
          "list:0:12:9ab775b9d9c00ef2",
          "list:0:11:9ab775b9d9c00ef2"
         ],
-        "collection_pages": [],
         "comparison_records": [
          "list:0:10:9ab775b9d9c00ef2",
          "list:0:13:9ab775b9d9c00ef2",
@@ -22778,7 +17173,6 @@
        "list:0:12:9ab775b9d9c00ef2",
        "list:0:11:9ab775b9d9c00ef2"
       ],
-      "refused_ids": [],
       "comparison_records": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -22786,7 +17180,6 @@
        "list:0:11:9ab775b9d9c00ef2"
       ],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -23148,36 +17541,26 @@
        "list:0:10:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:13:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:12:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:11:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:6114bbba99ed8c8a": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -23187,7 +17570,6 @@
         "evidenced": false,
         "read_for": [],
         "supporting_evidence": [],
-        "collection_pages": [],
         "comparison_records": [
          "list:0:10:9ab775b9d9c00ef2",
          "list:0:13:9ab775b9d9c00ef2",
@@ -23215,7 +17597,6 @@
        "list:0:12:9ab775b9d9c00ef2",
        "list:0:11:9ab775b9d9c00ef2"
       ],
-      "refused_ids": [],
       "comparison_records": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -23223,7 +17604,6 @@
        "list:0:11:9ab775b9d9c00ef2"
       ],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -23609,36 +17989,26 @@
        "list:0:10:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:13:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:12:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "list:0:11:9ab775b9d9c00ef2": {
         "current": true,
         "derived": false,
-        "refused": false,
-        "held": false,
         "requirements": []
        },
        "derived:5f43a45d252ee3fe": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": [
          "cheap"
         ]
@@ -23646,8 +18016,6 @@
        "derived:6114bbba99ed8c8a": {
         "current": true,
         "derived": true,
-        "refused": false,
-        "held": false,
         "requirements": []
        }
       },
@@ -23669,7 +18037,6 @@
          "list:0:12:9ab775b9d9c00ef2",
          "list:0:11:9ab775b9d9c00ef2"
         ],
-        "collection_pages": [],
         "comparison_records": [
          "list:0:10:9ab775b9d9c00ef2",
          "list:0:13:9ab775b9d9c00ef2",
@@ -23697,7 +18064,6 @@
        "list:0:12:9ab775b9d9c00ef2",
        "list:0:11:9ab775b9d9c00ef2"
       ],
-      "refused_ids": [],
       "comparison_records": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",
@@ -23705,7 +18071,6 @@
        "list:0:11:9ab775b9d9c00ef2"
       ],
       "tallies": [],
-      "standings": [],
       "expanded": [
        "list:0:10:9ab775b9d9c00ef2",
        "list:0:13:9ab775b9d9c00ef2",

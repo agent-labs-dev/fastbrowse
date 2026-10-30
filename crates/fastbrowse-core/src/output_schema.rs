@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/output_schema.py`: a JSON Schema as the model `run_task` takes for `output_schema`.
+//! A JSON Schema as the model `run_task` takes for `output_schema`.
 //!
 //! `fastbrowse serve` gets its caller's output shape as JSON Schema draft 2020-12, since that is what a schema library
 //! in another language can emit. Only keywords the model can enforce are taken. Any other is refused by name, so a

@@ -1,4 +1,4 @@
-//! Port of `clients/vercel.py`: the Vercel AI Gateway v4 evaluation transport.
+//! The Vercel AI Gateway v4 evaluation transport.
 //!
 //! Integrator's observed response, with choice, noul (wire boolean), and score:
 //!

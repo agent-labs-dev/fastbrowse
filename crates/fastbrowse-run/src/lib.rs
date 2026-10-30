@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/run.py`: run one task end to end. Assemble a browser, the model clients and the agent,
+//! Run one task end to end. Assemble a browser, the model clients and the agent,
 //! then return the result.
 //!
 //! This is the embedding entry point: the terminal and the live eval both call it, so the assembly has one

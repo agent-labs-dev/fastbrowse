@@ -61,10 +61,10 @@ pub fn steps(task: &str) -> Result<Vec<Step>> {
     Ok(found)
 }
 
-/// Answers each choice as the script's current step says, and every yes/no so that the run goes on.
+/// Answers each choice as the script's current step says, and every yes/no with no.
 ///
-/// A run's options do not cross the protocol, so the thresholds are the shipped ones. A flat probability cannot serve
-/// them all: the walls and the irreversible check stop a run above theirs, and the done check stops it below its own.
+/// A no keeps a wall, a sign-in or the irreversible check from stopping the scripted run, and the run ends when the
+/// script runs out and the operation choice falls back to DONE.
 pub struct ScriptedJev {
     state: Mutex<Script>,
 }

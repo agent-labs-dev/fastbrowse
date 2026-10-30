@@ -13,7 +13,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -65,7 +64,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Sign in\n\nEnter your password to continue.",
       "tabs": []
      },
@@ -330,7 +328,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -351,7 +348,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "b4949aae14fc2f22",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Checking your browser\n\nThis takes a few seconds.",
       "tabs": []
      },
@@ -624,7 +620,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -645,7 +640,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "d0",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Checking your browser\n\nRay ID: 0f3a.",
       "tabs": []
      },
@@ -681,7 +675,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "d1",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Checking your browser\n\nRay ID: 1f3a.",
       "tabs": []
      },
@@ -717,7 +710,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "d2",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Checking your browser\n\nRay ID: 2f3a.",
       "tabs": []
      },
@@ -1058,7 +1050,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -1090,7 +1081,6 @@
         "submit_semantics": "submit"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Cart\n\nBlue mug, $12.",
       "tabs": []
      },
@@ -1366,7 +1356,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -1400,7 +1389,6 @@
         "input_name": "q"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Books\n\nSearch the catalogue.",
       "tabs": []
      },
@@ -1732,7 +1720,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -1838,7 +1825,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -1859,7 +1845,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "f7403c0926b2d56e",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Not found\n\nNo such page.",
       "tabs": [],
       "response_status": 404
@@ -2512,7 +2497,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -2545,7 +2529,6 @@
         "download": true
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Releases\n\nVersion 2.0 is out.",
       "tabs": []
      },
@@ -3087,7 +3070,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -3140,7 +3122,6 @@
         "submit_semantics": "submit"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Contact us\n\nTell us who you are.",
       "tabs": []
      },
@@ -3587,7 +3568,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -3642,7 +3622,6 @@
         "submit_semantics": "submit"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Contact us\n\nTell us who you are.",
       "tabs": []
      },
@@ -4092,7 +4071,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -4126,7 +4104,6 @@
         "frame_origin": "https://acme.test"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Log in\n\nWelcome back.",
       "tabs": []
      },
@@ -4375,7 +4352,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -4411,7 +4387,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Trips\n\nChoose a class.",
       "tabs": []
      },
@@ -4721,7 +4696,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -4757,7 +4731,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Trips\n\nChoose a class.",
       "tabs": []
      },
@@ -5129,7 +5102,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -5150,7 +5122,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "682fa39b9f1eb1ec",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Draft\n\nDiscard this draft?",
       "tabs": [],
       "dialog": {
@@ -5445,7 +5416,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -5476,7 +5446,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "PyPI\n\nFind packages.",
       "tabs": []
      },
@@ -5512,7 +5481,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "cac3f2735ebc0ccf",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Elsewhere\n\nNot the site.",
       "tabs": []
      },
@@ -6240,7 +6208,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -6261,7 +6228,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "128318a82858393e",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -6293,7 +6259,6 @@
         "href": "/about"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Site\n\nWelcome.",
       "tabs": []
      },
@@ -6977,7 +6942,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -7008,7 +6972,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "App\n\nOpen the settings panel.",
       "tabs": []
      },
@@ -8026,7 +7989,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -8058,7 +8020,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Shop\n\nHover the menu to see departments.",
       "tabs": []
      },
@@ -8400,7 +8361,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -8432,7 +8392,6 @@
         "input_type": "file"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Apply\n\nAttach your CV.",
       "tabs": []
      },
@@ -8737,7 +8696,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -8769,7 +8727,6 @@
         "input_type": "email"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Newsletter\n\nSign up for updates.",
       "tabs": []
      },
@@ -9067,7 +9024,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -9101,7 +9057,6 @@
         "frame_origin": "https://bank.test"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Bank\n\nEnter your PIN.",
       "tabs": []
      },
@@ -9394,7 +9349,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -9415,7 +9369,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "f7403c0926b2d56e",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Not found\n\nNo such page.",
       "tabs": [],
       "response_status": 404
@@ -9684,7 +9637,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -9718,7 +9670,6 @@
         "input_name": "q"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Books\n\nSearch the catalogue.",
       "tabs": []
      },
@@ -10124,7 +10075,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -10155,7 +10105,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "App\n\nOpen the settings panel.",
       "tabs": []
      },
@@ -10453,7 +10402,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -10485,7 +10433,6 @@
         "submit_semantics": "submit"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Contact\n\nSend us your message.",
       "tabs": []
      },
@@ -10521,7 +10468,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "1e2884355a31f1ef",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "Sent\n\nYour message has been sent.",
       "tabs": [],
       "response_status": 503
@@ -10927,7 +10873,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -10985,7 +10930,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Panel\n\nThree switches.",
       "tabs": []
      },
@@ -12007,7 +11951,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -12038,7 +11981,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Portal\n\nMembers area.",
       "tabs": []
      },
@@ -12772,7 +12714,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -12804,7 +12745,6 @@
         "href": "/sso/start"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Portal\n\nMembers area.",
       "tabs": []
      },
@@ -13538,7 +13478,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -13569,7 +13508,6 @@
         ]
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Portal\n\nMembers area.",
       "tabs": []
      },
@@ -14298,7 +14236,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -14332,7 +14269,6 @@
         "frame_origin": "https://acme.test"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Log in\n\nWelcome back.",
       "tabs": []
      },
@@ -14542,7 +14478,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -14576,7 +14511,6 @@
         "frame_origin": "https://acme.test"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Log in\n\nWelcome back.",
       "tabs": []
      },
@@ -14794,7 +14728,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -14827,7 +14760,6 @@
         "download": true
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Releases\n\nVersion 2.0 is out.",
       "tabs": []
      },
@@ -15176,7 +15108,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -15210,7 +15141,6 @@
         "input_name": "q"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Books\n\nSearch the catalogue.",
       "tabs": []
      },
@@ -15501,7 +15431,6 @@
       "captured_at": "2026-09-26T20:00:00Z",
       "document_key": "ae5b393e40643569",
       "controls": [],
-      "omitted_controls": 0,
       "viewport_text": "",
       "tabs": []
      },
@@ -15533,7 +15462,6 @@
         "href": "/m/1"
        }
       ],
-      "omitted_controls": 0,
       "viewport_text": "Inbox\n\nYou have new mail.",
       "tabs": [],
       "dialog": {

@@ -84,8 +84,6 @@ class Observation(Frozen):
     document_key: str = ""
     """Document identity, independent of field edits and scrolling, for access-wall checks."""
     controls: tuple[Control, ...]
-    omitted_controls: int = Field(ge=0)
-    """Controls present but not offered because of observation limits."""
     viewport_text: str
     visual_content: bool = False
     """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier

@@ -504,7 +504,6 @@
         "read",
         "field_text",
         "recover",
-        "verify",
         "compose",
         "shortcut"
       ],

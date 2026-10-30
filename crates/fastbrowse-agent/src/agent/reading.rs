@@ -243,14 +243,6 @@ impl Agent {
         let ledger = state.ledger.clone();
         let options = ReadOptions { ledger: Some(&ledger), ..options };
         let outcome = read(&*self.llm, &capture, &question, &wanted_ids, &mut state.notes, &options).await?;
-        for requirement in &wanted {
-            // The first page of a list that goes on, each later page and the closing read all belong to that
-            // requirement's collection, whether or not they held a matching record. Another requirement read alongside it
-            // does not: its check would be told these pages were its own and held no match.
-            if outcome.continues.contains(&requirement.id) || state.continuing.contains(&requirement.id) {
-                state.notes.add_collection_page(&requirement.id, &capture.url, &capture.sha256);
-            }
-        }
         let mut context_added = false;
         if state.oversized_answer && !state.open_answer_outputs.is_empty() {
             // A field read can return context while another field or collection is still open. Its quotes must reach
@@ -360,13 +352,11 @@ impl Agent {
         ))
     }
 
-    /// `collecting` names the requirements whose list continued onto these pages; the rest are read alongside.
     async fn join_page(
         &self,
         state: &mut RunState,
         page: &PageRead,
         wanted: &[Requirement],
-        collecting: &[String],
         last: bool,
     ) -> Step<Option<ReadOutcome>> {
         let outcome = match page.task.wait().await.unwrap_or_else(|| Err(super::state::cancelled())) {
@@ -409,9 +399,6 @@ impl Agent {
         let before = state.notes.facts().len();
         state.notes.remember_capture(&page.capture);
         outcome.merge_records(&mut state.notes)?;
-        for requirement_id in collecting {
-            state.notes.add_collection_page(requirement_id, &page.capture.url, &page.capture.sha256);
-        }
         state.read_documents.insert(page.observation.document_key.clone(), false);
         state.incomplete.extend(outcome.incomplete.iter().cloned());
         let progressed = state.notes.facts().len() > before;
@@ -455,9 +442,6 @@ impl Agent {
         let plan = state.plan().clone();
         let wanted: Vec<Requirement> =
             state.notes.unresolved(&plan).into_iter().filter(|r| r.kind == RequirementKind::Information).collect();
-        // Every unresolved requirement is read on each page, but only a list that went on is being paged.
-        let collecting: Vec<String> =
-            wanted.iter().filter(|r| state.continuing.contains(&r.id)).map(|r| r.id.clone()).collect();
         let mut pending: Vec<PageRead> = Vec::new();
         let mut last_records: Option<usize> = None;
         let mut ended: Vec<String> = Vec::new();
@@ -612,7 +596,7 @@ impl Agent {
                 other => other?,
             }
             for (index, page) in pending.iter().enumerate() {
-                let outcome = self.join_page(state, page, &wanted, &collecting, Some(index) == last_records).await?;
+                let outcome = self.join_page(state, page, &wanted, Some(index) == last_records).await?;
                 if Some(index) == last_records
                     && let Some(outcome) = outcome
                 {

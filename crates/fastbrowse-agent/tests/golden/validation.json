@@ -705,7 +705,7 @@
  },
  {
   "model": "_AnswerDraft",
-  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}, \"ranks\": {\"default\": false, \"description\": \"True if it states a rank or order among counted groups.\", \"title\": \"Ranks\", \"type\": \"boolean\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"claims\": {\"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Claims\", \"type\": \"array\"}}, \"required\": [\"claims\"], \"title\": \"_AnswerDraft\", \"type\": \"object\"}",
+  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"claims\": {\"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Claims\", \"type\": \"array\"}}, \"required\": [\"claims\"], \"title\": \"_AnswerDraft\", \"type\": \"object\"}",
   "input": "{\"claims\": [{\"text\": \"t\", \"evidence_ids\": [\"e1\"]}]}",
   "result": {
    "ok": {
@@ -714,8 +714,7 @@
       "text": "t",
       "evidence_ids": [
        "e1"
-      ],
-      "ranks": false
+      ]
      }
     ]
    }
@@ -723,15 +722,15 @@
  },
  {
   "model": "_AnswerDraft",
-  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}, \"ranks\": {\"default\": false, \"description\": \"True if it states a rank or order among counted groups.\", \"title\": \"Ranks\", \"type\": \"boolean\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"claims\": {\"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Claims\", \"type\": \"array\"}}, \"required\": [\"claims\"], \"title\": \"_AnswerDraft\", \"type\": \"object\"}",
-  "input": "{\"claims\": [{\"text\": \"t\", \"evidence_ids\": \"e1\", \"ranks\": \"y\"}]}",
+  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"claims\": {\"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Claims\", \"type\": \"array\"}}, \"required\": [\"claims\"], \"title\": \"_AnswerDraft\", \"type\": \"object\"}",
+  "input": "{\"claims\": [{\"text\": \"t\", \"evidence_ids\": \"e1\"}]}",
   "result": {
    "errors": "[{\"type\":\"tuple_type\",\"loc\":[\"claims\",0,\"evidence_ids\"],\"msg\":\"Input should be a valid array\"}]"
   }
  },
  {
   "model": "_AnswerDraft",
-  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}, \"ranks\": {\"default\": false, \"description\": \"True if it states a rank or order among counted groups.\", \"title\": \"Ranks\", \"type\": \"boolean\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"claims\": {\"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Claims\", \"type\": \"array\"}}, \"required\": [\"claims\"], \"title\": \"_AnswerDraft\", \"type\": \"object\"}",
+  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"claims\": {\"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Claims\", \"type\": \"array\"}}, \"required\": [\"claims\"], \"title\": \"_AnswerDraft\", \"type\": \"object\"}",
   "input": "{\"claims\": [{\"evidence_ids\": []}]}",
   "result": {
    "errors": "[{\"type\":\"missing\",\"loc\":[\"claims\",0,\"text\"],\"msg\":\"Field required\"}]"
@@ -739,7 +738,7 @@
  },
  {
   "model": "_FieldAnswerDraft",
-  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}, \"ranks\": {\"default\": false, \"description\": \"True if it states a rank or order among counted groups.\", \"title\": \"Ranks\", \"type\": \"boolean\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"output_0\": {\"description\": \"The price of the first item\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 0\", \"type\": \"array\"}, \"output_2\": {\"description\": \"The name of the seller\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 2\", \"type\": \"array\"}}, \"required\": [\"output_0\", \"output_2\"], \"title\": \"_FieldAnswerDraft\", \"type\": \"object\"}",
+  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"output_0\": {\"description\": \"The price of the first item\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 0\", \"type\": \"array\"}, \"output_2\": {\"description\": \"The name of the seller\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 2\", \"type\": \"array\"}}, \"required\": [\"output_0\", \"output_2\"], \"title\": \"_FieldAnswerDraft\", \"type\": \"object\"}",
   "input": "{\"output_0\": [{\"text\": \"t\", \"evidence_ids\": [\"e1\"]}], \"output_2\": []}",
   "result": {
    "ok": {
@@ -748,8 +747,7 @@
       "text": "t",
       "evidence_ids": [
        "e1"
-      ],
-      "ranks": false
+      ]
      }
     ],
     "output_2": []
@@ -758,7 +756,7 @@
  },
  {
   "model": "_FieldAnswerDraft",
-  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}, \"ranks\": {\"default\": false, \"description\": \"True if it states a rank or order among counted groups.\", \"title\": \"Ranks\", \"type\": \"boolean\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"output_0\": {\"description\": \"The price of the first item\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 0\", \"type\": \"array\"}, \"output_2\": {\"description\": \"The name of the seller\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 2\", \"type\": \"array\"}}, \"required\": [\"output_0\", \"output_2\"], \"title\": \"_FieldAnswerDraft\", \"type\": \"object\"}",
+  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"output_0\": {\"description\": \"The price of the first item\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 0\", \"type\": \"array\"}, \"output_2\": {\"description\": \"The name of the seller\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 2\", \"type\": \"array\"}}, \"required\": [\"output_0\", \"output_2\"], \"title\": \"_FieldAnswerDraft\", \"type\": \"object\"}",
   "input": "{\"output_0\": [{\"text\": \"t\"}]}",
   "result": {
    "errors": "[{\"type\":\"missing\",\"loc\":[\"output_0\",0,\"evidence_ids\"],\"msg\":\"Field required\"},{\"type\":\"missing\",\"loc\":[\"output_2\"],\"msg\":\"Field required\"}]"
@@ -766,7 +764,7 @@
  },
  {
   "model": "_FieldAnswerDraft",
-  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}, \"ranks\": {\"default\": false, \"description\": \"True if it states a rank or order among counted groups.\", \"title\": \"Ranks\", \"type\": \"boolean\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"output_0\": {\"description\": \"The price of the first item\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 0\", \"type\": \"array\"}, \"output_2\": {\"description\": \"The name of the seller\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 2\", \"type\": \"array\"}}, \"required\": [\"output_0\", \"output_2\"], \"title\": \"_FieldAnswerDraft\", \"type\": \"object\"}",
+  "schema": "{\"$defs\": {\"Claim\": {\"additionalProperties\": false, \"properties\": {\"text\": {\"title\": \"Text\", \"type\": \"string\"}, \"evidence_ids\": {\"items\": {\"type\": \"string\"}, \"title\": \"Evidence Ids\", \"type\": \"array\"}}, \"required\": [\"text\", \"evidence_ids\"], \"title\": \"Claim\", \"type\": \"object\"}}, \"additionalProperties\": false, \"properties\": {\"output_0\": {\"description\": \"The price of the first item\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 0\", \"type\": \"array\"}, \"output_2\": {\"description\": \"The name of the seller\", \"items\": {\"$ref\": \"#/$defs/Claim\"}, \"title\": \"Output 2\", \"type\": \"array\"}}, \"required\": [\"output_0\", \"output_2\"], \"title\": \"_FieldAnswerDraft\", \"type\": \"object\"}",
   "input": "{\"output_0\": [], \"output_1\": [], \"output_2\": []}",
   "result": {
    "errors": "[{\"type\":\"extra_forbidden\",\"loc\":[\"output_1\"],\"msg\":\"Extra inputs are not permitted\"}]"

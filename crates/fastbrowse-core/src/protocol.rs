@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/protocol.py`: the messages `fastbrowse serve` exchanges with its client, and the version
+//! The messages `fastbrowse serve` exchanges with its client, and the version
 //! of that exchange.
 //!
 //! JSON-RPC 2.0, one message per line, each written as `model_dump_json()` writes it.

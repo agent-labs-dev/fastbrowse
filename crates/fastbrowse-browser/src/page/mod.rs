@@ -598,7 +598,6 @@ impl CdpPage {
                 response_status,
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
-                omitted_controls: 0,
                 viewport_text,
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
@@ -660,7 +659,6 @@ impl CdpPage {
             response_status: None,
             document_key: String::new(),
             controls: vec![],
-            omitted_controls: 0,
             viewport_text: String::new(),
             visual_content: false,
             tabs: self.session.tabs(),

@@ -1,4 +1,4 @@
-//! Port of `clients/validation.py`: shared wire encoding and strict validation for both Jev transports, and the retry
+//! Shared wire encoding and strict validation for both Jev transports, and the retry
 //! and accounting every model request goes through.
 //!
 //! Python cancels a call by raising `CancelledError` into it and lets each frame settle its receipts on the way out.

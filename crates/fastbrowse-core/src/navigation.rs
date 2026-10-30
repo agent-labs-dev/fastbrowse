@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/navigation.py`: addresses supplied by the caller, never inferred from page instructions.
+//! Addresses supplied by the caller, never inferred from page instructions.
 //!
 //! An address is judged as Chrome would load it (WHATWG, ADR 0002), where Python used `urlsplit`, `urljoin` and IDNA
 //! 2003. The cases where the two disagree are pinned in the tests below.

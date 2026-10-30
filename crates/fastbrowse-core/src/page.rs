@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/page.py`: the seam between the browser layer and the decision loop.
+//! The seam between the browser layer and the decision loop.
 //!
 //! The browser layer produces `Observation` (bounded, for Jev's action choice) and `Capture` (complete, for reading),
 //! and executes `Action`s. Nothing above this seam touches CDP.
@@ -204,9 +204,6 @@ pub struct Observation {
     #[serde(default)]
     pub document_key: String,
     pub controls: Vec<Control>,
-    /// Controls present but not offered because of observation limits.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub omitted_controls: i64,
     pub viewport_text: String,
     /// Whether the page's visible state is carried by pixels: a chart, picture, drawing or video with no control
     /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
@@ -561,7 +558,6 @@ mod tests {
             response_status: None,
             document_key: String::new(),
             controls: vec![],
-            omitted_controls: 0,
             viewport_text: String::new(),
             visual_content: false,
             tabs: vec![],

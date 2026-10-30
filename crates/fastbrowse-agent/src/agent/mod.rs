@@ -1,14 +1,11 @@
-//! Port of `src/fastbrowse/agent.py`, the run loop: Jev chooses each action, the LLM plans, reads, writes and
-//! recovers, and code owns every gate.
+//! The run loop: Jev chooses each action and decides when a page is read and when the run is done; the LLM plans,
+//! reads, writes and recovers.
 //!
 //! Only `Status::Complete` is success. Anything the loop cannot prove (an answer whose claims fail their checks, a
 //! DONE the verifier rejects at the end of the budget) is reported as what it is rather than rounded up.
 //!
-//! The module docstring of `agent.py` holds the invariants for guessed addresses, readings and holds; `Lineage`,
-//! `note_lineage` and `Notes::discredit` hold the detail. Every prompt and Jev request built here is byte for byte the
-//! one Python builds for the same inputs, since a run is proven by replaying recorded model traffic keyed on a hash of
-//! the request body. Python runs some calls side by side; here they run side by side too, and only their send order
-//! can differ.
+//! Every prompt and Jev request built here is a pure function of its inputs, since a run is replayed from recorded model
+//! traffic keyed on a hash of the request body. Some calls run side by side, and only their send order can differ.
 
 mod acting;
 mod driving;

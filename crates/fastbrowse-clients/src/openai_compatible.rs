@@ -1,4 +1,4 @@
-//! Port of `clients/openai_compatible.py`: structured chat completions with one schema repair and complete usage
+//! Structured chat completions with one schema repair and complete usage
 //! accounting.
 
 use std::collections::HashMap;

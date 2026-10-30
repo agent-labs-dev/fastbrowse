@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/adapters/totp.py`: authenticator codes computed locally when a secret is typed.
+//! Authenticator codes computed locally when a secret is typed.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

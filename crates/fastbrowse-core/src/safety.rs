@@ -1,5 +1,4 @@
-//! Port of `src/fastbrowse/safety.py`: gates code owns. Irreversible actions need authorization, and secrets never
-//! leave their origins or reach logs.
+//! Authorization for irreversible actions, and secrets that never leave their origins or reach logs.
 //!
 //! Models only ever see secret names. Values are resolved here, at dispatch time, for the origin being acted on.
 //! Origins are read as Chrome reads them (WHATWG, ADR 0002); the cases where that differs from `urlsplit` are pinned

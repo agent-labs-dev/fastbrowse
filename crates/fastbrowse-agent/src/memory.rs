@@ -1,11 +1,10 @@
-//! Port of `src/fastbrowse/memory.py`: small evidence-backed memory with stable citation ids and explicit truncation.
+//! Small evidence-backed memory with stable citation ids and explicit truncation.
 //!
-//! Python keeps several dicts and sets beside the facts; each dict here is an `IndexMap`, so whatever Python iterates
-//! in insertion order iterates the same way, and each set is only ever asked for membership or sorted first.
+//! Every map beside the facts is an `IndexMap`, so iteration follows insertion order, and each set is only ever asked
+//! for membership or sorted first.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
 
 use fastbrowse_core::models::{Evidence, FactReader};
 use fastbrowse_core::page::Capture;
@@ -33,37 +32,6 @@ impl Tally {
     pub fn count(&self) -> usize {
         self.records.iter().collect::<HashSet<_>>().len()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CountedGroup {
-    pub rank: i64,
-    pub group: String,
-    pub count: i64,
-    pub complete: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Standing {
-    /// 1 plus the number of groups counted for the same requirement with a higher count; equal counts tie.
-    pub rank: i64,
-    /// How many other groups share this count.
-    pub tied: i64,
-    /// Every group counted for the requirement, highest first.
-    pub groups: Vec<CountedGroup>,
-    pub group_count: i64,
-    /// Whether every group counted for the requirement is complete.
-    pub complete: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CollectionRead {
-    pub url: String,
-    /// Which state of the address was read: a list that loads more or pages in place keeps its URL.
-    pub capture_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,9 +305,6 @@ pub struct CapturedPage {
     pub title: String,
 }
 
-/// Whether a reading was taken on a guessed address.
-pub type Guessed = Arc<dyn Fn(&Evidence) -> bool + Send + Sync>;
-
 /// A requirement-scoped row identity: requirement, address without its fragment, squashed quote.
 pub type RecordIdentity = (String, String, String);
 
@@ -349,21 +314,14 @@ pub struct Notes {
     requirements: IndexMap<String, BTreeSet<String>>,
     owners: HashMap<String, BTreeSet<String>>,
     retired: HashSet<String>,
-    /// The readings a requirement was refused on as read off the wrong page, held from every requirement.
-    discredited: HashSet<String>,
-    /// Whether a reading was taken on the guess, asked afresh each time, since a later reading off the guess of the
-    /// same text frees it.
-    on_guess: Option<Guessed>,
     tally_records: HashSet<String>,
     record_ids: IndexMap<RecordIdentity, Vec<IndexMap<String, String>>>,
     continuation_records: IndexMap<String, HashSet<String>>,
-    collection_pages: IndexMap<String, IndexSet<CollectionRead>>,
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
 }
 
 /// Everything a `Notes` holds, as `tests/golden/capture.py` writes it, so a recorded call can start from the notes a
-/// Python test had built. Sets are sorted; maps keep insertion order. A guess test cannot be written down, so it is
-/// kept as the evidence ids it accepted when the state was taken.
+/// Python test had built. Sets are sorted; maps keep insertion order.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -372,12 +330,9 @@ pub struct NotesState {
     pub requirements: Vec<(String, Vec<String>)>,
     pub owners: Vec<(String, Vec<String>)>,
     pub retired: Vec<String>,
-    pub discredited: Vec<String>,
-    pub guessed: Option<Vec<String>>,
     pub tally_records: Vec<String>,
     pub record_ids: Vec<(RecordIdentity, Vec<IndexMap<String, String>>)>,
     pub continuation_records: Vec<(String, Vec<String>)>,
-    pub collection_pages: Vec<(String, Vec<CollectionRead>)>,
     pub pages: Vec<((String, String, DateTime), CapturedPage)>,
 }
 
@@ -399,17 +354,11 @@ impl Notes {
     #[doc(hidden)]
     pub fn from_state(state: NotesState) -> Notes {
         let sorted = |values: Vec<String>| values.into_iter().collect::<HashSet<_>>();
-        let on_guess: Option<Guessed> = state.guessed.map(|ids| {
-            let ids: HashSet<String> = ids.into_iter().collect();
-            Arc::new(move |evidence: &Evidence| ids.contains(&evidence_id(evidence))) as Guessed
-        });
         Notes {
             facts: state.facts.into_iter().collect(),
             requirements: state.requirements.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
             owners: state.owners.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
             retired: sorted(state.retired),
-            discredited: sorted(state.discredited),
-            on_guess,
             tally_records: sorted(state.tally_records),
             record_ids: state.record_ids.into_iter().collect(),
             continuation_records: state
@@ -417,7 +366,6 @@ impl Notes {
                 .into_iter()
                 .map(|(k, v)| (k, v.into_iter().collect()))
                 .collect(),
-            collection_pages: state.collection_pages.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
             pages: state.pages.into_iter().collect(),
         }
     }
@@ -429,18 +377,6 @@ impl Notes {
             values.sort();
             values
         };
-        let guessed = self.on_guess.as_ref().map(|on_guess| {
-            let mut ids: Vec<String> = self
-                .facts
-                .values()
-                .filter_map(|fact| fact.evidence.as_ref())
-                .filter(|evidence| on_guess(evidence))
-                .map(evidence_id)
-                .collect();
-            ids.sort();
-            ids.dedup();
-            ids
-        });
         NotesState {
             facts: self.facts.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             requirements: self.requirements.iter().map(|(k, v)| (k.clone(), v.iter().cloned().collect())).collect(),
@@ -452,16 +388,9 @@ impl Notes {
                 owners
             },
             retired: sorted(&self.retired),
-            discredited: sorted(&self.discredited),
-            guessed,
             tally_records: sorted(&self.tally_records),
             record_ids: self.record_ids.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             continuation_records: self.continuation_records.iter().map(|(k, v)| (k.clone(), sorted(v))).collect(),
-            collection_pages: self
-                .collection_pages
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
             pages: self.pages.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         }
     }
@@ -512,48 +441,19 @@ impl Notes {
             .collect()
     }
 
-    /// The quotes anything may build on: current, and not refused.
-    ///
-    /// Every constructor that gathers quotes it was not handed, such as a comparison taking the whole notes as its
-    /// proof, starts here. One that took `evidence` instead swept a held guessed reading into a legitimate rebuilt
-    /// ranking, and the ranking was refused for resting on it every time.
+    /// The quotes anything may build on: the current ones.
     pub fn usable_evidence(&self) -> IndexMap<String, Evidence> {
         self.facts
             .iter()
-            .filter(|(key, _)| self.current(key) && !self.refused(key))
+            .filter(|(key, _)| self.current(key))
             .filter_map(|(key, fact)| fact.evidence.as_ref().map(|evidence| (key.clone(), evidence.clone())))
             .collect()
-    }
-
-    /// The quotes among `keys` a claim citing them may rest on: current, and not refused.
-    ///
-    /// A claim names no requirement, so a hold cannot be judged per requirement there: one quote can carry a provider
-    /// name that stands and a price from the wrong dates, and a claim stating both while citing it got past a hold
-    /// kept for the price alone. A refused reading is refused for every claim instead.
-    pub fn usable_citations<'a>(&self, keys: impl IntoIterator<Item = &'a str>) -> IndexMap<String, Evidence> {
-        let usable = self.usable_evidence();
-        let mut cited = IndexMap::new();
-        for key in keys {
-            if let Some(evidence) = usable.get(key) {
-                cited.entry(key.to_string()).or_insert_with(|| evidence.clone());
-            }
-        }
-        cited
-    }
-
-    /// The facts refused now, for anything that caches a judgement of the notes: a hold changes what may be cited
-    /// without changing a single fact, so a cache keyed on the facts alone kept a refused answer.
-    pub fn refused_ids(&self) -> Vec<String> {
-        let mut refused: Vec<String> = self.facts.keys().filter(|key| self.refused(key)).cloned().collect();
-        refused.sort();
-        refused
     }
 
     /// The usable evidence a later read has not superseded, and a quote the given capture still shows there.
     ///
     /// A superseded fact stays as context but is not a current value, so offering it would let the extraction copy a
-    /// price the final page corrected; a quote from another page still stands. A held reading is not offered either:
-    /// readers, extraction and the answer would only build on it again.
+    /// price the final page corrected; a quote from another page still stands.
     pub fn current_evidence(&self, capture: Option<&Capture>) -> IndexMap<String, Evidence> {
         let current = self.usable_evidence();
         let Some(capture) = capture else { return current };
@@ -607,10 +507,9 @@ impl Notes {
                     occurrences.len() - 1
                 });
             occurrences[position].insert(sha, key.clone());
-            // One row read twice names one record, and it must never be a held reading while another stands: a
-            // recount on the run's own page with a new banner joined the refused row and was refused with it.
-            let readings: Vec<String> = self.record_ids[&identity][position].values().cloned().collect();
-            let canonical = readings.iter().find(|k| !self.refused(k)).unwrap_or(&readings[0]).clone();
+            // One row read twice names one record: its first reading.
+            let canonical =
+                self.record_ids[&identity][position].values().next().cloned().unwrap_or_else(|| key.clone());
             records.push(canonical);
             self.tally_records.insert(key.clone());
         }
@@ -627,15 +526,7 @@ impl Notes {
         .grounded()
         .map_err(AgentError::Invalid)?;
         let key = fact_id(&probe);
-        // A recount on the right page keeps the tally's key, so carrying the refused page's records into it would
-        // leave the count resting on them and refused again on every finish.
-        let carried: Vec<String> = self
-            .facts
-            .get(&key)
-            .map_or_else(Vec::new, |previous| previous.basis.clone())
-            .into_iter()
-            .filter(|record| !self.refused(record))
-            .collect();
+        let carried: Vec<String> = self.facts.get(&key).map_or_else(Vec::new, |previous| previous.basis.clone());
         let records = unique(carried.into_iter().chain(records));
         let tally = Tally { records: records.clone(), ..tally };
         let fact =
@@ -649,83 +540,6 @@ impl Notes {
 
     pub fn add_continuation(&mut self, requirement_id: &str, record_id: &str) {
         self.continuation_records.entry(requirement_id.into()).or_default().insert(record_id.into());
-    }
-
-    pub fn add_collection_page(&mut self, requirement_id: &str, url: &str, capture_sha256: &str) {
-        // Keyed by what was read, not where: Load more and in-place paging show new rows at one address, and keying by
-        // URL folded every later state into the first, so a state with no match left no trace of being read.
-        let read = CollectionRead { url: url.into(), capture_sha256: capture_sha256.into() };
-        self.collection_pages.entry(requirement_id.into()).or_default().insert(read);
-    }
-
-    /// Every read of a list that went on past one page, in reading order, matching records or not.
-    ///
-    /// A page with no matching record leaves no quote, so a check that judged coverage from the cited records alone
-    /// took that page for unread and refused a comparison code had closed over every page of the list.
-    pub fn collection_pages(&self, requirement_id: &str) -> Vec<CollectionRead> {
-        // A read whose rows for this collection are held was read off a refused guess: shown as read, it would stand
-        // for a page covered while none of its rows is counted. A held quote another requirement drew from the same
-        // page says nothing of this collection's rows, and dropping the page for it left a valid count unaudited.
-        let mut rows: HashSet<String> = self.comparison_records(Some(requirement_id)).into_iter().collect();
-        for fact in self.facts.values() {
-            if let Some(tally) = fact.tally.as_ref().filter(|tally| tally.requirement_id == requirement_id) {
-                rows.extend(tally.records.iter().cloned());
-            }
-        }
-        let held: HashSet<(String, String)> = rows
-            .iter()
-            .filter(|key| self.held(key))
-            .filter_map(|key| self.facts.get(key)?.evidence.as_ref())
-            .map(|evidence| (evidence.url.clone(), evidence.capture_sha256.clone()))
-            .collect();
-        self.collection_pages.get(requirement_id).map_or_else(Vec::new, |reads| {
-            reads
-                .iter()
-                .filter(|read| !held.contains(&(read.url.clone(), read.capture_sha256.clone())))
-                .cloned()
-                .collect()
-        })
-    }
-
-    /// Where a counted group ranks among every group counted for its requirement; None for a lone group.
-    ///
-    /// A rank is decided by every other group's count. A ranking claim that cites only its own group's tally shows the
-    /// claim check that group's records and nothing they beat, and citing every group's records instead can overflow
-    /// its budget. Each count here is code's, over records `add_tally` checked were captured spans.
-    pub fn standing(&self, tally: &Tally) -> Option<Standing> {
-        let mut tallies: Vec<(&Tally, bool)> = self
-            .facts
-            .iter()
-            // A count resting on a held reading ranks against nothing: it is no count of the right page.
-            .filter(|(key, _)| !self.refused(key))
-            .filter_map(|(key, fact)| {
-                let counted = fact.tally.as_ref().filter(|counted| counted.requirement_id == tally.requirement_id)?;
-                Some((counted, self.requirements_of(key).is_some_and(|ids| ids.contains(&counted.requirement_id))))
-            })
-            .collect();
-        tallies.sort_by(|a, b| {
-            (std::cmp::Reverse(a.0.count()), &a.0.key).cmp(&(std::cmp::Reverse(b.0.count()), &b.0.key))
-        });
-        if tallies.len() < 2 || !tallies.iter().any(|(counted, _)| counted.key == tally.key) {
-            return None;
-        }
-        let rank_of = |count: usize| 1 + tallies.iter().filter(|(other, _)| other.count() > count).count() as i64;
-        let count = tally.count();
-        Some(Standing {
-            rank: rank_of(count),
-            tied: tallies.iter().filter(|(other, _)| other.count() == count).count() as i64 - 1,
-            groups: tallies
-                .iter()
-                .map(|(group, complete)| CountedGroup {
-                    rank: rank_of(group.count()),
-                    group: group.key.clone(),
-                    count: group.count() as i64,
-                    complete: *complete,
-                })
-                .collect(),
-            group_count: tallies.len() as i64,
-            complete: tallies.iter().all(|(_, complete)| *complete),
-        })
     }
 
     pub fn comparison_records(&self, requirement_id: Option<&str>) -> Vec<String> {
@@ -752,10 +566,7 @@ impl Notes {
         let keys: Vec<String> = self
             .facts
             .iter()
-            .filter(|(key, fact)| {
-                fact.tally.as_ref().is_some_and(|tally| tally.requirement_id == requirement_id)
-                    && !self.rests_on_held(key, &fact.basis)
-            })
+            .filter(|(_, fact)| fact.tally.as_ref().is_some_and(|tally| tally.requirement_id == requirement_id))
             .map(|(key, _)| key.clone())
             .collect();
         for key in keys {
@@ -766,64 +577,13 @@ impl Notes {
         }
     }
 
-    /// Whether a fact is, or concludes from, a held reading.
-    ///
-    /// Every path that lets a fact evidence a requirement asks this, since one that did not reopened the loop
-    /// `discredit` closes: a count completed from the refused page's records answered the requirement again.
-    fn rests_on_held(&self, key: &str, basis: &[String]) -> bool {
-        if self.discredited.is_empty() {
-            return false;
-        }
-        self.held(key)
-            || self.expand_evidence_ids(basis.iter().map(String::as_str)).iter().any(|source| self.held(source))
-    }
-
-    /// Whether a fact is, or concludes from, a held reading: context the run may see while choosing what to do, never
-    /// something to cite or build on. Offered to the composer, a held value was cited in an answer whose requirement
-    /// it could no longer evidence.
-    pub fn refused(&self, key: &str) -> bool {
-        let basis = self.facts.get(key).map_or(&[][..], |fact| fact.basis.as_slice());
-        self.rests_on_held(key, basis)
-    }
-
-    /// Whether a reading some requirement was refused on is still a reading taken only on the guess.
-    ///
-    /// Held by its fact id alone, a reading never came back: a page that keeps its search outside the address, reached
-    /// again by the run itself, drew the same text, cut the same fact and was refused for good. A hold is the refused
-    /// reading while nothing has read the same text off the guess.
-    pub fn held(&self, key: &str) -> bool {
-        self.discredited.contains(key)
-            && self
-                .facts
-                .get(key)
-                .and_then(|fact| fact.evidence.as_ref())
-                .is_some_and(|evidence| self.on_guess.as_ref().is_some_and(|on_guess| on_guess(evidence)))
-    }
-
     /// Whether a new span was added; reused spans still evidence other requirements.
     pub fn add(&mut self, fact: Fact) -> bool {
         let key = fact_id(&fact);
         self.retired.remove(&key);
-        if let Some(evidence) = &fact.evidence
-            && self.facts.contains_key(&key)
-            && self.held(&key)
-            && self.on_guess.as_ref().is_some_and(|on_guess| !on_guess(evidence))
-        {
-            // The same text read off the guess at an address that differs only in its fragment has this id, since an
-            // id ignores the fragment while lineage keeps it: a search routed by fragment, rebuilt with identical
-            // text, stayed held on the old address. The reading the run took itself stands in its place.
-            if let Some(existing) = self.facts.get_mut(&key) {
-                existing.evidence = Some(evidence.clone());
-            }
-        }
         self.requirements.entry(key.clone()).or_default();
         if let Some(requirement_id) = &fact.requirement_id {
-            // A re-added fact keeps the basis it had, so the refused quotes are looked for in both.
-            let mut basis = self.facts.get(&key).map_or_else(Vec::new, |previous| previous.basis.clone());
-            basis.extend(fact.basis.iter().cloned());
-            if !self.rests_on_held(&key, &basis) {
-                self.requirements.entry(key.clone()).or_default().insert(requirement_id.clone());
-            }
+            self.requirements.entry(key.clone()).or_default().insert(requirement_id.clone());
             self.owners.entry(key.clone()).or_default().insert(requirement_id.clone());
         }
         if let Some(previous) = self.facts.get(&key) {
@@ -919,19 +679,11 @@ impl Notes {
             owners: facts.keys().map(|key| (key.clone(), self.owners.get(key).cloned().unwrap_or_default())).collect(),
             facts,
             retired: self.retired.intersection(&kept).cloned().collect(),
-            discredited: self.discredited.clone(),
-            on_guess: self.on_guess.clone(),
             tally_records: self.tally_records.intersection(&kept).cloned().collect(),
             continuation_records: self
                 .continuation_records
                 .iter()
                 .map(|(requirement, records)| (requirement.clone(), records.intersection(&kept).cloned().collect()))
-                .collect(),
-            collection_pages: self
-                .collection_pages
-                .iter()
-                .filter(|(requirement, _)| wanted.contains(requirement.as_str()))
-                .map(|(requirement, pages)| (requirement.clone(), pages.clone()))
                 .collect(),
             record_ids: self
                 .record_ids
@@ -955,46 +707,6 @@ impl Notes {
         let dropped: HashSet<&str> = requirement_ids.into_iter().collect();
         for requirements in self.requirements.values_mut() {
             requirements.retain(|id| !dropped.contains(id.as_str()));
-        }
-    }
-
-    /// Reopen requirements read off the wrong page, and keep the readings taken there from answering them again.
-    ///
-    /// Evidence is held only if it was read while on a built address, and only that reading: `guessed` says whether a
-    /// reading was, and is asked again whenever a hold is checked.
-    ///
-    /// Reopening alone was not enough: the next read, on the search the run had since rebuilt through the form,
-    /// concluded the refused value again by drawing on the reopened quotes, and every DONE got the same refusal until
-    /// the run stopped stuck. Holding more than the guessed readings left requirements open for good: a quote from a
-    /// page the run reached itself, refused alongside a guessed one, or the same text read again once the run set the
-    /// search up itself. A conclusion or tally is held through the readings it rests on, never by its own name, so a
-    /// recount on the right page still counts. Held facts stay as context.
-    ///
-    /// A hold is not kept per requirement. One quote can answer two, and a claim citing it for the one never refused
-    /// also stated the refused value from it; nothing tells which part of a quote a claim relied on. So a held reading
-    /// answers nothing: every requirement resting on it reopens, and one the verifier never doubted is answered again
-    /// from a fresh reading, off the guess, the way the refused one is.
-    pub fn discredit<'a>(&mut self, requirement_ids: impl IntoIterator<Item = &'a str>, guessed: Guessed) {
-        self.on_guess = Some(guessed.clone());
-        // Every refused requirement's support is gathered before any hold is applied: holding one requirement's
-        // readings first refused a conclusion another rested on, its support came back empty, and a guessed quote
-        // only that conclusion drew on was never held.
-        let requirements: IndexSet<&str> = requirement_ids.into_iter().collect();
-        let roots: Vec<String> =
-            requirements.iter().flat_map(|requirement| self.supporting(requirement)).map(|(key, _)| key).collect();
-        let supporting = self.expand_evidence_ids(roots.iter().map(String::as_str));
-        let held: Vec<String> = supporting
-            .into_iter()
-            .filter(|key| self.facts.get(key).and_then(|fact| fact.evidence.as_ref()).is_some_and(|e| guessed(e)))
-            .collect();
-        self.discredited.extend(held);
-        // Only what rests on a held quote is reopened: a quote from a page the run reached itself was never doubted,
-        // and reopening it too left the requirement open until a reread happened to cite it again.
-        let reopened: Vec<String> = self.requirements.keys().filter(|key| self.refused(key)).cloned().collect();
-        for key in reopened {
-            if let Some(requirements) = self.requirements.get_mut(&key) {
-                requirements.clear();
-            }
         }
     }
 
@@ -1084,15 +796,11 @@ impl Notes {
     }
 
     /// A tally is ranked by code; other facts keep the order they were read in.
-    ///
-    /// A refused fact supports nothing even while it still names the requirement: a hold is asked of the lineage each
-    /// time, so one lifted by a reading off the guess, answered again, comes back once the run reads the guessed page
-    /// again, and the requirement stood on a quote no claim could cite.
     pub fn supporting(&self, requirement_id: &str) -> Vec<(String, Fact)> {
         let mut supporting: Vec<(String, Fact)> = self
             .requirements
             .iter()
-            .filter(|(key, ids)| ids.contains(requirement_id) && !self.refused(key))
+            .filter(|(_, ids)| ids.contains(requirement_id))
             .filter_map(|(key, _)| Some((key.clone(), self.facts.get(key)?.clone())))
             .collect();
         supporting.sort_by_key(|(_, fact)| std::cmp::Reverse(fact.tally.as_ref().map_or(0, Tally::count)));
@@ -1301,18 +1009,14 @@ impl Notes {
             rendered.join("\n")
         };
 
-        // A refused fact is never offered to cite, whatever reads these notes: a reader, the composer, a verdict.
-        let mut ranked: Vec<(&String, &Fact)> = self
-            .facts
-            .iter()
-            .filter(|(key, _)| (!summarized.contains(*key) || self.answers_any(key)) && !self.refused(key))
-            .collect();
+        let mut ranked: Vec<(&String, &Fact)> =
+            self.facts.iter().filter(|(key, _)| !summarized.contains(*key) || self.answers_any(key)).collect();
         // Counts are ranked in code; the reader need only select the output the task asked for.
         ranked.sort_by(|a, b| tally_order(a.1).cmp(&tally_order(b.1)));
 
         let complete = render(&ranked);
         if size(&complete) <= budget {
-            let ids = self.facts.keys().filter(|key| !self.refused(key)).cloned().collect();
+            let ids = self.facts.keys().cloned().collect();
             return Ok(RenderedNotes { text: complete, evidence_ids: ids });
         }
         let answering: Vec<&str> =
@@ -1551,27 +1255,6 @@ mod tests {
             assert!(notes.add(Fact::read(None, "fact", evidence, FactReader::Llm)));
         }
         assert_eq!(notes.facts().len(), 2);
-    }
-
-    #[test]
-    fn test_a_refusal_holds_only_the_quotes_read_on_the_guess() {
-        let (guessed, right) = ("https://example.test/search?q=guess", "https://example.test/search?tfs=set");
-        let on_guess = quoted("Fare $320", "guess", guessed);
-        let on_right = quoted("Fare $305", "right", right);
-        let mut notes = Notes::new([on_guess.clone(), on_right.clone()]);
-        let held_url = guessed.to_string();
-        notes.discredit(["r1"], Arc::new(move |evidence: &Evidence| evidence.url == held_url));
-        let supporting =
-            |notes: &Notes| -> Vec<String> { notes.supporting("r1").into_iter().map(|(k, _)| k).collect() };
-        assert_eq!(supporting(&notes), [fact_id(&on_right)]);
-        notes.add(on_guess.clone());
-        notes.add(on_right.clone());
-        assert_eq!(supporting(&notes), [fact_id(&on_right)]);
-        let concluded = Fact::derived(Some("r1"), "$305", vec![fact_id(&on_right)], FactReader::Llm).unwrap();
-        let mixed = Fact::derived(Some("r1"), "$320", vec![fact_id(&on_guess)], FactReader::Llm).unwrap();
-        notes.add(concluded.clone());
-        notes.add(mixed);
-        assert_eq!(supporting(&notes), [fact_id(&on_right), fact_id(&concluded)]);
     }
 
     #[test]

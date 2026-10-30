@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/llm.py`: the contract for the injected LLM, structured generation for a named purpose.
+//! The contract for the injected LLM, structured generation for a named purpose.
 //!
 //! Python's `generate` is generic over the pydantic model it fills. A generic method would keep the trait from
 //! being a `dyn` object, which a failover between providers needs, so the trait takes the response model as a
@@ -157,49 +157,10 @@ pub trait LLMClientExt: LLMClient {
 
 impl<C: LLMClient + ?Sized> LLMClientExt for C {}
 
-/// The generation, its receipt already in `ledger`.
-///
-/// A successful generation leaves its receipt to the caller. A call run beside another returned into a task that
-/// could be dropped before its caller recorded it: a verifier that finished while the audit beside it failed was
-/// paid for and never billed. Recorded where it was made, a finished call is a billed call, whatever happens to its
-/// sibling. A receipt that breaks a limit is kept and the limit reported.
-pub async fn recorded<T, F>(generating: F, ledger: Option<&Ledger>) -> Result<Generation<T>, LLMError>
-where
-    F: Future<Output = Result<Generation<T>, LLMError>>,
-{
-    let generated = generating.await?;
-    if let Some(ledger) = ledger {
-        ledger.record([generated.cost.clone()])?;
-    }
-    Ok(generated)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{CostBasis, CostComponent, Limits};
     use crate::py::dump::Dump;
-    use crate::testing::block_on;
-
-    fn line(dollars: f64) -> CostLine {
-        CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(dollars))
-    }
-
-    #[test]
-    fn a_recorded_generation_is_billed_where_it_finished() {
-        let ledger = Ledger::new(Limits::default());
-        let generated = block_on(recorded(async { Ok(Generation { data: 1, cost: line(0.5) }) }, Some(&ledger)));
-        assert_eq!(generated.unwrap().data, 1);
-        assert_eq!(ledger.breakdown().known_dollars(), 0.5);
-    }
-
-    #[test]
-    fn a_receipt_over_the_cap_is_kept_and_reported() {
-        let ledger = Ledger::new(Limits { max_dollars: Some(0.1), ..Limits::default() });
-        let generated = block_on(recorded(async { Ok(Generation { data: (), cost: line(0.5) }) }, Some(&ledger)));
-        assert!(matches!(generated, Err(LLMError::Budget(_))));
-        assert_eq!(ledger.breakdown().lines.len(), 1);
-    }
 
     #[test]
     fn a_message_dumps_as_pydantic_does() {

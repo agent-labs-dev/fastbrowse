@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/mcp_server.py`: an MCP server that runs fastbrowse tasks for a model, with one `browse`
+//! An MCP server that runs fastbrowse tasks for a model, with one `browse`
 //! tool, over stdio or streamable HTTP.
 //!
 //! ```text
@@ -33,8 +33,6 @@ use crate::{bitwarden, pyjson};
 
 pub const TOKEN_VARIABLE: &str = "FASTBROWSE_MCP_TOKEN";
 pub const HEALTH_PATH: &str = "/healthz";
-/// What FastMCP reports as the server's version: the `mcp` package's own.
-const SDK_VERSION: &str = "1.30.0";
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
 const INSTRUCTIONS: &str = "fastbrowse drives a real browser. Each browse call is one task from one start page and can \
@@ -658,7 +656,7 @@ impl McpServer {
                             "resources": {"subscribe": false, "listChanged": false},
                             "tools": {"listChanged": false},
                         },
-                        "serverInfo": {"name": "fastbrowse", "version": SDK_VERSION},
+                        "serverInfo": {"name": "fastbrowse", "version": env!("CARGO_PKG_VERSION")},
                         "instructions": INSTRUCTIONS,
                     }),
                 ));

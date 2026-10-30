@@ -492,7 +492,7 @@ pub fn field_question(
 const FIELD_GROUP_SIZE: usize = 30;
 
 /// Candidates split for a group choice, at most `max_options` minus its none option.
-pub fn field_candidate_groups(candidates: &[Candidate], max_options: usize) -> Vec<Vec<Candidate>> {
+fn field_candidate_groups(candidates: &[Candidate], max_options: usize) -> Vec<Vec<Candidate>> {
     let mut size = FIELD_GROUP_SIZE.min(max_options - 1);
     if candidates.len().div_ceil(size) >= max_options {
         size = candidates.len().div_ceil(max_options - 1);
@@ -502,7 +502,7 @@ pub fn field_candidate_groups(candidates: &[Candidate], max_options: usize) -> V
 
 /// The first of two choices when the candidate pool exceeds one Jev question. Every candidate is described in exactly
 /// one group, and the inner question still offers none, so widening the pool drops no value.
-pub fn field_group_question(
+fn field_group_question(
     field: &ScalarField,
     groups: &[Vec<Candidate>],
     name: Option<&str>,

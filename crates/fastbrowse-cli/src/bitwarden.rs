@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/adapters/bitwarden.py`: login values from a Bitwarden vault item, read through the `bw` CLI
+//! Login values from a Bitwarden vault item, read through the `bw` CLI
 //! the user has unlocked.
 //!
 //! The item's own saved URIs decide where it may be used, under each URI's match detection. Secrets here are scoped

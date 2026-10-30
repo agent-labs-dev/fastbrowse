@@ -4,7 +4,7 @@
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
-    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, JEV_MODEL, NO_IMAGES, Question, without_images,
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, NO_IMAGES, Question, without_images,
 };
 use fastbrowse_core::py::base64;
 use indexmap::IndexMap;
@@ -90,11 +90,6 @@ impl SystemOneClient {
     pub fn unpriced(mut self) -> SystemOneClient {
         self.profile.dollars_per_input_token = None;
         self
-    }
-
-    /// The direct API with its default model.
-    pub fn direct(api_key: impl Into<String>, http: Http) -> SystemOneClient {
-        SystemOneClient::new(api_key, http, TYPESAFE_URL, JEV_MODEL).typesafe()
     }
 
     async fn ask(

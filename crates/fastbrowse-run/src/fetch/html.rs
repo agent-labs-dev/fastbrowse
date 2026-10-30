@@ -1,4 +1,4 @@
-//! `fetch.py`'s `_Reader`: the rendered text of one served document as the blocks a reader cites, without running it.
+//! The rendered text of one served document as the blocks a reader cites, without running it.
 //!
 //! The tokenizer is CPython 3.13's `html.parser.HTMLParser` with `convert_charrefs=True`, fed the whole document and
 //! closed: the same tags, the same raw-text elements, and the same rule for a construct the document never closes.

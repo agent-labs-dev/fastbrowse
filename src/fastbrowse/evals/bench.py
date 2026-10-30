@@ -599,8 +599,7 @@ async def run_suite(args: argparse.Namespace) -> int:
         elif path.exists():
             cassette = Cassette.load(path)
         else:
-            print(f"SKIP  {task.id}: no cassette at {path}", flush=True)
-            continue
+            raise SystemExit(f"{task.id}: no cassette at {path}; record it first")
         before = len(cassette.exchanges)
         # A fill pass serves what it has at once and sends each miss upstream, where it takes real time, so the
         # run can branch again after it. Each pass extends the instant path, until one sends nothing upstream.
@@ -750,7 +749,6 @@ def python_footprint() -> dict[str, Any]:
     return {
         "site_packages_bytes": sum(packages.values()),
         "packages": dict(sorted(packages.items(), key=lambda item: -item[1])),
-        "npm_darwin_arm64_unpacked_bytes": 52_900_000,
     }
 
 
@@ -847,7 +845,6 @@ def markdown(summary: dict[str, Any]) -> str:
     if footprint:
         lines += ["## Footprint", "", "| what | MiB |", "|---|---:|"]
         lines.append(f"| site-packages, fastbrowse and runtime deps | {_mib(footprint['site_packages_bytes'])} |")
-        lines.append(f"| npm package, darwin-arm64, unpacked | {_mib(footprint['npm_darwin_arm64_unpacked_bytes'])} |")
         for path, size in footprint.get("installed", {}).items():
             lines.append(f"| {path} | {_mib(size)} |")
         lines.append("")
@@ -873,7 +870,7 @@ def report(args: argparse.Namespace) -> int:
     if args.footprint:
         summary["footprint"] = python_footprint()
     if args.installed:
-        summary.setdefault("footprint", {"site_packages_bytes": None, "npm_darwin_arm64_unpacked_bytes": 52_900_000})
+        summary.setdefault("footprint", {"site_packages_bytes": None})
         summary["footprint"]["installed"] = {str(p): _directory_bytes(p) for p in args.installed}
     text = markdown(summary)
     if args.markdown:

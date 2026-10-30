@@ -1,4 +1,4 @@
-//! Port of `clients/environment.py`: settings from the environment and `.env`, and the default Jev and LLM clients
+//! Settings from the environment and `.env`, and the default Jev and LLM clients
 //! built from them.
 //!
 //! Jev: TYPESAFE_API_KEY selects direct TypeSafe; otherwise OPENROUTER_API_KEY is primary, with AI_GATEWAY_API_KEY

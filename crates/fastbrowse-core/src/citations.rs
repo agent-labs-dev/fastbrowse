@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/citations.py`: WICG text-fragment deep links derived from captured quotes.
+//! WICG text-fragment deep links derived from captured quotes.
 
 use std::fmt;
 

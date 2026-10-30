@@ -1,5 +1,4 @@
-//! Port of `src/fastbrowse/comparison.py`: numeric rankings over complete, cited records, with ambiguous fields left to
-//! the reader.
+//! Numeric rankings over complete, cited records, with ambiguous fields left to the reader.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -175,11 +174,8 @@ fn amount(value: &str) -> Option<(&str, Number)> {
 }
 
 pub fn complete_comparison(notes: &mut Notes, requirement_id: &str, comparison: &NumericComparison) -> bool {
-    // Only quotes the requirement may still rest on: a held guessed row, or the whole notes taken as context with it,
-    // left a rebuilt ranking refused for good.
     let known = notes.usable_evidence();
-    let records: Vec<String> =
-        notes.comparison_records(Some(requirement_id)).into_iter().filter(|key| !notes.refused(key)).collect();
+    let records = notes.comparison_records(Some(requirement_id));
     if records.is_empty() {
         return false;
     }

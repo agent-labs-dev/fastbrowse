@@ -574,7 +574,7 @@ mod tests {
     fn page() -> Observation {
         serde_json::from_value(json!({
             "url": "https://example.test/encode/httpx", "title": "encode/httpx", "page_key": "k",
-            "captured_at": "2026-01-01T00:00:00Z", "controls": [], "omitted_controls": 0,
+            "captured_at": "2026-01-01T00:00:00Z", "controls": [],
             "viewport_text": "encode/httpx", "tabs": [],
         }))
         .expect("observation")

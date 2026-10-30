@@ -1,5 +1,4 @@
-//! Port of `src/fastbrowse/batches.py`: many independent questions against one shared state, packed under Jev's
-//! input limits and sent together.
+//! Many independent questions against one shared state, packed under Jev's input limits and sent together.
 
 use std::sync::{Mutex, MutexGuard};
 

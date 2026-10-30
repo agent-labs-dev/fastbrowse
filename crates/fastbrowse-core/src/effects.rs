@@ -1,10 +1,9 @@
-//! Port of `src/fastbrowse/effects.py`: what an action visibly did, told back to the policy so that a no-op cannot
-//! pass for progress.
+//! What an action visibly did, told back to the policy so that a no-op cannot pass for progress.
 
 use indexmap::IndexMap;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::page::{BlockKind, Capture, Control, Observation};
+use crate::page::{Control, Observation};
 use crate::py::{json::dumps, sha256_hex, text};
 
 /// Clicking one of these is choosing a value, so it should leave some value, selection or address changed.
@@ -26,27 +25,6 @@ pub fn state_key(observation: &Observation) -> String {
         .collect();
     controls.sort();
     sha256_hex(dumps(&json!([observation.url, controls])).as_bytes())
-}
-
-/// Identify which step or content state a capture shows: its page state and the shape of its text.
-///
-/// A wizard's Review and Submit steps can share an address and their Back and Next buttons, so `state_key` takes one
-/// for the other. Each block's kind and the headings over it tell them apart, while a block's own words are left
-/// out: a countdown or a corrected name changes them on every capture of the same step.
-pub fn step_key(observation: &Observation, capture: &Capture) -> String {
-    let shape: Vec<Value> = capture
-        .blocks
-        .iter()
-        .filter(|block| block.kind != BlockKind::Observation)
-        .map(|block| json!([block.kind, block.frame_id, block.heading_path]))
-        .collect();
-    let headings: Vec<&str> = capture
-        .blocks
-        .iter()
-        .filter(|block| block.kind == BlockKind::Heading)
-        .map(|block| capture.block_text(block))
-        .collect();
-    sha256_hex(dumps(&json!([state_key(observation), shape, headings])).as_bytes())
 }
 
 /// A control attribute as `str()` shows it.
@@ -196,7 +174,6 @@ mod tests {
             response_status: None,
             document_key: String::new(),
             controls,
-            omitted_controls: 0,
             viewport_text: String::new(),
             visual_content: false,
             tabs: vec![],

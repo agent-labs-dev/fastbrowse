@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/cli.py`: run one task from the terminal.
+//! Run one task from the terminal.
 //!
 //! ```text
 //! fastbrowse "What is the latest version of httpx?" --start https://pypi.org/
@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
@@ -510,9 +510,4 @@ fn with_build(mut result: serde_json::Value, build: &Build) -> serde_json::Value
         fields.insert("build".into(), build.fields().into());
     }
     result
-}
-
-/// A path as `Path.resolve()` would leave it, for messages that name one.
-pub fn shown(path: &Path) -> String {
-    path.display().to_string()
 }

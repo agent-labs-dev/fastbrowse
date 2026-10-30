@@ -221,9 +221,9 @@ async fn test_an_error_status_retry_does_not_add_llm_cost() {
 #[tokio::test]
 async fn test_a_response_cut_off_sends_no_cap_and_is_reported_once() {
     let script = Script::new([truncated(r#"{"count":""#), stopped(r#"{"count":5}"#, None)]);
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Verify, "verifier");
-    let error = generate(&llm, LLMPurpose::Verify, &[], None).await.unwrap_err();
-    assert!(error.to_string().contains("cut off before its JSON ended (verify)"), "{error}");
+    let llm = client(script.http(), "https://llm.test", LLMPurpose::Compose, "composer");
+    let error = generate(&llm, LLMPurpose::Compose, &[], None).await.unwrap_err();
+    assert!(error.to_string().contains("cut off before its JSON ended (compose)"), "{error}");
     assert!(!error.to_string().contains("schema"));
     assert_eq!(script.requests().len(), 1);
     assert_eq!(caps(&script), [Value::Null]);

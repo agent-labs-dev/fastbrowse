@@ -90,19 +90,12 @@ fn session_id() -> String {
     fastbrowse_core::py::sha256_hex(seed.as_bytes())[..32].to_string()
 }
 
-/// One session's state beside the MCP session itself: the GET stream, when a client opened one.
-#[derive(Default)]
-struct Open {
-    session: Arc<Session>,
-    listening: Option<mpsc::UnboundedSender<Bytes>>,
-}
-
 pub struct Http {
     server: Arc<McpServer>,
     token: Option<String>,
     /// DNS rebinding protection, on when the server is bound to loopback.
     loopback_only: bool,
-    sessions: Mutex<HashMap<String, Open>>,
+    sessions: Mutex<HashMap<String, Arc<Session>>>,
 }
 
 /// Constant-time comparison, so the token cannot be recovered a byte at a time from response timings.
@@ -144,7 +137,7 @@ impl Http {
         Arc::new(Http { server, token, loopback_only, sessions: Mutex::default() })
     }
 
-    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Open>> {
+    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Session>>> {
         self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
@@ -183,10 +176,10 @@ impl Http {
             Some(_) => return server_error(StatusCode::NOT_FOUND, -32600, "Session not found", None),
             None => (session_id(), true),
         };
-        let session = if opening { Arc::new(Session::default()) } else { self.sessions()[&id].session.clone() };
+        let session = if opening { Arc::new(Session::default()) } else { self.sessions()[&id].clone() };
         let (response, established) = self.transport(method, headers, body, &id, &session, opening);
         if opening && established {
-            self.sessions().insert(id, Open { session, listening: None });
+            self.sessions().insert(id, session);
         }
         response
     }
@@ -292,26 +285,6 @@ impl Http {
                 });
                 self.server.receive(session, &line, &outbox);
                 (events(receiver, id), initializing)
-            }
-            Method::GET => {
-                if !sse_ok {
-                    let message = "Not Acceptable: Client must accept text/event-stream";
-                    return refused(server_error(StatusCode::NOT_ACCEPTABLE, -32600, message, Some(id)));
-                }
-                if let Some(response) = check_headers() {
-                    return refused(response);
-                }
-                let mut sessions = self.sessions();
-                let Some(open) = sessions.get_mut(id) else {
-                    return refused(server_error(StatusCode::NOT_FOUND, -32600, "Session not found", None));
-                };
-                if open.listening.as_ref().is_some_and(|sender| !sender.is_closed()) {
-                    let message = "Conflict: Only one SSE stream is allowed per session";
-                    return refused(server_error(StatusCode::CONFLICT, -32000, message, Some(id)));
-                }
-                let (sender, receiver) = mpsc::unbounded_channel();
-                open.listening = Some(sender);
-                (events(receiver, id), false)
             }
             Method::DELETE => {
                 if let Some(response) = check_headers() {

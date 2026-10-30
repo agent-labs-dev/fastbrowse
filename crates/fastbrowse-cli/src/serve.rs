@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/serve.py`: serve runs to another process over JSON-RPC on stdio.
+//! Serve runs to another process over JSON-RPC on stdio.
 //!
 //! ```text
 //! fastbrowse serve --stdio

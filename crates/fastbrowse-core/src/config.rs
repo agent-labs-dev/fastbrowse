@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/config.py`: tunable policy. Defaults are starting points to be recalibrated from recorded
+//! Tunable policy. Defaults are starting points to be recalibrated from recorded
 //! decision packets.
 
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ pub struct Thresholds {
     pub recover_below: f64,
     #[serde(deserialize_with = "lax::float")]
     pub login_required_above: f64,
-    /// Jev's agreement, on a page it also judged a wall, that the wall is a bot check and not a sign-in.
+    /// Jev's agreement that the page is a bot check, above which the run waits for it to clear or stops on it.
     #[serde(deserialize_with = "lax::float")]
     pub bot_check_above: f64,
     #[serde(deserialize_with = "lax::float")]

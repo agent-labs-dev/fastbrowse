@@ -1,5 +1,4 @@
-//! Port of `src/fastbrowse/policy.py`: Jev's per-step decision, one batched request that picks the operation and its
-//! target.
+//! Jev's per-step decision: one batched request that picks the operation and its target.
 //!
 //! Question wording is adapted from browser-use/jev-ultrafast (MIT) `questions.py` and `model.py`, where it was
 //! live-bench proven. The batch asks for an operation, its possible targets, and an optional login check. Choices
@@ -785,14 +784,14 @@ pub fn build_request(
     compact: bool,
 ) -> Request {
     let indexed = index_controls(controls);
-    // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls,
-    // offered or omitted, has no form to lose, and a run asked again because it is stuck may need to start over.
+    // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls
+    // has no form to lose, and a run asked again because it is stuck may need to start over.
     let urls = navigation_urls(
         &context.task,
         &observation.url,
         context.start_url.as_deref(),
         context.start_landing_url.as_deref(),
-        (observation.controls.is_empty() && observation.omitted_controls == 0) || context.problem.is_some(),
+        observation.controls.is_empty() || context.problem.is_some(),
     );
     let offered = offered_operations(observation, &indexed, context, &urls);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
@@ -1106,7 +1105,7 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     if !context.secrets.is_empty() {
         state.insert("stored_secrets".into(), json!(context.secrets));
     }
-    let omitted = observation.omitted_controls + observation.controls.len() as i64 - controls.len() as i64;
+    let omitted = observation.controls.len() - controls.len();
     if omitted > 0 {
         state.insert("omitted_elements".into(), omitted.into());
     }
@@ -1308,7 +1307,7 @@ mod tests {
     fn observation(controls: Vec<Control>) -> Observation {
         serde_json::from_value(json!({
             "url": "https://example.test/", "title": "t", "page_key": "k", "captured_at": "2026-09-26T20:00:00Z",
-            "controls": controls.iter().map(Dump::dump).collect::<Vec<_>>(), "omitted_controls": 0,
+            "controls": controls.iter().map(Dump::dump).collect::<Vec<_>>(),
             "viewport_text": "", "tabs": [],
         }))
         .unwrap()

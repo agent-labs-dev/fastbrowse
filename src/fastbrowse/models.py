@@ -179,7 +179,6 @@ class LLMPurpose(StrEnum):
     READ = "read"
     FIELD_TEXT = "field_text"
     RECOVER = "recover"
-    VERIFY = "verify"
     COMPOSE = "compose"
     SHORTCUT = "shortcut"
 

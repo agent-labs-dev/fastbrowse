@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/models.py`: what a caller passes in and what a run returns.
+//! What a caller passes in and what a run returns.
 //!
 //! Every model here is pydantic's `Frozen`: unknown fields refused, numbers read leniently ([`crate::py::lax`]),
 //! fields written in declaration order with None written as null. [`crate::py::dump::Dump`] gives each the three
@@ -7,7 +7,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -361,7 +360,6 @@ str_enum! {
         Read = "read",
         FieldText = "field_text",
         Recover = "recover",
-        Verify = "verify",
         Compose = "compose",
         Shortcut = "shortcut",
     }
@@ -443,19 +441,6 @@ impl Schema for CostBreakdown {
 }
 
 impl CostBreakdown {
-    /// Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), so the sum can exceed the
-    /// run's wall time.
-    pub fn seconds_by_call(&self) -> IndexMap<String, f64> {
-        let mut totals: IndexMap<String, f64> = IndexMap::new();
-        for line in &self.lines {
-            if let Some(seconds) = line.seconds {
-                let total = totals.entry(line.label()).or_insert(0.0);
-                *total = crate::py::round(*total + seconds, 2);
-            }
-        }
-        totals
-    }
-
     pub fn known_dollars(&self) -> f64 {
         crate::py::sum(self.lines.iter().filter_map(|line| line.dollars))
     }
@@ -1071,11 +1056,6 @@ mod tests {
 
     #[test]
     fn seconds_round_as_python_rounds() {
-        let mut line = CostLine::new(CostComponent::Llm, CostBasis::Metered, None);
-        line.purpose = Some(LLMPurpose::Read);
-        line.seconds = Some(0.125);
-        let breakdown = CostBreakdown { lines: vec![line.clone(), CostLine { seconds: Some(1.0), ..line }] };
-        assert_eq!(breakdown.seconds_by_call().get("llm:read"), Some(&1.12));
         assert_eq!(crate::py::round(0.125, 2), 0.12);
         assert_eq!(crate::py::round(2.675, 2), 2.67);
     }

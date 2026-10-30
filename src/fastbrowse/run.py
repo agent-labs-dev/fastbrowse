@@ -191,9 +191,9 @@ async def run_task(
     document becomes the same `Capture` blocks a browser capture produces, so reads, quotes and citations
     are unchanged. A step that would click, fill, download or look at pixels has nothing to act on, so the
     run ends `blocked` with the reason instead of failing a step or answering from a page it never saw. What
-    a page builds with scripts is not there either: a document whose readable text is a sliver of its markup
-    is refused as needing a browser. Browser, recording, download and cursor options mean nothing here and
-    are an error rather than ignored.
+    a page builds with scripts is not there either: a document with no readable text in its markup is refused
+    as needing a browser. Browser, recording, download and cursor options mean nothing here and are an error
+    rather than ignored.
 
     `fetch_first` reads the same way, and when the fetched run ends `blocked` because the page refused
     something only a browser can do, runs the task again on the browser the other options describe. That run

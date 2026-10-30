@@ -23,22 +23,16 @@ use crate::memory::{Notes, RenderOptions, fact_id, unique};
 use crate::planner::{FIELD_CATEGORIES, Plan, Requirement, RequirementKind};
 use crate::pyre::{Pat, is_digit, is_word};
 
-const RANKS: &str = "True if it states a rank or order among counted groups.";
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claim {
     pub text: String,
     pub evidence_ids: Vec<String>,
-    /// Whether the checks are shown each cited tally's standing among the other groups. A count alone needs only its
-    /// own tally, and a standing for every tally put hundreds of group labels into each claim question.
-    #[serde(default)]
-    pub ranks: bool,
 }
 
 impl Claim {
     pub fn new(text: &str, evidence_ids: Vec<String>) -> Claim {
-        Claim { text: text.into(), evidence_ids, ranks: false }
+        Claim { text: text.into(), evidence_ids }
     }
 }
 
@@ -46,11 +40,7 @@ impl Schema for Claim {
     fn ty() -> Ty {
         ModelTy::frozen(
             "Claim",
-            vec![
-                Field::required("text", Ty::Str),
-                Field::required("evidence_ids", Ty::list(Ty::Str)),
-                Field::default("ranks", Ty::Bool, false).doc(RANKS),
-            ],
+            vec![Field::required("text", Ty::Str), Field::required("evidence_ids", Ty::list(Ty::Str))],
         )
         .ty()
     }
@@ -300,7 +290,7 @@ impl ComposeOptions<'_> {
     }
 }
 
-const COMPOSER: &str = "# Composer\nWrite the answer as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer the requested outputs; do not claim a requirement the notes do not evidence. Write every value the task asks for, such as each item's price, in the claim text itself: a reader sees the text, not the notes behind its citations.\n\nReports requested in plan.run_reports are appended by code from browser state and the run record. Do not write those reports or cite page notes for them.\n\n# Evidence scope\nThe notes' prose may contain an unsupported inference. Verify each value against its original quoted basis, not another note's conclusion. Preserve source conditions on eligibility, location and configuration, and the terms a value is quoted under, such as what it covers, the dates it applies to, or its unit (per person, per night, before tax): a value written under other terms than it was quoted under is a different claim. A component maximum is not an aggregate maximum; independent maxima cannot be added without explicit quoted support for simultaneous addition. Do not turn compatibility with several items into simultaneous operation or a subjective preference into a measured advantage. State what remains unsupported instead of supplying a related value as the requested one.\n\n# One claim, one fact\nA claim is supported in full by the notes it cites. Split a statement that combines separately evidenced facts into one claim each. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. A list of records cites each record it names, and a long list is written as several claims of a handful of records each. Each entity, whether named or referenced by ordinal, needs a quoted identifying source alongside its attribute sources. Reuse identifying citations across claims when needed; another claim does not supply them. Cite tally ids directly; their counts and descending order are computed in code, and code expands their record citations. Never re-list the basis ids inside a tally. A rank by count, such as the group with the second highest count, cites that group's own tally and sets ranks, so code shows the checks its standing; do not cite other groups' tallies.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer the requested outputs; do not claim a requirement the notes do not evidence. Write every value the task asks for, such as each item's price, in the claim text itself: a reader sees the text, not the notes behind its citations.\n\nReports requested in plan.run_reports are appended by code from browser state and the run record. Do not write those reports or cite page notes for them.\n\n# Evidence scope\nThe notes' prose may contain an unsupported inference. Verify each value against its original quoted basis, not another note's conclusion. Preserve source conditions on eligibility, location and configuration, and the terms a value is quoted under, such as what it covers, the dates it applies to, or its unit (per person, per night, before tax): a value written under other terms than it was quoted under is a different claim. A component maximum is not an aggregate maximum; independent maxima cannot be added without explicit quoted support for simultaneous addition. Do not turn compatibility with several items into simultaneous operation or a subjective preference into a measured advantage. State what remains unsupported instead of supplying a related value as the requested one.\n\n# One claim, one fact\nA claim is supported in full by the notes it cites. Split a statement that combines separately evidenced facts into one claim each. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. A list of records cites each record it names, and a long list is written as several claims of a handful of records each. Each entity, whether named or referenced by ordinal, needs a quoted identifying source alongside its attribute sources. Reuse identifying citations across claims when needed; another claim does not supply them. Cite tally ids directly; their counts and descending order are computed in code, and code expands their record citations. Never re-list the basis ids inside a tally. A rank by count, such as the group with the second highest count, cites the tally of every group it is ranked against.\n\n# Trust\n";
 
 /// `compose`: the LLM writes claims citing note ids; code drops a claim citing an id it was not offered.
 pub async fn compose(
@@ -492,7 +482,7 @@ pub async fn compose(
                 .collect();
             keys = unique(keys.into_iter().chain(collections));
         }
-        claims.push(Claim { text: without_citation_markup(&claim.text), evidence_ids: keys, ranks: claim.ranks });
+        claims.push(Claim { text: without_citation_markup(&claim.text), evidence_ids: keys });
         if let Some(check) = check {
             let index = claims.len() - 1;
             outputs.entry(check.clone()).or_default().push(index);

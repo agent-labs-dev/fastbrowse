@@ -1,4 +1,4 @@
-//! Port of `clients/failover.py`: keep a run on its backup after the chosen Jev provider exhausts its retries or refuses
+//! Keep a run on its backup after the chosen Jev provider exhausts its retries or refuses
 //! its key, or the LLM's provider refuses its key.
 
 use std::sync::atomic::{AtomicBool, Ordering};

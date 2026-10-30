@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/shortcut.py`: a direct address for the task on the start site, proposed while the start
+//! A direct address for the task on the start site, proposed while the start
 //! page loads.
 //!
 //! Most steps of a lookup only move between pages whose addresses follow from the task: a package page, a repository,

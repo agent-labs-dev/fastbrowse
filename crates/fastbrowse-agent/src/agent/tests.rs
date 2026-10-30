@@ -10,7 +10,6 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     Answer, BoxAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images, NoulAnswer, Question,
 };
-use fastbrowse_core::effects::step_key;
 use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
     Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Evidence, FactReader, Limits, Operation,
@@ -125,7 +124,7 @@ async fn run_state() -> RunState {
 fn observation(controls: &[Control]) -> Observation {
     serde_json::from_value(json!({
         "url": "https://example.test/", "title": "t", "page_key": "k", "captured_at": "2026-09-26T20:00:00Z",
-        "controls": controls.iter().map(Dump::dump).collect::<Vec<_>>(), "omitted_controls": 0,
+        "controls": controls.iter().map(Dump::dump).collect::<Vec<_>>(),
         "viewport_text": "", "tabs": [],
     }))
     .unwrap()
@@ -246,16 +245,6 @@ async fn test_a_named_action_is_not_taken_over_a_confident_choice_or_on_a_contro
     assert!(follow_recovery(&mut state, &observation(&[search]), &decision, false).is_none());
     state.directed = Some((Operation::Click, Some("search".into())));
     assert!(follow_recovery(&mut state, &observation(&[]), &decision, true).is_none());
-}
-
-#[test]
-fn test_a_steps_identity_ignores_a_timer_but_not_its_heading() {
-    let on = observation(&[button("Next")]);
-    let shown = |heading: &str, timer: &str| {
-        capture(&[(BlockKind::Heading, heading), (BlockKind::Paragraph, &format!("Elapsed: {timer}"))])
-    };
-    assert_eq!(step_key(&on, &shown("Review", "00:01")), step_key(&on, &shown("Review", "00:07")));
-    assert_ne!(step_key(&on, &shown("Review", "00:01")), step_key(&on, &shown("Submit", "00:01")));
 }
 
 #[test]

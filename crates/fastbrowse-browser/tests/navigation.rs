@@ -710,7 +710,6 @@ async fn test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_of
     h.goto("/long-list.html").await;
     let observation = observe_until(&h.page, "Book 1", 5.0).await;
     let labels: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(observation.omitted_controls, 0);
     assert!(labels.contains(&"next"));
     assert!(labels.contains(&"Show more books"));
     h.close().await;

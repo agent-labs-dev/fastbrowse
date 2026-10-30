@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/telemetry.py`: spend and call accounting against `Limits`, checked before each call rather
+//! Spend and call accounting against `Limits`, checked before each call rather
 //! than discovered after, and the trace a run keeps of why it went the way it did.
 //!
 //! Python shares one `Ledger` between the tasks of a run on one thread; here the counters sit behind a mutex so the
@@ -343,31 +343,6 @@ impl Drop for Span<'_> {
     }
 }
 
-/// Time within `began..ended` that calls spent on transient provider failures, calls that overlapped counted once.
-/// Evals run an attempt with any of it again rather than subtract it, which would credit the one arm whose requests
-/// are visible. An upper bound on the delay: a call running beside the failed one may have taken as long anyway.
-pub fn transient_seconds(events: &[Value], began: f64, ended: f64) -> f64 {
-    let mut spans: Vec<(f64, f64)> = events
-        .iter()
-        .filter(|event| event.get("event").and_then(Value::as_str) == Some("request_transient"))
-        .filter_map(|event| {
-            let start = event.get("began")?.as_f64()?;
-            let end = event.get("ended")?.as_f64()?;
-            Some((start.max(began), end.min(ended)))
-        })
-        .collect();
-    spans.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let (mut total, mut reach) = (0.0, began);
-    for (start, end) in spans {
-        let start = start.max(reach);
-        if end > start {
-            total += end - start;
-            reach = end;
-        }
-    }
-    total
-}
-
 #[cfg(test)]
 mod tests {
     //! tests/test_telemetry.py.
@@ -386,16 +361,6 @@ mod tests {
         }
         assert_eq!(dollars(1e16), "10000000000000000");
         assert_eq!(dollars(1.5e-7), "0.00000015");
-    }
-
-    #[test]
-    fn test_transient_time_counts_overlapping_calls_once_and_only_within_the_run() {
-        let span = |began: f64, ended: f64| json!({"event": "request_transient", "call": "jev", "began": began, "ended": ended});
-        // Parallel batches failing over 2..5 and 4..6 lost 4s, not 5; a span before the run and other events add none.
-        let events =
-            [span(4.0, 6.0), span(2.0, 5.0), span(-3.0, -1.0), json!({"event": "request_retry"}), json!("a message")];
-        assert!((transient_seconds(&events, 0.0, 10.0) - 4.0).abs() < 1e-9);
-        assert!((transient_seconds(&events, 0.0, 3.0) - 1.0).abs() < 1e-9);
     }
 
     #[test]

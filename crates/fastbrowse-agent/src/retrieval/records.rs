@@ -331,7 +331,7 @@ pub async fn filter_tallies(
             })?;
         }
     }
-    let mut outcome = ReadOutcome::new(notes.facts().into_iter().cloned().collect(), vec![0], 0, cost_lines);
+    let mut outcome = ReadOutcome::new(notes.facts().into_iter().cloned().collect(), 0, cost_lines);
     outcome.continues = readers.iter().map(|r| r.requirement_id.clone()).collect();
     outcome.continuation_records = continuation_records;
     Ok(Some(outcome))

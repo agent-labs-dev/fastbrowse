@@ -4,9 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use fastbrowse_core::decision::{Answer, Question};
 use fastbrowse_core::llm::Generation;
-use fastbrowse_core::models::{
-    Bytes, Decider, Evidence, FactReader, Operation, RunResult, Status, StepOutcome, UntilCheck,
-};
+use fastbrowse_core::models::{Decider, Evidence, FactReader, Operation, RunResult, Status, StepOutcome, UntilCheck};
 use fastbrowse_core::page::Observation;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -53,7 +51,7 @@ impl Agent {
             }
             // Independent outputs need separate evidence envelopes, not fewer source quotes.
             let plan = state.plan().clone();
-            match partition_plan(&*self.llm, &state.task, &plan, &state.ledger, state.oversized_answer).await {
+            match partition_plan(&*self.llm, &state.task, &plan, &state.ledger).await {
                 Ok(partition) => {
                     state.finish_partitions = partition.plans;
                     state.output_targets = partition.targets;
@@ -606,7 +604,6 @@ impl Agent {
                 None => report,
             });
         }
-        let _ = Bytes(Vec::new());
         Ok(result)
     }
 }

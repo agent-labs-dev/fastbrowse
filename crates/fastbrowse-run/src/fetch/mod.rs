@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/fetch.py`: a page read straight off the network, with no browser behind it.
+//! A page read straight off the network, with no browser behind it.
 //!
 //! A run that only needs to read a page pays for a browser it never uses: a Chrome that takes seconds to start, a
 //! navigation that waits for scripts, and an index of controls nobody clicks. So a browserless run fetches the
@@ -327,7 +327,6 @@ impl Page for FetchedPage {
                 response_status: None,
                 document_key: capture.sha256.clone(),
                 controls: Vec::new(),
-                omitted_controls: 0,
                 viewport_text: capture.text.clone(),
                 visual_content: false,
                 // Nothing here can be scrolled, clicked or looked at, so no step may be chosen to do it.

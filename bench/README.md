@@ -1,6 +1,6 @@
 # Benchmark
 
-This directory holds the cassettes and the Python baseline for `src/fastbrowse/evals/bench.py`. The harness runs
+This directory holds the cassettes and results for `src/fastbrowse/evals/bench.py`. The harness runs
 every fixture task (the `local` and `mock` suites) against any program that speaks `fastbrowse serve --stdio`, with
 the model traffic played back from a cassette. It checks two things: given the same model responses, the agent
 reaches the same results, and how much time, CPU and memory it takes to get there.
@@ -85,4 +85,3 @@ Timings come from a shared laptop and vary run to run. Compare medians from runs
 
 - `cassettes/<task>.jsonl.gz`: one gzip JSONL file per task. The first line holds the recording date, version and
   models; every other line is one request and its response, in the order they arrived.
-- `baseline/python.json`: the Python numbers (`report --json`), with `baseline/python.md` as the table.

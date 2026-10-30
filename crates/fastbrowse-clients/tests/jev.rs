@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use common::{Script, answering, reply, text};
 use fastbrowse_clients::failover::FailoverDecisionClient;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
-use fastbrowse_clients::system_one::{IMAGES_HEADER, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient};
+use fastbrowse_clients::system_one::{IMAGES_HEADER, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient, TYPESAFE_URL};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spend};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
@@ -56,7 +56,7 @@ fn host(request: &Request) -> String {
 }
 
 fn direct(http: Http) -> SystemOneClient {
-    SystemOneClient::direct("key", http)
+    SystemOneClient::new("key", http, TYPESAFE_URL, JEV_MODEL).typesafe()
 }
 
 fn gateway(http: Http) -> VercelGatewayJevClient {
@@ -320,7 +320,6 @@ async fn test_an_unmetered_answer_from_a_model_with_no_price_is_an_unknown_cost(
 async fn test_direct_rejects_invalid_answers() {
     for answer in [
         choice_answer(json!({"choice": "absent"})),
-        choice_answer(json!({"choice": "red"})),
         choice_answer(json!({"probabilities": {"blue": 1}})),
         choice_answer(json!({"probabilities": {"blue": 1, "red": 0, "extra": 0}})),
         choice_answer(json!({"probabilities": {"blue": 0.3, "red": 0.3}})),
@@ -590,7 +589,7 @@ async fn test_an_echoed_key_never_reaches_the_error() {
     for (status, payload) in bodies {
         let http = always(status, payload);
         let clients: [Box<dyn DecisionClient>; 2] = [
-            Box::new(SystemOneClient::direct(key.clone(), http.clone())),
+            Box::new(SystemOneClient::new(key.clone(), http.clone(), TYPESAFE_URL, JEV_MODEL).typesafe()),
             Box::new(VercelGatewayJevClient::new(key.clone(), http.clone(), GATEWAY_URL)),
         ];
         for client in clients {

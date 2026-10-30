@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/origins.py`: the exact-origin grant, which documents a run may inspect and control.
+//! The exact-origin grant, which documents a run may inspect and control.
 //!
 //! Addresses are parsed by the WHATWG URL Standard, so an origin here is the origin Chrome gives the document.
 

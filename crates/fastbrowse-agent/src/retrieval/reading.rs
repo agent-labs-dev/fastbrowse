@@ -317,7 +317,6 @@ pub struct ReadOutcome {
     pub facts: Vec<Fact>,
     #[serde(skip)]
     pub collection_facts: Vec<Fact>,
-    pub coverage: Vec<i64>,
     pub rejected_claims: i64,
     pub cost_lines: Vec<CostLine>,
     /// Requirements whose list goes on past this capture, so no claim from it closes them.
@@ -344,16 +343,10 @@ fn as_plain_facts<S: serde::Serializer>(facts: &[Fact], serializer: S) -> std::r
 }
 
 impl ReadOutcome {
-    pub(super) fn new(
-        facts: Vec<Fact>,
-        coverage: Vec<i64>,
-        rejected_claims: i64,
-        cost_lines: Vec<CostLine>,
-    ) -> ReadOutcome {
+    pub(super) fn new(facts: Vec<Fact>, rejected_claims: i64, cost_lines: Vec<CostLine>) -> ReadOutcome {
         ReadOutcome {
             facts,
             collection_facts: Vec::new(),
-            coverage,
             rejected_claims,
             cost_lines,
             continues: Vec::new(),
@@ -915,7 +908,7 @@ pub fn read_tallies(
             })?;
         }
     }
-    Ok(Some(ReadOutcome::new(notes.facts().into_iter().cloned().collect(), vec![0], 0, Vec::new())))
+    Ok(Some(ReadOutcome::new(notes.facts().into_iter().cloned().collect(), 0, Vec::new())))
 }
 
 // --- read ---------------------------------------------------------------------------------------------------------
@@ -1080,7 +1073,6 @@ async fn read_inner(
     let ledger = options.ledger;
     notes.remember_capture(capture);
     let mut facts: IndexMap<(String, Option<String>), Fact> = IndexMap::new();
-    let mut coverage: Vec<i64> = Vec::new();
     let mut costs: Vec<CostLine> = Vec::new();
     let mut continues: IndexSet<String> = IndexSet::new();
     let mut lost: IndexSet<String> = IndexSet::new();
@@ -1143,7 +1135,7 @@ async fn read_inner(
                 None => false,
             };
             if !carried {
-                return Ok(ReadOutcome::new(facts.into_values().collect(), Vec::new(), rejected, costs));
+                return Ok(ReadOutcome::new(facts.into_values().collect(), rejected, costs));
             }
             question
                 .push_str("\n\nEvery requirement is answered. Read only the context claims the task's actions need.");
@@ -1219,14 +1211,9 @@ async fn read_inner(
             }
             Err(other) => return Err(other),
         };
-        // A refused fact is withheld from every prompt by design, so it is not a record this budget lost.
         if options.require_all_evidence {
             let offered_ids: HashSet<&String> = offered_notes.evidence_ids.iter().collect();
-            let lost_any = so_far
-                .facts()
-                .iter()
-                .map(|fact| fact_id(fact))
-                .any(|key| !so_far.refused(&key) && !offered_ids.contains(&key));
+            let lost_any = so_far.facts().iter().map(|fact| fact_id(fact)).any(|key| !offered_ids.contains(&key));
             if lost_any {
                 return Err(AgentError::NotesTooLarge(
                     "The final page cannot fit every earlier record in its collected evidence".into(),
@@ -1318,7 +1305,6 @@ async fn read_inner(
             ledger.record([result.cost.clone()])?;
         }
         costs.push(result.cost.clone());
-        coverage.push(part.index);
         let mut accepted = 0;
         let mut rejected_here = 0;
         // The latest chunk decides: it holds the page's foot, where a pager sits, reads every earlier chunk's records in
@@ -1787,7 +1773,6 @@ async fn read_inner(
     let outcome = ReadOutcome {
         facts: facts.into_values().collect(),
         collection_facts,
-        coverage,
         rejected_claims: rejected,
         cost_lines: costs,
         continues: continues.iter().cloned().collect(),

@@ -607,10 +607,6 @@ impl BrowserSession {
         self.0.state.lock().unwrap().artifacts.clone()
     }
 
-    pub fn downloads_captured(&self) -> u32 {
-        self.0.state.lock().unwrap().downloads_captured
-    }
-
     /// Downloads resolved since the session opened, kept or refused.
     ///
     /// A navigation that resolves straight to a file aborts with `net::ERR_ABORTED`, and the abort is that
@@ -678,11 +674,6 @@ impl BrowserSession {
         let pending = state.download_texts[state.download_texts_shown.min(state.download_texts.len())..].to_vec();
         state.download_texts_shown = state.download_texts.len();
         pending
-    }
-
-    /// Every download the ceiling turned away, oldest first: kept as evidence, not consumed.
-    pub fn downloads_refused(&self) -> Vec<DownloadRefused> {
-        self.0.state.lock().unwrap().download_refusals.clone()
     }
 
     /// Refusals the run has not been told about yet, and now marked as told.
@@ -891,8 +882,6 @@ impl BrowserSession {
         Ok(target_id)
     }
 
-    /// A window that was already open loaded its document before the new-document scripts were registered, so
-    /// without this its freshness tracking and banner refusal would start only at its next navigation.
     /// Whether a window still holds the document Chrome gives a new about:blank. How a window was created does not
     /// say what is in it: a page can be written into after it opens, and such a window is not the run's.
     async fn still_blank(&self, target_id: &str) -> Result<bool, BrowserError> {
@@ -909,6 +898,8 @@ impl BrowserSession {
         Ok(read?["result"]["value"] == json!(true))
     }
 
+    /// A window that was already open loaded its document before the new-document scripts were registered, so
+    /// without this its freshness tracking and banner refusal would start only at its next navigation.
     async fn run_document_scripts(&self, session_id: &str) {
         let scripts = self.0.new_document_scripts.iter().map(|source| async move {
             let _ = self.send("Runtime.evaluate", json!({"expression": source}), Some(session_id)).await;

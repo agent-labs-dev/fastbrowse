@@ -854,7 +854,7 @@ async fn test_an_observation_keeps_every_control_and_the_whole_viewport_text() {
     )
     .await;
     let observation = h.observe().await;
-    assert!(observation.controls.len() == 400 && observation.omitted_controls == 0);
+    assert!(observation.controls.len() == 400);
     assert_eq!(observation.viewport_text, "x".repeat(8000));
     h.close().await;
 }
