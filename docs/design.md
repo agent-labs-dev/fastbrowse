@@ -39,10 +39,11 @@ focusing the field does not enter a query.
 Jev's read assessment is the READ decision: when Jev judges the page evidence the notes do not yet preserve,
 the step reads it, unless Jev picked DONE or ESCALATE. Code does not force a read. It tells Jev, in the step
 state's `page_facts`, when a page changed after it was last read, when a list page has not been read, and when
-an action that may have committed a change has not had its page read, and Jev is asked the read assessment
-whenever such a fact holds. Navigation notes write each source URL once and refer to it from later claims.
-Reads are deduplicated by document, capture hash and unresolved information requirements, so changed content
-can be read again; a read of content already read is skipped and recorded in the history. The reader is sent
+an action that may have committed a change has not had its page read. Jev is asked the read assessment on
+every page it can read, for evidence toward an unanswered requirement and for a value a remaining action needs,
+such as a code shown on another page. Navigation notes write each source URL once and refer to it from later
+claims. Every READ Jev picks goes to the reader, including a repeat of content already read; a read that adds no
+evidence counts toward the stall rule like any other step that moved nothing. The reader is sent
 the tally, ranking and paging guidance only when the capture holds records, the plan counts them, or a pager
 is in play. Identical relevance questions share one score within a pass, while controls remain separate action
 targets.

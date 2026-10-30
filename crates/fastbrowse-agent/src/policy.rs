@@ -804,27 +804,27 @@ pub fn build_request(
         .into(),
     );
     let reading = observation.dialog.is_none() && !context.withheld.contains(&Operation::Read);
-    if reading
-        && (context.unread_requirements.as_ref().is_none_or(|unread| !unread.is_empty())
-            || !context.page_facts.is_empty())
-    {
+    if reading {
         let listing = if crate::agent::next_page_control(observation).is_some() {
             "Matching records in a paginated list are evidence for a count or comparison even when this page cannot supply the final answer. Read those records before opening a record's detail link or leaving the list. "
         } else {
             ""
         };
         let instructions = format!(
-            "{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information requirement that should be read before further interaction? Use unread_requirements, the collected notes and recent actions; while planning, judge from the task. Evidence can answer part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total must be preserved even when the page also has an editable form. Field values, suggestions and previews are inputs, unless inspecting their labels, disabled state or layout is requested. Preserve inspection evidence before leaving. Treat prices or availability a picker shows beside its options as inputs (a calendar's fare per day) while a value is still being chosen. A review page before a final submit is evidence: the totals it shows may not appear again once the submit commits. A rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
+            "{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information requirement, or a value the task's remaining actions need, that should be read before further interaction? A value shown here and needed elsewhere, such as a code to type on another page, is kept only by reading it: once the page is left, only the notes hold it. Use unread_requirements, the collected notes and recent actions; while planning, judge from the task. Evidence can answer part of a comparison or explain a failed action. {listing}A relevant error, refusal, result or total must be preserved even when the page also has an editable form. Field values, suggestions and previews are inputs, unless inspecting their labels, disabled state or layout is requested. Preserve inspection evidence before leaving. Treat prices or availability a picker shows beside its options as inputs (a calendar's fare per day) while a value is still being chosen. A review page before a final submit is evidence: the totals it shows may not appear again once the submit commits. A rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
         );
         let criteria = [
-            (ReadAssessment::Absent, "The page adds no evidence for the unanswered requirements."),
+            (
+                ReadAssessment::Absent,
+                "The page adds nothing the unanswered requirements or the remaining actions need.",
+            ),
             (
                 ReadAssessment::Editing,
                 "Only inputs toward a later result are relevant; no requested inspection needs this form read.",
             ),
             (
                 ReadAssessment::Evidence,
-                "The page contains relevant evidence, including requested form inspection, partial results or a failure, that the notes do not yet preserve. Read it before interacting again.",
+                "The page contains relevant evidence, including requested form inspection, partial results, a failure or a value a remaining action needs, that the notes do not yet preserve. Read it before interacting again.",
             ),
         ];
         questions.insert(
