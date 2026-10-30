@@ -597,6 +597,12 @@ impl Notes {
             if !new_kept && fact.requirement_id.is_some() && !text.contains(&fact.text) {
                 text = format!("{text}\n{}", fact.text);
             }
+            // The context claim it was read as stays too: a Phone page line read for the sign-in code, then again as
+            // the account email, kept only the email claim, and Jev went back for a code the notes no longer said.
+            let quote = previous.evidence.as_ref().map(|evidence| evidence.quote.as_str());
+            if new_kept && Some(previous.text.as_str()) != quote && !text.contains(&previous.text) {
+                text = format!("{}\n{text}", previous.text);
+            }
             let comparison = fact.comparison.clone().or_else(|| kept.comparison.clone());
             let merged = Fact { basis, text, comparison, ..kept.clone() };
             self.facts.insert(key, merged);
@@ -1123,6 +1129,18 @@ mod tests {
 
     fn texts(notes: &Notes, requirement: &str) -> Vec<String> {
         notes.supporting(requirement).into_iter().map(|(_, fact)| fact.text).collect()
+    }
+
+    #[test]
+    fn a_requirement_claim_on_a_context_quote_keeps_the_context_claim() {
+        let line = quoted("katherine@example.com: 423345", "a", "https://example.test/phone");
+        let mut notes = Notes::default();
+        notes.add(Fact { text: "The code for katherine@example.com is 423345.".into(), ..context(line.clone()) });
+        notes.add(Fact { text: "The account email is katherine@example.com.".into(), ..line });
+        assert_eq!(
+            texts(&notes, "r1"),
+            ["The code for katherine@example.com is 423345.\nThe account email is katherine@example.com."]
+        );
     }
 
     #[test]
