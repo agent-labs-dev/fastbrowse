@@ -221,7 +221,7 @@ No frame or screenshot is sent while a resolved secret may show on the page.
 `run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; see
 [Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
 
-**Choosing the model backend without the environment.** Not in 0.9.0; it ships in the next release.
+**Choosing the model backend without the environment.** New in 0.9.1.
 `run_task(settings={...})` takes the same names as the
 environment variables (`OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`,
 `FASTBROWSE_LLM_PROVIDER`, `FASTBROWSE_LLM_MODEL` and the rest) and reads them instead of the environment and
@@ -231,7 +231,7 @@ environment variables (`OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`, `TYPESAFE_API
 result = await run_task("Find the latest httpx release", settings={"OPENROUTER_API_KEY": my_key})
 ```
 
-**The same rules outside a run.** Not in 0.9.0; it ships in the next release. `fastbrowse.origins` (`origin_of`, `parse_origin`) parses `allowed_origins` as the
+**The same rules outside a run.** New in 0.9.1. `fastbrowse.origins` (`origin_of`, `parse_origin`) parses `allowed_origins` as the
 run does; `fastbrowse.safety` (`secret_allowed`, `origin_of`, `ScopedSecrets`) answers where a secret may be typed,
 `*.` patterns included; `fastbrowse.totp.one_time_code(key)` makes the codes an authenticator key gives. Each wraps
 the core's own rule, so the answer before a run is the one the run gives.
