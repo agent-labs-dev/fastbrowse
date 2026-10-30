@@ -1,71 +1,90 @@
-name: Approve benchmark publication
+name: Publish benchmarks
+
+# Opens the pull request on agent-labs-dev/fastbrowse-site that publishes one campaign: the candidate's exact bytes
+# as data/benchmark-<campaign>.json and the site's group files under data/benchmarks/, written by
+# `python -m fastbrowse.evals.site_groups`. The site computes every figure from the candidate's per-attempt rows.
+# Merging the pull request is the approval; nothing else gates it.
+#
+# The campaign workflow calls this when its candidate is built. Dispatch it by hand with that run's id to publish a
+# campaign again, for example after the site pull request was closed.
+#
+# Repository configuration: FASTBROWSE_SITE_TOKEN, a fine-grained token with contents and pull request write
+# access on agent-labs-dev/fastbrowse-site. The run's own token cannot write to another repository.
+
 on:
-  # Approval is the results shown in the channel and the reviewer saying ship. Dispatching this publishes that
-  # decision: it checks the figures are true and records which bytes it published, and never asks again.
+  workflow_call:
+    secrets:
+      FASTBROWSE_SITE_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
-      allow_first_publication:
-        description: Establish the first baseline when none is published
+      run_id:
+        description: The Benchmark campaign run whose benchmark-candidate artifact to publish
         required: true
-        type: boolean
-        default: false
-      protocol_change:
-        description: Publish groups whose catalog, tasks or limits changed as a fresh baseline
-        required: true
-        type: boolean
-        default: false
-      protocol_note:
-        description: Why the protocol changed (recorded beside the figures)
-        required: false
         type: string
-        default: ''
+
 permissions: {}
+
+concurrency:
+  group: publish-benchmarks
+  cancel-in-progress: false
+
 jobs:
-  approve:
+  site:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions: {contents: read, actions: read}
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SOURCE_RUN: ${{ inputs.run_id || github.run_id }}
     steps:
-      # The receipt names the candidate committed on main, which CI reads back from that commit.
-      - run: test "$GITHUB_REF" = refs/heads/main
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {fetch-depth: 0, persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-        with: {python-version: '3.13'}
-      - run: uv sync --locked
-      - name: Validate full coverage and the exact fixture build
+      - name: Check the site token
         env:
-          GH_TOKEN: '${{ github.token }}'
-          BOOTSTRAP: '${{ inputs.allow_first_publication }}'
-          PROTOCOL_CHANGE: '${{ inputs.protocol_change }}'
-          PROTOCOL_NOTE: '${{ inputs.protocol_note }}'
-        run: |
-          args=()
-          if [ "$BOOTSTRAP" = true ]; then args+=(--bootstrap); fi
-          if [ "$PROTOCOL_CHANGE" = true ]; then
-            args+=(--protocol-change --protocol-note "$PROTOCOL_NOTE" --protocol-record protocol-change.json)
-          fi
-          uv run python -m fastbrowse.evals.benchmarks --candidate docs/results/benchmark-candidate.json \
-            --baseline docs/results/benchmarks.json --verify-fixture "${args[@]}"
-      - name: Record the published bytes
-        run: |
-          uv run python - <<'PY'
-          import hashlib, os
-          from datetime import UTC, datetime
-          from pathlib import Path
-          from fastbrowse.evals.benchmarks import Approval, ProtocolChange
-          record = Path('protocol-change.json')
-          receipt = Approval(
-              candidate_sha256=hashlib.sha256(Path('docs/results/benchmark-candidate.json').read_bytes()).hexdigest(),
-              workflow_run=int(os.environ['GITHUB_RUN_ID']),
-              head_sha=os.environ['GITHUB_SHA'],
-              approved_by=os.environ['GITHUB_ACTOR'],
-              approved_at=datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-              protocol_change=ProtocolChange.model_validate_json(record.read_bytes()) if record.exists() else None,
-          )
-          Path('benchmark-approval.json').write_text(receipt.model_dump_json(indent=2) + '\n')
-          PY
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          FASTBROWSE_SITE_TOKEN: ${{ secrets.FASTBROWSE_SITE_TOKEN }}
+        run: test -n "$FASTBROWSE_SITE_TOKEN" || { echo "::error::missing repository secret FASTBROWSE_SITE_TOKEN"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {path: fastbrowse, persist-credentials: false}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with: {python-version: "3.13"}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: benchmark-approval
-          path: benchmark-approval.json
-          if-no-files-found: error
+          name: benchmark-candidate
+          path: candidate
+          # Unset when called, which reads this run's own artifact; a dispatch reads the named run's.
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ inputs.run_id && github.token || '' }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: agent-labs-dev/fastbrowse-site
+          path: site
+          token: ${{ secrets.FASTBROWSE_SITE_TOKEN }}
+          persist-credentials: false
+      - name: Write the group files
+        run: |
+          cd fastbrowse
+          uv sync --locked
+          uv run python -m fastbrowse.evals.site_groups "$GITHUB_WORKSPACE/candidate/benchmark-candidate.json" \
+            "$GITHUB_WORKSPACE/candidate/run-facts.json" "$GITHUB_WORKSPACE/site"
+      - name: Open the site pull request
+        env:
+          GH_TOKEN: ${{ secrets.FASTBROWSE_SITE_TOKEN }}
+        run: |
+          campaign="$(jq -r .campaign_id candidate/benchmark-candidate.json)"
+          digest="$(sha256sum candidate/benchmark-candidate.json | cut -d' ' -f1)"
+          branch="benchmarks/$campaign"
+          source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN"
+          cd site
+          git config user.name "agent-labs-pr-bot"
+          git config user.email "pr-bot@agent-labs.dev"
+          git checkout -b "$branch"
+          git add data
+          git commit -m "feat(benchmarks): publish campaign $campaign"
+          # A rerun replaces its own branch; nothing else writes to it.
+          git push --force "https://x-access-token:$GH_TOKEN@github.com/agent-labs-dev/fastbrowse-site.git" "HEAD:refs/heads/$branch"
+          if gh pr list --repo agent-labs-dev/fastbrowse-site --head "$branch" --state open --json number --jq '.[0].number' | grep -q .; then
+            echo "the pull request for $branch is already open"
+            exit 0
+          fi
+          gh pr create --repo agent-labs-dev/fastbrowse-site --base main --head "$branch" \
+            --title "feat(benchmarks): publish campaign $campaign" \
+            --body "Campaign \`$campaign\`, measured by $source. \`data/benchmark-$campaign.json\` is the candidate byte for byte (sha256 \`$digest\`), and the site computes every figure from its per-attempt rows. The group files under \`data/benchmarks/\` bind each card to it. Merging this pull request publishes the figures; it is the approval."
