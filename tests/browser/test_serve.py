@@ -173,7 +173,7 @@ def serving(tmp_path: Path) -> Generator[Client]:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=log,
-            env=kept | {"OPENROUTER_API_KEY": "stand-in"},
+            env=kept | {"OPENROUTER_API_KEY": "stand-in", "FASTBROWSE_TRACE": str(tmp_path / "trace.jsonl")},
             cwd=empty,
         ) as process,
     ):
@@ -239,6 +239,8 @@ def test_one_run_types_a_secret_the_client_holds_and_leaves_no_chrome_behind(
 
     assert TOKEN.encode() not in client.written
     assert TOKEN not in stderr
+    trace = (tmp_path / "trace.jsonl").read_text(encoding="utf-8")
+    assert trace and TOKEN not in trace
 
 
 def _waiting_on_the_secret(client: Client, origin: str) -> set[int]:

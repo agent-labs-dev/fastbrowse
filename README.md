@@ -94,7 +94,7 @@ prints the full result: every step, the quotes behind the answer, cost by compon
 | `--foreground` | bring the run's tab to the front instead of working behind the current one |
 | `--proxy-country CC` | browse from that country (`uk`, `de`, ...; default `us`) |
 | `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation` |
-| `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only |
+| `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only, and the value is masked in the result, the run events and the trace |
 | `--bitwarden ITEM` | use a vault login on the origin its saved URIs match, including its one-time code |
 | `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
