@@ -298,8 +298,7 @@ def _tasks(only: list[str], suites: list[str]) -> tuple[list[tuple[str, LocalTas
 def parser() -> argparse.ArgumentParser:
     argument = argparse.ArgumentParser()
     argument.add_argument("--suite", nargs="+", choices=["local", "mock"], default=["local", "mock"])
-    # Repeated flags accumulate: `--only a --only b` used to keep only `b`, so a narrowed run silently ran fewer
-    # tasks than asked for.
+    # Repeated --only flags accumulate.
     argument.add_argument("--only", nargs="*", action="extend", default=[])
     argument.add_argument("--repeat", type=int, default=1)
     argument.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
