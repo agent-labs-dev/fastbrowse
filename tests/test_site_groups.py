@@ -40,9 +40,7 @@ def test_the_live_suite_names_the_head_to_head_group_and_its_exact_rows() -> Non
 def test_a_vendor_without_a_cost_or_without_rows_has_its_own_state() -> None:
     candidate = json.loads(STAGED.read_bytes())
     group = next(g for g in candidate["groups"] if g["id"] == "internal-hosted")
-    group["rows"] = [
-        {**row, "dollars": None} if row["arm"] == "browser-use" else row for row in group["rows"]
-    ]
+    group["rows"] = [{**row, "dollars": None} if row["arm"] == "browser-use" else row for row in group["rows"]]
     candidate["groups"] = [group]
     content = json.dumps(candidate).encode()
     live = json.loads(group_files(content, FACTS, CURRENT)["data/benchmarks/live-suite.json"])["measured"]
