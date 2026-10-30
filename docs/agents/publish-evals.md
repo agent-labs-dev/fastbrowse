@@ -25,9 +25,8 @@ through its browser; figures approved at 46 or 47 tasks still read. It holds row
 no answer, so it runs only the tasks of the set graded without one. An arm that did not run has no rows and the site
 shows it as not measured. An arm that reports neither its model nor its spend carries `"dollars": null`
 and the site shows its pass rate and seconds with "cost not reported"; fastbrowse rows always carry a cost. The
-official suites publish fastbrowse and, when it ran, the hosted Browser Use agent on the same tasks with the same
-upstream judge, and accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
-defines it, the group records the repeat count, and a task's figure is the mean of its repeats' scores.
+official suites publish fastbrowse alone, beside the vendor's own published figure, and accept any positive repeat
+count: every task and repeat is one row with its upstream score kept as the upstream defines it, the group records the repeat count, and a task's figure is the mean of its repeats' scores.
 
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
@@ -69,14 +68,14 @@ publish a campaign again, dispatch `publish-evals.yml` with the campaign run's i
 
 Official results reach the same candidate through their public rows. A run directory holds decrypted BU Bench goals
 and upstream records, so it leaves `official-benchmarks.yml` only encrypted, and that job also writes the
-`official-rows-<suite>-<arm>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after Parallax
+`official-rows-<suite>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after Parallax
 has held the run to every publication rule. Dispatch it first, then dispatch `benchmark-campaign.yml` on the same
 `fastbrowse_ref` and `parallax_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
-dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage merges each
-suite's arms into one group; its run facts take each suite's date and judge from those rows.
+dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage adds each
+suite as a group; its run facts take each suite's date and judge from those rows.
 
 Both workflows send every result to Langfuse as a step that runs even when the run stopped: `parallax browser
-track-ledger` for each campaign group and `track-official` for each suite and arm. The candidate is refused unless
+track-ledger` for each campaign group and `track-official` for each suite. The candidate is refused unless
 Langfuse holds them. An upload to Langfuse does not approve publication.
 
 ## Retiring a task or changing the protocol
