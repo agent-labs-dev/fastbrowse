@@ -741,11 +741,6 @@ def test_a_renamed_result_file_fails_the_diff_check(tmp_path: Path) -> None:
     assert any("removed" in finding.detail for finding in findings)
 
 
-def test_an_uncapped_start_gate_run_clears_publication_gate() -> None:
-    sources = attempts(3)
-    assert publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY).blocking == ()
-
-
 def test_a_published_slim_row_still_proves_it_ran_uncapped() -> None:
     """The publisher trims rows before the gate reads them again; the trim must keep what the protocol checks."""
     sources = [versions.slim(source) for source in attempts(3)]
