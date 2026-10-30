@@ -1,7 +1,8 @@
 # Credits
 
-The people outside the team whose reports, ideas and code shaped fastbrowse. Each one is also thanked in the
-changelog entry for the change they led to. Adapted third-party code is credited in [NOTICE](NOTICE).
+The people outside the team whose reports, ideas and code shaped fastbrowse. A change made from someone's report,
+request or code also thanks them in its changelog entry; entries released before this list began are kept as they
+were published, so for those this table is the credit. Adapted third-party code is credited in [NOTICE](NOTICE).
 
 | Who | What | Notes |
 |---|---|---|
