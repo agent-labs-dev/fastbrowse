@@ -4,8 +4,8 @@
 //! fastbrowse serve --stdio
 //! ```
 //!
-//! The fourth entry point, beside the CLI, the MCP server and `run_task`. It is what the JavaScript SDK starts and
-//! talks to. The messages are in `fastbrowse_core::protocol`.
+//! The fourth entry point, beside the CLI, the MCP server and `run_task`. It is what the language SDKs start and
+//! talk to. The messages are in `fastbrowse_core::protocol`.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
