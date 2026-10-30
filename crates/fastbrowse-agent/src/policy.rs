@@ -404,9 +404,8 @@ pub async fn decide(
                 continue;
             }
         }
-        if !matches!(reduction, Reduction::OnscreenOnly | Reduction::Capped) && controls.iter().any(|c| c.offscreen) {
-            controls.retain(|c| !c.offscreen);
-            reduction = Reduction::OnscreenOnly;
+        if let Some(onscreen) = onscreen_rung(&controls, reduction) {
+            (controls, reduction) = (onscreen, Reduction::OnscreenOnly);
             continue;
         }
         // A page too dense even on screen is still worked rather than ending the run: the controls that fit are
@@ -555,8 +554,13 @@ fn shed(
     if state + largest <= config.tokens.batch_tokens as f64 {
         return None;
     }
+    onscreen_rung(controls, reduction).map(|onscreen| (onscreen, Reduction::OnscreenOnly))
+}
+
+/// The fitting ladder's on-screen rung: `controls` without the off-screen ones, or None when it has no more to drop.
+fn onscreen_rung(controls: &[Control], reduction: Reduction) -> Option<Vec<Control>> {
     (!matches!(reduction, Reduction::OnscreenOnly | Reduction::Capped) && controls.iter().any(|c| c.offscreen))
-        .then(|| (controls.iter().filter(|c| !c.offscreen).cloned().collect(), Reduction::OnscreenOnly))
+        .then(|| controls.iter().filter(|c| !c.offscreen).cloned().collect())
 }
 
 /// The controls at `indices`, in document order.
