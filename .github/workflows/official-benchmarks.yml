@@ -281,6 +281,15 @@ jobs:
             uv pip install --python .venv/bin/python -r requirements.txt
           fi
           test -z "$(git status --porcelain)" || { echo "::error::preparing the judge changed the upstream checkout"; exit 1; }
+      - name: Check the artifact recipient
+        # Encrypting is the only way a run directory leaves the runner, so a recipient age cannot use stops the job
+        # here, before any paid call, not after the suite has spent its budget.
+        env:
+          RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+        run: |
+          sudo apt-get install -y -qq age
+          echo probe | age -r "$RECIPIENT" > /dev/null \
+            || { echo "::error::PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT is not an age recipient"; exit 1; }
       - name: Fetch the Online-Mind2Web tasks
         if: matrix.suite == 'online-mind2web'
         # Parallax's loader checks the bytes against the digest and the pinned upstream Git blob before keeping them.
@@ -348,7 +357,6 @@ jobs:
           RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
         run: |
           test -d "$OUT" || { echo "::warning::no run directory was written"; exit 0; }
-          sudo apt-get install -y -qq age
           tar -C "$(dirname "$OUT")" -czf - "$SUITE" | age -r "$RECIPIENT" -o "$RUNNER_TEMP/$SUITE.tar.gz.age"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
