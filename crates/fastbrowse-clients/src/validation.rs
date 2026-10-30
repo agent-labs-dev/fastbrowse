@@ -661,9 +661,6 @@ fn probabilities(value: Option<&Value>, keys: &[String]) -> Result<IndexMap<Stri
     Ok(result)
 }
 
-/// The wire's two-decimal probability step.
-const ROUNDING_UNIT: f64 = 0.01;
-
 pub fn parse_answers(
     value: Option<&Value>,
     questions: &IndexMap<String, Question>,
@@ -696,12 +693,6 @@ pub fn parse_answers(
                     Some(choice) if probs.contains_key(choice) => choice.to_string(),
                     _ => return Err(format!("choice outside criteria for {key}")),
                 };
-                // Probabilities are rounded to sum to one, which can move an option by one unit and put a near-tie a
-                // hundredth the wrong way round: a live run failed on escalate 0.40 chosen over read 0.41.
-                let top = probs.values().copied().fold(f64::NEG_INFINITY, f64::max);
-                if probs[&choice] < top - ROUNDING_UNIT - 1e-6 {
-                    return Err(format!("chosen option is not maximal for {key}"));
-                }
                 let confidence = probability(confidence_value)?;
                 Answer::Choice(ChoiceAnswer { kind: Default::default(), choice, probabilities: probs, confidence })
             }

@@ -12,7 +12,6 @@
   let framePath = null;
   let sourcePath = '';
   let inaccessible = 0;
-  let visibleH1 = false;
   const imageSource = source => {
     if (!source) return source;
     if (source.startsWith('data:')) {
@@ -415,8 +414,6 @@
       };
       push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }
-    const h1 = [...root.querySelectorAll('h1,[role="heading"][aria-level="1"]')].filter(visible);
-    visibleH1 ||= h1.length > 0;
     if (root === document.body) {
       const doc = document.documentElement;
       push('observation', `Observed viewport: Horizontal overflow: ${doc.scrollWidth > doc.clientWidth ? 'yes' : 'no'}`);
@@ -430,6 +427,5 @@
   }
 
   scope(document.body, null, '');
-  if (!visibleH1) push('observation', 'Observed accessible DOM: Visible h1 headings: 0');
-  return { url: location.href, title: document.title, blocks, inaccessible_frames: inaccessible, visible_h1: visibleH1 };
+  return { url: location.href, title: document.title, blocks, inaccessible_frames: inaccessible };
 })

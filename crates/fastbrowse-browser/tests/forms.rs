@@ -8,7 +8,7 @@ mod dispatch_support;
 use std::time::Duration;
 
 use common::{Harness, harness, harness_on, sites};
-use dispatch_support::{action, eval_active, eval_value, fill, find, observe_until};
+use dispatch_support::{action, eval_active, fill, find, observe_until};
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation, StepOutcome};
@@ -117,17 +117,7 @@ async fn test_capture_preserves_empty_fields_disabled_actions_and_layout() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_capture_evidences_absent_visible_headings() {
-    let Some(h) = harness().await else { return };
-    h.goto("").await;
-    eval_active(&h.page, "document.body.innerHTML = '<h1 hidden>Hidden</h1><p>Welcome</p>'").await;
-    let capture = h.page.capture().await.expect("capture");
-    assert!(capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_heading_absence_does_not_ignore_shadow_roots() {
+async fn test_capture_reads_shadow_roots() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -138,65 +128,28 @@ async fn test_heading_absence_does_not_ignore_shadow_roots() {
     .await;
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.text.contains("Visible title"), "{}", capture.text);
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
     h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_empty_shadow_scope_does_not_contradict_document_heading() {
-    let Some(h) = harness().await else { return };
-    h.goto("").await;
-    eval_active(
-        &h.page,
-        "document.body.innerHTML = '<h1>Visible title</h1><div id=host></div>'; \
-         document.querySelector('#host').attachShadow({mode:'open'}).innerHTML = '<p>Other content</p>'",
-    )
-    .await;
-    let capture = h.page.capture().await.expect("capture");
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_heading_absence_includes_cross_origin_frame_documents() {
+async fn test_capture_reads_cross_origin_frame_documents() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     observe_until(&h.page, "Frame button").await;
-    eval_active(&h.page, "document.querySelectorAll('h1').forEach(e => e.remove())").await;
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.text.contains("Inside the frame"), "{}", capture.text);
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
     h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_inaccessible_frames_prevent_document_wide_absence_claims() {
+async fn test_capture_counts_frames_it_may_not_read() {
     // test_safety.py's `scoped`: the run may control the main site only, so its cross-origin frame is withheld.
     let Some(chrome) = common::chrome() else { return };
     let connection = BrowserConnection { allowed_origins: Some(vec![sites().main.clone()]), ..chrome.clone() };
     let h = harness_on(connection, Config::default(), SessionOptions::default()).await.expect("harness");
     h.goto("").await;
-    let session_id = h.session.active_session_id().expect("active session");
-    eval_value(&h.session, &session_id, "document.querySelectorAll('h1').forEach(e => e.remove())").await;
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.inaccessible_frames > 0);
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_empty_frame_documents_emit_one_absence_observation() {
-    let Some(h) = harness().await else { return };
-    h.goto("").await;
-    observe_until(&h.page, "Frame button").await;
-    let mut frame_sessions = vec![h.session.active_session_id().expect("active session")];
-    frame_sessions.extend(h.session.frame_sessions().into_iter().map(|(_, session)| session));
-    for frame_session in &frame_sessions {
-        eval_value(&h.session, frame_session, "document.querySelectorAll('h1').forEach(e => e.remove())").await;
-    }
-    let capture = h.page.capture().await.expect("capture");
-    assert_eq!(capture.inaccessible_frames, 0);
-    assert_eq!(capture.text.matches("Visible h1 headings: 0").count(), 1, "{}", capture.text);
     h.close().await;
 }
 

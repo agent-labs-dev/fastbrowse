@@ -623,8 +623,7 @@ impl BrowserSession {
 
     /// Whether every download settled since `since` saves a file an earlier action already saved.
     ///
-    /// `since` is a `downloads_settled` count. A page that offers the same export twice has not moved the run forward
-    /// the second time, so the click that saved it again must not be recorded as one that changed something.
+    /// `since` is a `downloads_settled` count.
     pub fn repeated_download(&self, since: u32) -> bool {
         let state = self.0.state.lock().unwrap();
         repeated(&state.download_keys, since as usize)
@@ -2015,9 +2014,8 @@ mod tests {
         assert_eq!(filename_from_disposition("inline"), None);
     }
 
-    /// Saving the file an earlier click already saved changes nothing, so the click that saved it again is idle.
     #[test]
-    fn a_repeat_download_is_not_an_effect() {
+    fn a_download_an_earlier_click_already_saved_is_told_apart() {
         let saved = Some(("https://example.test/a.csv".to_owned(), "d1".to_owned()));
         let keys = [saved.clone(), saved.clone()];
         assert!(repeated(&keys, 1));

@@ -563,7 +563,7 @@ impl Agent {
             {
                 written.insert(target.id.clone());
             }
-            let mut judged = match edit {
+            let judged = match edit {
                 _ if !executed => Some(false),
                 Some(edited) => Some(edited),
                 None => (!changed).then_some(false),
@@ -583,16 +583,12 @@ impl Agent {
                 && let Some(target) = &decision.target
                 && SETTING_ROLES.contains(&target.role.as_str())
             {
-                // Choosing an option has an intended effect to check: a menu that closed without the value changing
-                // still changes the page, and Google Flights' "One way" was clicked to the step limit.
+                // A menu that closed without the value changing still changes the page, so what the choice set is
+                // stated: Google Flights' "One way" was clicked to the step limit while the history said only "changed".
                 let landed = self.observe().await?;
                 let done = effect(observation, &landed, Some(target));
                 state.acted_from = None;
                 setting = done.set_something;
-                judged = Some(done.set_something);
-                if !done.set_something {
-                    result.detail = Some(format!("no effect: {}", done.summary));
-                }
                 effect_now = Some(done.summary);
             }
             progressed = judged;

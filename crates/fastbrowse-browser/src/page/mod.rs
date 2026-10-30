@@ -205,8 +205,6 @@ struct CaptureSnapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     blocks: Vec<SnapshotBlock>,
-    #[serde(default)]
-    visible_h1: bool,
 }
 
 impl FrameText for CaptureSnapshot {
@@ -580,7 +578,7 @@ impl CdpPage {
                     Refusal::Failed => "The browser could not hand over or store the file".to_owned(),
                 };
                 notices.push_str(&format!(
-                    "\n\n[Download not kept: {} from {}] {why}; nothing was saved. Report the file as not downloaded.",
+                    "\n\n[Download not kept: {} from {}] {why}; nothing was saved.",
                     refused.name, refused.url,
                 ));
             }
@@ -800,11 +798,6 @@ impl CdpPage {
             Some(main) => main.raw.url.clone(),
             None => self.origin_once().await?,
         };
-        let has_h1 = frames.iter().any(|(_, f)| f.raw.visible_h1);
-        let unreadable = self.inaccessible_frames(
-            &frames.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect::<Vec<_>>(),
-        )?;
-        let mut absence_seen = false;
         for (_, frame) in &frames {
             let frame_key = frame.frame_id.clone().unwrap_or_else(|| MAIN.to_owned());
             match coverage.iter_mut().find(|(s, _)| *s == frame.session_id) {
@@ -812,15 +805,6 @@ impl CdpPage {
                 None => coverage.push((frame.session_id.clone(), frame.raw.inaccessible_frames)),
             }
             for block in &frame.raw.blocks {
-                // A cross-origin frame is captured separately; its h1 disproves document-wide absence too.
-                if block.kind == BlockKind::Observation
-                    && block.text == "Observed accessible DOM: Visible h1 headings: 0"
-                {
-                    if has_h1 || unreadable > 0 || absence_seen {
-                        continue;
-                    }
-                    absence_seen = true;
-                }
                 let start = offset;
                 text.push_str(&block.text);
                 offset += text::len(&block.text);

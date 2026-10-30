@@ -966,7 +966,7 @@ impl Agent {
         }
         if !document.is_empty()
             && read.is_none()
-            && observation.controls.iter().any(fastbrowse_core::page::pager_link)
+            && helpers::next_page_control(observation).is_some()
             && state.ready_plan.as_ref().is_some_and(|plan| helpers::unread(plan, &state.notes))
         {
             facts.push("This list page has not been read: turning to another page leaves its records unread.".into());

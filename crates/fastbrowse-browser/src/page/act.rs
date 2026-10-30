@@ -262,14 +262,16 @@ impl CdpPage {
             // the page it was on, so nothing on the page changed. The download is the action's whole effect, and
             // the text it carries is only read by the next observation, so the run must not be told the click did
             // nothing and must not observe before the captured file is there to read.
-            // Saving a file an earlier click already saved is not an effect: an exports page whose one link was
-            // clicked four times, each time rewriting the same CSV, kept the run's click loop going.
-            if self.session.repeated_download(downloads_before) {
-                detail = detail.or_else(|| Some("saved the same file again, which changes nothing".into()));
-            } else {
-                changed = true;
-                detail = detail.or_else(|| Some("downloaded the file the link points at".into()));
-            }
+            // A file an earlier click already saved is named as such: an exports page whose one link was clicked four
+            // times, each time rewriting the same CSV, kept the run's click loop going.
+            changed = true;
+            detail = detail.or_else(|| {
+                Some(if self.session.repeated_download(downloads_before) {
+                    "downloaded the same file an earlier step already saved".into()
+                } else {
+                    "downloaded the file the link points at".into()
+                })
+            });
         }
         Ok(ActResult { outcome: StepOutcome::Executed, page_changed: changed, detail, moved })
     }
@@ -477,10 +479,7 @@ impl CdpPage {
             detail = Some(Value::String(py_json(&Value::Object(described))));
         }
         match detail {
-            Some(detail) => format!(
-                "Target is covered by {}. Dismiss an observed obstruction before retrying.",
-                super::value_str(&detail)
-            ),
+            Some(detail) => format!("Target is covered by {}.", super::value_str(&detail)),
             None => "Target is covered.".into(),
         }
     }

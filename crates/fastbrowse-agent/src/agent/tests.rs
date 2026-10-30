@@ -151,6 +151,11 @@ fn link(key: &str, label: &str, href: &str) -> Control {
     control
 }
 
+/// A link the page marks `rel="next"`.
+fn pager(key: &str, label: &str, href: &str) -> Control {
+    Control { next_page: Some(true), ..link(key, label, href) }
+}
+
 fn draggable() -> Control {
     Control::new("drag1", "generic", "Card A", [Operation::Click, Operation::Drag])
 }
@@ -270,16 +275,17 @@ fn test_every_visited_address_is_shown_redacted() {
 #[test]
 fn test_the_next_page_of_a_list_is_one_link_to_another_address() {
     for (controls, found) in [
-        (vec![link("n", "Next \u{2192}", "/page/2/")], Some("n")),
-        (vec![link("n", "next", "/c/mystery/page-2.html"), link("m", "Mystery", "/c/mystery/index.html")], Some("n")),
+        (vec![pager("n", "Next \u{2192}", "/page/2/")], Some("n")),
+        (vec![pager("n", "next", "/c/mystery/page-2.html"), link("m", "Mystery", "/c/mystery/index.html")], Some("n")),
         // A pager above and below the list is one next page.
-        (vec![link("top", "\u{bb}", "/page/2/"), link("bottom", "\u{bb}", "/page/2/")], Some("top")),
+        (vec![pager("top", "\u{bb}", "/page/2/"), pager("bottom", "\u{bb}", "/page/2/")], Some("top")),
         // Two different next pages is doubt, left to Jev.
-        (vec![link("a", "Next", "/page/2/"), link("b", "Next", "/other/2/")], None),
+        (vec![pager("a", "Next", "/page/2/"), pager("b", "Next", "/other/2/")], None),
         // A load-more button keeps the earlier records on the page, so reading again would count them twice.
         (vec![button("Next")], None),
-        (vec![link("n", "Next", "/list/")], None),
-        (vec![link("n", "Next steps for your account", "/help/")], None),
+        (vec![pager("n", "Next", "/list/")], None),
+        // A label alone is never read as a pager: Jev picks one the page does not mark.
+        (vec![link("n", "Next", "/page/2/")], None),
     ] {
         let control = next_page_control(&at("https://example.test/list/", &controls));
         assert_eq!(control.as_ref().map(|c| c.id.as_str()), found, "{controls:?}");
@@ -289,9 +295,7 @@ fn test_the_next_page_of_a_list_is_one_link_to_another_address() {
 #[test]
 fn test_a_pager_the_page_marks_rel_next_is_followed_whatever_its_label() {
     // A pager drawn as an icon, or in another language, says so only in the markup.
-    let icon =
-        Control { label: "Weiter".into(), next_page: Some(true), ..link("n", "\u{2192}\u{2192}\u{2192}", "/page/2/") };
-    let found = next_page_control(&at("https://example.test/list/", &[icon]));
+    let found = next_page_control(&at("https://example.test/list/", &[pager("n", "Weiter", "/page/2/")]));
     assert_eq!(found.map(|c| c.id), Some("n".to_string()));
 }
 
@@ -334,13 +338,13 @@ fn test_an_upload_is_judged_by_the_page_not_by_a_value() {
 #[test]
 fn test_code_pager_never_follows_another_site_or_same_page() {
     for href in ["https://other.test/list/2", "//other.test/list/2", "other.test/list/2", "#next"] {
-        assert!(next_page_control(&at("https://example.test/list/1", &[link("n", "Next", href)])).is_none(), "{href}");
+        assert!(next_page_control(&at("https://example.test/list/1", &[pager("n", "Next", href)])).is_none(), "{href}");
     }
 }
 
 #[test]
 fn test_disabled_pager_is_not_followed() {
-    let disabled = Control { operations: Default::default(), ..link("next", "Next", "/list/2") };
+    let disabled = Control { operations: Default::default(), ..pager("next", "Next", "/list/2") };
     assert!(next_page_control(&at("https://example.test/list/1", &[disabled])).is_none());
 }
 
@@ -490,7 +494,7 @@ fn test_numeric_next_page_rejects_ambiguous_or_changed_scope() {
 fn test_next_page_deduplicates_absolute_and_relative_destinations() {
     for fragment in ["", "#results"] {
         let controls = [
-            link("next", "Next", &format!("https://example.test/list?page=3&sort=weight{fragment}")),
+            pager("next", "Next", &format!("https://example.test/list?page=3&sort=weight{fragment}")),
             link("number", "3", "/list?page=3&sort=weight"),
         ];
         let found = next_page_control(&at("https://example.test/list?page=2&sort=weight", &controls));
@@ -500,7 +504,7 @@ fn test_next_page_deduplicates_absolute_and_relative_destinations() {
 
 #[test]
 fn test_next_page_deduplicates_reordered_unique_query_pairs() {
-    let controls = [link("next", "Next", "/list?page=3&sort=weight"), link("number", "3", "/list?sort=weight&page=3")];
+    let controls = [pager("next", "Next", "/list?page=3&sort=weight"), link("number", "3", "/list?sort=weight&page=3")];
     let found = next_page_control(&at("https://example.test/list?page=2&sort=weight", &controls));
     assert_eq!(found.map(|c| c.id), Some("next".to_string()));
 }
@@ -517,8 +521,8 @@ fn test_numeric_next_page_preserves_repeated_filter_value_order() {
 #[test]
 fn test_next_page_keeps_reordered_repeated_parameters_ambiguous() {
     let controls = [
-        link("next", "Next", "/list?page=3&filter=first&filter=last"),
-        link("other", "Next", "/list?page=3&filter=last&filter=first"),
+        pager("next", "Next", "/list?page=3&filter=first&filter=last"),
+        pager("other", "Next", "/list?page=3&filter=last&filter=first"),
     ];
     assert!(next_page_control(&at("https://example.test/list?page=2", &controls)).is_none());
 }
@@ -545,9 +549,9 @@ fn test_a_link_that_saves_a_file_is_not_a_next_page() {
     // Paging clicks without the per-step gate, so a "next" link to an export must never be taken for a pager.
     let at_page_one =
         |control: Control| Observation { url: "https://addons.test/list/page-1".into(), ..observation(&[control]) };
-    assert!(next_page_control(&at_page_one(link("next", "Next", "/list/page-2.csv"))).is_none());
-    let pager = link("next", "Next", "/list/page-2");
-    assert_eq!(next_page_control(&at_page_one(pager.clone())), Some(pager));
+    assert!(next_page_control(&at_page_one(pager("next", "Next", "/list/page-2.csv"))).is_none());
+    let next = pager("next", "Next", "/list/page-2");
+    assert_eq!(next_page_control(&at_page_one(next.clone())), Some(next));
 }
 
 // -- The one stall rule and the one budget-renewal rule -------------------------------------------------------------

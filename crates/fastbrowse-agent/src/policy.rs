@@ -17,7 +17,7 @@ use fastbrowse_core::decision::{
 };
 use fastbrowse_core::models::{CostComponent, CostLine, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
-use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, loads_more, pager_link};
+use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
 use fastbrowse_core::py::{lax, sha256_hex, text};
@@ -595,7 +595,6 @@ fn cap(
 /// fill the shortlist and push out the button that applies it.
 fn protected(control: &Control) -> bool {
     pager_link(control)
-        || loads_more(control)
         || control.value.as_deref().is_some_and(|value| !value.is_empty())
         || control.checked == Some(true)
         || control.selected == Some(true)
@@ -810,7 +809,7 @@ pub fn build_request(
         && (context.unread_requirements.as_ref().is_none_or(|unread| !unread.is_empty())
             || !context.page_facts.is_empty())
     {
-        let listing = if observation.controls.iter().any(pager_link) {
+        let listing = if crate::agent::next_page_control(observation).is_some() {
             "Matching records in a paginated list are evidence for a count or comparison even when this page cannot supply the final answer. Read those records before opening a record's detail link or leaving the list. "
         } else {
             ""

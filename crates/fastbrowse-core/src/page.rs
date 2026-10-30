@@ -149,64 +149,13 @@ impl Control {
     }
 }
 
-/// The chevrons pagers draw.
-const ARROWS: [char; 4] = ['\u{203a}', '\u{bb}', '\u{2192}', '>'];
-
-/// `_NEXT_PAGE.fullmatch` on a label with its space squashed:
-/// `(?:next(?: page)?|more results|older(?: posts)?)\s*[arrows]*|[arrows]{1,2}`, ignoring case.
-fn reads_next_page(label: &str) -> bool {
-    let arrows = label.chars().filter(|c| ARROWS.contains(c)).count();
-    if (1..=2).contains(&arrows) && arrows == label.chars().count() {
-        return true;
-    }
-    ["next page", "next", "more results", "older posts", "older"].iter().any(|word| {
-        text::starts_with_ignore_case(label, word)
-            .is_some_and(|at| label[at..].trim_start_matches(text::is_space).chars().all(|c| ARROWS.contains(&c)))
-    })
-}
-
-/// Whether a link is a pager's way to the next page of a list: marked `rel="next"`, or labelled like one.
-///
-/// "next", "Next" and an arrow, "Next page", a lone chevron. The page's own mark says so in any language and behind
-/// an icon, so the label is only the fallback.
-pub fn pages_forward(control: &Control) -> bool {
-    control.next_page == Some(true) || reads_next_page(&text::squash(&control.label))
-}
-
-/// `_LOAD_MORE.fullmatch`: `(?:show|view|load|see)(?: \d+)? more(?: [\w-]+){0,3}`, ignoring case.
-fn reads_load_more(label: &str) -> bool {
-    let words: Vec<&str> = label.split(' ').collect();
-    let Some((verb, rest)) = words.split_first() else { return false };
-    if !["show", "view", "load", "see"].iter().any(|v| text::starts_with_ignore_case(verb, v) == Some(verb.len())) {
-        return false;
-    }
-    let rest = match rest.first() {
-        Some(count) if !count.is_empty() && count.chars().all(char::is_numeric) => &rest[1..],
-        _ => rest,
-    };
-    let Some((more, tail)) = rest.split_first() else { return false };
-    text::starts_with_ignore_case(more, "more") == Some(more.len())
-        && tail.len() <= 3
-        && tail.iter().all(|w| !w.is_empty() && w.chars().all(|c| text::is_word(c) || c == '-'))
-}
-
-/// Whether a control is labelled as loading more of the list it ends: "View more flights", "Show 20 more".
-///
-/// It sits at the foot of the list like a pager does, past what the off-screen cap keeps, and may carry no mark but
-/// its words: Google Flights' button has only its label. "Learn more" and the like do not match.
-pub fn loads_more(control: &Control) -> bool {
-    control.operations.contains(&Operation::Click) && reads_load_more(&text::squash(&control.label))
-}
-
-/// Whether this control is one the loop could actually walk a list with: a link, to an address.
-///
-/// A carousel's arrow and a wizard's button read exactly like a pager, and a busy page draws many of them. Only a
-/// link to somewhere else is ever followed, so anything else by that name earns no special treatment.
+/// Whether the page marks this control as the link to the next page of a list (`rel="next"`), in any language and
+/// behind any icon. Its label is never read for it: Jev picks a pager the page does not mark.
 pub fn pager_link(control: &Control) -> bool {
     control.role == "link"
+        && control.next_page == Some(true)
         && control.operations.contains(&Operation::Click)
         && control.href.as_deref().is_some_and(|href| !href.is_empty())
-        && pages_forward(control)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -569,54 +518,18 @@ mod tests {
     }
 
     #[test]
-    fn test_labels_that_turn_the_page() {
-        for label in [
-            "next",
-            "Next",
-            "Next page",
-            "Next \u{203a}",
-            "\u{203a}",
-            "\u{bb}",
-            "  next\n",
-            "Older posts",
-            "More results",
-        ] {
-            assert!(pages_forward(&link(label, None, 0)), "{label:?}");
-        }
-    }
-
-    #[test]
-    fn test_labels_that_do_not() {
-        for label in ["Nextel", "Book 3", "previous", "Next steps for the team", "Home"] {
-            assert!(!pages_forward(&link(label, None, 0)), "{label:?}");
-        }
-    }
-
-    #[test]
-    fn test_a_link_the_page_marks_rel_next_turns_the_page_whatever_it_says() {
-        assert!(pages_forward(&link("Suivant", Some(true), 0)));
-    }
-
-    #[test]
-    fn test_a_calendar_next_without_a_destination_is_not_a_pager() {
-        let mut control = link("Next", None, 0);
-        control.role = "button".into();
-        control.href = None;
-        assert!(!pager_link(&control));
-    }
-
-    #[test]
-    fn test_a_control_that_only_looks_like_a_pager_is_not_one() {
-        let mut button = link("next", None, 0);
+    fn test_only_a_link_the_page_marks_rel_next_is_a_pager() {
+        assert!(pager_link(&link("Suivant", Some(true), 0)));
+        assert!(!pager_link(&link("Next", None, 0)));
+        let mut button = link("next", Some(true), 0);
         button.role = "button".into();
         assert!(!pager_link(&button));
-        let mut nowhere = link("next", None, 0);
+        let mut nowhere = link("next", Some(true), 0);
         nowhere.href = None;
         assert!(!pager_link(&nowhere));
-        let mut inert = link("next", None, 0);
+        let mut inert = link("next", Some(true), 0);
         inert.operations.clear();
         assert!(!pager_link(&inert));
-        assert!(pager_link(&link("next", None, 0)));
     }
 
     #[test]
@@ -636,21 +549,6 @@ mod tests {
         let cut = cut_text(&"a".repeat(200), 100, false);
         assert_eq!(text::len(&cut), 100);
         assert!(cut.ends_with("[Viewport text cut: 172 characters omitted; read the page for the rest]"));
-    }
-
-    #[test]
-    fn a_list_footer_that_loads_more_is_told_from_one_that_does_not() {
-        for (label, loads) in [
-            ("View more flights", true),
-            ("Show 20 more", true),
-            ("load more  results now please", true),
-            ("Load more of the latest results today", false),
-            ("Learn more", false),
-            ("See more of the best-sellers", true),
-            ("Show more", true),
-        ] {
-            assert_eq!(loads_more(&Control::new("b", "button", label, [Operation::Click])), loads, "{label}");
-        }
     }
 
     #[test]
