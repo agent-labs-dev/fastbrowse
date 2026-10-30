@@ -227,26 +227,21 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
     }
 }
 
-/// The page's first rendered text, quoted block by block, for a page the run stops on without reading.
-pub fn leading_quotes(capture: &Capture, max_chars: i64) -> Vec<Evidence> {
+/// The page's rendered text, quoted block by block, for a page the run stops on without reading.
+pub fn page_quotes(capture: &Capture) -> Vec<Evidence> {
     let page = Page::new(capture);
-    let mut quotes = Vec::new();
-    let mut left = max_chars;
-    for block in &capture.blocks {
+    capture
+        .blocks
+        .iter()
         // A typed observation is a description code wrote, not words the page showed, and a download the session
         // kept is an earlier file appended after the page, not the page itself.
-        if left <= 0
-            || block.kind == BlockKind::Observation
-            || block.source_url.is_some()
-            || text::strip(page.slice(block.start, block.end)).is_empty()
-        {
-            continue;
-        }
-        let end = block.end.min(block.start + left);
-        quotes.push(evidence(&page, block, block.start, end));
-        left -= end - block.start;
-    }
-    quotes
+        .filter(|block| {
+            block.kind != BlockKind::Observation
+                && block.source_url.is_none()
+                && !text::strip(page.slice(block.start, block.end)).is_empty()
+        })
+        .map(|block| evidence(&page, block, block.start, block.end))
+        .collect()
 }
 
 /// A run of source blocks a model names by its ends.

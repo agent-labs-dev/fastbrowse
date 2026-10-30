@@ -7,9 +7,6 @@ use serde_json::{Value, json};
 use crate::page::{BlockKind, Capture, Control, Observation};
 use crate::py::{json::dumps, sha256_hex, text};
 
-const SHOWN: usize = 4;
-const TEXT: usize = 60;
-
 /// Clicking one of these is choosing a value, so it should leave some value, selection or address changed.
 pub const SETTING_ROLES: [&str; 6] = ["option", "checkbox", "radio", "switch", "menuitemradio", "menuitemcheckbox"];
 
@@ -79,15 +76,13 @@ impl Shown {
 
 fn short(value: &Shown) -> String {
     let squashed = if *value == Shown::Missing { String::new() } else { text::squash(&value.str()) };
-    let shown = if squashed.is_empty() { "empty".to_string() } else { squashed };
-    if text::len(&shown) <= TEXT { shown } else { format!("{}\u{2026}", text::prefix(&shown, TEXT - 1)) }
+    if squashed.is_empty() { "empty".to_string() } else { squashed }
 }
 
 fn listed(controls: &[&Control]) -> String {
     let count = format!("{} control{}", controls.len(), if controls.len() == 1 { "" } else { "s" });
-    let names: Vec<String> = controls.iter().take(SHOWN).map(|c| short(&Shown::Text(c.label.clone()))).collect();
-    let more = if controls.len() > SHOWN { format!(" and {} more", controls.len() - SHOWN) } else { String::new() };
-    format!("{count}: {}{more}", names.join(", "))
+    let names: Vec<String> = controls.iter().map(|c| short(&Shown::Text(c.label.clone()))).collect();
+    format!("{count}: {}", names.join(", "))
 }
 
 fn plain(text: &str) -> String {
@@ -158,8 +153,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         }
     }
     if !changes.is_empty() {
-        let more = if changes.len() > SHOWN { format!(" and {} more", changes.len() - SHOWN) } else { String::new() };
-        parts.push(format!("changed {}{more}", changes[..changes.len().min(SHOWN)].join("; ")));
+        parts.push(format!("changed {}", changes.join("; ")));
     }
     let shown: Vec<&Control> = new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect();
     let hidden: Vec<&Control> = old.iter().filter(|(key, _)| !new.contains_key(*key)).map(|(_, c)| *c).collect();
@@ -174,15 +168,15 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         setting =
             setting || after.controls.iter().any(|c| !SETTING_ROLES.contains(&c.role.as_str()) && shows(c, &choice));
     }
-    let mut summary = if parts.is_empty() { "nothing visible changed".to_string() } else { parts.join("; ") };
-    // A submit a form refuses moves nothing or reopens a picker, and says why only in the fields it marks: Search on a
-    // round trip with no return date reopened the date picker, and the run clicked Done and Search in turn.
-    if !(navigated || setting) {
-        let blocking: Vec<&Control> = after.controls.iter().filter(|c| c.blocking == Some(true)).collect();
-        if !blocking.is_empty() {
-            summary.push_str(&format!("; fields the form still needs: {}", listed(&blocking)));
-        }
-    }
+    // A form that refuses a submit can say why in its text alone, as Sauce Demo's checkout shows "Error: First Name is
+    // required" and changes no control.
+    let summary = if !parts.is_empty() {
+        parts.join("; ")
+    } else if before.viewport_text != after.viewport_text {
+        "only the page text changed".to_string()
+    } else {
+        "nothing visible changed".to_string()
+    };
     Effect { summary, set_something: navigated || setting }
 }
 
@@ -309,28 +303,21 @@ mod tests {
     }
 
     #[test]
-    fn test_an_action_that_set_nothing_names_the_fields_the_form_still_needs() {
-        let search = Control::new("s", "button", "Search", [Operation::Click]);
-        let needed = with(&Control::new("r", "textbox", "Return", [Operation::Fill]), |c| c.blocking = Some(true));
-        let form = observation(vec![search.clone(), needed.clone()]);
-        assert_eq!(
-            effect(&form, &form, None).summary,
-            "nothing visible changed; fields the form still needs: 1 control: Return"
-        );
-        let filled = observation(vec![
-            search,
-            with(&needed, |c| {
-                c.value = Some("Oct 23".into());
-                c.blocking = Some(false);
-            }),
-        ]);
-        assert!(!effect(&form, &filled, None).summary.contains("still needs"));
+    fn test_an_action_that_changed_only_the_text_says_so() {
+        let form = observation(vec![Control::new("s", "button", "Continue", [Operation::Click])]);
+        let refused = Observation { viewport_text: "Error: First Name is required".into(), ..form.clone() };
+        let done = effect(&form, &refused, None);
+        assert_eq!(done.summary, "only the page text changed");
+        assert!(!done.set_something);
     }
 
     #[test]
-    fn a_long_name_is_cut_with_an_ellipsis() {
+    fn every_name_is_told_whole() {
         let long = "x".repeat(70);
-        assert_eq!(short(&Shown::Text(long)), format!("{}\u{2026}", "x".repeat(59)));
+        assert_eq!(short(&Shown::Text(long.clone())), long);
         assert_eq!(short(&Shown::Missing), "empty");
+        let many: Vec<Control> = (0..6).map(|i| control(&format!("c{i}"), &format!("Item {i}"), "link")).collect();
+        let done = effect(&observation(vec![]), &observation(many), None);
+        assert_eq!(done.summary, "showed 6 controls: Item 0, Item 1, Item 2, Item 3, Item 4, Item 5");
     }
 }

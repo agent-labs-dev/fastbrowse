@@ -89,6 +89,10 @@ fn content(message: &Message) -> Result<Value, LLMError> {
     Ok(Value::Array(blocks))
 }
 
+/// The Messages API requires `max_tokens`, so an uncapped request sends the documented output maximum of the current
+/// Claude models.
+const MAX_OUTPUT_TOKENS: i64 = 128_000;
+
 /// The Messages request for one generation. System messages become the top-level `system`, as the API takes them.
 pub(crate) fn body(
     extra: &Map<String, Value>,
@@ -110,12 +114,8 @@ pub(crate) fn body(
     }
     let mut body = extra.clone();
     body.insert("model".into(), model.into());
-    // Zero is the caller saying no ceiling; the provider's own default applies. fastbrowse never caps output tokens.
-    if max_output_tokens > 0 {
-        body.insert("max_tokens".into(), max_output_tokens.into());
-    } else {
-        body.remove("max_tokens");
-    }
+    let cap = if max_output_tokens > 0 { max_output_tokens } else { MAX_OUTPUT_TOKENS };
+    body.insert("max_tokens".into(), cap.into());
     if !system.is_empty() {
         body.insert("system".into(), system.join("\n\n").into());
     }

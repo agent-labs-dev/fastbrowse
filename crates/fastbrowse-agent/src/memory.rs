@@ -1146,27 +1146,19 @@ impl Notes {
 
     /// Claims across read sources for picking the next action; completion checks use full quoted evidence.
     ///
-    /// `quotes` adds each claim's literal source text where it fits, for a writer that must copy a value exactly.
-    pub fn render_for_navigation(&self, max_chars: i64, quotes: bool) -> Result<String> {
-        if max_chars < 0 {
-            return Err(AgentError::Invalid("max_chars must be nonnegative".into()));
-        }
-        let max_chars = max_chars as usize;
-        let marker = format!("[{} facts omitted]", self.facts.len());
+    /// `quotes` adds each claim's literal source text, for a writer that must copy a value exactly.
+    pub fn render_for_navigation(&self, quotes: bool) -> String {
         let mut lines: Vec<String> = Vec::new();
         let mut sources: IndexMap<String, usize> = IndexMap::new();
-        let mut used = text::len(&marker);
         let mut ranks: HashMap<Option<&str>, usize> = HashMap::new();
         let mut ranked: Vec<(usize, &String, &Fact)> = Vec::new();
-        // Repeated reads of one page must not push every earlier source out of the next action's memory.
+        // Each source's latest claim comes first, so a page read many times does not bury the others.
         for (key, fact) in self.facts.iter().rev() {
             let address = fact.evidence.as_ref().map(|evidence| evidence.url.as_str());
             let rank = ranks.get(&address).copied().unwrap_or(0);
             ranked.push((rank, key, fact));
             ranks.insert(address, rank + 1);
         }
-        // A long source quote can consume the whole action budget and hide which items were already checked. Actions
-        // need progress claims; readers and verification retain their separate quoted view.
         ranked.sort_by_key(|entry| entry.0);
         for (_, key, fact) in ranked {
             let mut source = String::new();
@@ -1175,40 +1167,21 @@ impl Notes {
                 let number = sources.get(address).copied().unwrap_or(sources.len() + 1);
                 source = format!(" source={number}");
                 if !sources.contains_key(address) {
-                    // Tracking addresses hid previously checked entities from the action chooser.
-                    if text::len(address) <= 256 {
-                        source.push_str(&format!(" url={}", quoted(address, true)));
-                    } else {
-                        source.push_str(&format!(" url_prefix={}", quoted(text::prefix(address, 256), true)));
-                    }
+                    source.push_str(&format!(" url={}", quoted(address, true)));
                 }
             }
             let mut line = format!("{} requirements={}{source}", quoted(&fact.text, false), self.requirement_list(key));
             if let (true, Some(evidence)) = (quotes, &fact.evidence) {
                 // A claim is model prose and can normalize a code or a name; the quote is what the page said.
-                let with_quote = format!("{line} quote={}", quoted(&evidence.quote, false));
-                if used + text::len(&with_quote) < max_chars {
-                    line = with_quote;
-                }
+                line = format!("{line} quote={}", quoted(&evidence.quote, false));
             }
-            if used + text::len(&line) < max_chars {
-                used += text::len(&line) + 1;
-                lines.push(line);
-                if let Some(evidence) = &fact.evidence {
-                    let next = sources.len() + 1;
-                    sources.entry(evidence.url.clone()).or_insert(next);
-                }
+            lines.push(line);
+            if let Some(evidence) = &fact.evidence {
+                let next = sources.len() + 1;
+                sources.entry(evidence.url.clone()).or_insert(next);
             }
         }
-        let omitted = self.facts.len() - lines.len();
-        if omitted > 0 {
-            lines.push(format!("[{omitted} facts omitted]"));
-        }
-        let result = lines.join("\n");
-        if text::len(&result) > max_chars {
-            return Err(AgentError::Invalid("max_chars is too small to report omitted facts".into()));
-        }
-        Ok(result)
+        lines.join("\n")
     }
 
     pub fn render(&self, max_chars: i64, preserve_requirements: bool, json_encoded: bool) -> Result<String> {

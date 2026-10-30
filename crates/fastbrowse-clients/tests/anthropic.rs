@@ -84,10 +84,18 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
     let format = &sent["output_config"]["format"];
     assert_eq!(format["type"], "json_schema");
     assert_eq!(format["schema"]["additionalProperties"], false);
-    assert_eq!(sent["output_config"]["effort"], "low");
     for absent in ["response_format", "provider", "reasoning", "reasoning_effort", "max_completion_tokens"] {
         assert!(sent.get(absent).is_none(), "sent {absent}");
     }
+    assert!(sent["output_config"].get("effort").is_none(), "an unset effort leaves the model's own default");
+}
+
+#[tokio::test]
+async fn test_an_uncapped_request_sends_the_documented_output_maximum() {
+    let script = Script::new(vec![answer(r#"{"answer":"ok"}"#)]);
+    let llm = settings(&ENV).llm(&script.http()).unwrap();
+    llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 0, None).await.unwrap();
+    assert_eq!(body(&script.requests()[0])["max_tokens"], 128_000);
 }
 
 #[tokio::test]
@@ -128,11 +136,12 @@ async fn test_cost_counts_cached_input_and_stays_unknown_without_a_price() {
 }
 
 #[tokio::test]
-async fn test_a_reply_cut_at_max_tokens_is_asked_again_with_more_room() {
+async fn test_a_reply_cut_at_max_tokens_is_reported_at_the_callers_cap() {
     let cut = reply(json!([{"type": "text", "text": "{\"ans"}]), "max_tokens");
     let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut, answer(r#"{"answer":"ok"}"#)]).await;
-    assert_eq!(result.unwrap().data["answer"], "ok");
-    assert_eq!(body(&seen[1])["max_tokens"], 8000);
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("truncated at the 2000 token output cap"), "{error}");
+    assert_eq!(seen.len(), 1);
 }
 
 #[tokio::test]

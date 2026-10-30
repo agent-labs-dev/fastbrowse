@@ -119,13 +119,17 @@ async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
 }
 
 #[tokio::test]
-async fn test_a_shell_or_a_wall_needs_the_browser_that_renders_it() {
+async fn test_a_shell_or_a_challenge_needs_the_browser_that_renders_it() {
     let shell = format!("<html><body><div id=root></div></body></html>{}", "<script>a=1</script>".repeat(200));
     let error = fetched(&html(&shell), "https://shop.example.com/app").await.unwrap_err();
     assert!(error.0.contains("scripts"), "{error}");
+    // A bot check answers with its status, as Cloudflare's 403 and 503 challenges do, so it is never read as the page.
     let wall = "<html><body><h1>Just a moment</h1><p>Checking your browser</p></body></html>";
-    let error = fetched(&html(wall), "https://shop.example.com/app").await.unwrap_err();
-    assert!(error.0.contains("bot check"), "{error}");
+    for status in [403, 503] {
+        let page = FetchedPage::new(client(wall, status, "text/html"), None, None);
+        let error = page.navigate("https://shop.example.com/app", None).await.unwrap_err();
+        assert!(error.needs_browser() && error.to_string().contains(&format!("HTTP {status}")), "{error}");
+    }
 }
 
 #[test]
@@ -169,7 +173,7 @@ async fn test_a_redirect_inside_the_grant_is_followed() {
 
 #[tokio::test]
 async fn test_a_fetched_page_reads_but_cannot_act() {
-    let page = FetchedPage::new(html(PAGE), None, 6000, None);
+    let page = FetchedPage::new(html(PAGE), None, None);
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
     assert_eq!(observation.url, "https://shop.example.com/orders");
@@ -188,7 +192,7 @@ async fn test_a_fetched_page_reads_but_cannot_act() {
 
 #[tokio::test]
 async fn test_a_page_that_cannot_be_fetched_needs_the_browser_unless_it_was_a_guess() {
-    let page = FetchedPage::new(client("gone", 404, "text/html"), None, 6000, None);
+    let page = FetchedPage::new(client("gone", 404, "text/html"), None, None);
     let error = page.navigate("https://shop.example.com/missing", None).await.unwrap_err();
     assert!(error.needs_browser(), "{error}");
     // A guessed address falls back to the start page, as a browser failure does.
@@ -306,7 +310,7 @@ async fn test_access_withdrawn_after_the_navigation_stops_the_read() {
         let open = gate.load(Ordering::SeqCst);
         Box::pin(async move { if open { Ok(()) } else { Err("withdrawn".into()) } })
     });
-    let page = FetchedPage::new(html(PAGE), None, 6000, Some(check));
+    let page = FetchedPage::new(html(PAGE), None, Some(check));
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
     page.observe().await.expect("observe");
     allowed.store(false, Ordering::SeqCst);

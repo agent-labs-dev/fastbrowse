@@ -26,7 +26,7 @@ pub use answers::{
     transaction_check_question,
 };
 pub use choices::read_candidates;
-pub use chunks::{Chunk, chunk, leading_quotes, read_message_for};
+pub use chunks::{Chunk, chunk, page_quotes, read_message_for};
 pub use fields::{
     Annotation, Candidate, Proposed, ScalarField, ScalarValue, UnsupportedField, choose_candidate, copy_field,
     field_candidate_groups, field_candidates, field_candidates_from_notes, field_group_question, field_question,

@@ -18,7 +18,7 @@ use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_browser::testing;
-use fastbrowse_core::config::{Config, ObservationLimits};
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BlockKind, Capture, Control, Observation};
 use serde_json::{Value, json};
@@ -842,37 +842,20 @@ async fn test_fill_fails_when_another_field_holds_the_text_we_could_not_insert()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_observation_limits_can_exceed_old_javascript_caps() {
+async fn test_an_observation_keeps_every_control_and_the_whole_viewport_text() {
     let _gate = gate().await;
     let Some(h) = loaded().await else { return };
     eval_active(
         &h,
         "document.body.replaceChildren(); const text = document.createElement('div'); text.textContent = \
-         'x'.repeat(8000); document.body.append(text); for (let i = 0; i < 60; i++) { const b = \
+         'x'.repeat(8000); document.body.append(text); for (let i = 0; i < 400; i++) { const b = \
          document.createElement('button'); b.textContent = 'Button ' + i; b.style.cssText = \
          'position:absolute;left:20px;top:' + (10000+i*40) + 'px'; document.body.append(b); }",
     )
     .await;
-    let default = h.observe().await;
-    assert!(default.controls.len() == 60 && default.omitted_controls == 0);
-    assert_eq!(
-        default.viewport_text,
-        format!("{}\n[Viewport text cut: 2000 characters omitted; read the page for the rest]", "x".repeat(6000))
-    );
-
-    let limits = ObservationLimits {
-        max_controls: 100,
-        max_offscreen_controls: 55,
-        viewport_text_chars: 7500,
-        ..Default::default()
-    };
-    let page = CdpPage::new(h.session.clone(), Config { observation: limits, ..Config::default() });
-    let expanded = page.observe().await.expect("observe");
-    assert!(expanded.controls.len() == 55 && expanded.omitted_controls == 5);
-    assert_eq!(
-        expanded.viewport_text,
-        format!("{}\n[Viewport text cut: 500 characters omitted; read the page for the rest]", "x".repeat(7500))
-    );
+    let observation = h.observe().await;
+    assert!(observation.controls.len() == 400 && observation.omitted_controls == 0);
+    assert_eq!(observation.viewport_text, "x".repeat(8000));
     h.close().await;
 }
 
@@ -1511,7 +1494,7 @@ async fn test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_an
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_download_evidence_is_bounded_and_cites_the_response() {
+async fn test_download_evidence_is_whole_and_cites_the_response() {
     let _gate = gate().await;
     // The Python test quotes the download through retrieval's `chunk` and `_cited`, which are not ported; with one
     // chunk holding the whole capture, the quote is the block's text, its url the block's source or the capture's,
@@ -1521,7 +1504,6 @@ async fn test_download_evidence_is_bounded_and_cites_the_response() {
         h.goto("").await;
         h.goto(path).await;
         let capture = h.page.capture().await.expect("capture");
-        assert!(capture.text.chars().count() < 70000, "{path}");
         let block = capture.blocks.iter().find(|b| b.source_id.starts_with("download/")).expect("download block");
         assert_eq!(block.kind, BlockKind::Table, "{path}");
         let url = block.source_url.as_deref().unwrap_or(&capture.url);
@@ -1529,8 +1511,8 @@ async fn test_download_evidence_is_bounded_and_cites_the_response() {
         let quote = slice(&capture, block.start, block.end);
         assert!(quote.contains("name,total"), "{path}");
         assert!(quote.contains("139.79"), "{path}");
-        assert_eq!(quote.contains("omitted"), ["/report.csv", "/export-report"].contains(&path), "{path}");
-        assert_eq!(block.complete_source, path == "/report.csv?short", "{path}");
+        assert_eq!(quote.matches("item,1").count(), if path.contains('?') { 0 } else { 10000 }, "{path}");
+        assert_eq!(block.complete_source, path != "/report.csv?partial", "{path}");
         let first = &capture.blocks[0];
         assert_ne!(
             (first.frame_id.as_deref(), first.source_url.as_deref().unwrap_or(&capture.url)),
@@ -1654,29 +1636,23 @@ async fn test_the_kept_status_world_is_addressed_only_by_its_unique_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_required_radios_use_their_form_group_validity() {
+async fn test_fields_carry_what_the_page_says_about_them() {
     let _gate = gate().await;
     let Some(h) = harness().await else { return };
     h.goto("").await;
     let markup = concat!(
-        "<form><label>First<input type=\"radio\" name=\"choice\" required checked></label>",
-        "<label>Second<input type=\"radio\" name=\"choice\" required></label>",
-        "<label>Terms<input type=\"checkbox\" required></label></form>",
-        "<form><label>Other form<input type=\"radio\" name=\"choice\" required></label></form>",
+        "<form><label>First<input name=\"first\" required></label>",
+        "<label>Last<input name=\"last\" aria-required=\"true\" aria-invalid=\"true\"></label>",
+        "<label>Zip<input name=\"zip\" value=\"12345\"></label></form>",
     );
     let session_id = active(&h);
     let script = format!("document.body.innerHTML = {}", serde_json::to_string(markup).unwrap());
     h.page.evaluate(&session_id, &script).await.expect("evaluate");
     let observed = h.observe().await;
-    let blocking = |obs: &Observation, label: &str| find(obs, label).blocking == Some(true);
-    assert!(!blocking(&observed, "First"));
-    assert!(!blocking(&observed, "Second"));
-    assert!(blocking(&observed, "Terms"));
-    assert!(blocking(&observed, "Other form"));
-    h.page.evaluate(&session_id, "document.querySelector('input').checked = false").await.expect("evaluate");
-    let observed = h.observe().await;
-    assert!(blocking(&observed, "First"));
-    assert!(blocking(&observed, "Second"));
+    let marks = |label: &str| (find(&observed, label).required, find(&observed, label).invalid);
+    assert_eq!(marks("First"), (Some(true), None));
+    assert_eq!(marks("Last"), (Some(true), Some(true)));
+    assert_eq!(marks("Zip"), (None, None));
     h.close().await;
 }
 

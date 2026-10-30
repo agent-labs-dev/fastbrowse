@@ -6,6 +6,7 @@
 //! beyond Jev's option limit use a group choice followed by a separate element request. A relevance filter shortlists
 //! dense pages before the action choice so late controls can still be offered.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
@@ -15,9 +16,9 @@ use fastbrowse_core::decision::{
 };
 use fastbrowse_core::models::{CostComponent, CostLine, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
-use fastbrowse_core::page::{Control, Observation, loads_more, pager_link};
+use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, loads_more, pager_link};
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::py::json::{Style, dumps, write};
+use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
 use fastbrowse_core::py::{lax, text};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
@@ -27,7 +28,7 @@ use serde_json::{Map, Value, json};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An element marked blocking is a field\nits form will not submit without: fill it, or change the form's mode, before submitting again. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\nA link's href shows where it leads; use it to tell site navigation from content links.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\nA link's href shows where it leads; use it to tell site navigation from content links.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode (a trip or ticket type, a tab) is not the one the task needs, the control that sets\nthe mode is the target, not the form's submit. A control that explores or browses broadly does not run the\nsearch the task asked for.\nElements marked offscreen can be targeted directly. A link's href shows where it leads.\nElements that read alike carry a `context`: the card, row or section each one belongs to. When the task\nor subgoal names one of those, choose the element whose context matches it.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
@@ -75,6 +76,9 @@ str_enum! {
         Compact = "compact",
         /// Compacted, and only the elements that fit offered; the rest are counted as omitted for a scroll to reach.
         Capped = "capped",
+        /// Compacted, with the oldest actions dropped and long texts cut until the request fits Jev's documented
+        /// limit; the state counts the dropped actions and each cut text ends saying how much was left out.
+        Trimmed = "trimmed",
     }
 }
 
@@ -167,6 +171,13 @@ pub struct StepContext {
     /// The caller's background, which Jev reads beside the task and never as a requirement.
     #[serde(default)]
     pub background: Option<String>,
+    /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_actions: usize,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 impl StepContext {
@@ -187,6 +198,7 @@ impl StepContext {
             start_landing_url: None,
             recovery_memory: String::new(),
             background: None,
+            omitted_actions: 0,
         }
     }
 }
@@ -291,15 +303,19 @@ pub async fn decide(
     relevance_cache: Option<&RelevanceCache>,
     trace: &Trace,
 ) -> Result<Decision> {
+    let options = jev.profile().max_choice_options;
+    let fitting = Fitting { config, options };
+    let (mut observation, mut context) = (Cow::Borrowed(observation), Cow::Borrowed(context));
     let mut controls: Vec<Control> = observation.controls.clone();
     let mut reduction = Reduction::None;
     let mut cost: Vec<CostLine> = Vec::new();
     let mut tokens = 0;
-    let max_offered = config.observation.max_offered_controls.max(0) as usize;
+    // A target is picked from at most `options` groups of at most `group_size`, so no more can be offered at once.
+    let max_offered = fitting.group_size() * options;
     let mut shortlist_tried = controls.len() > max_offered;
     if shortlist_tried {
         let shortlisted =
-            shortlist(jev, observation, &controls, context, config, ledger, false, relevance_cache, trace).await?;
+            shortlist(jev, &observation, &controls, &context, fitting, ledger, false, relevance_cache, trace).await?;
         if let Some((kept, paid, used)) = shortlisted {
             (controls, cost, tokens) = (kept, paid, used);
             reduction = Reduction::Relevance;
@@ -311,8 +327,9 @@ pub async fn decide(
     // Shortening text loses nothing a choice needs, so it is tried before any control is dropped, and kept for every
     // rung after it.
     let mut compact = false;
+    let mut trimmed = false;
     loop {
-        let request = build_request(observation, &controls, context, config, compact);
+        let request = build_request(&observation, &controls, &context, config, options, compact);
         if fits(&request, config) {
             match evaluate(jev, &request, &controls, reduction, ledger, compact).await {
                 Ok(mut decision) => {
@@ -322,8 +339,7 @@ pub async fn decide(
                 }
                 Err(AgentError::Jev(DecisionError::InputTooLarge(_))) => {}
                 Err(AgentError::Jev(DecisionError::RetriesExhausted(error))) => {
-                    let Some((smaller, reduced)) = shed(&request, observation, &controls, context, config, reduction)
-                    else {
+                    let Some((smaller, reduced)) = shed(&request, &controls, config, reduction) else {
                         return Err(AgentError::Jev(DecisionError::RetriesExhausted(error)));
                     };
                     trace.event("decide_shed", || {
@@ -346,10 +362,20 @@ pub async fn decide(
             }
             continue;
         }
+        // Long history and texts are cut when that alone makes room for every control offered; a page whose controls
+        // are what overflow keeps its texts and has its controls shortlisted instead.
+        if !trimmed {
+            trimmed = true;
+            if let Some((smaller, shorter)) = trim(&observation, &controls, &context, fitting) {
+                (observation, context, reduction) = (Cow::Owned(smaller), Cow::Owned(shorter), Reduction::Trimmed);
+                continue;
+            }
+        }
         if !shortlist_tried {
             shortlist_tried = true;
             let shortlisted =
-                shortlist(jev, observation, &controls, context, config, ledger, true, relevance_cache, trace).await?;
+                shortlist(jev, &observation, &controls, &context, fitting, ledger, true, relevance_cache, trace)
+                    .await?;
             if let Some((kept, paid, used)) = shortlisted {
                 (controls, cost, tokens) = (kept, paid, used);
                 reduction = Reduction::Relevance;
@@ -363,14 +389,120 @@ pub async fn decide(
         }
         // A page too dense even on screen is still worked rather than ending the run: the controls that fit are
         // offered, the rest counted as omitted, and a scroll brings them into the next step's view.
-        let Some(capped) = cap(observation, &controls, context, config, controls.len()) else {
+        if let Some(capped) = cap(&observation, &controls, &context, fitting) {
+            (controls, reduction) = (capped, Reduction::Capped);
+            continue;
+        }
+        // Not even an empty element list fits beside the texts, so they are cut to make room for the capped controls.
+        let bare = (!fitting.fits(&observation, &[], &context)).then(|| trim(&observation, &[], &context, fitting));
+        let Some((smaller, shorter)) = bare.flatten() else {
             return Err(AgentError::ObservationTooLarge(format!(
                 "the state on {} exceeds Jev's input limits with no controls",
                 observation.url
             )));
         };
-        (controls, reduction) = (capped, Reduction::Capped);
+        (observation, context) = (Cow::Owned(smaller), Cow::Owned(shorter));
     }
+}
+
+/// What decides whether a step request fits: the fitted config and Jev's documented limit on options per choice.
+#[derive(Clone, Copy)]
+struct Fitting<'a> {
+    config: &'a Config,
+    options: usize,
+}
+
+impl Fitting<'_> {
+    fn group_size(&self) -> usize {
+        (self.config.observation.group_size.max(0) as usize).min(self.options)
+    }
+
+    /// How many characters the compact request's state runs over Jev's limit; zero or less when it fits.
+    fn excess(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> i64 {
+        let request = build_request(observation, controls, context, self.config, self.options, true);
+        let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
+        text::len(&dumps(&request.state)) as i64 - self.config.tokens.input_chars(&written, true)
+    }
+
+    fn fits(&self, observation: &Observation, controls: &[Control], context: &StepContext) -> bool {
+        self.excess(observation, controls, context) <= 0
+    }
+}
+
+fn notes_marker(omitted_chars: usize) -> String {
+    format!("\n[Notes cut: {omitted_chars} characters omitted to fit the request]")
+}
+
+fn recovery_marker(omitted_chars: usize) -> String {
+    format!("\n[Recovery memory cut: {omitted_chars} characters omitted to fit the request]")
+}
+
+/// The observation and context cut until the request with `controls` fits, or None if no cut makes it fit.
+///
+/// When dropping actions alone makes room, the oldest go first and values set last, keeping the most recent that fit.
+/// Otherwise the recovery memory, the page text and the notes are cut in turn, each only by what the request still
+/// runs over, and actions are dropped only if those cuts are not enough.
+fn trim(
+    observation: &Observation,
+    controls: &[Control],
+    context: &StepContext,
+    fitting: Fitting<'_>,
+) -> Option<(Observation, StepContext)> {
+    let (original, page_text) = (context, observation.viewport_text.as_str());
+    let (mut observation, mut context) = (observation.clone(), context.clone());
+    let history = std::mem::take(&mut context.history);
+    // A value typed or a box ticked is still on the page however long ago it was set, so it is the last to go.
+    let mut order: Vec<usize> = (0..history.len()).collect();
+    order.sort_by_key(|i| history[*i].text.is_some() || history[*i].setting == Some(true));
+    let without = |context: &StepContext, dropped: usize| {
+        let gone: HashSet<usize> = order[..dropped].iter().copied().collect();
+        let mut shorter = context.clone();
+        shorter.history = (0..history.len()).filter(|i| !gone.contains(i)).map(|i| history[i].clone()).collect();
+        shorter.omitted_actions += dropped;
+        shorter
+    };
+    // The fewest actions to drop for the request to fit, or all of them when none is enough.
+    let fewest = |observation: &Observation, context: &StepContext| {
+        let (mut low, mut high) = (0, history.len());
+        while low < high {
+            let middle = (low + high) / 2;
+            if fitting.fits(observation, controls, &without(context, middle)) {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        low
+    };
+    if fitting.fits(&observation, controls, &without(&context, history.len())) {
+        let dropped = fewest(&observation, &context);
+        context = without(&context, dropped);
+    } else {
+        // The excess is counted in JSON-escaped characters, so each text is cut as it is written into the state.
+        let room = |text: &str, excess: i64| (dumped_len(text) as i64 - excess).max(0) as usize;
+        let full = without(&context, 0);
+        let excess = fitting.excess(&observation, controls, &full);
+        if excess > 0 {
+            context.recovery_memory =
+                cut_with(&context.recovery_memory, room(&context.recovery_memory, excess), true, recovery_marker);
+        }
+        let excess = fitting.excess(&observation, controls, &without(&context, 0));
+        if excess > 0 {
+            observation.viewport_text =
+                cut_text(&observation.viewport_text, room(&observation.viewport_text, excess), true);
+        }
+        let excess = fitting.excess(&observation, controls, &without(&context, 0));
+        if excess > 0 {
+            context.notes = cut_with(&context.notes, room(&context.notes, excess), true, notes_marker);
+        }
+        let dropped = fewest(&observation, &context);
+        context = without(&context, dropped);
+    }
+    let cut = context.history.len() < history.len()
+        || context.recovery_memory != original.recovery_memory
+        || context.notes != original.notes
+        || observation.viewport_text != page_text;
+    (cut && fitting.fits(&observation, controls, &context)).then_some((observation, context))
 }
 
 /// Protected controls, then the first others up to `limit` in all: document order when no relevance score is known.
@@ -387,13 +519,11 @@ fn protected_first(controls: &[Control], limit: usize) -> HashSet<usize> {
 /// The gateway sheds large Jev requests. A Wikipedia article's step offered 160 controls, twice over (state and target
 /// question), in 27k input tokens, and it failed six runs in six as unavailable; replayed, that same request was
 /// answered four times in ten while every request under 10k tokens but two in 29 was. So a large request is asked
-/// again smaller: off-screen controls first, as the fitting ladder drops them, then half of those left. A request
-/// already as small as a batch is not the reason, so its failure stays an outage.
+/// again once without its off-screen controls, as the fitting ladder drops them; past that the outage is reported. A
+/// request already as small as a batch is not the reason, so its failure stays an outage.
 fn shed(
     request: &Request,
-    observation: &Observation,
     controls: &[Control],
-    context: &StepContext,
     config: &Config,
     reduction: Reduction,
 ) -> Option<(Vec<Control>, Reduction)> {
@@ -403,10 +533,8 @@ fn shed(
     if state + largest <= config.tokens.batch_tokens as f64 {
         return None;
     }
-    if !matches!(reduction, Reduction::OnscreenOnly | Reduction::Capped) && controls.iter().any(|c| c.offscreen) {
-        return Some((controls.iter().filter(|c| !c.offscreen).cloned().collect(), Reduction::OnscreenOnly));
-    }
-    cap(observation, controls, context, config, controls.len() / 2).map(|capped| (capped, Reduction::Capped))
+    (!matches!(reduction, Reduction::OnscreenOnly | Reduction::Capped) && controls.iter().any(|c| c.offscreen))
+        .then(|| (controls.iter().filter(|c| !c.offscreen).cloned().collect(), Reduction::OnscreenOnly))
 }
 
 /// The controls at `indices`, in document order.
@@ -414,22 +542,21 @@ fn keep_indices(controls: &[Control], indices: &HashSet<usize>) -> Vec<Control> 
     controls.iter().enumerate().filter(|(i, _)| indices.contains(i)).map(|(_, c)| c.clone()).collect()
 }
 
-/// The largest prefix, protected controls first, shorter than `below` whose request fits; None if none does.
+/// The largest prefix, protected controls first, shorter than all of `controls` whose request fits; None if none does.
 fn cap(
     observation: &Observation,
     controls: &[Control],
     context: &StepContext,
-    config: &Config,
-    below: usize,
+    fitting: Fitting<'_>,
 ) -> Option<Vec<Control>> {
     let mut order: Vec<usize> = (0..controls.len()).collect();
     order.sort_by_key(|i| !protected(&controls[*i]));
     let kept = |prefix: usize| keep_indices(controls, &order[..prefix.min(order.len())].iter().copied().collect());
-    let fits_with = |prefix: usize| fits(&build_request(observation, &kept(prefix), context, config, true), config);
-    if below == 0 || !fits_with(0) {
+    let fits_with = |prefix: usize| fitting.fits(observation, &kept(prefix), context);
+    if controls.is_empty() || !fits_with(0) {
         return None;
     }
-    let (mut low, mut high) = (0, below - 1);
+    let (mut low, mut high) = (0, controls.len() - 1);
     while low < high {
         let middle = (low + high).div_ceil(2);
         if fits_with(middle) {
@@ -446,7 +573,6 @@ fn cap(
 fn protected(control: &Control) -> bool {
     pager_link(control)
         || loads_more(control)
-        || control.blocking == Some(true)
         || control.value.as_deref().is_some_and(|value| !value.is_empty())
         || control.checked == Some(true)
         || control.selected == Some(true)
@@ -462,12 +588,13 @@ async fn shortlist(
     observation: &Observation,
     controls: &[Control],
     context: &StepContext,
-    config: &Config,
+    fitting: Fitting<'_>,
     ledger: Option<&Ledger>,
     compact: bool,
     cache: Option<&RelevanceCache>,
     trace: &Trace,
 ) -> Result<Option<Shortlist>> {
+    let config = fitting.config;
     let protected_set: HashSet<usize> = (0..controls.len()).filter(|i| protected(&controls[*i])).collect();
     let candidates: Vec<usize> = (0..controls.len()).filter(|i| !protected_set.contains(i)).collect();
     let state = json!({
@@ -550,11 +677,11 @@ async fn shortlist(
         indices.extend(ranked[..prefix].iter().copied());
         keep_indices(controls, &indices)
     };
-    let max_offered = config.observation.max_offered_controls.max(0) as usize;
+    let max_offered = fitting.group_size() * fitting.options;
     let (mut low, mut high) = (0, ranked.len().min(max_offered.saturating_sub(protected_set.len())));
     while low < high {
         let middle = (low + high).div_ceil(2);
-        if fits(&build_request(observation, &kept(middle), context, config, compact), config) {
+        if fits(&build_request(observation, &kept(middle), context, config, fitting.options, compact), config) {
             low = middle;
         } else {
             high = middle - 1;
@@ -631,6 +758,7 @@ pub fn build_request(
     controls: &[Control],
     context: &StepContext,
     config: &Config,
+    max_options: usize,
     compact: bool,
 ) -> Request {
     let indexed = index_controls(controls);
@@ -681,7 +809,7 @@ pub fn build_request(
     }
     let mut targets: IndexMap<Operation, Vec<Control>> = IndexMap::new();
     let mut groups: IndexMap<Operation, Vec<Vec<Control>>> = IndexMap::new();
-    let limit = config.observation.max_choice_options.max(0) as usize;
+    let limit = max_options;
     let size = (config.observation.group_size.max(0) as usize).min(limit);
     for operation in &offered {
         if !TARGETED.contains(operation) {
@@ -926,6 +1054,9 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     state.insert("unread_requirements".into(), json!(context.unread_requirements));
     state.insert("notes".into(), context.notes.clone().into());
     state.insert("recent_actions".into(), Value::Array(context.history.iter().map(Dump::dump_exclude_none).collect()));
+    if context.omitted_actions > 0 {
+        state.insert("omitted_actions".into(), context.omitted_actions.into());
+    }
     state
         .insert("elements".into(), Value::Array(controls.iter().map(|c| Value::Object(element(c, compact))).collect()));
     if let Some(background) = context.background.as_deref().map(text::strip).filter(|b| !b.is_empty()) {
@@ -1011,8 +1142,10 @@ pub fn element(control: &Control, compact: bool) -> Map<String, Value> {
     if control.offscreen {
         element.insert("offscreen".into(), true.into());
     }
-    if control.blocking == Some(true) {
-        element.insert("blocking".into(), true.into());
+    for (key, marked) in [("required", control.required), ("invalid", control.invalid)] {
+        if marked == Some(true) {
+            element.insert(key.into(), true.into());
+        }
     }
     element
 }
@@ -1100,8 +1233,8 @@ mod tests {
 
     use fastbrowse_core::BoxFuture;
     use fastbrowse_core::config::ObservationLimits;
-    use fastbrowse_core::decision::ChoiceTag;
     use fastbrowse_core::decision::NoulTag;
+    use fastbrowse_core::decision::{ChoiceTag, DecisionProfile, MAX_CHOICE_OPTIONS};
     use fastbrowse_core::models::{CostBasis, Limits};
     use fastbrowse_core::py::datetime::DateTime;
 
@@ -1109,8 +1242,7 @@ mod tests {
     use crate::support::testing::block_on;
 
     fn grouped() -> Config {
-        let observation = ObservationLimits { max_choice_options: 10, group_size: 4, ..ObservationLimits::default() };
-        Config { observation, ..Config::default() }
+        Config { observation: ObservationLimits { group_size: 4 }, ..Config::default() }
     }
 
     fn button(i: usize) -> Control {
@@ -1133,7 +1265,9 @@ mod tests {
         relevant: &'static str,
         interrupt: bool,
         retry: AtomicBool,
+        options: usize,
         requests: Mutex<Vec<IndexMap<String, Question>>>,
+        states: Mutex<Vec<Value>>,
     }
 
     fn fake(pick: &[(&'static str, &str)], relevant: &'static str) -> Fake {
@@ -1142,17 +1276,24 @@ mod tests {
             relevant,
             interrupt: false,
             retry: AtomicBool::new(false),
+            options: MAX_CHOICE_OPTIONS,
             requests: Mutex::new(Vec::new()),
+            states: Mutex::new(Vec::new()),
         }
     }
 
     impl DecisionClient for Fake {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile { max_choice_options: self.options, ..DecisionProfile::jev() }
+        }
+
         fn evaluate<'a>(
             &'a self,
-            _: &'a Value,
+            state: &'a Value,
             questions: &'a IndexMap<String, Question>,
         ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
             self.requests.lock().unwrap().push(questions.clone());
+            self.states.lock().unwrap().push(state.clone());
             let relevance = !questions.contains_key("operation");
             let hold =
                 relevance && self.interrupt && !questions.contains_key("r0") && !self.retry.load(Ordering::SeqCst);
@@ -1200,7 +1341,8 @@ mod tests {
     }
 
     fn relevance_requests(jev: &Fake) -> Vec<IndexMap<String, Question>> {
-        jev.requests.lock().unwrap().iter().filter(|q| !q.contains_key("operation")).cloned().collect()
+        let scored = |key: &String| key.strip_prefix('r').is_some_and(|i| i.parse::<usize>().is_ok());
+        jev.requests.lock().unwrap().iter().filter(|q| q.keys().all(scored)).cloned().collect()
     }
 
     #[test]
@@ -1218,7 +1360,8 @@ mod tests {
     #[test]
     fn test_too_many_candidates_go_group_then_element() {
         let config = grouped();
-        let jev = fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "");
+        let jev =
+            Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "") };
         let page = observation((0..12).map(button).collect());
         let context = StepContext::new("press button 3");
         let decision = block_on(decide(&jev, &page, &context, &config, None, None, &Trace::disabled())).unwrap();
@@ -1233,7 +1376,7 @@ mod tests {
     #[test]
     fn test_each_request_including_groups_needs_budget() {
         let config = grouped();
-        let jev = fake(&[("operation", "click"), ("click_group", "0")], "");
+        let jev = Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "0")], "") };
         let ledger = Ledger::new(Limits { max_jev_calls: Some(1), ..Limits::default() });
         let page = observation((0..12).map(button).collect());
         let context = StepContext::new("press button 3");
@@ -1244,11 +1387,11 @@ mod tests {
 
     #[test]
     fn test_redraw_keeps_answered_batches_and_retries_unfinished_batches_in_parallel() {
-        let mut config = Config::default();
-        config.observation.max_offered_controls = 2;
+        // Two options of two controls offer four at most, so five are shortlisted first.
+        let mut config = Config { observation: ObservationLimits { group_size: 2 }, ..Config::default() };
         config.tokens.batch_tokens = 1;
         let cache = RelevanceCache::default();
-        let mut jev = fake(&[("operation", "click")], "Button 0");
+        let mut jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 0") };
         jev.interrupt = true;
         let page = observation((0..5).map(button).collect());
         let context = StepContext::new("press button 3");
@@ -1276,6 +1419,66 @@ mod tests {
         assert!(result.target.unwrap().id.starts_with("fresh-"));
     }
 
+    /// A request no larger than Jev's documented limit in tokens, at 1.5 characters a token.
+    fn tight() -> Config {
+        let mut config = Config::default();
+        (config.tokens.state_plus_largest_question, config.tokens.state_plus_all_questions) = (4000, 8000);
+        config
+    }
+
+    #[test]
+    fn test_a_long_history_loses_its_oldest_actions_but_not_a_value_set() {
+        let jev = fake(&[("operation", "click")], "");
+        let mut context = StepContext::new("press button 3");
+        let mut typed = HistoryEntry::new(Some(Operation::Fill), Some("Name"), StepOutcome::Executed, true);
+        typed.text = Some("Ada".into());
+        context.history = std::iter::once(typed)
+            .chain((0..200).map(|i| {
+                HistoryEntry::new(Some(Operation::Click), Some(&format!("Next {i}")), StepOutcome::Executed, true)
+            }))
+            .collect();
+        let page = observation((0..3).map(button).collect());
+        let decision = block_on(decide(&jev, &page, &context, &tight(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.reduction, Reduction::Trimmed);
+        let states = jev.states.lock().unwrap();
+        let actions = states[0]["recent_actions"].as_array().unwrap();
+        let omitted = states[0]["omitted_actions"].as_u64().unwrap() as usize;
+        assert_eq!(actions.len() + omitted, 201);
+        assert_eq!(actions[0]["text"], "Ada");
+        assert_eq!(actions.last().unwrap()["target"], "Next 199");
+        assert_eq!(states[0]["elements"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_a_long_page_text_is_cut_to_fit_and_says_so() {
+        let jev = fake(&[("operation", "click")], "");
+        let mut page = observation((0..3).map(button).collect());
+        page.viewport_text = "word ".repeat(4000);
+        let mut context = StepContext::new("press button 3");
+        context.history = vec![HistoryEntry::new(Some(Operation::Scroll), None, StepOutcome::Executed, true)];
+        let decision = block_on(decide(&jev, &page, &context, &tight(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.reduction, Reduction::Trimmed);
+        let states = jev.states.lock().unwrap();
+        let text = states[0]["page"]["text"].as_str().unwrap();
+        assert!(text.starts_with("word word") && text.contains("characters omitted; read the page for the rest"));
+        // The text overflowed, not the history, so the one action stays.
+        assert_eq!(states[0]["recent_actions"].as_array().unwrap().len(), 1);
+        assert!(states[0].get("omitted_actions").is_none());
+        assert_eq!(states[0]["elements"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_a_long_page_text_is_whole_when_it_fits() {
+        let jev = fake(&[("operation", "click")], "");
+        let mut page = observation((0..3).map(button).collect());
+        page.viewport_text = "word ".repeat(4000);
+        let context = StepContext::new("press button 3");
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.reduction, Reduction::None);
+        assert_eq!(jev.states.lock().unwrap()[0]["page"]["text"], page.viewport_text);
+    }
+
     #[test]
     fn test_a_link_told_apart_by_its_query_keeps_it_when_compact() {
         let mut link = Control::new("q", "link", "Item", [Operation::Click]);
@@ -1287,11 +1490,14 @@ mod tests {
     }
 
     #[test]
-    fn test_a_field_the_form_will_not_submit_without_is_marked_for_jev() {
-        let mut blocking = button(1);
-        blocking.blocking = Some(true);
-        assert_eq!(element(&blocking, false)["blocking"], true);
-        assert!(!element(&button(2), false).contains_key("blocking"));
+    fn test_what_the_page_says_about_a_field_is_shown_to_jev() {
+        let mut field = button(1);
+        field.required = Some(true);
+        field.invalid = Some(true);
+        assert_eq!(element(&field, false)["required"], true);
+        assert_eq!(element(&field, false)["invalid"], true);
+        assert!(!element(&button(2), false).contains_key("required"));
+        assert!(!element(&button(2), false).contains_key("invalid"));
     }
 
     #[test]
@@ -1299,7 +1505,7 @@ mod tests {
         let mut page = observation(vec![]);
         page.captured_at = DateTime::new(2026, 9, 26, 20, 0, 0).utc();
         let context = StepContext::new("Select next month's first Friday");
-        let state = build_request(&page, &[], &context, &Config::default(), false).state;
+        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false).state;
         assert_eq!(state["date"], "2026-09-26 (Saturday). In one month: October 2026; in two months: November 2026");
     }
 
@@ -1307,10 +1513,10 @@ mod tests {
     fn test_jev_reads_the_callers_background_apart_from_the_task() {
         let page = observation(vec![]);
         let mut context = StepContext::new("Find the price");
-        let state = build_request(&page, &[], &context, &Config::default(), false).state;
+        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false).state;
         assert!(state.get("background").is_none());
         context.background = Some(" Asked by email from Ana. ".into());
-        let state = build_request(&page, &[], &context, &Config::default(), false).state;
+        let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS, false).state;
         assert_eq!(
             (&state["task"], &state["background"]),
             (&json!("Find the price"), &json!("Asked by email from Ana."))
@@ -1320,7 +1526,8 @@ mod tests {
     #[test]
     fn test_drag_is_not_offered_when_nothing_is_draggable() {
         let page = observation(vec![button(1)]);
-        let request = build_request(&page, &[button(1)], &StepContext::new("t"), &Config::default(), false);
+        let request =
+            build_request(&page, &[button(1)], &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS, false);
         assert!(!request.questions.contains_key("drag_target"));
         assert!(!request.questions.contains_key("drag_destination"));
     }

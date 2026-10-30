@@ -285,15 +285,6 @@ async fn test_json_object_mode_states_the_schema_and_reads_a_fenced_reply() {
     assert!(instruction.contains("JSON") && instruction.contains(&answer_model().json_schema().to_string()));
 }
 
-#[tokio::test]
-async fn test_a_truncated_reply_grows_the_cap_field_the_preset_uses() {
-    let env = [("FASTBROWSE_LLM_PROVIDER", "openai"), ("OPENAI_API_KEY", "k"), ("FASTBROWSE_LLM_MODEL", "m")];
-    let (seen, _) =
-        generate(&env, vec![completion("{\"ans", "length"), completion(r#"{"answer":"ok"}"#, "stop")]).await;
-    assert_eq!(body(&seen[1])["max_completion_tokens"], 8000);
-    assert!(body(&seen[1]).get("max_tokens").is_none());
-}
-
 #[test]
 fn test_an_extra_body_cannot_replace_the_presets_own_fields() {
     let loaded = settings(&[

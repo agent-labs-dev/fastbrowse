@@ -7,8 +7,8 @@
 //!
 //! What it cannot do is act. There are no controls in a fetched document, and pixels are not rendered, so a step that
 //! would click or fill ends the run as blocked with the reason rather than pretending. Anything a page builds with
-//! scripts is likewise invisible here, and a document whose readable text is a sliver of its markup is read as exactly
-//! that: [`NotFetched`], with the browser left as the only reader.
+//! scripts is likewise invisible here, and a document with no readable text is read as exactly that: [`NotFetched`],
+//! with the browser left as the only reader.
 
 pub mod html;
 
@@ -26,7 +26,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::Artifact;
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, BrowserError, Capture, Observation, Page, PageResult, Tab, cut_text,
+    ActResult, Action, Block, BlockKind, BrowserError, Capture, Observation, Page, PageResult, Tab,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
@@ -37,22 +37,6 @@ use html::{Found, blocks, clean, join};
 const TIMEOUT_SECONDS: f64 = 15.0;
 /// Markup beyond this is not a document anyone reads as text; the browser can still be pointed at it.
 const MAX_BYTES: usize = 5 * 1024 * 1024;
-/// The walls a static fetch meets where a browser would pass: a challenge page, or a shell with no content until
-/// scripts run. Either way the fetched text is not the page and the run has to use the browser.
-const WALLS: [&str; 7] = [
-    "just a moment",
-    "checking your browser",
-    "enable javascript",
-    "verification required",
-    "access denied",
-    "are you a robot",
-    "captcha",
-];
-/// A document whose text is under this share of its markup is a shell: a rendered page of any substance carries far
-/// more words than an empty template, and the browser is the only reader of what scripts build.
-const MIN_TEXT_SHARE: f64 = 0.01;
-/// A page carrying this much text is not a wall telling the reader to turn scripts on.
-const LITTLE_TEXT_CHARS: usize = 480;
 /// A redirect chain longer than this is a loop or a tracker maze, and the browser is the reader for both.
 const MAX_REDIRECTS: usize = 10;
 const HTML_TYPES: [&str; 2] = ["text/html", "application/xhtml+xml"];
@@ -264,15 +248,9 @@ pub async fn fetch_capture(
         return Err(refused(format!("{named} is not a document read as text")));
     }
     let (title, found) = blocks(&body, &final_url);
-    let readable: usize = found.iter().map(|block| text::len(&block.text)).sum();
-    let head = text::prefix(&body, 20_000).to_ascii_lowercase();
-    if WALLS.iter().any(|wall| head.contains(wall)) && readable < LITTLE_TEXT_CHARS {
-        return Err(refused("the page is a bot check or an empty shell that scripts fill"));
-    }
-    if readable == 0 || readable < (text::len(&body) as f64 * MIN_TEXT_SHARE) as usize {
+    if found.iter().all(|block| block.text.is_empty()) {
         // A page whose markup is scripts and styles has nothing to quote: the browser is the only reader of what they
-        // build, and reading the shell as the page would answer from nothing. A genuinely short document passes,
-        // because its text is most of its markup however few characters that is.
+        // build, and reading the shell as the page would answer from nothing.
         return Err(refused("the page renders its content with scripts, so the markup holds no readable text"));
     }
     Ok(capture(&final_url, title, found))
@@ -292,7 +270,6 @@ struct Loaded {
 pub struct FetchedPage {
     http: Http,
     origins: Option<Vec<String>>,
-    viewport_chars: usize,
     seconds: f64,
     check_access: Option<CheckAccess>,
     loaded: Mutex<Loaded>,
@@ -300,16 +277,10 @@ pub struct FetchedPage {
 }
 
 impl FetchedPage {
-    pub fn new(
-        http: Http,
-        allowed_origins: Option<Vec<String>>,
-        viewport_text_chars: usize,
-        check_access: Option<CheckAccess>,
-    ) -> FetchedPage {
+    pub fn new(http: Http, allowed_origins: Option<Vec<String>>, check_access: Option<CheckAccess>) -> FetchedPage {
         FetchedPage {
             http,
             origins: allowed_origins,
-            viewport_chars: viewport_text_chars,
             seconds: TIMEOUT_SECONDS,
             check_access,
             loaded: Mutex::new(Loaded::default()),
@@ -357,7 +328,7 @@ impl Page for FetchedPage {
                 document_key: capture.sha256.clone(),
                 controls: Vec::new(),
                 omitted_controls: 0,
-                viewport_text: cut_text(&capture.text, self.viewport_chars, false),
+                viewport_text: capture.text.clone(),
                 visual_content: false,
                 // Nothing here can be scrolled, clicked or looked at, so no step may be chosen to do it.
                 tabs: vec![Tab {

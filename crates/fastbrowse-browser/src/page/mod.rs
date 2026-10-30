@@ -1,7 +1,7 @@
 //! `CdpPage`: the `Page` seam on a `BrowserSession`. `browser/page.py`.
 //!
 //! Freshness (page_key plus a per-element guard), hit-test-before-input (covered detection), scroll-into-view for
-//! offscreen targets, password masking and the offscreen-nearest cap are ported from jev-ultrafast (MIT):
+//! offscreen targets and password masking are ported from jev-ultrafast (MIT):
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
 pub(crate) mod act;
@@ -19,8 +19,7 @@ use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Artifact, Operation, SourceControl};
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult, cut_marker,
-    loads_more, pager_link,
+    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -32,7 +31,7 @@ use tokio::time::{Instant, sleep, timeout};
 
 use crate::cdp::secs;
 use crate::error::BrowserError;
-use crate::session::{BrowserSession, CAPTURE_JS, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
+use crate::session::{BrowserSession, CAPTURE_JS, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
 use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
@@ -127,16 +126,11 @@ struct SnapshotControl {
     sensitive: bool,
     #[serde(default)]
     offscreen: bool,
-    blocking: Option<bool>,
+    required: Option<bool>,
+    invalid: Option<bool>,
     next_page: Option<bool>,
     download: Option<bool>,
-    /// Past the observation caps: sent with only the fields that decide whether it is a pager.
-    #[serde(default)]
-    partial: bool,
 }
-
-/// The whole rows a snapshot kept in the page for its partial controls: (control, guard, retarget key).
-type SentRows = Option<Vec<(SnapshotControl, Option<String>, Option<String>)>>;
 
 pub(crate) trait FrameText: DeserializeOwned {
     const SHAPE: &'static str;
@@ -171,9 +165,6 @@ struct Snapshot {
     guards: HashMap<String, Option<String>>,
     /// Digest of the guard without the node ids at its ends, which a redraw changes.
     retarget_keys: HashMap<String, Option<String>>,
-    /// Names this snapshot to the page, which keeps the whole rows of its partial controls under it.
-    #[serde(default)]
-    token: Option<i64>,
 }
 
 impl FrameText for Snapshot {
@@ -323,20 +314,6 @@ fn same_http_origin(previous_url: &str, current_url: &str) -> bool {
     }
 }
 
-/// Keep pagers and load-more controls within the cap so a truncated list can still be continued.
-fn capped(controls: Vec<Control>, limit: usize) -> Vec<Control> {
-    if controls.len() <= limit {
-        return controls;
-    }
-    let mut keep: HashSet<String> =
-        controls.iter().filter(|c| pager_link(c) || loads_more(c)).take(limit).map(|c| c.id.clone()).collect();
-    let room = limit.saturating_sub(keep.len());
-    let rest: Vec<String> =
-        controls.iter().filter(|c| !keep.contains(&c.id)).take(room).map(|c| c.id.clone()).collect();
-    keep.extend(rest);
-    controls.into_iter().filter(|c| keep.contains(&c.id)).collect()
-}
-
 /// The control a snapshot row names in `frame`, recorded in `control_state` for `act` to find again.
 fn add_control(
     control_state: &mut HashMap<String, Target>,
@@ -383,7 +360,8 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
-        blocking: c.blocking,
+        required: c.required,
+        invalid: c.invalid,
         next_page: c.next_page,
         download: c.download,
     }
@@ -419,12 +397,6 @@ fn parse<T: DeserializeOwned>(raw: Value, shape: &str) -> Result<T, BrowserError
     // Our own page script produced this, so a mismatch is a bug in one side of the contract.
     serde_json::from_value(raw)
         .map_err(|e| BrowserError::Failed(format!("page script returned an unexpected {shape}: {e}")))
-}
-
-/// A configured count as a length. Core's `Config` refuses a negative one when it is read; one built in code is
-/// taken as zero.
-fn limit(count: i64) -> usize {
-    usize::try_from(count).unwrap_or(0)
 }
 
 /// A length or offset as core's models hold it, the `int` Python writes.
@@ -566,33 +538,16 @@ impl CdpPage {
                 }
                 history_entry = None;
             }
-            let mut controls: Vec<Control> = vec![];
+            let mut kept: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();
-            let mut partial: HashSet<String> = HashSet::new();
             for (frame_key, frame) in &frames {
                 for c in &frame.raw.controls {
                     let key = c.id.to_string();
                     let guard = frame.raw.guards.get(&key).cloned().flatten();
                     let retarget = frame.raw.retarget_keys.get(&key).cloned().flatten();
-                    let control = add_control(&mut control_state, frame_key, frame, c, guard, retarget);
-                    if c.partial {
-                        partial.insert(control.id.clone());
-                    }
-                    controls.push(control);
+                    kept.push(add_control(&mut control_state, frame_key, frame, c, guard, retarget));
                 }
             }
-
-            let limits = &self.config.observation;
-            let total = controls.len();
-            let (onscreen, offscreen): (Vec<Control>, Vec<Control>) = controls.into_iter().partition(|c| !c.offscreen);
-            let offscreen = capped(offscreen, limit(limits.max_offscreen_controls));
-            let mut omitted = total - onscreen.len() - offscreen.len();
-            let both = onscreen.len() + offscreen.len();
-            let kept = capped(onscreen.into_iter().chain(offscreen).collect(), limit(limits.max_controls));
-            omitted += both - kept.len();
-            let kept = self.whole_rows(&frames, kept, &partial, &mut control_state).await?;
-            let control_state: HashMap<String, Target> =
-                kept.iter().map(|c| (c.id.clone(), control_state[&c.id].clone())).collect();
             let mut labels: HashMap<String, Vec<String>> = HashMap::new();
             for c in &kept {
                 labels.entry(control_state[&c.id].1.clone()).or_default().push(c.label.clone());
@@ -615,32 +570,20 @@ impl CdpPage {
                 ));
             }
             for refused in self.session.pending_download_refusals() {
+                let why = match refused.reason {
+                    Refusal::TooLarge { size_bytes, limit_bytes } => format!(
+                        "The file is {} and this run keeps downloads up to {}",
+                        bytes_of(size_bytes),
+                        bytes_of(limit_bytes)
+                    ),
+                    Refusal::Failed => "The browser could not hand over or store the file".to_owned(),
+                };
                 notices.push_str(&format!(
-                    "\n\n[Download not kept: {} from {}] The file is {} and this run keeps downloads up to {}; \
-                     nothing was saved. Report the file as not downloaded.",
-                    refused.name,
-                    refused.url,
-                    bytes_of(refused.size_bytes),
-                    bytes_of(refused.limit_bytes)
+                    "\n\n[Download not kept: {} from {}] {why}; nothing was saved. Report the file as not downloaded.",
+                    refused.name, refused.url,
                 ));
             }
-            let budget = limit(limits.viewport_text_chars);
-            if notices.is_empty() {
-                let length = text::len(&viewport_text);
-                if length > budget {
-                    viewport_text = text::prefix(&viewport_text, budget).to_owned() + &cut_marker(length - budget);
-                }
-            } else {
-                // The notice is the only evidence that a file was offered and not kept, and it is marked as shown
-                // here, so it is given its room before the page text is cut: appended after a full page it was
-                // truncated away and never reported again.
-                let reserved = budget.saturating_sub(text::len(&notices));
-                let length = text::len(&viewport_text);
-                if length > reserved {
-                    viewport_text = text::prefix(&viewport_text, reserved).to_owned() + &cut_marker(length - reserved);
-                }
-                viewport_text.push_str(&notices);
-            }
+            viewport_text.push_str(&notices);
             let response_status = match main {
                 Some(main) if main.raw.url == document.url && main.raw.document_key == document.document_key => {
                     // pydantic's bound on the field: a status outside it would make an observation core cannot read.
@@ -656,7 +599,7 @@ impl CdpPage {
                 response_status,
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
-                omitted_controls: int(omitted),
+                omitted_controls: 0,
                 viewport_text,
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
@@ -729,56 +672,8 @@ impl CdpPage {
         }
     }
 
-    /// `kept` with each partial control replaced by the whole row the page kept for it.
-    ///
-    /// A pager past the caps was sent with only what made it one; the page kept the rest of its row under the
-    /// snapshot's token, and is asked for it only once the control is kept.
-    async fn whole_rows(
-        &self,
-        frames: &[(String, FrameObservation<Snapshot>)],
-        kept: Vec<Control>,
-        partial: &HashSet<String>,
-        control_state: &mut HashMap<String, Target>,
-    ) -> Result<Vec<Control>, BrowserError> {
-        let mut wanted: Vec<(String, Vec<i64>)> = vec![];
-        for c in kept.iter().filter(|c| partial.contains(&c.id)) {
-            let (_, frame_key, id, _) = &control_state[&c.id];
-            match wanted.iter_mut().find(|(key, _)| key == frame_key) {
-                Some((_, ids)) => ids.push(*id),
-                None => wanted.push((frame_key.clone(), vec![*id])),
-            }
-        }
-        let mut whole: HashMap<String, Control> = HashMap::new();
-        for (frame_key, ids) in wanted {
-            let Some((_, frame)) = frames.iter().find(|(key, _)| *key == frame_key) else { continue };
-            let rows = self
-                .evaluate(
-                    &frame.session_id,
-                    &format!(
-                        "((r, token, ids) => r?.sent?.token === token && ids.every(id => r.sent.rows.has(id)) \
-                         ? ids.map(id => r.sent.rows.get(id)) : null)(window.__fastbrowse, {}, {})",
-                        py_json(&json!(frame.raw.token)),
-                        py_json(&json!(ids))
-                    ),
-                )
-                .await?;
-            let sent: SentRows = parse(rows, "list[tuple[_SnapshotControl, str | None, str | None]] | None")?;
-            let Some(sent) = sent else {
-                // Another snapshot or a new document replaced the rows this one kept.
-                return Err(BrowserError::ContextLost("the page changed before its pagers were read".into()));
-            };
-            for (c, guard, retarget) in &sent {
-                let control = add_control(control_state, &frame_key, frame, c, guard.clone(), retarget.clone());
-                whole.insert(control.id.clone(), control);
-            }
-        }
-        Ok(kept.into_iter().map(|c| whole.remove(&c.id).unwrap_or(c)).collect())
-    }
-
     async fn snapshot_all_frames(&self) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
-        let limits = &self.config.observation;
-        let caps = py_json(&json!({"onscreen": limits.max_controls, "offscreen": limits.max_offscreen_controls}));
-        let script = format!("{}('snapshot', {caps})", self.page_js);
+        let script = format!("{}('snapshot')", self.page_js);
         let result = self.read_frames::<Snapshot>(&script).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();

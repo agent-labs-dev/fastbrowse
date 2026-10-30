@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::helpers::{
-    controls_text, describe, field_corrections, history, lookup, partition_proof, recovery_memory, recovery_routes,
+    controls_text, describe, field_corrections, lookup, partition_proof, recovery_memory, recovery_routes,
     recovery_text, unread, unread_output_section, without_failed_links,
 };
 use super::state::{FieldText, RunState, Step, Stop};
@@ -272,7 +272,7 @@ impl Agent {
             state.start_landing_url.as_deref(),
             true,
         );
-        let routes = recovery_routes(state, self.config.observation.working_notes_chars);
+        let routes = recovery_routes(state);
         let mut destinations = caller_destinations.clone();
         if !state.open_answer_outputs.is_empty() {
             for link in state.observed_links.keys() {
@@ -281,7 +281,8 @@ impl Agent {
                 }
             }
         }
-        let steps = history(&state.history, &self.config.observation)
+        let steps = state
+            .history
             .iter()
             .map(|h| {
                 let operation = h.operation.map_or("open", |o| o.as_str());
@@ -302,7 +303,7 @@ impl Agent {
         if !state.open_answer_outputs.is_empty() {
             system += SECTIONS;
         }
-        let notes = state.notes.render_for_navigation(self.config.observation.working_notes_chars, false)?;
+        let notes = state.notes.render_for_navigation(false);
         let started = self.redact(state.started_url.as_deref().or(state.first_url.as_deref()).unwrap_or_default());
         let status = observation.response_status.map_or("None".to_string(), |s| s.to_string());
         let mut content = format!(

@@ -1,5 +1,5 @@
 // Complete structured text capture of one frame, as ordered blocks with heading paths.
-// Unlike snapshot.js (bounded, for Jev's action choice) this reads the whole rendered document, on screen or not,
+// Unlike snapshot.js (the viewport, for Jev's action choice) this reads the whole rendered document, on screen or not,
 // so the reading path and answer-evidence quotes see everything a user could scroll to.
 // Adjacent inline content (text, <strong>, <a>, <span>...) is one block, so a value inside markup stays with its label.
 // biome-ignore format: Python embeds this function inside an expression, where a semicolon is invalid.
@@ -13,12 +13,6 @@
   let sourcePath = '';
   let inaccessible = 0;
   let visibleH1 = false;
-  let controlObservations = 0;
-  let imageObservations = 0;
-  let imagesOmitted = false;
-  let linkObservations = 0;
-  let linksOmitted = false;
-  let controlsOmitted = false;
   const imageSource = source => {
     if (!source) return source;
     if (source.startsWith('data:')) {
@@ -26,7 +20,7 @@
       return `${source.slice(0, comma < 0 ? 128 : Math.min(comma, 128))},[payload omitted]`;
     }
     if (source.startsWith('blob:')) return 'blob:[identifier omitted]';
-    return source.length > 1024 ? `${source.slice(0, 1024)}[truncated]` : source;
+    return source;
   };
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
   const granted = doc => {
@@ -147,43 +141,7 @@
     }
     return '';
   };
-  // A rating widget states its value only in markup a reader cannot see: a `star-rating` class carrying a
-  // One..Five word token, or an accessible label the icons alone do not carry. Counting icons never works,
-  // since a site colours a fixed row of them by class instead of drawing one per star (books.toscrape.com:
-  // `<p class="star-rating Five">`, five identical `<i class="icon-star">` children whatever the rating).
-  // Only these two explicit sources are trusted; a class that merely mentions "star" or an icon glyph is not
-  // read as a rating, and a hidden widget states nothing a reader could see either.
-  const RATING_WORD = { one: 'One', two: 'Two', three: 'Three', four: 'Four', five: 'Five' };
-  const RATING_LABEL = /\b[1-5]\s*(?:\/|out of)\s*5\b|\b[1-5]\s*stars?\b/i;
-  const ratingOf = e => {
-    if (hidden(e) || getComputedStyle(e).visibility === 'hidden') return '';
-    const classes = [...e.classList].map(c => c.toLowerCase());
-    if (classes.includes('star-rating')) {
-      for (const token of classes) if (RATING_WORD[token]) return `${RATING_WORD[token]} stars`;
-    }
-    const label = e.getAttribute('aria-label') || e.getAttribute('title');
-    return label && RATING_LABEL.test(label) ? clean(label) : '';
-  };
-  // Checked on the element itself, then any descendant a class or role names as the widget, since a
-  // role="img" label commonly sits one level below the card holding the title and price. A widget hidden
-  // by an ancestor (rather than itself) states nothing a reader could see either, so ratingOf's own
-  // `hidden` check is not enough: walk up to the search root and reject any candidate under a hidden one.
-  const ratingIn = c =>
-    ratingOf(c) ||
-    [...c.querySelectorAll('[class*="star" i], [class*="rating" i], [role="img"]')]
-      .filter(e => {
-        for (let a = e.parentElement; a && a !== c; a = a.parentElement) if (hidden(a)) return false;
-        return true;
-      })
-      .map(ratingOf)
-      .find(Boolean) ||
-    '';
-  const withRating = (text, c) => {
-    const rating = ratingIn(c);
-    if (!rating || text.includes(rating)) return text;
-    return text ? `${text} (${rating})` : rating;
-  };
-  const cellText = c => withRating(textOf(c) || drawn(c), c);
+  const cellText = c => textOf(c) || drawn(c);
 
   // What a form holds is in its controls' values, which no text node carries: a task that asked for dates to be
   // chosen was refused as unanswered because "the dates chosen" had nothing to quote. A filled control reads as
@@ -270,7 +228,6 @@
       elements[0].tagName === 'A' &&
       elements[0].href &&
       clean(elements[0].innerText ?? '') === text;
-    for (const e of elements) text = withRating(text, e);
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]) }, run);
     else push('paragraph', text, {}, run);
     for (const e of elements) for (const field of fields(e)) push('paragraph', field);
@@ -311,8 +268,8 @@
     const descendants = [...el.querySelectorAll('*')];
     if (descendants.some(c => c.shadowRoot) || descendants.filter(c => HEADINGS[c.tagName]).length > 1) return null;
     if (!descendants.some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c))) return null;
-    const text = withRating(textOf(el), el);
-    if (!text || text.length > 1500) return null;
+    const text = textOf(el);
+    if (!text) return null;
     // A repeated wrapper around another list is a group, so keep the inner records separately citable.
     if (descendants.some(c => (c.tagName === 'LI' && leaf(c)) || recordText(c) !== null)) return null;
     records.set(el, text);
@@ -373,7 +330,7 @@
       const links = el.matches('a[href]') ? [el] : el.querySelectorAll('a[href]');
       push(
         el.tagName === 'LI' ? 'list_item' : 'record',
-        record ?? withRating(textOf(el), el),
+        record ?? textOf(el),
         links.length === 1 ? { href: hrefOf(links[0]) } : {},
         [el],
       );
@@ -417,33 +374,17 @@
     path = [...headings];
     const visible = e => e.checkVisibility ? e.checkVisibility({ visibilityProperty: true }) : !hidden(e);
     for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
-      if (controlObservations >= 64) {
-        if (!controlsOmitted) push('observation', 'Additional control state observations omitted.');
-        controlsOmitted = true;
-        break;
-      }
       // Placeholders suggest input; they do not label a value or prove an empty named field.
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
       const name = nameOf(e) || clean(e.innerText ?? '');
       if (!name || e.dataset?.fastbrowseSecret === '1') continue;
-      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) {
-        push('observation', `${name.slice(0, 1024)}: [empty]`);
-        controlObservations++;
-      }
-      if (controlObservations < 64 && e.matches(':disabled,[aria-disabled="true"]')) {
-        push('observation', `${name.slice(0, 1024)}: disabled`);
-        controlObservations++;
-      }
+      if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`);
+      if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
     }
     // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence.
     for (const image of [...root.querySelectorAll('img')].filter(visible)) {
-      if (imageObservations++ >= 32) {
-        if (!imagesOmitted) push('observation', 'Additional visible image metadata omitted.');
-        imagesOmitted = true;
-        break;
-      }
       // Loading changes without a page edit, so captures report presence rather than transient decode state.
-      const metadata = { alt: image.getAttribute('alt')?.slice(0, 1024) ?? null,
+      const metadata = { alt: image.getAttribute('alt') ?? null,
         src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')) };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}. Pixels are not described.`);
     }
@@ -465,17 +406,12 @@
       const page = location.href.split('#')[0];
       const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
       if (target.protocol === 'javascript:' || fragment) continue;
-      if (linkObservations++ >= 32) {
-        if (!linksOmitted) push('observation', 'Additional link destinations omitted.');
-        linksOmitted = true;
-        break;
-      }
       let row = link.parentElement;
       while (row && row !== root && !clean(row.innerText ?? '')) row = row.parentElement;
       const metadata = {
-        label: (nameOf(link) || drawn(link)).slice(0, 256) || null,
+        label: nameOf(link) || drawn(link) || null,
         href: imageSource(link.href),
-        near: row ? textOf(row).replace(/\s+/g, ' ').slice(0, 256) || null : null,
+        near: row ? textOf(row).replace(/\s+/g, ' ') || null : null,
       };
       push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }

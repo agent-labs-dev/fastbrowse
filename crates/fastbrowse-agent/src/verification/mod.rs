@@ -17,7 +17,7 @@ mod prompts;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use fastbrowse_core::config::{Config, Thresholds, TokenBudget};
+use fastbrowse_core::config::{Thresholds, TokenBudget};
 use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::{Bytes, CostLine, Evidence, LLMPurpose, SourceControl, UNTRUSTED};
@@ -69,11 +69,6 @@ pub struct DoneCheck {
     pub cost: CostLine,
 }
 
-/// A verdict is three short lists and a boolean. Measured on a live count-pagination run, an uncapped verdict spent
-/// 1166 output tokens and 13.7s restating the answer it was judging; the cap bounds that pathology while leaving room
-/// for every requirement id on a long plan.
-pub const VERDICT_TOKENS: i64 = 400;
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LLMVerdict {
@@ -120,8 +115,9 @@ fn stateful(controls: &[Control]) -> Vec<&Control> {
     controls.iter().filter(|c| c.value.is_some() || c.checked.is_some() || c.selected.is_some()).collect()
 }
 
-/// `page_state`: the page, its stateful controls and the notes for a Jev verdict, the notes' requirement evidence kept
-/// whole.
+/// `page_state`: the page, its stateful controls and the notes for a Jev verdict within Jev's documented input limit,
+/// the notes' requirement evidence kept whole. The page text is cut when the rest leaves it no room, and a state that
+/// still does not fit is refused rather than sent.
 pub fn page_state(
     observation: &Observation,
     notes: &Notes,
@@ -140,14 +136,17 @@ pub fn page_state(
     // though the requested filters were never applied.
     state.insert("controls".into(), Value::Array(controls(&observation.controls)));
     state.insert("notes".into(), "".into());
-    let room =
-        |state: &Map<String, Value>| tokens.remaining_chars(&dumps(&Value::Object(state.clone())), questions, true);
+    let budget = tokens.input_chars(questions, true);
+    let size = |state: &Map<String, Value>| text::len(&dumps(&Value::Object(state.clone()))) as i64;
+    let room = |state: &Map<String, Value>| (budget - size(state)).max(0);
+    let mut cut_page = false;
     match notes.render(room(&state), true, true) {
         Ok(rendered) => {
             state.insert("notes".into(), rendered.into());
         }
         Err(AgentError::NotesTooLarge(_)) => {
             // Preserve requirement evidence by cutting page text, then stateless controls, before refusing a verdict.
+            cut_page = true;
             state["page"]["text"] = "".into();
             match notes.render(room(&state), true, true) {
                 Ok(rendered) => {
@@ -162,12 +161,61 @@ pub fn page_state(
                 }
                 Err(other) => return Err(other),
             }
-            let cut = cut_text(&observation.viewport_text, room(&state) as usize, true);
-            state["page"]["text"] = cut.into();
         }
         Err(other) => return Err(other),
     }
+    if cut_page || size(&state) > budget {
+        state["page"]["text"] = "".into();
+        state["page"]["text"] = cut_text(&observation.viewport_text, room(&state) as usize, true).into();
+    }
+    if size(&state) > budget {
+        return Err(AgentError::ObservationTooLarge(format!(
+            "the state on {} exceeds Jev's input limits with no page text",
+            observation.url
+        )));
+    }
     Ok(Value::Object(state))
+}
+
+/// The done check's state with `steps`, the run's actions already in `context`, the oldest dropped and counted when
+/// the request would otherwise run over Jev's input limit. As in a step request, actions go before the page text is
+/// cut, and the page text is cut only when dropping every action is not enough.
+fn done_state(
+    observation: &Observation,
+    notes: &Notes,
+    tokens: &TokenBudget,
+    questions: &[String],
+    context: &Map<String, Value>,
+    steps: &[String],
+) -> Result<Value> {
+    let attempt = |dropped: usize| {
+        let mut context = context.clone();
+        if dropped > 0 {
+            let omitted = format!("[{dropped} earlier actions omitted to fit the request]");
+            let lines: Vec<&str> =
+                [omitted.as_str()].into_iter().chain(steps[dropped..].iter().map(String::as_str)).collect();
+            context.insert("actions".into(), lines.join("\n").into());
+        }
+        page_state(observation, notes, tokens, questions, Some(&context))
+    };
+    let page = observation.viewport_text.as_str();
+    let whole = |state: &Result<Value>| matches!(state, Ok(state) if state["page"]["text"].as_str() == Some(page));
+    let full = attempt(0);
+    if steps.is_empty() || whole(&full) {
+        return full;
+    }
+    let page_kept = whole(&attempt(steps.len()));
+    let (mut low, mut high) = (0, steps.len());
+    while low < high {
+        let middle = (low + high) / 2;
+        let state = attempt(middle);
+        if if page_kept { whole(&state) } else { state.is_ok() } {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    attempt(low)
 }
 
 /// `check_done`'s keyword arguments.
@@ -180,83 +228,6 @@ pub struct DoneOptions<'a> {
     /// Every address the run has been on, first the one it began on, which no action records.
     pub visited: &'a [String],
     pub trace: Trace,
-}
-
-/// How a requirement that only moves through pages is worded (`_TRAVERSAL`), each a whole-word match ignoring case.
-const TRAVERSAL: &[&str] = &[
-    "navigate",
-    "browse",
-    "go through",
-    "going through",
-    "go to each",
-    "visit",
-    "scroll",
-    "page through",
-    "paging through",
-    "read through",
-    "look through",
-    "open each",
-    "move through",
-    "click through",
-    "walk through",
-    "search through",
-    "explore",
-];
-
-/// The verbs that make a requirement something the caller receives instead (`_COMMITTING`): a submission, an account,
-/// a purchase. Python's optional words are spelled out.
-const COMMITTING: &[&str] = &[
-    "submit",
-    "send",
-    "sign in",
-    "sign up",
-    "log in",
-    "log out",
-    "login",
-    "logout",
-    "register",
-    "add to cart",
-    "add to basket",
-    "add to bag",
-    "add to the cart",
-    "add to the basket",
-    "add to the bag",
-    "place order",
-    "place the order",
-    "place an order",
-    "place your order",
-    "buy",
-    "purchase",
-    "pay",
-    "check out",
-    "checkout",
-    "book",
-    "reserve",
-    "delete",
-    "remove",
-    "upload",
-    "download",
-    "fill",
-    "type",
-    "enter",
-    "apply",
-    "save",
-    "create",
-    "post",
-    "publish",
-    "confirm",
-    "accept",
-    "subscribe",
-];
-
-/// Whether a requirement only directs the browsing, rather than naming something the caller receives.
-///
-/// A traversal requirement is instrumental: its point is the information it reaches, so once that information is
-/// evidenced and verified, an unconfirmed visit does not leave the task unanswered. Anything that changes state on
-/// the site keeps blocking, because a run that never submitted the form or placed the order has not done what the
-/// caller asked for however good its evidence is.
-pub fn traversal_only(text: &str) -> bool {
-    text::find_word(text, TRAVERSAL).is_some() && text::find_word(text, COMMITTING).is_none()
 }
 
 fn probability(answers: &IndexMap<String, Answer>, key: &str) -> f64 {
@@ -296,25 +267,7 @@ pub async fn check_done(
         .collect();
     let mut unmet: Vec<String> = unevidenced.iter().map(|id| id.to_string()).collect();
     unmet.sort();
-    // A requirement that only directs the browsing -- go through every page, browse the category, visit each listing
-    // -- is how the run reaches the information, not something the caller receives. Once every information
-    // requirement is evidenced, holding the run open for one of these buys nothing: a count read off the site's own
-    // exhaustive tag listing still looped on "navigate through every page" until its recoveries ran out. The answer
-    // stands; the browsing step is reported as unconfirmed rather than blocking an evidenced answer. The exemption
-    // stands in for an answer that is already proved. A plan that asks for no answer, or one with no information
-    // requirement to prove, has no answer for a visit to stand in for, so its navigation is the task.
-    let standing_answer =
-        plan.page_answer_expected() && plan.requirements.iter().any(|r| r.kind == RequirementKind::Information);
-    let instrumental: HashSet<&str> = if standing_answer && unevidenced.is_empty() {
-        plan.requirements
-            .iter()
-            .filter(|r| r.kind == RequirementKind::Action && traversal_only(&r.text))
-            .map(|r| r.id.as_str())
-            .collect()
-    } else {
-        HashSet::new()
-    };
-    for requirement in plan.requirements.iter().filter(|r| !instrumental.contains(r.id.as_str())) {
+    for requirement in &plan.requirements {
         match requirement.kind {
             RequirementKind::Action => {
                 questions.insert(
@@ -361,8 +314,9 @@ pub async fn check_done(
     let mut context = Map::new();
     context.insert("task".into(), task.into());
     context.insert("run_reports".into(), json!(plan.run_reports));
-    if !options.history.is_empty() {
-        context.insert("actions".into(), options.history.iter().map(step).collect::<Vec<_>>().join("\n").into());
+    let steps: Vec<String> = options.history.iter().map(step).collect();
+    if !steps.is_empty() {
+        context.insert("actions".into(), steps.join("\n").into());
     }
     if !options.visited.is_empty() {
         context.insert("visited".into(), json!(options.visited));
@@ -371,7 +325,7 @@ pub async fn check_done(
         context.insert("draft".into(), draft.answer.clone().into());
     }
     let written = |questions: &IndexMap<String, Question>| questions.values().map(Dump::dump_json).collect::<Vec<_>>();
-    let state = match page_state(observation, notes, &options.tokens, &written(&questions), Some(&context)) {
+    let state = match done_state(observation, notes, &options.tokens, &written(&questions), &context, &steps) {
         Ok(state) => state,
         Err(AgentError::NotesTooLarge(message)) => {
             if draft.is_none() {
@@ -381,13 +335,13 @@ pub async fn check_done(
             context.shift_remove("draft");
             questions.shift_remove("draft_needs_writing");
             draft = None;
-            page_state(observation, notes, &options.tokens, &written(&questions), Some(&context))?
+            done_state(observation, notes, &options.tokens, &written(&questions), &context, &steps)?
         }
         Err(other) => return Err(other),
     };
     let evaluation = jev.evaluate(&state, &questions).await?;
     let answers = &evaluation.answers;
-    for requirement in plan.requirements.iter().filter(|r| !instrumental.contains(r.id.as_str())) {
+    for requirement in &plan.requirements {
         if probability(answers, &format!("unmet_{}", requirement.id)) > thresholds.claim_problem_above {
             unmet.push(requirement.id.clone());
         }
@@ -400,9 +354,8 @@ pub async fn check_done(
         .requirements
         .iter()
         .filter(|r| {
-            !instrumental.contains(r.id.as_str())
-                && !matches!(answers.get(&format!("unmet_{}", r.id)),
-                    Some(Answer::Noul(doubt)) if doubt.probability < thresholds.requirement_confirmed_below)
+            !matches!(answers.get(&format!("unmet_{}", r.id)),
+                Some(Answer::Noul(doubt)) if doubt.probability < thresholds.requirement_confirmed_below)
         })
         .map(|r| r.id.clone())
         .collect();
@@ -499,8 +452,8 @@ const VISUAL_ONLY_INPUTS: [&str; 8] = ["file", "color", "range", "date", "time",
 ///
 /// Page text, the controls and the notes cover a form, a listing and a quoted answer. What they do not carry is a
 /// checked box, a selected option, a calendar's highlighted day, a canvas or a chart, a file input's chosen file, or a
-/// dialog drawn over the page. A page with almost no text is judged the same way: there is nothing in it to read, so
-/// the screenshot is the only evidence there is.
+/// dialog drawn over the page. A page with no text is judged the same way: there is nothing in it to read, so the
+/// screenshot is the only evidence there is.
 pub fn visual_only_state(observation: &Observation) -> bool {
     if observation.dialog.is_some() {
         return true;
@@ -510,7 +463,7 @@ pub fn visual_only_state(observation: &Observation) -> bool {
     if observation.visual_content {
         return true;
     }
-    if text::len(text::strip(&observation.viewport_text)) < 40 {
+    if text::strip(&observation.viewport_text).is_empty() {
         return true;
     }
     observation.controls.iter().any(|c| {
@@ -531,7 +484,6 @@ pub struct VerifyOptions<'a> {
     pub invented: &'a [String],
     /// Every address the run has been on, first the one it began on.
     pub visited: &'a [String],
-    pub config: Config,
     pub ledger: Option<&'a Ledger>,
 }
 
@@ -604,24 +556,12 @@ pub fn verify_messages(
             ))
         },
     ];
-    let schema = dumps(&LLMVerdict::ty_schema());
-    let room = |messages: &[Message], parts: &[&str]| {
-        let prompt: String = messages.iter().map(|m| m.content.as_str()).chain(parts.iter().copied()).collect();
-        options.config.tokens.remaining_chars::<&str>(&format!("{prompt}{schema}"), &[], false)
-    };
-    // As in the done check's page state, the notes' requirement evidence is placed first and the page text is cut to
-    // what remains: a "View more" results page once left the notes no room at all and ended the run.
-    let rendered = notes.render(room(&messages, &["\n\n## Notes\n"]), true, false)?;
-    let cut = cut_text(&observation.viewport_text, room(&messages, &["\n\n## Notes\n", &rendered]) as usize, false);
+    // The verifier's context holds the whole page and every note, so neither is cut to fit.
+    let rendered = notes.render(i64::MAX, true, false)?;
     let last = messages.len() - 1;
-    messages[last].content = format!("{}\n\n## Notes\n{rendered}\n\n{cut}", messages[last].content);
+    messages[last].content =
+        format!("{}\n\n## Notes\n{rendered}\n\n{}", messages[last].content, observation.viewport_text);
     Ok(messages)
-}
-
-impl LLMVerdict {
-    fn ty_schema() -> Value {
-        fastbrowse_core::schema::json_schema(&LLMVerdict::ty())
-    }
 }
 
 fn digest(data: &[u8]) -> Vec<u8> {
@@ -658,7 +598,7 @@ pub async fn llm_verify(
     options: &VerifyOptions<'_>,
 ) -> Result<Generation<LLMVerdict>> {
     let messages = verify_messages(task, plan, observation, screenshots, notes, history, options)?;
-    Ok(generate::<LLMVerdict>(llm, LLMPurpose::Verify, &messages, VERDICT_TOKENS, options.ledger).await?)
+    Ok(generate::<LLMVerdict>(llm, LLMPurpose::Verify, &messages, 0, options.ledger).await?)
 }
 
 // --- output checks ----------------------------------------------------------------------------------------------
@@ -1392,9 +1332,7 @@ pub async fn extract(
     }
     match schema.model.validate(&Value::Object(values)) {
         Ok(data) => Ok(Extraction { data: Some(data), evidence, problem: None }),
-        Err(error) => {
-            Ok(Extraction { data: None, evidence, problem: Some(text::prefix(&error.to_string(), 500).to_string()) })
-        }
+        Err(error) => Ok(Extraction { data: None, evidence, problem: Some(error.to_string()) }),
     }
 }
 
@@ -1463,30 +1401,14 @@ mod tests {
         assert!(finished.load(std::sync::atomic::Ordering::SeqCst));
     }
 
-    // -- tests/test_accuracy_fixes.py: a browsing step cannot outvote an evidenced answer ------------------------
-
-    #[test]
-    fn only_browsing_steps_are_instrumental() {
-        // A browsing step is how the run reaches the information. Anything that changes state on the site is what
-        // the caller asked for, so it keeps blocking however good the evidence is.
-        for (text, traversal) in [
-            ("Navigate through every page of the site.", true),
-            ("Browse the Sequential Art category, including all of its pages.", true),
-            ("Scroll through the listing until every result has been shown.", true),
-            ("Sign in with username standard_user and password secret_sauce.", false),
-            ("Add both products to the cart and place the order.", false),
-            ("Submit the contact form with the prepared message.", false),
-            ("Go through every page and submit the last page's form.", false),
-            ("Report the country with the 12th-highest GDP.", false),
-        ] {
-            assert_eq!(traversal_only(text), traversal, "{text}");
-        }
-    }
-
     /// `_Jev` in tests/test_done_check.py: answers each question it is asked from a table of probabilities.
     struct TableJev(Vec<(&'static str, f64)>);
 
     impl DecisionClient for TableJev {
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
+        }
+
         fn evaluate<'a>(
             &'a self,
             _: &'a Value,
@@ -1558,16 +1480,39 @@ mod tests {
     }
 
     #[test]
-    fn an_unconfirmed_browsing_step_does_not_hold_an_evidenced_answer() {
-        // Every information requirement is evidenced; only the visit is unconfirmed, and the page is doubted as a
-        // whole. The tag count was read off the site's own exhaustive listing.
+    fn an_unconfirmed_browsing_step_is_asked_like_any_other_action() {
+        // A requirement the planner wrote is asked of Jev whatever its wording, and an unmet one is never skipped.
         let check = done(vec![("complete", 0.63), ("unmet_r1", 0.9), ("unmet_r2", 0.1)], &counted_notes());
-        assert_eq!(check.verdict, DoneVerdict::Accept);
+        assert_eq!(check.verdict, DoneVerdict::Verify);
+        assert_eq!(check.unmet, ["r1"]);
     }
 
     #[test]
     fn an_unevidenced_answer_still_keeps_the_run_working() {
-        // The traversal exemption is for a run that has read what it was asked for, never for one that has not.
         assert_eq!(done(vec![("complete", 0.9)], &Notes::default()).verdict, DoneVerdict::Reject);
+    }
+
+    fn small_budget() -> TokenBudget {
+        TokenBudget { state_plus_largest_question: 2000, state_plus_all_questions: 4000, ..TokenBudget::default() }
+    }
+
+    #[test]
+    fn a_long_run_loses_its_oldest_actions_before_the_page_text() {
+        let steps: Vec<String> = (0..200).map(|i| format!("- click Result {i} -> executed")).collect();
+        let context = Map::from_iter([("actions".to_string(), Value::from(steps.join("\n")))]);
+        let (tokens, questions) = (small_budget(), ["q".to_string()]);
+        let state = done_state(&page(), &Notes::default(), &tokens, &questions, &context, &steps).expect("state");
+        let actions = state["actions"].as_str().unwrap();
+        assert!(actions.contains("earlier actions omitted to fit the request]\n"), "{actions}");
+        assert!(actions.ends_with("- click Result 199 -> executed"), "{actions}");
+        assert_eq!(state["page"]["text"], page().viewport_text);
+        assert!(text::len(&dumps(&state)) as i64 <= tokens.input_chars(&questions, true));
+    }
+
+    #[test]
+    fn a_state_that_cannot_fit_is_refused_rather_than_sent() {
+        let context = Map::from_iter([("task".to_string(), Value::from("word ".repeat(2000)))]);
+        let error = page_state(&page(), &Notes::default(), &small_budget(), &["q".to_string()], Some(&context));
+        assert!(matches!(error, Err(AgentError::ObservationTooLarge(_))), "{error:?}");
     }
 }

@@ -3,7 +3,7 @@
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); the Python side merges frames.
 // biome-ignore format: Python appends mode arguments to this parenthesized expression.
-((mode, allowedOrigins = null, limits = null) => {
+((mode, allowedOrigins = null) => {
   const granted = doc => {
     if (allowedOrigins === null) return true;
     const frame = doc.defaultView.frameElement;
@@ -15,22 +15,8 @@
     const url = new URL(doc.URL);
     return ['http:', 'https:'].includes(url.protocol) && allowedOrigins.includes(url.origin);
   };
-  // Form context is repeated for each submit-capable input in safety prompts.
-  const FORM_TEXT_CHARS = 2000;
   // Freshness guards bound comparison work on large cards; this text is never sent to a model.
   const GUARD_TEXT_CHARS = 6000;
-  // Twin controls repeat their card heading, so keep its excerpt shorter than the control itself.
-  const CONTROL_CONTEXT_CHARS = 120;
-  // A hover target can be a whole card whose text would crowd out the other controls.
-  const HOVER_LABEL_CHARS = 200;
-  // Each hover rule fans out to DOM queries, so bound stylesheet work per observation.
-  const MAX_HOVER_RULES = 200;
-  // Hover targets supplement the actionable controls rather than fill their observation budget.
-  const MAX_HOVER_TARGETS = 40;
-  // Each candidate checks hidden descendants, which can stall a dense page's observation.
-  const MAX_HOVER_CHECKS = 400;
-  const excerpt = (text, cap) =>
-    text.length <= cap ? text : `${text.slice(0, cap)} [${text.length - cap} characters omitted]`;
   // A transparent native checkbox is the one control TodoMVC shows, so only its own opacity is excused: a
   // transparent ancestor still hides it. Walked by style, not layout box, as a `display: contents` parent
   // generates no box yet hides nothing.
@@ -351,7 +337,7 @@
       label: submit ? labelOf(submit) : labelOf(form),
       method: submit?.getAttribute('formmethod') || form.method,
       action: submit?.getAttribute('formaction') || form.action,
-      text: excerpt(innerTextOf(form), FORM_TEXT_CHARS),
+      text: innerTextOf(form),
     });
   });
 
@@ -509,19 +495,10 @@
       if (value !== null) base[key] = value === 'true';
     }
     if (['checkbox', 'radio'].includes(source.type)) base.checked = source.checked;
-    // A field a form will not submit without: required and still empty, or marked invalid by the page.
-    // A custom widget marks the element the user sees, not the input underneath it, so both are asked.
-    if (
-      e.getAttribute('aria-invalid') === 'true' ||
-      source.getAttribute('aria-invalid') === 'true' ||
-      (['INPUT', 'SELECT', 'TEXTAREA'].includes(source.tagName) &&
-        (source.required || source.getAttribute('aria-required') === 'true') &&
-        (source.type === 'radio' && source.required
-          ? source.validity.valueMissing
-          : !(base.checked ?? (source.value ?? '').trim())))
-    ) {
-      base.blocking = true;
-    }
+    // What the page says about the field. A custom widget marks the element the user sees, not the input
+    // underneath it, so both are asked.
+    if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
+    if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true')) base.invalid = true;
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
@@ -607,7 +584,7 @@
       if (e.matches('article,li,[role="listitem"]') ||
         (e.matches('tr,[role="row"]') && e.querySelector('input,textarea,select,[role="textbox"]'))) break;
     }
-    return scope ? excerpt(nameOf(scope, element, label, nearest), CONTROL_CONTEXT_CHARS) : '';
+    return scope ? nameOf(scope, element, label, nearest) : '';
   };
   // Content a stylesheet shows only under the pointer (`.card:hover .caption`) is out of reach of every other
   // operation. An element whose hover rule would reveal something now hidden is offered as a hover target.
@@ -657,14 +634,11 @@
       }
     };
     for (const rules of sheets) collect(rules);
-    const found = [...reveals.values()].slice(0, MAX_HOVER_RULES);
+    const found = [...reveals.values()];
     registry.hoverRules.set(doc, { version, reveals: found });
     return found;
   };
   const offered = new Set(controls.map(c => registry.nodes.get(c.id)));
-  // Bounded work: each candidate costs a query, and a stylesheet can name thousands of hoverable elements.
-  let hovers = 0,
-    checked = 0;
   for (const doc of docs) {
     for (const [base, tail] of revealsIn(doc)) {
       let hosts = [];
@@ -674,7 +648,6 @@
         continue;
       }
       for (const e of hosts) {
-        if (hovers >= MAX_HOVER_TARGETS || checked >= MAX_HOVER_CHECKS) break;
         // A link or button's own hover rule restyles it or shows decoration; offering HOVER there as well as
         // CLICK only gives the choice another way to be wrong.
         if (offered.has(e) || e === doc.body || e === doc.documentElement || !visible(e)) continue;
@@ -682,7 +655,6 @@
           x = r.x + r.width / 2,
           y = r.y + r.height / 2;
         if (r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth || r.height > innerHeight) continue;
-        checked++;
         let hidden = false;
         try {
           hidden = [...e.querySelectorAll(tail)].some(
@@ -708,7 +680,7 @@
         const c = {
           id: identity(e),
           role,
-          label: excerpt(label, HOVER_LABEL_CHARS),
+          label,
           offscreen: y < 0 || y >= innerHeight,
           distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
           sensitive: false,
@@ -721,7 +693,6 @@
         };
         controls.push(c);
         offered.add(e);
-        hovers++;
       }
     }
   }
@@ -765,7 +736,7 @@
         if (!node.parentElement?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
         lines.push(` ${line} `.split(` ${label} `).join(' '));
       }
-      return excerpt(firstLine(lines.join('\n')), CONTROL_CONTEXT_CHARS);
+      return firstLine(lines.join('\n'));
     };
     const own = group.map(c => (c.context ? '' : ownOf(registry.nodes.get(c.id), c.label)));
     if (new Set(own.filter(Boolean)).size > 1 || (own.some(Boolean) && group.some(c => c.context))) {
@@ -805,9 +776,9 @@
         .filter(child => child !== path)
         .map(child => firstLine(innerTextOf(child)))
         .find(line => line && line !== label && !repeated.has(line));
-      return excerpt((aria !== label && aria) || outside || first, CONTROL_CONTEXT_CHARS);
+      return (aria !== label && aria) || outside || first;
     }
-    return excerpt(first, CONTROL_CONTEXT_CHARS);
+    return first;
   };
   for (const c of controls) {
     if (!c.context && unnamed.has(c.id)) {
@@ -818,6 +789,8 @@
 
   // A revealed caption needs its actual container association, not merely the most recent action.
   registry.hoverContexts = new WeakMap();
+  // Hover targets are often every card of one list, so the sibling list is taken once per parent.
+  const siblingsOf = memo(parent => [...(parent?.children || [])]);
   for (const c of controls) {
     if (!c.operations.includes('hover')) continue;
     const element = registry.nodes.get(c.id);
@@ -828,9 +801,9 @@
       },
       labelAttributes: [element.getAttribute('role'), element.getAttribute('aria-label'),
         element.getAttribute('title'), element.querySelector('img[alt]')?.getAttribute('alt') || null],
-      text: element.innerText,
+      text: innerTextOf(element),
       parent: element.parentNode,
-      siblings: [...(element.parentNode?.children || [])],
+      siblings: siblingsOf(element.parentNode),
     });
   }
 
@@ -841,9 +814,9 @@
   const nearestHeading = (element, label) => {
     for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
-      if (aria && aria !== label) return excerpt(aria, CONTROL_CONTEXT_CHARS);
+      if (aria && aria !== label) return aria;
       const section = sectionOf(e, element, label);
-      if (section) return excerpt(section, CONTROL_CONTEXT_CHARS);
+      if (section) return section;
     }
     return '';
   };
@@ -907,10 +880,9 @@
       columns.set(table, names);
     }
     const column = columns.get(table).get(cell);
-    if (column) c.context = [c.context, `column: ${excerpt(column, CONTROL_CONTEXT_CHARS)}`].filter(Boolean).join('; ');
+    if (column) c.context = [c.context, `column: ${column}`].filter(Boolean).join('; ');
   }
 
-  // Python applies the configured caps after merging frames; keep the nearest controls first.
   controls.sort((a, b) => a.distance - b.distance);
 
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
@@ -960,12 +932,9 @@
 
   // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
   // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,
-  // because that is what a screenshot captures: an image below the fold cannot appear in it, and counting every
-  // image on a long page would ask for a screenshot on almost every page and undo the gate it exists to serve.
-  // Geometry is read in the parent's coordinates the way readText reads text, so a frame's image counts where the
-  // frame itself sits on screen. Elements small enough to be an icon or a rule are not page state.
+  // because that is what a screenshot captures. Geometry is read in the parent's coordinates the way readText reads
+  // text, so a frame's image counts where the frame itself sits on screen.
   const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
-  const VISUAL_MIN_PX = 48;
   let visual_content = 0;
   const readVisual = (doc, dx, dy) => {
     if (visual_content) return;
@@ -974,7 +943,7 @@
       const r = e.getBoundingClientRect();
       const top = r.top + dy,
         left = r.left + dx;
-      if (r.width < VISUAL_MIN_PX || r.height < VISUAL_MIN_PX) continue;
+      if (r.width <= 0 || r.height <= 0) continue;
       if (top + r.height <= 0 || top >= innerHeight || left + r.width <= 0 || left >= innerWidth) continue;
       visual_content = 1;
       return;
@@ -1003,7 +972,7 @@
     retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
   }
   // A dependent field can appear without changing page text. Compare all controls,
-  // excusing only the value and required marker of the field just filled.
+  // excusing only the value and invalid marker of the field just filled.
   const formState = controls.map(({ distance, offscreen, ...c }) => {
     const form = registry.nodes.get(c.id)?.form;
     return { ...c, form: form ? [form.action, form.method, form.target] : null };
@@ -1014,7 +983,7 @@
     if (!previous || previous.page !== formPage) return false;
     const expected = previous.controls.map(c => {
       if (c.id !== mode.id) return c;
-      const { blocking, ...filled } = c;
+      const { invalid, ...filled } = c;
       return mode.text ? { ...filled, value: mode.text } : c;
     });
     const same = JSON.stringify(expected) === JSON.stringify(formState);
@@ -1053,21 +1022,5 @@
     retarget_keys,
     inaccessible_frames: inaccessible,
   };
-  if (!limits) return result;
-  // Python keeps at most `limits.onscreen` of the controls on screen and `limits.offscreen` of those off it, each
-  // the first in this order, and any pager past either cap. A control past the caps is sent with only what decides
-  // whether it is a pager; Python asks for the rest of one it keeps, by this snapshot's token, from what is kept here.
-  const token = (registry.snapshots = (registry.snapshots || 0) + 1);
-  registry.sent = { token, rows: new Map(semantics.map(c => [c.id, [c, guards[c.id], retarget_keys[c.id]]])) };
-  let onscreen = 0,
-    offscreen = 0;
-  result.controls = semantics.map(c => {
-    if (c.offscreen ? offscreen++ < limits.offscreen : onscreen++ < limits.onscreen) return c;
-    delete result.guards[c.id];
-    delete result.retarget_keys[c.id];
-    const { id, role, label, operations, href, next_page } = c;
-    return { id, role, label, operations, href, next_page, offscreen: c.offscreen, partial: true };
-  });
-  result.token = token;
   return result;
 })

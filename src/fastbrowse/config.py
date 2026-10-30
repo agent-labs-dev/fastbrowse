@@ -30,41 +30,21 @@ class Thresholds(Frozen):
 
 
 class ObservationLimits(Frozen):
-    max_controls: int = Field(default=320, gt=0)
-    """The browser's hard pool bound; late controls beyond it are still cut in DOM order."""
-    max_offscreen_controls: int = Field(default=120, ge=0)
-    """Long footers must leave most of the control budget for what is on screen."""
-    max_offered_controls: int = Field(default=160, gt=0)
-    """Jev's step sees at most this many controls; on a denser page a relevance filter picks which.
-
-    Typesafe documents that Jev 1.13 loses accuracy on large state full of irrelevant detail, and a
-    DOM-order cut dropped the control a task needed.
-    """
-    viewport_text_chars: int = Field(default=6000, gt=0)
-    """Keep navigation's page excerpt small; the reader captures the whole page when it needs more."""
-    working_notes_chars: int = Field(default=6000, gt=0)
-    """Navigation, field writing and recovery share a short memory; verdicts use the token budget instead."""
-    history_entries: int = Field(default=6, ge=0)
-    """Keep effects for six recent actions; older effects describe page states that have already changed."""
-    earlier_history_entries: int = Field(default=14, ge=0)
-    """Actions before the recent ones, shown without their effects. With only the last six, a form filled in
-    eight steps lost its first field from view, and Jev typed the origin again instead of searching."""
     group_size: int = Field(default=30, gt=1)
     """Thirty controls keep the second choice small when selection goes group -> element."""
-    max_choice_options: int = Field(default=240, gt=1, le=255)
-    """Leave headroom under Jev's 255-option ceiling for policy choices."""
 
 
 class TokenBudget(Frozen):
-    state_plus_largest_question: int = Field(default=24_000, gt=0)
-    """Conservative target under Jev's 32k limit, since tokens are estimated locally."""
-    state_plus_all_questions: int = Field(default=48_000, gt=0)
-    """Conservative target under Jev's 64k limit."""
+    state_plus_largest_question: int = Field(default=32_000, gt=0)
+    """Tokens a decision request may spend on its state and largest question: Jev's documented 32k, brought within
+    another model's limit by the model's decision profile."""
+    state_plus_all_questions: int = Field(default=64_000, gt=0)
+    """Tokens a decision request may spend on its state and every question: Jev's documented 64k."""
     batch_tokens: int = Field(default=8000, gt=0)
     """Target for one request among many independent questions. The gateway sheds large requests with 503s (a 26k
     token request failed five of eight times, 4k never), so a batch of questions is split small and sent in parallel."""
     chars_per_token: float = Field(default=3.0, gt=0)
-    """Local estimate for prompt budgeting; Jev also has a separate dense JSON safety bound."""
+    """Local estimate for prose prompts; a decision request's dense JSON is counted at 1.5 characters a token."""
     read_output_tokens: int = Field(default=0, ge=0)
     """The reader's output ceiling; 0 sends none, so a page of records and its verbatim quotes is never cut short."""
     compose_output_tokens: int = Field(default=0, ge=0)

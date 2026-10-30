@@ -251,8 +251,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 24000,
-   "state_plus_all_questions": 48000,
+   "state_plus_largest_question": 32000,
+   "state_plus_all_questions": 64000,
    "batch_tokens": 1000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -1053,8 +1053,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 24000,
-   "state_plus_all_questions": 48000,
+   "state_plus_largest_question": 32000,
+   "state_plus_all_questions": 64000,
    "batch_tokens": 1000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -1911,8 +1911,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 24000,
-   "state_plus_all_questions": 48000,
+   "state_plus_largest_question": 32000,
+   "state_plus_all_questions": 64000,
    "batch_tokens": 1000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -1951,8 +1951,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 40,
-   "state_plus_all_questions": 40,
+   "state_plus_largest_question": 80,
+   "state_plus_all_questions": 80,
    "batch_tokens": 8000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -1985,8 +1985,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 40,
-   "state_plus_all_questions": 40,
+   "state_plus_largest_question": 80,
+   "state_plus_all_questions": 80,
    "batch_tokens": 8000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -2112,8 +2112,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 40,
-   "state_plus_all_questions": 40,
+   "state_plus_largest_question": 80,
+   "state_plus_all_questions": 80,
    "batch_tokens": 8000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -2227,8 +2227,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 40,
-   "state_plus_all_questions": 40,
+   "state_plus_largest_question": 80,
+   "state_plus_all_questions": 80,
    "batch_tokens": 8000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -2300,8 +2300,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 40,
-   "state_plus_all_questions": 40,
+   "state_plus_largest_question": 80,
+   "state_plus_all_questions": 80,
    "batch_tokens": 8000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,
@@ -2383,8 +2383,8 @@
    }
   },
   "tokens": {
-   "state_plus_largest_question": 24000,
-   "state_plus_all_questions": 48000,
+   "state_plus_largest_question": 32000,
+   "state_plus_all_questions": 64000,
    "batch_tokens": 8000,
    "chars_per_token": 3.0,
    "read_output_tokens": 8000,

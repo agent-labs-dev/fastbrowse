@@ -232,6 +232,10 @@ fn jev_key(state: &str, questions: &str) -> String {
 struct ReplayJev(Replies);
 
 impl DecisionClient for ReplayJev {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,

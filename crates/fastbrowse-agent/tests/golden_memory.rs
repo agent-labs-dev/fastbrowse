@@ -76,7 +76,7 @@ fn snapshot(notes: &Notes, requirement_ids: &[String]) -> Value {
         "standings": tallies.iter().map(|tally| notes.standing(tally).map(|s| s.dump())).collect::<Vec<_>>(),
         "expanded": notes.expand_evidence_ids(keys.iter().rev().map(String::as_str)),
         "rendered": notes.render_with_ids(1_000_000, &options).unwrap().text,
-        "navigation": notes.render_for_navigation(1_000_000, true).unwrap(),
+        "navigation": notes.render_for_navigation(true),
     })
 }
 
@@ -144,12 +144,7 @@ fn run(notes: &mut Notes, op: &Value) -> Value {
             Ok(rendered) => json!({"text": rendered.text, "evidence_ids": rendered.evidence_ids}),
             Err(e) => error(e),
         },
-        "render_for_navigation" => {
-            match notes.render_for_navigation(op["max_chars"].as_i64().unwrap(), op["quotes"].as_bool().unwrap()) {
-                Ok(text) => json!(text),
-                Err(e) => error(e),
-            }
-        }
+        "render_for_navigation" => json!(notes.render_for_navigation(op["quotes"].as_bool().unwrap())),
         "current_evidence" => {
             let capture = (!op["capture"].is_null()).then(|| parse::<Capture>(&op["capture"]));
             json!(notes.current_evidence(capture.as_ref()).keys().collect::<Vec<_>>())
