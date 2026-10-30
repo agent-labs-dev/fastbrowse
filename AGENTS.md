@@ -6,8 +6,8 @@ Guidance for an agent working in this repository.
 
 A browser agent built on one idea: **it picks instead of generating**. Every page is indexed into the
 controls it actually has, and [Jev](https://typesafe.ai), a choice model, picks one of them. An LLM plans,
-reads and writes prose. Deterministic code owns everything that must not be argued with: authorization gates,
-secret resolution, cost limits, and whether a run may call itself finished.
+reads and writes prose. Jev also decides when a page is read and when the run is done. Code owns authorization
+gates, secret resolution and cost limits, and states what it knows to Jev instead of overruling it.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for what a PR needs, [README.md](README.md) for the product, [docs/design.md](docs/design.md) for the browser layer,
 [docs/evals.md](docs/evals.md) for how it is measured, and [docs/jev.md](docs/jev.md) for every Jev
@@ -180,8 +180,8 @@ These are the things a change must not quietly break.
   recorded may be the one that put the secret there. Live JPEG frames and recordings are held back before
   secret typing and while observations reveal a resolved secret; recordings keep their last clean frame.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code
-  refuses actions classified as irreversible without authorization. Code-selected pagination and authorized,
-  confident actions skip classification. The classifier is not a guarantee against missed changes.
+  refuses an irreversible one unless the run is authorized and Jev judges the task asked for it. Only
+  code-selected pagination skips classification. The classifier is not a guarantee against missed changes.
 - **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE and a return to a
   page state already seen with nothing read since are each no progress. `unchanged_actions` of them in a row
   go to recovery, which asks Jev again without the stalled action. A page state not seen before or new evidence
@@ -195,8 +195,8 @@ A prompt is code, and a model's output is untrusted until code accepts it.
 - **One call does one job.** A request that states a task states everything the next step needs from it. The
   plan call writes its own answer checks instead of leaving a terse draft for a second call to repair. Split a
   job across calls only when the two cannot be asked in the same breath, and give each half its own contract.
-- **Code decides, the model proposes.** A check, a count, a citation or a stop decision is settled by code
-  against the schema, the quotes or the page state. Trust a model's output only where code can prove it
+- **The LLM proposes.** A schema, a count or a citation is checked by code against the quotes or the page
+  state, and the run's next step and its end are Jev's. Trust an LLM's output only where code can prove it
   complete; where it cannot, repair it deterministically or ask again. A partial result is reported as
   partial.
 - **Every call leaves a receipt.** The ledger records each call's purpose, tokens and dollars, and a budget
