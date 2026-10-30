@@ -4,7 +4,12 @@ name: Benchmark campaign
 # Dispatch only, by hand or by the release workflow on a minor release: every run drives real browsers and real
 # model calls, so it spends money and is never triggered by a push or a pull request. When every group has run,
 # publish-evals.yml opens a pull request on agent-labs-dev/fastbrowse-site with the candidate and the site's group
-# files; merging that pull request is the approval.
+# files; merging that pull request is the approval. Each group's ledger goes to the private Langfuse project as soon as
+# it stops, finished or not, and the candidate requires it there.
+#
+# `official_runs` names finished Official benchmarks runs of the same `fastbrowse_ref` and `parallax_sha`. Their public
+# rows join this candidate as the bu-bench and online-mind2web groups: the site reads one candidate, so every group in
+# it comes from one build. Run them first; this workflow neither starts nor waits for them.
 #
 # The campaign code lives in agent-labs-dev/parallax (parallax.browser_use), pinned by `parallax_sha`. The
 # fastbrowse repo does not depend on parallax, so this workflow checks the pinned parallax out beside fastbrowse
@@ -24,7 +29,8 @@ name: Benchmark campaign
 #
 # Repository configuration this file needs (checked before any paid call):
 #   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
-#            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the candidate reads the fixture run back)
+#            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
+#            with the fixture run)
 #            BROWSER_USE_API_KEY (with `browser: cloud` or the head-to-head group)
 #   secrets, optional: FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
@@ -75,6 +81,11 @@ on:
         description: Space separated Parallax suites
         required: true
         default: "core dev heldout stretch-dev stretch-heldout"
+      official_runs:
+        description: Space separated Official benchmarks run ids of this build whose public rows join the candidate
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -108,6 +119,7 @@ jobs:
       - name: Require the full comparison protocol
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id }}
+          OFFICIAL_RUNS: ${{ inputs.official_runs }}
         run: |
           case "$REPEAT" in
             ''|*[!0-9]*) echo "repeat must be an integer, got '$REPEAT'"; exit 1 ;;
@@ -115,6 +127,9 @@ jobs:
           test "$REPEAT" -ge 3 || { echo "repeat must be at least 3, got $REPEAT"; exit 1; }
           case "$BUDGET" in
             ''|*[!0-9.]*) echo "budget must be a number, got '$BUDGET'"; exit 1 ;;
+          esac
+          case "$OFFICIAL_RUNS" in
+            *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
           esac
           # The site stores the candidate as data/benchmark-<campaign_id>.json.
           printf '%s' "$CAMPAIGN_ID" | grep -Eq '^[a-zA-Z0-9_.-]+$' \
@@ -202,6 +217,8 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    env:
+      OUT: ${{ github.workspace }}/ledgers/${{ matrix.out }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -245,7 +262,6 @@ jobs:
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           ARMS: ${{ matrix.arms }}
-          OUT: ${{ github.workspace }}/ledgers/${{ matrix.out }}
         run: |
           cd parallax
           mkdir -p "$(dirname "$OUT")"
@@ -266,6 +282,18 @@ jobs:
             --budget "$BUDGET" \
             "${browser[@]}" \
             --out "$OUT"
+      - name: Send the ledger to Langfuse
+        # A stopped group is tracked too: every arm's experiment lists what ran.
+        if: always()
+        env:
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+        run: |
+          test -s "$OUT" || { echo "::warning::no ledger to track"; exit 0; }
+          cd parallax
+          uv run --no-sync parallax browser track-ledger "$OUT" --push
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -310,6 +338,16 @@ jobs:
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: {path: ledgers, pattern: ledger-*, merge-multiple: true}
+      - name: Fetch the official rows
+        if: ${{ inputs.official_runs != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OFFICIAL_RUNS: ${{ inputs.official_runs }}
+        run: |
+          read -ra runs <<< "$OFFICIAL_RUNS"
+          for run in "${runs[@]}"; do
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --pattern 'official-rows-*' --dir "official-rows/$run"
+          done
       - name: Export the catalog
         run: |
           cd parallax
@@ -338,11 +376,14 @@ jobs:
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id }}
           FIXTURE_RUN: ${{ steps.fixture.outputs.run }}
-          # The fixture run's traces are read back from fastbrowse's Langfuse project (evals/storage.py HOST).
+          # The fixture run's traces and each group's experiments are read back from fastbrowse's Langfuse project
+          # (evals/storage.py HOST).
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
         run: |
+          mapfile -t official < <(find "$GITHUB_WORKSPACE/official-rows" -name '*.rows.json' 2> /dev/null | sort)
           cd parallax
           args=()
           for spec in \
@@ -351,6 +392,7 @@ jobs:
             path="${spec%%:*}"
             if test -f "$path"; then args+=("${spec##*:}" "$path"); fi
           done
+          if test "${#official[@]}" -gt 0; then args+=(--official-rows "${official[@]}"); fi
           mkdir -p "$GITHUB_WORKSPACE/candidate"
           uv run --no-sync parallax browser publish-candidate \
             --campaign-id "$CAMPAIGN_ID" \
@@ -366,9 +408,16 @@ jobs:
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
         run: |
+          # An official suite has its own run date and upstream judge, read from its rows.
+          groups="$(find official-rows -name '*.rows.json' -exec jq -s '
+            sort_by(.measured_on)
+            | map({key: .group, value: {run_on: .measured_on, judge: "\(.judge_model) through OpenRouter"}})
+            | from_entries' {} + 2> /dev/null || true)"
+          test -n "$groups" || groups='{}'
           jq -n --arg run_on "$RUN_ON" --arg harness "Parallax at ${PARALLAX_SHA:0:7}" \
-            --arg judge "$PARALLAX_JUDGE_MODELS through $PARALLAX_JUDGE_BASE_URL" \
-            '{run_on: $run_on, harness: $harness, judge: $judge}' > "$GITHUB_WORKSPACE/candidate/run-facts.json"
+            --arg judge "$PARALLAX_JUDGE_MODELS through $PARALLAX_JUDGE_BASE_URL" --argjson groups "$groups" \
+            '{run_on: $run_on, harness: $harness, judge: $judge, groups: $groups}' \
+            > "$GITHUB_WORKSPACE/candidate/run-facts.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmark-candidate
