@@ -45,7 +45,7 @@ name: Official benchmarks
 # are not directly comparable with the figures upstream publishes for its judges.
 #
 # This runs the fastbrowse arm, the one the official groups publish. Parallax can also measure the hosted Browser Use
-# and Browserbase agents on these suites (`parallax browser official --arm`) for comparison; their rows are published
+# browsers' own agent on these suites (`parallax browser official --arm`) for comparison; their rows are published
 # only where Parallax marks them publishable. Ultrafast returns no answer, so it is not run on them.
 #
 # `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
