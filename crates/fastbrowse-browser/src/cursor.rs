@@ -141,22 +141,6 @@ enum Failure {
     Random,
 }
 
-impl Failure {
-    fn kind(self) -> &'static str {
-        match self {
-            Self::Timeout => "Timeout",
-            Self::DriverExited => "DriverExited",
-            Self::DriverRejected => "DriverRejected",
-            Self::BadReply => "BadReply",
-            Self::ToolFailed => "ToolFailed",
-            Self::MissingTools => "MissingTools",
-            Self::NoWindowScope => "NoWindowScope",
-            Self::Io => "Io",
-            Self::Random => "Random",
-        }
-    }
-}
-
 fn log_warning(message: &str) {
     if std::env::var_os("FASTBROWSE_LOG").is_some() {
         let _ = writeln!(std::io::stderr(), "fastbrowse.browser.cursor: {message}");
@@ -508,7 +492,7 @@ impl Inner {
     }
 
     async fn fail(&self, failure: Failure) {
-        log_warning(&format!("cursor feedback turned off for this run ({})", failure.kind()));
+        log_warning(&format!("cursor feedback turned off for this run ({failure:?})"));
         self.disabled.store(true, Ordering::SeqCst);
         self.driver.close().await;
     }
@@ -630,7 +614,7 @@ pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
     match opened {
         Ok(session) => Some(CursorFeedback::new(guard.take(), session)),
         Err(failure) => {
-            log_warning(&format!("cursor feedback unavailable ({}); running without it", failure.kind()));
+            log_warning(&format!("cursor feedback unavailable ({failure:?}); running without it"));
             guard.take().close().await;
             None
         }
