@@ -387,8 +387,7 @@ async fn terminate(child: &mut Child) {
 ///
 /// After a sign-in, its save and leaked-password bubbles take the browser's input: the page still renders and hit
 /// tests still pass, but no click reaches it, and the bubble is Chrome's own interface, outside the page the agent
-/// sees. saucedemo's shared password is a known leak, so every click after its sign-in did nothing. A kept profile
-/// keeps every other preference its owner set; these three are set on each launch.
+/// sees. A kept profile keeps every other preference its owner set; these three are set on each launch.
 fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
     let preferences = profile.join("Default").join("Preferences");
     let held: Option<Value> = match std::fs::read(&preferences) {
