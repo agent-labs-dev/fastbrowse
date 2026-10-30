@@ -116,6 +116,18 @@ proposing a direct address and typing field text.
 own key. An endpoint that reports no price leaves those calls' cost unknown, so `--max-dollars` stops the run
 after the first one.
 
+Jev, the decision model, has settings of its own:
+
+| Setting | Effect |
+|:--|:--|
+| `FASTBROWSE_DECISION_SOURCE` | `typesafe`, `openrouter` or `gateway` picks Jev's first provider, or another decision host by name |
+| `FASTBROWSE_DECISION_BASE_URL` | retargets the selected source, and turns off automatic failover |
+| `FASTBROWSE_DECISION_MODEL` | pins the decision model, and turns off automatic failover |
+| `FASTBROWSE_DECISION_API_KEY` | the key for a decision host that takes one |
+
+[Jev routing](jev.md#provider-failover) gives the provider order and failover, and
+[other decision hosts](jev.md#other-decision-hosts) lists each host with its key and models.
+
 ## Results
 
 The exit code is the status. Only `complete` exits 0; configuration refusals exit 1 and bad syntax exits 2.
