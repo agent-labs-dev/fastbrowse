@@ -14,16 +14,22 @@ name: Official benchmarks
 # PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT before it is uploaded; only the holder of the matching identity can read it.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: AGENT_LABS_PR_BOT_APP_ID, AGENT_LABS_PR_BOT_PRIVATE_KEY (read agent-labs-dev/parallax)
-#            OPENROUTER_API_KEY (the agent's LLM and Jev), OPENAI_API_KEY (both upstream judges call OpenAI)
+#   secrets: PARALLAX_DEPLOY_KEY (a read-only deploy key on agent-labs-dev/parallax)
+#            OPENROUTER_API_KEY (the agent's LLM and Jev)
+#            PARALLAX_JUDGE_API_KEY (the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
 #            BROWSER_USE_API_KEY (only with `browser: cloud`)
 #            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
 #   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
 #   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
 #            PARALLAX_BU_BENCH_JUDGE, PARALLAX_MIND2WEB_JUDGE (the judge of each suite run, as JSON; see below)
 #
-# Each judge variable is one JSON object with every price checked against the provider's pages:
-#   {"model": "...", "reasoning": "...", "pricing_checked": "YYYY-MM-DD",
+# Both upstream judges call OpenAI directly. Here they call the OpenAI-compatible endpoint in `base_url`
+# (`parallax browser official --judge-base-url`), such as OpenRouter with its id for the upstream model; the run
+# records the route, and a published group says it differs from the upstream's.
+# `--judge-base-url` needs a parallax_sha that includes agent-labs-dev/parallax#361.
+#
+# Each judge variable is one JSON object with every price checked against that endpoint's listing:
+#   {"base_url": "https://...", "model": "...", "reasoning": "...", "pricing_checked": "YYYY-MM-DD",
 #    "input_usd_per_mtok": 0, "output_usd_per_mtok": 0, "image_tokens": 0,
 #    "max_requests": 0, "max_input_tokens": 0, "max_output_tokens": 0, "budget_usd": 0}
 # plus, for a model with a long-context price tier, all three of
@@ -50,11 +56,11 @@ on:
         options: [all, bu-bench, online-mind2web]
         default: all
       browser:
-        description: Browser Use Cloud browsers, or headless local Chrome on the runner
+        description: Headless local Chrome on the runner, or Browser Use Cloud browsers
         required: true
         type: choice
-        options: [cloud, local]
-        default: cloud
+        options: [local, cloud]
+        default: local
       repeat:
         description: Runs per task (at least 3)
         required: true
@@ -130,8 +136,33 @@ jobs:
             echo "fastbrowse_sha=$fastbrowse_sha"
             echo "parallax_sha=$PARALLAX_SHA"
           } >> "$GITHUB_OUTPUT"
+      - name: Check the credentials
+        env:
+          PARALLAX_DEPLOY_KEY: ${{ secrets.PARALLAX_DEPLOY_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+          SUITE_SET: ${{ inputs.suites }}
+        run: |
+          missing=""
+          need() { test -n "$2" || missing="$missing $1"; }
+          need PARALLAX_DEPLOY_KEY "$PARALLAX_DEPLOY_KEY"
+          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
+          need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
+          if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
+          # Online-Mind2Web is gated: HF_TOKEN's account must also have accepted the dataset's access conditions.
+          if test "$SUITE_SET" != bu-bench; then need HF_TOKEN "$HF_TOKEN"; fi
+          if test -n "$missing"; then
+            echo "::error::missing repository configuration:$missing"
+            exit 1
+          fi
       - name: Build the suite matrix
         id: matrix
+        # Runs after a credential failure too, so one dispatch names everything that is missing.
+        if: ${{ !cancelled() && steps.pins.outcome == 'success' }}
         env:
           SUITE_SET: ${{ inputs.suites }}
           BU_BENCH_JUDGE: ${{ vars.PARALLAX_BU_BENCH_JUDGE }}
@@ -166,14 +197,15 @@ jobs:
               if not isinstance(judge, dict):
                   missing.append(f"{variable} (repository variable, a JSON object)")
                   continue
-              absent = [k for k in ("model", "reasoning", "pricing_checked", *PRICES) if judge.get(k) in (None, "")]
+              absent = [k for k in ("base_url", "model", "reasoning", "pricing_checked", *PRICES)
+                        if judge.get(k) in (None, "")]
               tier = [k for k in CONTEXT if k in judge]
               if tier and len(tier) != len(CONTEXT):
                   absent += [k for k in CONTEXT if k not in judge]
               if absent:
                   missing.append(f"{variable} fields {', '.join(absent)}")
                   continue
-              flags = ["--judge-model", judge["model"], "--judge-reasoning", judge["reasoning"],
+              flags = ["--judge-base-url", judge["base_url"], "--judge-model", judge["model"], "--judge-reasoning", judge["reasoning"],
                        "--judge-pricing-checked", judge["pricing_checked"]]
               for key in (*PRICES, *tier):
                   flags += ["--judge-" + key.removesuffix("_usd").replace("_", "-"), str(judge[key])]
@@ -185,30 +217,6 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"matrix={json.dumps(include)}\n")
           PY
-      - name: Check the credentials
-        env:
-          AGENT_LABS_PR_BOT_APP_ID: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
-          AGENT_LABS_PR_BOT_PRIVATE_KEY: ${{ secrets.AGENT_LABS_PR_BOT_PRIVATE_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
-          SUITE_SET: ${{ inputs.suites }}
-        run: |
-          missing=""
-          need() { test -n "$2" || missing="$missing $1"; }
-          need AGENT_LABS_PR_BOT_APP_ID "$AGENT_LABS_PR_BOT_APP_ID"
-          need AGENT_LABS_PR_BOT_PRIVATE_KEY "$AGENT_LABS_PR_BOT_PRIVATE_KEY"
-          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
-          need OPENAI_API_KEY "$OPENAI_API_KEY"
-          need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
-          if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
-          if test "$SUITE_SET" != bu-bench; then need HF_TOKEN "$HF_TOKEN"; fi
-          if test -n "$missing"; then
-            echo "::error::missing repository configuration:$missing"
-            exit 1
-          fi
 
   official:
     name: ${{ matrix.suite }}
@@ -233,22 +241,13 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with: {python-version: "3.13"}
-      - name: Mint the pr-bot token
-        id: app
-        uses: actions/create-github-app-token@5d869da34e18e7287c1daad50e0b8ea0f506ce69 # v2
-        with:
-          app-id: ${{ secrets.AGENT_LABS_PR_BOT_APP_ID }}
-          private-key: ${{ secrets.AGENT_LABS_PR_BOT_PRIVATE_KEY }}
-          owner: agent-labs-dev
-          repositories: parallax
-          permission-contents: read
       - name: Check out the pinned parallax
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: agent-labs-dev/parallax
           ref: ${{ needs.resolve.outputs.parallax_sha }}
           path: parallax
-          token: ${{ steps.app.outputs.token }}
+          ssh-key: ${{ secrets.PARALLAX_DEPLOY_KEY }}
           persist-credentials: false
       - name: Install parallax and fastbrowse
         # Every later parallax command runs with --no-sync: a syncing `uv run` would put back the fastbrowse
@@ -304,7 +303,8 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # The upstream judge reads its key as OPENAI_API_KEY whatever endpoint it calls.
+          OPENAI_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           # Ignored with a local browser: the runner then drives the local Chrome alone.
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           JUDGE: ${{ matrix.judge }}
