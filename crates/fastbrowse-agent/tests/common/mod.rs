@@ -83,7 +83,9 @@ impl Script {
     }
 }
 
-pub struct ReplayJev(Script, DecisionProfile);
+/// Replays recorded Jev answers. Under `FASTBROWSE_UPDATE_GOLDEN=1` it answers from the recording without comparing
+/// the requests, and keeps each request as written now in `asked` for the test to record.
+pub struct ReplayJev(Script, DecisionProfile, pub Mutex<Vec<(String, String)>>);
 
 /// Jev's profile, with the fewer options per choice a case sets to reach group questions with few controls.
 pub fn case_profile(case: &Value) -> DecisionProfile {
@@ -96,7 +98,7 @@ pub fn case_profile(case: &Value) -> DecisionProfile {
 
 impl ReplayJev {
     pub fn new(case: &Value) -> ReplayJev {
-        ReplayJev(Script::new(case, "jev"), case_profile(case))
+        ReplayJev(Script::new(case, "jev"), case_profile(case), Mutex::new(Vec::new()))
     }
 
     pub fn finish(&self) {
@@ -118,12 +120,13 @@ impl DecisionClient for ReplayJev {
         let name = &self.0.name;
         let written: serde_json::Map<String, Value> =
             questions.iter().map(|(key, question)| (key.clone(), question.dump())).collect();
-        assert_eq!(write(state, Style::HTTPX), call["jev"]["state"].as_str().unwrap(), "{name}: Jev state #{index}");
-        assert_eq!(
-            write(&Value::Object(written), Style::HTTPX),
-            call["jev"]["questions"].as_str().unwrap(),
-            "{name}: Jev questions #{index}"
-        );
+        let (state, questions) = (write(state, Style::HTTPX), write(&Value::Object(written), Style::HTTPX));
+        if std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some() {
+            self.2.lock().unwrap().push((state, questions));
+        } else {
+            assert_eq!(state, call["jev"]["state"].as_str().unwrap(), "{name}: Jev state #{index}");
+            assert_eq!(questions, call["jev"]["questions"].as_str().unwrap(), "{name}: Jev questions #{index}");
+        }
         let response = call["response"].clone();
         Box::pin(async move { jev_response(&response) })
     }

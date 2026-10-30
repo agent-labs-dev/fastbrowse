@@ -180,12 +180,14 @@ impl Page for FakeSite {
 
 /// Recorded answers by the bytes of the request that got them; identical requests are answered in recorded order.
 ///
-/// With `FASTBROWSE_UPDATE_GOLDEN=1` a request with no recorded answer is answered from the case's script instead,
-/// and every call made is kept so the case can be written back with its new calls, result and events.
+/// With `FASTBROWSE_UPDATE_GOLDEN=1` a request with no recorded answer keeps the answer recorded at its place in the
+/// case where that still fits the request, and is otherwise answered from the case's script. Every call made is kept so
+/// the case can be written back with its new calls, result and events.
 struct Replies {
     name: String,
     kind: &'static str,
     answers: Mutex<HashMap<String, VecDeque<Value>>>,
+    ordered: Vec<Value>,
     log: Option<Arc<Mutex<Vec<Value>>>>,
 }
 
@@ -197,12 +199,14 @@ impl Replies {
         key: impl Fn(&Value) -> String,
     ) -> Replies {
         let mut answers: HashMap<String, VecDeque<Value>> = HashMap::new();
+        let mut ordered = Vec::new();
         for call in case["calls"].as_array().unwrap() {
             if let Some(request) = call.get(kind) {
                 answers.entry(key(request)).or_default().push_back(call["response"].clone());
+                ordered.push(call.clone());
             }
         }
-        Replies { name: case["name"].as_str().unwrap().to_string(), kind, answers: Mutex::new(answers), log }
+        Replies { name: case["name"].as_str().unwrap().to_string(), kind, answers: Mutex::new(answers), ordered, log }
     }
 
     fn take(&self, key: &str, request: Value, script: impl FnOnce(&[Value]) -> Value) -> Value {
@@ -212,7 +216,14 @@ impl Replies {
             return recorded.unwrap_or_else(|| self.missing(key, &answers));
         };
         let mut log = log.lock().unwrap();
-        let response = recorded.unwrap_or_else(|| script(&log));
+        let response = recorded.unwrap_or_else(|| {
+            let made = log.iter().filter(|call| call.get(self.kind).is_some()).count();
+            let scripted = script(&log);
+            match self.ordered.get(made) {
+                Some(old) => in_place(self.kind, old, &request, scripted),
+                None => scripted,
+            }
+        });
         log.push(serde_json::json!({self.kind: request, "response": response}));
         response
     }
@@ -240,6 +251,27 @@ impl Replies {
         let left: Vec<&String> = answers.iter().filter(|(_, queue)| !queue.is_empty()).map(|(key, _)| key).collect();
         assert!(left.is_empty(), "{}: requests recorded and not made:\n{left:#?}", self.name);
     }
+}
+
+/// The answer recorded at a request's place in the case, where it still fits: an LLM answer for the same schema, or
+/// each Jev answer whose question is still asked with its recorded choice still offered. The script answers the rest.
+fn in_place(kind: &str, old: &Value, request: &Value, scripted: Value) -> Value {
+    if kind == "llm" {
+        return if old["llm"]["schema_name"] == request["schema_name"] { old["response"].clone() } else { scripted };
+    }
+    let mut response = scripted;
+    let Some(recorded) = old["response"]["evaluation"]["answers"].as_object() else { return response };
+    let Some(answers) = response["evaluation"]["answers"].as_object_mut() else { return response };
+    for (key, answer) in answers.iter_mut() {
+        let Some(kept) = recorded.get(key) else { continue };
+        let offered = answer["probabilities"]
+            .as_object()
+            .is_none_or(|p| kept["choice"].as_str().is_some_and(|c| p.contains_key(c)));
+        if kept["type"] == answer["type"] && offered {
+            *answer = kept.clone();
+        }
+    }
+    response
 }
 
 /// The `n`th entry of a scripted answer that is a list, the last repeated, or the answer itself.

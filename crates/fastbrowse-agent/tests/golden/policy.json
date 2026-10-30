@@ -19573,7 +19573,7 @@
     "max_steps": null,
     "max_jev_calls": null,
     "max_llm_calls": null,
-    "max_dollars": 1e-09,
+    "max_dollars": 1e-9,
     "max_seconds": null
    },
    "cache": false,

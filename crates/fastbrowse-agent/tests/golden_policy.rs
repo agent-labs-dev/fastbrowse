@@ -13,10 +13,11 @@ use serde_json::{Map, Value, json};
 
 #[test]
 fn decisions_ask_and_choose_as_python_does() {
-    let golden = golden("policy.json");
-    let cases = golden["cases"].as_array().unwrap();
+    let mut golden = golden("policy.json");
+    let updating = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    let cases = golden["cases"].as_array_mut().unwrap();
     assert!(cases.len() > 50);
-    for case in cases {
+    for case in cases.iter_mut() {
         let jev = ReplayJev::new(case);
         let ledger = ledger(&case["ledger"]);
         let cache = case["cache"].as_bool().unwrap().then(RelevanceCache::default);
@@ -35,24 +36,61 @@ fn decisions_ask_and_choose_as_python_does() {
             outcomes.push(json!({"result": result, "trace": trace.events()}));
         }
         jev.finish();
+        if updating {
+            let asked = jev.2.into_inner().unwrap();
+            let calls = case["calls"].as_array_mut().unwrap().iter_mut().filter(|call| call.get("jev").is_some());
+            for (call, (state, questions)) in calls.zip(asked) {
+                call["jev"] = json!({"state": state, "questions": questions});
+            }
+            case["outcome"] = Value::Array(outcomes);
+            case["ledger_after"] = ledger_state(ledger.as_ref());
+            continue;
+        }
         assert_outcome(case, Value::Array(outcomes));
         assert_eq!(ledger_state(ledger.as_ref()), case["ledger_after"], "{}: ledger", case["name"]);
     }
+    if updating {
+        save("policy.json", &golden);
+    }
+}
+
+/// Writes a golden file as Python's json.dump(indent=1, ensure_ascii=False) wrote it.
+fn save(name: &str, value: &Value) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
+    let mut out = Vec::new();
+    let mut serializer =
+        serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
+    serde::Serialize::serialize(value, &mut serializer).unwrap();
+    out.push(b'\n');
+    std::fs::write(&path, out).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 }
 
 #[test]
 fn requests_are_built_as_python_builds_them() {
-    let golden = golden("policy.json");
-    for case in golden["build_request"].as_array().unwrap() {
+    let mut golden = golden("policy.json");
+    let updating = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some();
+    for case in golden["build_request"].as_array_mut().unwrap() {
         let observation: Observation = parse(&case["observation"]);
         let context: StepContext = parse(&case["context"]);
         let config: Config = parse(&case["config"]);
         let options = case_profile(case).max_choice_options;
         let compact = case["compact"].as_bool().unwrap();
         let request = build_request(&observation, &observation.controls, &context, &config, options, compact);
-        assert_eq!(write(&request.state, Style::HTTPX), case["state"].as_str().unwrap());
         let questions: Map<String, Value> = request.questions.iter().map(|(k, q)| (k.clone(), q.dump())).collect();
-        assert_eq!(write(&Value::Object(questions), Style::HTTPX), case["questions"].as_str().unwrap());
-        assert_eq!(json!(fits(&request, &config)), case["fits"]);
+        let built = json!({
+            "state": write(&request.state, Style::HTTPX),
+            "questions": write(&Value::Object(questions), Style::HTTPX),
+            "fits": fits(&request, &config),
+        });
+        for key in ["state", "questions", "fits"] {
+            if updating {
+                case[key] = built[key].clone();
+            } else {
+                assert_eq!(built[key], case[key], "{key}");
+            }
+        }
+    }
+    if updating {
+        save("policy.json", &golden);
     }
 }
