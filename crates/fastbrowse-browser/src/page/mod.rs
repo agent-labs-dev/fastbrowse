@@ -1250,8 +1250,9 @@ impl CdpPage {
             timed_out = true;
         }
         // A timeout says nothing about the page's content; a caller with no step of its own yet needs the distinct
-        // type, not this message, to tell a slow site or session from its own broken navigation.
-        let message = format!("Page.navigate failed ({failure})");
+        // type, not this message, to tell a slow site or session from its own broken navigation. The address is the
+        // caller's own, and a run that failed before its first step has no other record of where it was going.
+        let message = format!("Page.navigate failed ({failure}) for {url}");
         if timed_out {
             return Err(BrowserError::NavigationTimeout(message));
         }
