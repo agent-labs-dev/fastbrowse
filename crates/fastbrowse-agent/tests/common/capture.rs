@@ -88,13 +88,7 @@ pub type CallLog = Arc<Mutex<Vec<Value>>>;
 
 /// Why a case cannot be replayed in Rust, or None.
 pub fn skip_reason(case: &Value) -> Option<String> {
-    if let Some(reason) = case.get("skip").and_then(Value::as_str) {
-        return Some(reason.to_string());
-    }
-    if case.get("unsupported").and_then(Value::as_bool) == Some(true) {
-        return Some("an argument Rust cannot rebuild".into());
-    }
-    None
+    case.get("skip").and_then(Value::as_str).map(str::to_string)
 }
 
 pub fn notes_arg(value: &Value) -> Notes {
@@ -112,13 +106,6 @@ fn sorted_owners(mut state: Value) -> Value {
         owners.sort_by_key(|pair| pair[0].as_str().unwrap_or_default().to_string());
     }
     state
-}
-
-/// Compares the notes a call left with what Python's left; `$same` means the call did not change them.
-pub fn assert_notes(case: &Value, param: &str, notes: &Notes) {
-    let expected = &case["notes_after"][param];
-    let wanted = if expected.get("$same").is_some() { case["args"][param]["$notes"].clone() } else { expected.clone() };
-    assert_eq!(notes_json(notes), sorted_owners(wanted), "{}: notes {param}", case["name"]);
 }
 
 /// `case` with what Rust returned, left behind, traced and asked.
@@ -260,23 +247,6 @@ pub fn ledger_json(ledger: &Ledger) -> Value {
         "jev_calls": state.jev_calls,
         "llm_calls": state.llm_calls,
     })
-}
-
-pub fn assert_ledger(case: &Value, param: &str, ledger: &Ledger) {
-    let expected = &case["ledger_after"][param];
-    let expected = expected.get("$ledger").unwrap_or(expected);
-    assert_eq!(ledger_json(ledger), *expected, "{}: ledger {param}", case["name"]);
-}
-
-/// Trace events compared as a multiset: concurrent calls record in whichever order they finish.
-pub fn assert_trace(case: &Value, events: &[Value]) {
-    let sort = |events: &[Value]| {
-        let mut written: Vec<String> = events.iter().map(dumps).collect();
-        written.sort();
-        written
-    };
-    let expected: Vec<Value> = case["trace"].as_array().cloned().unwrap_or_default();
-    assert_eq!(sort(events), sort(&expected), "{}: trace", case["name"]);
 }
 
 struct Answers {
