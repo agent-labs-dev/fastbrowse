@@ -195,6 +195,27 @@ async fn test_covered_controls_are_not_modified() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_cover_inside_a_shadow_root_is_named() {
+    let _serial = one_at_a_time().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/safety.html").await;
+    eval_active(
+        &h.session,
+        "const host = document.body.appendChild(document.createElement('div')); \
+         host.attachShadow({mode: 'open'}).innerHTML = `<div role=dialog aria-label=Consent \
+         style='position:fixed;inset:0;background:white'><button>Accept</button></div>`",
+    )
+    .await;
+    let obs = h.observe().await;
+    let action = Action { text: Some("Second".into()), ..targeted(Operation::Select, &find(&obs, "Destination").id) };
+    let result = h.page.act(&action, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Covered);
+    let detail = result.detail.expect("what covers it");
+    assert!(detail.contains("dialog") && detail.contains("Consent") && detail.contains("Accept"), "{detail}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_iframe_focus_hit_testing_and_capture_scope() {
     let _serial = one_at_a_time().await;
     let Some(h) = harness().await else { return };

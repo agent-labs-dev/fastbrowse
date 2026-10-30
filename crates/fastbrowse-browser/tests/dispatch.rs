@@ -716,7 +716,7 @@ async fn test_covered_target_reports_visible_overlay_controls() {
                     command["method"] == "Runtime.evaluate"
                         && command["params"]["expression"]
                             .as_str()
-                            .is_some_and(|e| e.contains("let cover = hit?.closest"))
+                            .is_some_and(|e| e.contains("let cover = null"))
                 })
                 .await;
                 let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
