@@ -276,7 +276,7 @@ jobs:
         run: |
           cd parallax
           uv sync --locked --extra browser --extra track
-          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+          uv pip install "git+file://$GITHUB_WORKSPACE/fastbrowse@$(git -C "$GITHUB_WORKSPACE/fastbrowse" rev-parse HEAD)"
           uv run --no-sync python -c "import fastbrowse, parallax"
       - name: Check out the pinned upstream
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -265,7 +265,7 @@ jobs:
           uv sync --locked --extra browser --extra track
           # Measure this fastbrowse build, not the one parallax pins. Every later command runs with --no-sync:
           # a syncing `uv run` would reinstall the pinned build over this one.
-          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+          uv pip install "git+file://$GITHUB_WORKSPACE/fastbrowse@$(git -C "$GITHUB_WORKSPACE/fastbrowse" rev-parse HEAD)"
           uv run --no-sync python -c "import fastbrowse, parallax"
       # The browser-harness arm's agent; the arm checks this exact version before each attempt.
       - name: Install Codex for the Browser Harness arm
@@ -349,7 +349,7 @@ jobs:
         run: |
           cd parallax
           uv sync --locked --extra browser --extra track
-          uv pip install "$GITHUB_WORKSPACE/fastbrowse"
+          uv pip install "git+file://$GITHUB_WORKSPACE/fastbrowse@$(git -C "$GITHUB_WORKSPACE/fastbrowse" rev-parse HEAD)"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: {path: ledgers, pattern: ledger-*, merge-multiple: true}
       - name: Export the catalog
