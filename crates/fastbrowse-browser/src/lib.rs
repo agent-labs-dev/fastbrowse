@@ -33,7 +33,8 @@ mod tests {
             return;
         }
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tests::a_warning_reaches_stderr_with_nothing_configured", "--nocapture"])
+            .arg("tests::a_warning_reaches_stderr_with_nothing_configured")
+            .env("RUST_TEST_NOCAPTURE", "1")
             .env("FASTBROWSE_TEST_WARN", "1")
             .env_remove("FASTBROWSE_LOG")
             .output()
