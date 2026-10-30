@@ -49,17 +49,11 @@ pub(crate) enum Point {
     Gone,
 }
 
-#[derive(Debug, Clone)]
-struct Refusal {
-    outcome: StepOutcome,
-    detail: Option<String>,
-}
-
 /// Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or why nowhere.
 enum Route {
     At(f64, f64),
     Keyboard,
-    Refused(Refusal),
+    Refused(Outcome),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,7 +513,7 @@ impl CdpPage {
     /// could run. Each key or insertion checks again after focusing.
     async fn route_around(&self, target: &Target, scroll: bool) -> Result<Route, BrowserError> {
         let (session_id, local_id, guard) = (&target.0, target.2, &target.3);
-        let refused = |outcome, detail: Option<String>| Ok(Route::Refused(Refusal { outcome, detail }));
+        let refused = |outcome, detail: Option<String>| Ok(Route::Refused((outcome, detail)));
         if self.cover(session_id, local_id).await? != Cover::Band {
             return refused(StepOutcome::Covered, Some(self.covered_detail(target).await));
         }
@@ -565,7 +559,7 @@ impl CdpPage {
             Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
             Point::At(x, y) => (x, y),
             Point::Covered => match self.route_around(target, true).await? {
-                Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
+                Route::Refused(refusal) => return Ok(refusal),
                 Route::Keyboard => return self.press(target).await,
                 Route::At(x, y) => (x, y),
             },
@@ -587,7 +581,7 @@ impl CdpPage {
             return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await)));
         }
         if let Some(refusal) = self.keys_reach(target, true, None).await? {
-            return Ok((refusal.outcome, refusal.detail));
+            return Ok(refusal);
         }
         self.press_key(session_id, &key).await?;
         Ok((StepOutcome::Executed, Some("Pressed from the keyboard: a band fixed to the window covers it.".into())))
@@ -605,9 +599,9 @@ impl CdpPage {
         target: &Target,
         guarded: bool,
         local_id: Option<i64>,
-    ) -> Result<Option<Refusal>, BrowserError> {
+    ) -> Result<Option<Outcome>, BrowserError> {
         if guarded && !self.guard_holds(target).await? {
-            return Ok(Some(Refusal { outcome: StepOutcome::Stale, detail: Some(CHANGED.into()) }));
+            return Ok(Some((StepOutcome::Stale, Some(CHANGED.into()))));
         }
         let node = local_id.unwrap_or(target.2);
         let cover = self.cover(&target.0, node).await?;
@@ -615,12 +609,12 @@ impl CdpPage {
     }
 
     /// The refusal [`Self::keys_reach`] gives a field `node` that `cover` was measured over after focus.
-    async fn cover_refusal(&self, target: &Target, node: i64, cover: Cover) -> Option<Refusal> {
+    async fn cover_refusal(&self, target: &Target, node: i64, cover: Cover) -> Option<Outcome> {
         if !matches!(cover, Cover::Obstruction | Cover::Other) {
             return None;
         }
         let handed = (target.0.clone(), target.1.clone(), node, target.3.clone());
-        Some(Refusal { outcome: StepOutcome::Covered, detail: Some(self.covered_detail(&handed).await) })
+        Some((StepOutcome::Covered, Some(self.covered_detail(&handed).await)))
     }
 
     async fn guard_holds(&self, target: &Target) -> Result<bool, BrowserError> {
@@ -693,7 +687,7 @@ impl CdpPage {
         // On the pointer route, the field focus landed on is checked for covers in the same evaluate, once focus took.
         let (handed, native_date, mut focused, mut covered): (Option<i64>, bool, Option<bool>, Option<Cover>) =
             match route {
-                Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
+                Route::Refused(refusal) => return Ok(refusal),
                 Route::At(x, y) => {
                     // Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing. Focus alone
                     // bypasses pointer handlers that open autocomplete and calendar pickers.
@@ -761,7 +755,7 @@ impl CdpPage {
                 None => self.keys_reach(target, keyboard, Some(local_id)).await?,
             };
             if let Some(refusal) = refusal {
-                return Ok((refusal.outcome, refusal.detail));
+                return Ok(refusal);
             }
             if secret {
                 // A secret must be checked and inserted in one renderer task: CDP insertText would leave a
@@ -877,7 +871,7 @@ impl CdpPage {
             // The choice is set without the pointer, so only a cover the page means to be dealt with first refuses it.
             Point::Covered => {
                 if let Route::Refused(refusal) = self.route_around(target, false).await? {
-                    return Ok((refusal.outcome, refusal.detail));
+                    return Ok(refusal);
                 }
             }
             Point::At(..) => {}
@@ -926,7 +920,7 @@ impl CdpPage {
                 // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
                 Point::Covered => {
                     if let Route::Refused(refusal) = self.route_around(target, false).await? {
-                        return Ok((refusal.outcome, refusal.detail));
+                        return Ok(refusal);
                     }
                 }
                 Point::At(..) => {}
@@ -935,7 +929,7 @@ impl CdpPage {
                 return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
             }
             if let Some(refusal) = self.keys_reach(target, point == Point::Covered, None).await? {
-                return Ok((refusal.outcome, refusal.detail));
+                return Ok(refusal);
             }
         }
         self.press_key(&session_id, key).await?;
