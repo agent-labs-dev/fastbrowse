@@ -357,7 +357,7 @@ impl Agent {
             outcome.continues.iter().filter(|key| !state.notes.evidenced(key)).cloned().collect();
         self.event("read", || {
             Map::from_iter([
-                ("url".into(), self.redact(&capture.url).into()),
+                ("url".into(), capture.url.clone().into()),
                 ("chars".into(), text::len(&capture.text).into()),
                 ("wanted".into(), json!(wanted_ids)),
                 ("facts_added".into(), (state.notes.facts().len() - before).into()),
