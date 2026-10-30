@@ -19,6 +19,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_agent::memory::{Notes, NotesState};
+use fastbrowse_agent::retrieval::{Annotation, ScalarField};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
@@ -79,6 +80,36 @@ pub type CallLog = Arc<Mutex<Vec<Value>>>;
 /// Why a case cannot be replayed in Rust, or None.
 pub fn skip_reason(case: &Value) -> Option<String> {
     case.get("skip").and_then(Value::as_str).map(str::to_string)
+}
+
+/// A recorded field as the retrieval and verification calls take it.
+pub fn scalar_field(field: &Value) -> ScalarField {
+    let annotation = match field["annotation"].as_str() {
+        Some("int") => Annotation::Int,
+        Some("float") => Annotation::Float,
+        Some("Decimal") => Annotation::Decimal,
+        Some("date") => Annotation::Date,
+        Some("bool") => Annotation::Bool,
+        Some("str") => Annotation::Str,
+        _ => Annotation::Other,
+    };
+    let bounds = field["metadata"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let (key, bound) = item.as_object()?.iter().next()?;
+            bound.as_f64().map(|bound| (key.clone(), bound))
+        })
+        .collect();
+    ScalarField {
+        annotation,
+        title: field["title"].as_str().map(str::to_string),
+        description: field["description"].as_str().map(str::to_string),
+        required: field["required"].as_bool().unwrap_or(true),
+        default: field.get("default").cloned().unwrap_or(Value::Null),
+        bounds,
+    }
 }
 
 pub fn notes_arg(value: &Value) -> Notes {
