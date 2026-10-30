@@ -16,7 +16,8 @@
 //! key is refused. FASTBROWSE_LLM_BASE_URL points the LLM at any other OpenAI-compatible
 //! chat completions endpoint (for example a local vLLM server) instead, and FASTBROWSE_LLM_API_KEY supplies its bearer
 //! token when it has one; that endpoint never receives the OpenRouter or gateway key. FASTBROWSE_LLM_STRICT and
-//! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint only. FASTBROWSE_LLM_MODEL sets the model for every
+//! FASTBROWSE_LLM_EXTRA_BODY shape requests to that endpoint and to the FASTBROWSE_LLM_PROVIDER presets, never to the
+//! OpenRouter or gateway routes; Anthropic's Messages API takes only the extra body. FASTBROWSE_LLM_MODEL sets the model for every
 //! purpose, and FASTBROWSE_LLM_REASONING sets the reasoning effort: none, low, medium or high.
 //!
 //! FASTBROWSE_LLM_PROVIDER names the LLM provider outright instead: openrouter, gateway, openai, anthropic, gemini,
@@ -219,8 +220,8 @@ pub struct Settings {
     pub llm_strict: bool,
     /// Whether FASTBROWSE_LLM_STRICT was given: a preset's own default holds until it is.
     pub llm_strict_set: bool,
-    /// Extra JSON object merged into every chat completions request body to the custom endpoint. An invalid value
-    /// stops the run.
+    /// Extra JSON object merged into every request body to the custom endpoint or a FASTBROWSE_LLM_PROVIDER preset,
+    /// never to the OpenRouter or gateway routes. An invalid value stops the run.
     pub llm_extra_body: Option<String>,
     /// FASTBROWSE_LLM_REASONING; unset, each model gets its own default.
     pub llm_reasoning: Option<ReasoningEffort>,
