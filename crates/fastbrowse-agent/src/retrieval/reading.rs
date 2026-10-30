@@ -220,7 +220,7 @@ pub(crate) struct ReadResponse {
 
 pub(crate) fn read_response_ty(collections: bool) -> Ty {
     let mut fields = vec![
-        Field::default("tallies", Ty::list(TallyRead::ty()), json!([])),
+        Field::default("tallies", Ty::list(TallyRead::ty()), json!([])).doc("Only for a requirement asking how many records match: code counts the records each group names. A sum or total of record values, a comparison and any other answer are claims, not tallies; leave this empty for them."),
         Field::required("claims", Ty::list(ReadClaim::ty()))
             .doc("Every fact this capture shows toward the question, each with the value stated in text."),
         Field::required("answered", Ty::Bool)
