@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use fastbrowse_core::decision::{DecisionClient, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::LLMClient;
-use fastbrowse_core::models::{CostLine, Decider, Operation, StepOutcome, StepResult, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, CostLine, Decider, Operation, StepOutcome, StepResult, UNTRUSTED};
 use fastbrowse_core::page::{Capture, Control, Observation};
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::origin_of;
@@ -310,9 +310,39 @@ impl Agent {
         }
         state.through_end = !continues.is_empty() && wanted.iter().all(|r| outcome.through_end.contains(&r.id));
         if let Some(observation) = observation {
+            if continues.is_empty() {
+                if self.list_ended(state, &capture).await? {
+                    state.continuing.clear();
+                }
+            } else {
+                state.continuing = continues.iter().cloned().collect();
+                state.list_url = Some(capture.url.clone());
+            }
             self.follow_pages(state, &continues, following.as_ref(), observation, outcome.expands.as_deref());
         }
         Ok(progressed)
+    }
+
+    /// Whether a read that saw no list going on is the end of the list left open. Off that list, on one of its items or
+    /// anywhere else, the read says nothing about the list, and a total drawn from it still covers only what was read.
+    pub(super) async fn list_ended(&self, state: &mut RunState, capture: &Capture) -> Step<bool> {
+        let Some(list) = state.list_url.clone().filter(|_| !state.continuing.is_empty()) else { return Ok(false) };
+        if list == capture.url {
+            return Ok(true);
+        }
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let question = NoulQuestion::new(
+            format!(
+                "{UNTRUSTED}\nThe run was reading a list at {list} and that page showed it going on. Is the page in state another page of that same list, rather than a page about something else or one of the list's items?"
+            ),
+            Some("It is another page of that same list."),
+            Some("It is not."),
+        );
+        let questions = indexmap::IndexMap::from([("same_list".to_string(), Question::Noul(question))]);
+        let page = json!({"page": {"url": capture.url, "title": capture.title, "text": capture.text}});
+        let evaluation = self.jev.evaluate(&page, &questions).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        Ok(matches!(evaluation.answers.get("same_list"), Some(Answer::Noul(answer)) if answer.probability >= 0.5))
     }
 
     /// Start reading a page of a list, its readings judged as any other read is.
@@ -679,7 +709,6 @@ impl Agent {
         observation: &Observation,
         expands: Option<&str>,
     ) {
-        state.continuing = continues.iter().cloned().collect();
         if continues.is_empty() {
             return;
         }

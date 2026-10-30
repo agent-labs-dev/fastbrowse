@@ -259,6 +259,21 @@
     );
   }
 
+  // A record can state a value only by drawing it: a row of identical icons a class colours has no text, and a capture
+  // of the text reads every record as alike. The page's own label or class names it, verbatim, for the reader to judge.
+  const LEAVES_OF_THEIR_OWN = 'a,button,img,input,select,textarea,svg';
+  function drawnFacts(descendants) {
+    const facts = [];
+    for (const e of descendants) {
+      if (!e.children.length || hidden(e) || textOf(e)) continue;
+      if (e.matches(LEAVES_OF_THEIR_OWN) || e.querySelector(LEAVES_OF_THEIR_OWN)) continue;
+      if (descendants.includes(e.parentElement) && !textOf(e.parentElement)) continue;
+      const name = e.getAttribute('aria-label') || e.getAttribute('title') || [...e.classList].join(' ');
+      if (clean(name)) facts.push(`[${clean(name)}]`);
+    }
+    return facts;
+  }
+
   const records = new WeakMap();
   function recordText(el) {
     if (records.has(el)) return records.get(el);
@@ -267,7 +282,7 @@
     const descendants = [...el.querySelectorAll('*')];
     if (descendants.some(c => c.shadowRoot) || descendants.filter(c => HEADINGS[c.tagName]).length > 1) return null;
     if (!descendants.some(c => !SKIP.has(c.tagName) && !hidden(c) && isBlock(c))) return null;
-    const text = textOf(el);
+    const text = [textOf(el), ...drawnFacts(descendants)].filter(Boolean).join(' ');
     if (!text) return null;
     // A repeated wrapper around another list is a group, so keep the inner records separately citable.
     if (descendants.some(c => (c.tagName === 'LI' && leaf(c)) || recordText(c) !== null)) return null;

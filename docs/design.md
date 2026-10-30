@@ -18,12 +18,11 @@ proceeds when Jev judges it not irreversible, or when the run is authorized and 
 for it; otherwise the run stops at `needs_confirmation`. A pick under `Thresholds.recover_below` never
 reaches this gate, since it goes to recovery before it acts.
 
-A submission of a form that holds more than one password field, or one marked
-`autocomplete=new-password`, changes an account's credentials whatever the page calls it, so Jev is not
-asked whether it is irreversible: an unauthorized run stops at `needs_confirmation`, and an authorized one
-proceeds only when Jev judges the task asked for it. A refusal is recorded as a failed step with a reason.
-The classifier can be wrong, so this gate is not a guarantee that every externally visible change is
-detected.
+A submission of a form that holds more than one password field changes an account's credentials whatever
+the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
+`needs_confirmation`, and an authorized one proceeds only when Jev judges the task asked for it. A refusal
+is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
+that every externally visible change is detected.
 
 ## Navigation
 
@@ -42,11 +41,13 @@ focusing the field does not enter a query.
 ## Reading and citations
 
 Jev's read assessment is the READ decision: when Jev judges the page evidence the notes do not yet preserve,
-the step reads it, unless Jev picked DONE or ESCALATE. Code does not force a read. It tells Jev, in the step
-state's `page_facts`, when a page changed after it was last read, when a list page has not been read, and when
-an action that may have committed a change has not had its page read. Jev is asked the read assessment on
-every page it can read, for evidence toward an unanswered requirement and for a value a remaining action needs,
-such as a code shown on another page. Navigation notes write each source URL once and refer to it from later
+the step reads it, even over a DONE, because the answer is written from the notes; only ESCALATE stands. Code
+does not force a read. It tells Jev, in the step state's `page_facts`, when a page was read and has not changed
+since, when it changed after it was last read, when a list page has not been read, and when an action that may
+have committed a change has not had its page read. Jev is asked the read assessment on every page it can read
+except one read and unchanged, whose evidence the notes already hold, for evidence toward an unanswered
+requirement and for a value a remaining action needs, such as a code shown on another page. Scrolling does not
+change a page: a read takes in all of it. Navigation notes write each source URL once and refer to it from later
 claims. Every READ Jev picks goes to the reader, including a repeat of content already read; a read that adds no
 evidence counts toward the stall rule like any other step that moved nothing. The reader is sent
 the tally, ranking and paging guidance only when the capture holds records, the plan counts them, or a pager

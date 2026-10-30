@@ -141,13 +141,25 @@ impl HistoryEntry {
     }
 }
 
+/// A requirement as Jev sees it. The notes cite requirements by id, which Jev cannot match to a requirement it sees
+/// only as text: told nothing but the notes, it judged a page whose answer it had read still worth reading and scrolled
+/// instead of finishing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequirementState {
+    pub id: String,
+    pub text: String,
+    /// The notes hold evidence citing this requirement.
+    pub answered_in_notes: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepContext {
     pub task: String,
     #[serde(deserialize_with = "lax::nullable")]
     pub subgoal: Option<String>,
-    pub requirements: Vec<String>,
+    pub requirements: Vec<RequirementState>,
     pub notes: String,
     pub history: Vec<HistoryEntry>,
     #[serde(deserialize_with = "lax::boolean")]
@@ -185,6 +197,9 @@ pub struct StepContext {
     /// What code knows about this page that bears on reading it, such as that it changed after it was read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub page_facts: Vec<String>,
+    /// This page was read and nothing has changed it since, so the notes hold what a read takes from it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub page_read: bool,
     /// The page's own address when a site failure that can clear stands on it, offered to navigate to as a reload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<String>,
@@ -223,6 +238,7 @@ impl StepContext {
             withheld: Vec::new(),
             no_value_fields: Vec::new(),
             page_facts: Vec::new(),
+            page_read: false,
             reload: None,
             screenshot: None,
         }
@@ -815,7 +831,10 @@ pub fn build_request(
         )
         .into(),
     );
-    let reading = observation.dialog.is_none() && !context.withheld.contains(&Operation::Read);
+    // Whether the page holds evidence the notes lack is moot once it was read unchanged: the notes hold what a read
+    // takes from it. Asked anyway, the assessment overrode Jev's pick of a list's next page with a read of the page
+    // already read, until the run stalled on it.
+    let reading = observation.dialog.is_none() && !context.withheld.contains(&Operation::Read) && !context.page_read;
     if reading {
         let listing = if crate::agent::next_page_control(observation).is_some() {
             "Matching records in a paginated list are evidence for a count or comparison even when this page cannot supply the final answer. Read those records before opening a record's detail link or leaving the list. "
@@ -1045,9 +1064,10 @@ async fn evaluate(
     } else {
         (ReadAssessment::Absent, 0.0)
     };
-    // Jev judging the page evidence to read before interacting again is its decision to READ. DONE and ESCALATE do
-    // not interact, so they stand: the done check is told the page changed after it was read.
-    if read_assessment == ReadAssessment::Evidence && !matches!(operation, Operation::Done | Operation::Escalate) {
+    // Jev judging the page evidence to read is its decision to READ, before finishing too: the answer is written from
+    // the notes, so a DONE on evidence left unread answers without it. Only ESCALATE stands, as it claims nothing. The
+    // assessment is not asked of a page already read, so this cannot repeat.
+    if read_assessment == ReadAssessment::Evidence && operation != Operation::Escalate {
         (operation, target, url, tab_id, target_confidence, destination) =
             (Operation::Read, None, None, None, None, None);
         operation_confidence = read_confidence;
@@ -1567,6 +1587,33 @@ mod tests {
         let states = jev.states.lock().unwrap();
         assert_eq!(states[0]["page"]["offscreen_text"], 38_000);
         assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
+    }
+
+    #[test]
+    fn test_done_on_evidence_left_unread_reads_it_first() {
+        let jev = fake(&[("operation", "done"), ("read_assessment", "evidence")], "");
+        let page = observation((0..3).map(button).collect());
+        let mut context = StepContext::new("Find which shop sells the grinder cheaper");
+        let unread =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(unread.operation, Operation::Read);
+        context.page_read = true;
+        let read = block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(read.operation, Operation::Done);
+    }
+
+    #[test]
+    fn test_a_page_read_unchanged_keeps_jevs_pick_of_its_next_page() {
+        let jev = fake(&[("operation", "click"), ("click_target", "b2"), ("read_assessment", "evidence")], "");
+        let page = observation((0..3).map(button).collect());
+        let mut context = StepContext::new("Count the quotes by one author across every page");
+        let unread =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(unread.operation, Operation::Read);
+        context.page_read = true;
+        let read = block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!((read.operation, read.target.map(|c| c.id)), (Operation::Click, Some("b2".into())));
+        assert!(!jev.requests.lock().unwrap()[1].contains_key("read_assessment"));
     }
 
     #[test]

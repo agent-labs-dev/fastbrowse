@@ -47,7 +47,7 @@ use state::{Flow, RunState, Spawned, Step};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
-use crate::policy::StepContext;
+use crate::policy::{RequirementState, StepContext};
 use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
 use crate::shortcut::{Shortcut, propose_shortcut};
 use crate::verification::RecordSchema;
@@ -916,10 +916,16 @@ impl Agent {
         Ok(StepContext {
             task: state.task.clone(),
             subgoal: state.hint.clone(),
-            requirements: state
-                .ready_plan
-                .as_ref()
-                .map_or_else(Vec::new, |plan| plan.requirements.iter().map(|r| r.text.clone()).collect()),
+            requirements: state.ready_plan.as_ref().map_or_else(Vec::new, |plan| {
+                plan.requirements
+                    .iter()
+                    .map(|r| RequirementState {
+                        id: r.id.clone(),
+                        text: r.text.clone(),
+                        answered_in_notes: state.notes.evidenced(&r.id),
+                    })
+                    .collect()
+            }),
             notes: state.notes.render_for_navigation(),
             history: state.history.clone(),
             check_login,
@@ -942,9 +948,15 @@ impl Agent {
                 .into_iter()
                 .collect(),
             page_facts,
+            page_read: Self::page_read(state, observation),
             reload: state.reload_target(&observation.url),
             screenshot: None,
         })
+    }
+
+    /// This page was read and no action has changed it since.
+    fn page_read(state: &RunState, observation: &Observation) -> bool {
+        !observation.document_key.is_empty() && state.read_documents.get(&observation.document_key) == Some(&false)
     }
 
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
@@ -954,6 +966,10 @@ impl Agent {
             facts.push(format!(
                 "This page answered HTTP {status}: the address did not load successfully in this browser session."
             ));
+        }
+        if Self::page_read(state, observation) {
+            facts
+                .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
         }
         let document = &observation.document_key;
         let read = state.read_documents.get(document).copied();

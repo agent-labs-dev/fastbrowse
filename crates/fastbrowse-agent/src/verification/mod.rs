@@ -5,6 +5,8 @@
 
 mod prompts;
 
+use std::collections::HashSet;
+
 use fastbrowse_core::config::{Thresholds, TokenBudget};
 use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::LLMClient;
@@ -47,7 +49,7 @@ pub struct DoneCheck {
     pub unanswered: Vec<String>,
     /// The offered draft when Jev judged it already answers the task, so no composer needs to run.
     pub answer: Option<ComposedAnswer>,
-    pub cost: CostLine,
+    pub costs: Vec<CostLine>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -185,9 +187,13 @@ pub struct DoneOptions<'a> {
     pub visited: &'a [String],
     /// Whether an action changed the page after its notes were last read: what the notes quote may no longer show.
     pub changed_since_read: bool,
+    /// The current page was read and has not changed since, so it is the evidence the notes quote.
+    pub page_read: bool,
     /// The site failure standing where the run is, stated so an answer drawn from it is not taken as the task's.
     pub site_failure: Option<String>,
-    /// Reserves the one Jev call.
+    /// Requirements whose list the reader saw go on past what the run read.
+    pub continuing: HashSet<String>,
+    /// Reserves Jev's calls.
     pub ledger: Option<&'a Ledger>,
     pub trace: Trace,
 }
@@ -217,7 +223,11 @@ pub async fn check_done(
                 "The page or the action record shows it is satisfied.",
             ),
             RequirementKind::Information => (
-                prompts::unmet_information(&requirement.text, notes.evidenced(&requirement.id)),
+                prompts::unmet_information(
+                    &requirement.text,
+                    notes.evidenced(&requirement.id),
+                    options.continuing.contains(&requirement.id),
+                ),
                 "It is not answered, or no cited note supports the answer.",
                 "A cited note answers it.",
             ),
@@ -288,11 +298,33 @@ pub async fn check_done(
         }
         Err(other) => return Err(other),
     };
-    if let Some(ledger) = options.ledger {
-        ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+    // The answer is written from the notes, so a page never read cannot answer an information requirement: shown one, Jev
+    // passed a comparison on a price only that page held. Action requirements are judged on the page either way.
+    let on_page = |key: &String| {
+        options.page_read
+            || plan.requirements.is_empty()
+            || plan.requirements.iter().any(|r| r.kind == RequirementKind::Action && format!("unmet_{}", r.id) == *key)
+    };
+    let (page_questions, notes_questions): (IndexMap<_, _>, IndexMap<_, _>) =
+        questions.into_iter().partition(|(key, _)| on_page(key));
+    let mut notes_state = state.clone();
+    if let Some(fields) = notes_state.as_object_mut() {
+        fields.shift_remove("page");
+        fields.shift_remove("controls");
     }
-    let evaluation = jev.evaluate(&state, &questions).await?;
-    let answers = &evaluation.answers;
+    let mut answers = IndexMap::new();
+    let mut lines = Vec::new();
+    for (state, questions) in [(&state, &page_questions), (&notes_state, &notes_questions)] {
+        if questions.is_empty() {
+            continue;
+        }
+        if let Some(ledger) = options.ledger {
+            ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        }
+        let evaluation = jev.evaluate(state, questions).await?;
+        answers.extend(evaluation.answers);
+        lines.push(evaluation.cost);
+    }
     let mut unmet: Vec<String> = Vec::new();
     let mut unanswered: Vec<String> = Vec::new();
     let mut ids: Vec<&str> = plan.requirements.iter().map(|r| r.id.as_str()).collect();
@@ -324,13 +356,7 @@ pub async fn check_done(
             fields
         });
     }
-    Ok(DoneCheck {
-        verdict,
-        unmet,
-        unanswered,
-        answer: if ready { draft.cloned() } else { None },
-        cost: evaluation.cost,
-    })
+    Ok(DoneCheck { verdict, unmet, unanswered, answer: if ready { draft.cloned() } else { None }, costs: lines })
 }
 
 /// One action as the run recorded it: the value typed and what it visibly did, both already redacted.
@@ -516,11 +542,11 @@ mod tests {
 
     /// `_Jev` in tests/test_done_check.py: answers each question it is asked from a table of probabilities.
     /// Answers from a table, keeping the instructions of every question asked.
-    struct TableJev(Vec<(&'static str, f64)>, std::sync::Mutex<IndexMap<String, String>>);
+    struct TableJev(Vec<(&'static str, f64)>, std::sync::Mutex<IndexMap<String, String>>, std::sync::Mutex<Vec<Value>>);
 
     impl TableJev {
         fn new(answers: Vec<(&'static str, f64)>) -> TableJev {
-            TableJev(answers, Default::default())
+            TableJev(answers, Default::default(), Default::default())
         }
     }
 
@@ -531,12 +557,13 @@ mod tests {
 
         fn evaluate<'a>(
             &'a self,
-            _: &'a Value,
+            state: &'a Value,
             questions: &'a IndexMap<String, Question>,
         ) -> fastbrowse_core::BoxFuture<
             'a,
             std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
         > {
+            self.2.lock().unwrap().push(state.clone());
             let mut asked = self.1.lock().unwrap();
             for (key, question) in questions {
                 if let Question::Noul(noul) = question {
@@ -665,6 +692,48 @@ mod tests {
         ))
         .expect("check");
         assert_eq!(check.verdict, DoneVerdict::Accept);
+    }
+
+    #[test]
+    fn an_unread_page_is_withheld_from_the_information_check() {
+        let jev = TableJev::new(vec![("unmet_r2", 0.9)]);
+        let options = DoneOptions { continuing: HashSet::from(["r2".to_string()]), ..DoneOptions::default() };
+        let check = block_on(check_done(
+            &jev,
+            "Count them.",
+            &count_plan(),
+            &page(),
+            &Notes::default(),
+            &Thresholds::default(),
+            None,
+            &options,
+        ))
+        .expect("check");
+        assert_eq!(check.unmet, vec!["r2".to_string()]);
+        let states = jev.2.lock().unwrap();
+        let from_notes = states.last().expect("a state");
+        assert!(from_notes.get("page").is_none() && from_notes.get("controls").is_none());
+        assert!(jev.1.lock().unwrap()["unmet_r2"].contains("go on past what has been read"));
+    }
+
+    #[test]
+    fn a_page_read_unchanged_stays_in_the_information_check() {
+        let jev = TableJev::new(vec![]);
+        let options = DoneOptions { page_read: true, ..DoneOptions::default() };
+        block_on(check_done(
+            &jev,
+            "Count them.",
+            &count_plan(),
+            &page(),
+            &Notes::default(),
+            &Thresholds::default(),
+            None,
+            &options,
+        ))
+        .expect("check");
+        let states = jev.2.lock().unwrap();
+        assert_eq!(states.len(), 1);
+        assert!(states[0].get("page").is_some());
     }
 
     #[test]

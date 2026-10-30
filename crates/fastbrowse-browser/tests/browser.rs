@@ -797,6 +797,23 @@ async fn test_shadow_dom_button_is_clickable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_record_keeps_a_value_it_only_draws() {
+    let _gate = gate().await;
+    let Some(h) = loaded().await else { return };
+    let card = |rating: &str, title: &str| {
+        format!(
+            "<article class='card'><p class='rating {rating}'><i></i><i></i></p><h3>{title}</h3><p>Stock</p></article>"
+        )
+    };
+    let html = [card("One", "First"), card("Five", "Second"), card("One", "Third")].concat();
+    eval_active(&h, &format!("document.body.innerHTML = {}", json!(html))).await;
+    let capture = h.page.capture().await.expect("capture");
+    assert!(capture.text.contains("First") && capture.text.contains("[rating One]"), "{}", capture.text);
+    assert!(capture.text.contains("[rating Five]"), "{}", capture.text);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_capture_offsets_slice_exactly_to_each_block() {
     let _gate = gate().await;
     let Some(h) = loaded().await else { return };
