@@ -1,4 +1,4 @@
-//! tests/test_serve.py: `fastbrowse serve --stdio` as a client sees it, the messages on the wire and the process
+//! `fastbrowse serve --stdio` as a client sees it, the messages on the wire and the process
 //! exiting. Most cases drive the server over in-memory streams; the ones about the real pipe start the binary.
 
 mod common;

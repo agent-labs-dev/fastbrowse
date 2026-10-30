@@ -1,4 +1,4 @@
-//! Shared wire encoding and strict validation for both Jev transports, and the retry
+//! Shared wire encoding and strict validation for every decision client, and the retry
 //! and accounting every model request goes through.
 //!
 //! Python cancels a call by raising `CancelledError` into it and lets each frame settle its receipts on the way out.
@@ -912,12 +912,11 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
 pub(crate) type Ask<'a> =
     dyn Fn(IndexMap<String, Question>, usize, bool) -> BoxFuture<'a, Result<Evaluation, AskError>> + Sync + 'a;
 
-/// Records a split's paid singles into the enclosing scope when the split is dropped, as Python's `except
-/// BaseException` does on cancellation.
-struct PaidOnDrop {
-    paid: Paid,
-    parent: Option<JevSpend>,
-    armed: bool,
+/// Records what the providers were paid into the enclosing scope when the call is dropped.
+pub(crate) struct PaidOnDrop {
+    pub(crate) paid: Paid,
+    pub(crate) parent: Option<JevSpend>,
+    pub(crate) armed: bool,
 }
 
 impl Drop for PaidOnDrop {

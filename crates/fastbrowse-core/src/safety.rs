@@ -547,7 +547,7 @@ fn hosts(text: &str) -> Vec<(usize, usize, String)> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_safety.py, then the behavior WHATWG changes, pinned.
+    //! The behavior WHATWG changes, pinned.
     use super::*;
     use crate::testing::block_on;
 
@@ -751,7 +751,6 @@ mod tests {
         }
     }
 
-    /// tests/test_navigation.py::test_focusing_a_field_does_not_claim_to_submit_its_form
     #[test]
     fn test_focusing_a_field_does_not_claim_to_submit_its_form() {
         let mut field = Control::new("b0", "textbox", "Name", [Operation::Click, Operation::Fill, Operation::Enter]);

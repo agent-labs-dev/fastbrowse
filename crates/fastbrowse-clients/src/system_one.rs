@@ -1,4 +1,4 @@
-//! The System One API (`POST /v1/systemone`), first ported from `clients/typesafe.py`: direct TypeSafe and OpenRouter
+//! The System One API (`POST /v1/systemone`): direct TypeSafe and OpenRouter
 //! serve Jev over it, Telnyx its own decision models, and Ollama any it runs locally. AIMLAPI and Perplexity take the
 //! same body at `/v1/decisions`. A host with no key is sent no Authorization header.
 

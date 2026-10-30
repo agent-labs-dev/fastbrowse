@@ -1,73 +1,21 @@
-//! What tests/browser/test_browser.py lends the dispatch and form suites (`eval_value`, `find`, `observe_until`,
-//! `wait_until`), plus a CDP proxy that stands in for the monkeypatched `page._input` and `page._evaluate`.
+//! What the dispatch and form suites share: action builders, plus a CDP proxy that stands in for the monkeypatched `page._input` and `page._evaluate`.
 
 #![allow(dead_code)]
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use fastbrowse_browser::page::CdpPage;
-use fastbrowse_browser::session::BrowserSession;
 use fastbrowse_core::models::Operation;
-use fastbrowse_core::page::{Action, Control, Observation};
+use fastbrowse_core::page::{Action, Control};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
-/// `eval_value`: evaluate in `session_id` and return the value, or null when the expression threw or returned none.
-pub async fn eval_value(session: &BrowserSession, session_id: &str, expression: &str) -> Value {
-    let out = session
-        .send("Runtime.evaluate", json!({"expression": expression, "returnByValue": true}), Some(session_id))
-        .await
-        .expect("Runtime.evaluate");
-    out["result"].get("value").cloned().unwrap_or(Value::Null)
-}
-
-/// `eval_value` in the active tab, the session nearly every test evaluates in.
+/// `common::eval_active` on a page's session.
 pub async fn eval_active(page: &CdpPage, expression: &str) -> Value {
-    let session = page.session();
-    eval_value(session, &session.active_session_id().expect("active session"), expression).await
-}
-
-/// `find`: the first control whose label contains `label`.
-pub fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
-    observation.controls.iter().find(|c| c.label.contains(label)).unwrap_or_else(|| {
-        panic!(
-            "no control labelled like {label:?} in {:?}",
-            observation.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
-        )
-    })
-}
-
-pub async fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64)
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(timeout_seconds);
-    while tokio::time::Instant::now() < deadline {
-        if predicate().await {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("condition was not met in time");
-}
-
-/// `observe_until`: observe until a control is actually there, since an attached frame session predates its document.
-pub async fn observe_until(page: &CdpPage, label: &str) -> Observation {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let observation = page.observe().await.expect("observe");
-        if observation.controls.iter().any(|c| c.label.contains(label)) {
-            return observation;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "condition was not met in time");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::common::eval_active(page.session(), expression).await
 }
 
 pub fn action(operation: Operation, target: &Control) -> Action {

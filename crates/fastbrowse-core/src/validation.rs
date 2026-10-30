@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 use crate::llm::ResponseSchema;
 use crate::py::dump::Dump;
-use crate::py::json::{Style, float_str, write};
+use crate::py::json::{Style, scalar_repr, write};
 use crate::py::{lax, text};
 use crate::schema::{ModelTy, Schema, Ty, json_schema};
 
@@ -519,22 +519,8 @@ fn same(allowed: &Value, value: &Value) -> bool {
 
 /// The allowed values as pydantic lists them: each as its Python repr, the last joined with "or".
 fn expected(values: &[Value]) -> String {
-    let shown: Vec<String> = values
-        .iter()
-        .map(|value| match value {
-            Value::String(s) => text::repr(s),
-            Value::Bool(true) => "True".into(),
-            Value::Bool(false) => "False".into(),
-            Value::Null => "None".into(),
-            Value::Number(n) if n.is_f64() => float_str(n.as_f64().unwrap_or_default()),
-            other => other.to_string(),
-        })
-        .collect();
-    match shown.split_last() {
-        Some((last, [])) => last.clone(),
-        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
-        None => String::new(),
-    }
+    let shown: Vec<String> = values.iter().map(scalar_repr).collect();
+    text::or_list(&shown)
 }
 
 /// Whether the value already has the branch's type, which a smart union prefers to any coercion.

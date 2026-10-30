@@ -1,4 +1,4 @@
-//! tests/test_serve_secrets.py: secrets over the serve protocol. The refs go to the server, and a value comes back
+//! Secrets over the serve protocol. The refs go to the server, and a value comes back
 //! only when it is typed.
 
 mod common;

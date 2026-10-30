@@ -42,6 +42,7 @@ from typing import Any, Literal, TypeGuard
 from pydantic import BaseModel, ConfigDict
 
 from fastbrowse.evals import baseline, versions
+from fastbrowse.evals.status import Ending
 from fastbrowse.evals.storage import ArchiveReceipt, read_archive
 from fastbrowse.models import Limits
 
@@ -470,7 +471,7 @@ def _protocol(row: Mapping[str, Any]) -> list[Finding]:
     # same viewport: a pass at another size would not be the same navigation task.
     if (
         row.get("arm") in {"fastbrowse", "fastbrowse-pool", "jev-ultrafast"}
-        and row.get("normalized_status") != "unavailable"
+        and row.get("normalized_status") != Ending.UNAVAILABLE
     ):
         try:
             page = PageEvidence.model_validate(row.get("final_page"))
@@ -664,13 +665,9 @@ def _ledger(
     )
 
 
-def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return [row for row in rows if row.get("normalized_status") != "unavailable"]
-
-
 def _distinct_repeats(rows: Sequence[Mapping[str, Any]]) -> set[object]:
     """The repeats that measured this group. Duplicates are refused elsewhere, so a set cannot hide one."""
-    return {row.get("repeat") for row in _measured(rows) if row.get("repeat") is not None}
+    return {row.get("repeat") for row in versions._measured(rows) if row.get("repeat") is not None}
 
 
 _MATCHED_CONFIG = ("providers", "model", "text_model", "max_steps", "step_cap", "step_cap_unit", "decision_cap")
@@ -830,7 +827,7 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
     for key, candidate in sorted(groups.items(), key=lambda item: (str(item[0][0]), str(item[0][1]))):
         suite, task, revision, config = key
         where = f"{task} v{revision}"
-        measured_candidate = _measured(candidate)
+        measured_candidate = versions._measured(candidate)
         candidate_repeats = _distinct_repeats(candidate)
         # A live comparison rests on repeats, not rows: this blocks a new task, a bumped task version or a
         # re-routed task with one attempt even before any baseline exists, and duplicate rows cannot count. The
@@ -860,7 +857,9 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
         # A baseline is counted by measured rows rather than distinct repeats: older published files may predate
         # the repeat field, and the baseline's own integrity was checked when it was published.
         rated = [
-            release for release in matching if len(_measured(releases[release][config])) >= REGRESSION_MIN_ATTEMPTS
+            release
+            for release in matching
+            if len(versions._measured(releases[release][config])) >= REGRESSION_MIN_ATTEMPTS
         ]
         if not rated:
             newest = max(matching, key=versions._release_key)
@@ -868,13 +867,13 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
                 _finding(
                     ADVISE,
                     "baseline",
-                    f"{where}: baseline {newest} has {len(_measured(releases[newest][config]))} attempts; "
+                    f"{where}: baseline {newest} has {len(versions._measured(releases[newest][config]))} attempts; "
                     f"fewer than {REGRESSION_MIN_ATTEMPTS} is not a rate",
                 )
             )
             continue
         release = max(rated, key=versions._release_key)
-        measured_base = _measured(releases[release][config])
+        measured_base = versions._measured(releases[release][config])
         passed_base = sum(row.get("passed") is True for row in measured_base)
         passed_candidate = sum(row.get("passed") is True for row in measured_candidate)
         if passed_candidate / len(measured_candidate) < passed_base / len(measured_base):
@@ -926,7 +925,6 @@ def gate(
     release: str | None = None,
     ledger: Sequence[Mapping[str, Any]] | None = None,
     baselines_: Sequence[Mapping[str, Any]] = (),
-    lock: Mapping[str, Mapping[str, Any]] | None = None,
     require_ledger: bool = False,
     require_coverage: bool | None = None,
     require_clean: bool = True,
@@ -943,7 +941,7 @@ def gate(
             findings=(_finding(REFUSE, "shape", "no rows: a publication with no results is not a publication"),),
             operational=Operational(selected_attempts=0),
         )
-    lock = versions.load_lock() if lock is None else lock
+    lock = versions.load_lock()
     suites = _suite_ids()
     findings: list[Finding] = []
     for row in rows_:

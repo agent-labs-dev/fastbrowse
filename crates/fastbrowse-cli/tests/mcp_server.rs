@@ -1,4 +1,4 @@
-//! tests/test_mcp_server.py: the MCP server's gates and the shape of what it returns, driven through MCP messages
+//! The MCP server's gates and the shape of what it returns, driven through MCP messages
 //! with `run_task` replaced by a recorder, so no browser and no model keys.
 
 mod common;
@@ -8,12 +8,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CHROME, Call, START, browser_event, result, runner, step, step_event};
+use common::{Call, START, browser_event, result, runner, step, step_event};
 use fastbrowse_cli::mcp::{
     self, DeclaredSecret, McpServer, Outbox, ServerConfig, Session, bounded, configure, is_loopback, parse,
 };
 use fastbrowse_cli::runner::{RunError, Runner};
-use fastbrowse_clients::environment::{DecisionSource, Secret, Settings};
+use fastbrowse_clients::environment::{DecisionSource, Settings};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -311,12 +311,7 @@ async fn test_a_configuration_error_in_a_run_is_a_tool_error() {
 }
 
 fn settings(change: impl Fn(&mut Settings)) -> Settings {
-    let mut settings = Settings {
-        openrouter_api_key: Some(Secret::new("or")),
-        ai_gateway_api_key: Some(Secret::new("gw")),
-        chrome: Some(CHROME.into()),
-        ..Settings::default()
-    };
+    let mut settings = common::model_settings();
     change(&mut settings);
     settings
 }

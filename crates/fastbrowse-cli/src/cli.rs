@@ -312,7 +312,7 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
     })
 }
 
-/// `cli.run(args)`: the exit code of a run that got as far as starting, or the configuration error that stopped it.
+/// The exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch) {
@@ -420,7 +420,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     Ok(exit_code(result.status))
 }
 
-/// `cli.main()` after the `serve` check: parse, run, and report a configuration error on both streams when `--json`
+/// What follows the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
     let args = match parse(argv, &context.build) {

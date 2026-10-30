@@ -34,33 +34,7 @@ fn flag(args: &Value, key: &str) -> bool {
 }
 
 fn field(value: &Value) -> ScalarField {
-    let field = &value["$field"];
-    let annotation = match field["annotation"].as_str() {
-        Some("int") => Annotation::Int,
-        Some("float") => Annotation::Float,
-        Some("Decimal") => Annotation::Decimal,
-        Some("date") => Annotation::Date,
-        Some("bool") => Annotation::Bool,
-        Some("str") => Annotation::Str,
-        _ => Annotation::Other,
-    };
-    let bounds = field["metadata"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            let (key, bound) = item.as_object()?.iter().next()?;
-            bound.as_f64().map(|bound| (key.clone(), bound))
-        })
-        .collect();
-    ScalarField {
-        annotation,
-        title: field["title"].as_str().map(str::to_string),
-        description: field["description"].as_str().map(str::to_string),
-        required: field["required"].as_bool().unwrap_or(true),
-        default: field.get("default").cloned().unwrap_or(Value::Null),
-        bounds,
-    }
+    scalar_field(&value["$field"])
 }
 
 fn fields(value: &Value) -> IndexMap<String, ScalarField> {
@@ -344,7 +318,7 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
         let expected = &case["notes_after"]["notes"];
         let wanted = if expected.get("$same").is_some() { args["notes"]["$notes"].clone() } else { expected.clone() };
         let actual = notes_json(notes);
-        if actual != sorted(wanted.clone()) {
+        if actual != sorted_owners(wanted.clone()) {
             problems.push(format!("notes\n  rust:   {}\n  python: {}", clip(&actual), clip(&wanted)));
         }
     }
@@ -372,13 +346,6 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
         problems.push(panic_text(&panic));
     }
     if problems.is_empty() { Ok(None) } else { Err(problems.join("\n")) }
-}
-
-fn sorted(mut state: Value) -> Value {
-    if let Some(Value::Array(owners)) = state.get_mut("owners") {
-        owners.sort_by_key(|pair| pair[0].as_str().unwrap_or_default().to_string());
-    }
-    state
 }
 
 fn clip(value: &Value) -> String {

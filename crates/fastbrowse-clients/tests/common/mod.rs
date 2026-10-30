@@ -6,13 +6,17 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_clients::http::{Http, Request, Response, Transport, TransportError};
+use fastbrowse_clients::system_one::{SystemOneClient, TYPESAFE_URL};
 use fastbrowse_clients::validation::{errors_json, line_error};
 use fastbrowse_core::BoxFuture;
+use fastbrowse_core::decision::{JEV_MODEL, NoulQuestion, Question};
 use fastbrowse_core::llm::ResponseSchema;
 use fastbrowse_core::py::lax::{bool_of, int_of};
 use fastbrowse_core::schema::{Field, ModelTy, Ty, json_schema};
 use fastbrowse_core::telemetry::Trace;
+use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 
@@ -108,6 +112,40 @@ where
     F: Fn(&Request) -> BoxFuture<'static, Result<Response, TransportError>> + Send + Sync + 'static,
 {
     Http::new(Arc::new(move |request: Request| answer(&request)))
+}
+
+pub fn settings(env: &[(&str, &str)]) -> Settings {
+    Settings::from_sources(env, None).unwrap()
+}
+
+pub fn config_error<T>(built: Result<T, ConfigurationError>) -> String {
+    match built {
+        Ok(_) => panic!("expected a configuration error"),
+        Err(error) => error.to_string(),
+    }
+}
+
+pub fn body(request: &Request) -> Value {
+    serde_json::from_slice(&request.body).unwrap()
+}
+
+pub fn noul(instructions: &str) -> Question {
+    NoulQuestion::new(instructions, None, None).into()
+}
+
+/// The one question most tests ask, under the key `q`.
+pub fn one() -> IndexMap<String, Question> {
+    IndexMap::from([("q".to_string(), noul("Is it?"))])
+}
+
+/// The question keys of a System One request.
+pub fn keys(request: &Request) -> Vec<String> {
+    let body: Value = serde_json::from_slice(&request.body).unwrap();
+    body["questions"].as_object().unwrap().keys().cloned().collect()
+}
+
+pub fn direct(http: Http) -> SystemOneClient {
+    SystemOneClient::new("key", http, TYPESAFE_URL, JEV_MODEL).typesafe()
 }
 
 /// A response model whose schema is pydantic's for `ty` and whose validation reports pydantic's errors.

@@ -1,5 +1,3 @@
-//! tests/browser/test_forms.py, test_form_evidence.py, test_deceptive_form.py and test_hidden_upload.py.
-//!
 //! A parametrized Python test is one Rust test that runs each case on a fresh session, in pytest's order.
 
 mod common;
@@ -7,8 +5,8 @@ mod dispatch_support;
 
 use std::time::Duration;
 
-use common::{Harness, harness, harness_on, sites};
-use dispatch_support::{action, eval_active, fill, find, observe_until};
+use common::{Harness, find, harness, harness_on, observe_until, sites};
+use dispatch_support::{action, eval_active, fill};
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation, StepOutcome};

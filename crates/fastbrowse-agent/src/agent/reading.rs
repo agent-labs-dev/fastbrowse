@@ -109,6 +109,21 @@ fn context_question(task: &str, actions: &[&str]) -> Question {
     .into()
 }
 
+/// Closes each list the reader proved ended, unless its requirement is still incomplete.
+fn close_ended(state: &mut RunState, ended: &[String]) {
+    for requirement_id in ended {
+        if state.incomplete.contains(requirement_id) {
+            continue;
+        }
+        if let Some(comparison) = state.comparisons.get(requirement_id).cloned() {
+            complete_comparison(&mut state.notes, requirement_id, &comparison);
+        }
+        if !state.notes.has_untallied_records(requirement_id) {
+            state.notes.complete_tallies(requirement_id);
+        }
+    }
+}
+
 impl Agent {
     /// Return whether the read added evidence, since only new evidence makes a read progress.
     pub(super) async fn read(
@@ -274,17 +289,7 @@ impl Agent {
         state.comparisons = outcome.comparisons.clone();
         // A records-only recovery can prove that a finite list ended. Apply its code-owned result here, where a normal
         // read can finish without the paged pipeline consuming an ended marker.
-        for requirement_id in &outcome.ended {
-            if state.incomplete.contains(requirement_id) {
-                continue;
-            }
-            if let Some(comparison) = state.comparisons.get(requirement_id).cloned() {
-                complete_comparison(&mut state.notes, requirement_id, &comparison);
-            }
-            if !state.notes.has_untallied_records(requirement_id) {
-                state.notes.complete_tallies(requirement_id);
-            }
-        }
+        close_ended(state, &outcome.ended);
         // A timer changes the capture hash and a reader can paraphrase the same claim, so only a new source quote or a
         // newly evidenced requirement restores the read budget.
         let progressed = context_added
@@ -603,16 +608,7 @@ impl Agent {
             && !state.paging_failed
         {
             let records = &pending[index];
-            for requirement_id in &ended {
-                if !state.incomplete.contains(requirement_id)
-                    && let Some(comparison) = state.comparisons.get(requirement_id).cloned()
-                {
-                    complete_comparison(&mut state.notes, requirement_id, &comparison);
-                }
-                if !state.incomplete.contains(requirement_id) && !state.notes.has_untallied_records(requirement_id) {
-                    state.notes.complete_tallies(requirement_id);
-                }
-            }
+            close_ended(state, &ended);
             if wanted.iter().all(|r| state.notes.evidenced(&r.id)) {
                 state.continuing.clear();
                 state.through_end = false;
@@ -688,8 +684,8 @@ impl Agent {
             state.next_page = true;
             return;
         }
-        // "Otherwise finish" was a dead end: the reader withholds a list it has not seen the end of, so the done check
-        // refused every such finish.
+        // Finishing is no way out: the reader withholds a list it has not seen the end of, so the done check refuses
+        // every such finish.
         let mut show = "open the control that loads or pages through more of the list".to_string();
         // The reader saw which control shows the rest. Matched against the page's own labels rather than trusted, so a
         // label the reader invented directs nothing.

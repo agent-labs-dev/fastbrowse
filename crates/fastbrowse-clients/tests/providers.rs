@@ -3,23 +3,12 @@
 
 mod common;
 
-use common::{Script, Step, answer_model};
-use fastbrowse_clients::environment::{ConfigurationError, LLMProvider, Settings};
+use common::{Script, Step, answer_model, body, config_error, settings};
+use fastbrowse_clients::environment::{LLMProvider, Settings};
 use fastbrowse_clients::http::{Request, Response};
 use fastbrowse_core::llm::{Generation, Message, ResponseSchema};
 use fastbrowse_core::models::{CostBasis, LLMPurpose};
 use serde_json::{Value, json};
-
-fn settings(env: &[(&str, &str)]) -> Settings {
-    Settings::from_sources(env, None).unwrap()
-}
-
-fn config_error<T>(built: Result<T, ConfigurationError>) -> String {
-    match built {
-        Ok(_) => panic!("expected a configuration error"),
-        Err(error) => error.to_string(),
-    }
-}
 
 fn completion(content: &str, finish_reason: &str) -> Step {
     Step::Reply(Response::json(
@@ -40,10 +29,6 @@ async fn generate(env: &[(&str, &str)], replies: Vec<Step>) -> (Vec<Request>, Ge
 
 async fn one(env: &[(&str, &str)]) -> Request {
     generate(env, vec![completion(r#"{"answer":"ok"}"#, "stop")]).await.0.remove(0)
-}
-
-fn body(request: &Request) -> Value {
-    serde_json::from_slice(&request.body).unwrap()
 }
 
 /// Every key a run could hold, each a value no other provider's request may carry.

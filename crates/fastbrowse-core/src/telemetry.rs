@@ -1,9 +1,8 @@
 //! Spend and call accounting against `Limits`, checked before each call rather
 //! than discovered after, and the trace a run keeps of why it went the way it did.
 //!
-//! Python shares one `Ledger` between the tasks of a run on one thread; here the counters sit behind a mutex so the
-//! clients a run calls side by side can reserve against it from any thread. A reservation is still checked against
-//! the receipts recorded when it is made, as in Python.
+//! A `Ledger`'s counters sit behind a mutex so the clients a run calls side by side can reserve against it from any
+//! thread. A reservation is checked against the receipts recorded when it is made.
 
 use std::future::Future;
 use std::io::Write;
@@ -66,7 +65,7 @@ pub struct LedgerState {
 pub struct Ledger {
     pub limits: Limits,
     /// When the run's clock started; None while it has not, so no call can run over a time limit before the run
-    /// takes the ledger over (Python's `started = math.inf`).
+    /// takes the ledger over.
     started: Mutex<Option<Instant>>,
     state: Mutex<LedgerState>,
 }
@@ -216,10 +215,10 @@ pub const TRACE_ENV: &str = "FASTBROWSE_TRACE";
 
 type Sink = Mutex<Box<dyn std::io::Write + Send>>;
 
-/// The process's trace destination once [`trace_to`] set one: Python's handler on the `fastbrowse.trace` logger.
+/// The process's trace destination once [`trace_to`] set one.
 static SINK: OnceLock<Sink> = OnceLock::new();
 
-/// `trace_to`: write every trace event as one JSON line, to stderr for `-` or `1` and otherwise appended to the file
+/// Write every trace event as one JSON line, to stderr for `-` or `1` and otherwise appended to the file
 /// named.
 ///
 /// The events say why a run went the way it did: each model call with its purpose, schema and timing, which reader
@@ -243,30 +242,29 @@ pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// One event as `_JsonLines` writes it: when it was made, then the event.
+/// One event as a JSON line: when it was made, then the event.
 fn write_line(sink: &Sink, record: &Map<String, Value>) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |at| at.as_secs_f64());
     let mut line = Map::new();
     line.insert("at".into(), crate::py::round(now, 3).into());
     line.extend(record.iter().map(|(key, value)| (key.clone(), value.clone())));
     let mut stream = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    // A trace that cannot be written is the trace's loss, never the run's, as logging's handleError leaves it.
+    // A trace that cannot be written is the trace's loss, never the run's.
     let _ = writeln!(stream, "{}", crate::py::json::dumps(&Value::Object(line))).and_then(|()| stream.flush());
 }
 
 /// Why a run went the way it did, one record per judgement, for evals to keep beside each result: ids, verdicts,
 /// scores and redacted addresses. The `http` events hold each model request and reply in full, page text included.
 ///
-/// Python collects these through a logger and a context variable, so runs that overlap keep separate traces. Here a
-/// run owns its `Trace` and hands it to what it calls; a disabled one builds nothing unless [`trace_to`] set a
-/// destination for the process, which every trace writes to, as every logger record reaches Python's handler.
+/// A run owns its `Trace` and hands it to what it calls, so runs that overlap keep separate traces. A disabled one
+/// builds nothing unless [`trace_to`] set a destination for the process, which every trace writes to.
 #[derive(Debug, Clone, Default)]
 pub struct Trace {
     events: Option<Arc<Mutex<Vec<Value>>>>,
 }
 
 impl Trace {
-    /// A trace that keeps nothing, as when DEBUG is off on `fastbrowse.trace`.
+    /// A trace that keeps nothing.
     pub fn disabled() -> Trace {
         Trace { events: None }
     }
@@ -280,7 +278,7 @@ impl Trace {
         self.events.is_some() || SINK.get().is_some()
     }
 
-    /// `trace(event, **fields)`. The fields are built only when the trace keeps or writes them.
+    /// Record one event. The fields are built only when the trace keeps or writes them.
     pub fn event(&self, event: &str, fields: impl FnOnce() -> Map<String, Value>) {
         let sink = SINK.get();
         if self.events.is_none() && sink.is_none() {
@@ -304,7 +302,7 @@ impl Trace {
             .map_or_else(Vec::new, |events| events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
     }
 
-    /// `call_span`: trace one model call's span on every exit, with how it ended.
+    /// Trace one model call's span on every exit, with how it ended.
     ///
     /// Calls overlap, so summed seconds per kind of call cannot say which of them a run was waiting on; each span can.
     /// A failed or cancelled call is billed too, and left out of the trace it made the time look free. A future
@@ -345,7 +343,6 @@ impl Drop for Span<'_> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_telemetry.py.
     use super::*;
     use crate::models::CostBasis;
     use crate::testing::block_on;

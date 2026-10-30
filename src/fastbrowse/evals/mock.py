@@ -511,7 +511,7 @@ class _Handler(BaseHTTPRequestHandler):
         sid = self.site.sign_in(email)
         self._redirect(fields.get("next") or "/account", sid)
 
-    def _second_step(self, query: dict[str, str]) -> tuple[str, str] | None:
+    def _second_step(self) -> tuple[str, str] | None:
         """The account and continuation this request continues, or None when it continues nothing.
 
         The password is what opens a second step, and the browser that typed it is the only one holding the
@@ -546,13 +546,13 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def _otp_page(self, query: dict[str, str]) -> None:
-        step = self._second_step(query)
+        step = self._second_step()
         if step is None:
             return
         self._html("Two-step sign-in", self._otp_form(step[0], query.get("next", "")))
 
     def _otp_post(self, fields: dict[str, str]) -> None:
-        step = self._second_step(fields)
+        step = self._second_step()
         if step is None:
             return
         email, token = step
@@ -579,13 +579,13 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def _code_form(self, query: dict[str, str]) -> None:
-        step = self._second_step(query)
+        step = self._second_step()
         if step is None:
             return
         self._html("Two-step sign-in", self._code_body(step[0], query.get("next", "")))
 
     def _code_post(self, fields: dict[str, str]) -> None:
-        step = self._second_step(fields)
+        step = self._second_step()
         if step is None:
             return
         email, token = step
@@ -716,8 +716,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._html(
             "Change your password",
-            # The copy promised a sign-out nothing here performed, so the page claimed something no grader
-            # could hold a run to. Say what actually happens instead.
             "<p>Choose a new password. Your signed-in session here stays as it is.</p>"
             + _form(
                 "/settings/password",

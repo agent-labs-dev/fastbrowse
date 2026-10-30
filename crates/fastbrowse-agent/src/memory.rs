@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
+use std::hash::Hash;
 
 use fastbrowse_core::models::{Evidence, FactReader};
 use fastbrowse_core::page::Capture;
@@ -320,8 +321,8 @@ pub struct Notes {
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
 }
 
-/// Everything a `Notes` holds, as `tests/golden/capture.py` writes it, so a recorded call can start from the notes a
-/// Python test had built. Sets are sorted; maps keep insertion order.
+/// Everything a `Notes` holds, in the golden fixtures' form, so a recorded call can start from recorded notes. Sets
+/// are sorted; maps keep insertion order.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -418,11 +419,6 @@ impl Notes {
 
     pub fn captured_page(&self, evidence: &Evidence) -> Option<&CapturedPage> {
         self.pages.get(&(evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at))
-    }
-
-    /// Whether a read has captured this address, whatever the page showed then.
-    pub fn read_address(&self, url: &str) -> bool {
-        self.pages.values().any(|page| page.url == url)
     }
 
     pub fn facts(&self) -> Vec<&Fact> {
@@ -1095,16 +1091,15 @@ fn tally_requirement(fact: &Fact) -> String {
     fact.tally.as_ref().map_or_else(String::new, |tally| tally.requirement_id.clone())
 }
 
-/// Each string once, in first-seen order: `tuple(dict.fromkeys(...))`.
-pub(crate) fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
-    let set: IndexSet<String> = values.into_iter().collect();
+/// Each value once, in first-seen order.
+pub(crate) fn unique<T: Eq + Hash>(values: impl IntoIterator<Item = T>) -> Vec<T> {
+    let set: IndexSet<T> = values.into_iter().collect();
     set.into_iter().collect()
 }
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_memory.py. The cases that assemble an answer or build an output audit wait for retrieval.py and
-    //! verification.py; tests/golden_memory.rs replays the rest of the file's scenarios against Python's results.
+    //! tests/golden_memory.rs replays the recorded memory scenarios.
     use fastbrowse_core::models::SourceControl;
 
     use super::*;

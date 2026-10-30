@@ -1,5 +1,4 @@
-//! tests/test_agent.py's cases, and those of its sibling files, about the loop's pure helpers and small state
-//! transitions. Whole runs, and the async methods that need a scripted page and models, are replayed in
+//! The loop's pure helpers and small state transitions. Whole runs, and the async methods that need a scripted page and models, are replayed in
 //! tests/agent.rs instead.
 
 use std::collections::HashSet;
@@ -103,7 +102,7 @@ fn planned(plan: Plan) -> Arc<Spawned<Generation<Plan>>> {
     Arc::new(Spawned::spawn(async move { Ok(Generation { data: plan, cost: free() }) }))
 }
 
-/// tests/test_agent.py's `run_state`: a run whose empty plan has already arrived.
+/// A run whose empty plan has already arrived.
 async fn run_state() -> RunState {
     let plan = Plan::new(Vec::new(), false);
     let planning = planned(plan.clone());
@@ -159,7 +158,7 @@ fn draggable() -> Control {
     Control::new("drag1", "generic", "Card A", [Operation::Click, Operation::Drag])
 }
 
-/// tests/test_retrieval.py's `block_evidence`: one whole block, as the reader's cite of it copies.
+/// One whole block, as the reader's cite of it copies.
 fn block_evidence(page: &Capture, source_id: &str) -> Evidence {
     let block = page.blocks.iter().find(|block| block.source_id == source_id).unwrap();
     serde_json::from_value(json!({
@@ -547,8 +546,6 @@ fn test_numeric_next_page_accepts_implicit_first_page() {
     }
 }
 
-// tests/test_download_gate.py
-
 #[test]
 fn test_a_link_that_saves_a_file_is_not_a_next_page() {
     // Paging clicks without the per-step gate, so a "next" link to an export must never be taken for a pager.
@@ -604,7 +601,7 @@ async fn test_going_back_to_a_page_state_after_new_evidence_is_progress() {
     assert_eq!(state.unchanged, 0);
 }
 
-// -- tests/test_accuracy_fixes.py: a stopping run commits an answer ------------------------------------------------
+// -- A stopping run commits an answer ------------------------------------------------------------------------------
 
 /// An LLM that writes `answer` for the one composer call a stopping run makes.
 struct Composer(serde_json::Value);
@@ -694,8 +691,7 @@ impl fastbrowse_core::llm::LLMClient for MeteredPlan {
 
 #[tokio::test]
 async fn test_abandoned_head_start_bills_the_finished_plan_receipt() {
-    // tests/clients/test_openai_compatible.py: the plan is the only call, so an abandoned run bills its receipt once
-    // and starts no follow-up.
+    // The plan is the only call, so an abandoned run bills its receipt once and starts no follow-up.
     let head = super::HeadStart::begin(Arc::new(MeteredPlan), "Report the price", None, None, None);
     head.planning.wait().await;
     let costs = head.abandon().await;

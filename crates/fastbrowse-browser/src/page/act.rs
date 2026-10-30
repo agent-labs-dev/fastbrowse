@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 use super::scripts::{
-    ACTIVATION_KEY_JS, COVER_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, PRESENTED_JS,
-    SELECT_TEXT_JS, UNCOVER_JS, py_float,
+    ACTIVATION_KEY_JS, COVER_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, OWNED_JS, PRESENTED_JS,
+    SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::secs;
@@ -49,17 +49,30 @@ pub(crate) enum Point {
     Gone,
 }
 
-#[derive(Debug, Clone)]
-struct Refusal {
-    outcome: StepOutcome,
-    detail: Option<String>,
+/// A key an action presses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Enter,
+    Escape,
+    Space,
+}
+
+impl Key {
+    /// Its CDP key name, its code, the text it types and its Windows virtual key code.
+    fn cdp(self) -> (&'static str, &'static str, &'static str, i64) {
+        match self {
+            Self::Enter => ("Enter", "Enter", "\r", 13),
+            Self::Escape => ("Escape", "Escape", "", 27),
+            Self::Space => (" ", "Space", " ", 32),
+        }
+    }
 }
 
 /// Where a covered control can be acted on: a point scrolled clear of the cover, the keyboard, or why nowhere.
 enum Route {
     At(f64, f64),
     Keyboard,
-    Refused(Refusal),
+    Refused(Outcome),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,9 +418,9 @@ impl CdpPage {
                 }
             }
             Operation::Select => self.select(target, text, point).await,
-            Operation::Enter => self.key(target, "Enter", point).await,
+            Operation::Enter => self.key(target, Key::Enter, point).await,
             Operation::Drag => self.drag(target, point, action.destination_id.as_deref()).await,
-            Operation::Escape => self.key(None, "Escape", Point::Gone).await,
+            Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
             Operation::Scroll | Operation::ScrollUp => {
                 self.scroll(action.operation).await?;
                 Ok((StepOutcome::Executed, None))
@@ -519,7 +532,7 @@ impl CdpPage {
     /// could run. Each key or insertion checks again after focusing.
     async fn route_around(&self, target: &Target, scroll: bool) -> Result<Route, BrowserError> {
         let (session_id, local_id, guard) = (&target.0, target.2, &target.3);
-        let refused = |outcome, detail: Option<String>| Ok(Route::Refused(Refusal { outcome, detail }));
+        let refused = |outcome, detail: Option<String>| Ok(Route::Refused((outcome, detail)));
         if self.cover(session_id, local_id).await? != Cover::Band {
             return refused(StepOutcome::Covered, Some(self.covered_detail(target).await));
         }
@@ -565,7 +578,7 @@ impl CdpPage {
             Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
             Point::At(x, y) => (x, y),
             Point::Covered => match self.route_around(target, true).await? {
-                Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
+                Route::Refused(refusal) => return Ok(refusal),
                 Route::Keyboard => return self.press(target).await,
                 Route::At(x, y) => (x, y),
             },
@@ -578,7 +591,8 @@ impl CdpPage {
         let (session_id, local_id) = (&target.0, target.2);
         let key = self.evaluate(session_id, &format!("({ACTIVATION_KEY_JS})({local_id})")).await?;
         let key = match key.as_str() {
-            Some(k @ ("Enter" | " ")) => Some(k.to_owned()),
+            Some("Enter") => Some(Key::Enter),
+            Some(" ") => Some(Key::Space),
             None if key.is_null() => None,
             _ => return Err(bad("Literal['Enter', ' '] | None")),
         };
@@ -587,9 +601,9 @@ impl CdpPage {
             return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await)));
         }
         if let Some(refusal) = self.keys_reach(target, true, None).await? {
-            return Ok((refusal.outcome, refusal.detail));
+            return Ok(refusal);
         }
-        self.press_key(session_id, &key).await?;
+        self.press_key(session_id, key).await?;
         Ok((StepOutcome::Executed, Some("Pressed from the keyboard: a band fixed to the window covers it.".into())))
     }
 
@@ -605,9 +619,9 @@ impl CdpPage {
         target: &Target,
         guarded: bool,
         local_id: Option<i64>,
-    ) -> Result<Option<Refusal>, BrowserError> {
+    ) -> Result<Option<Outcome>, BrowserError> {
         if guarded && !self.guard_holds(target).await? {
-            return Ok(Some(Refusal { outcome: StepOutcome::Stale, detail: Some(CHANGED.into()) }));
+            return Ok(Some((StepOutcome::Stale, Some(CHANGED.into()))));
         }
         let node = local_id.unwrap_or(target.2);
         let cover = self.cover(&target.0, node).await?;
@@ -615,12 +629,12 @@ impl CdpPage {
     }
 
     /// The refusal [`Self::keys_reach`] gives a field `node` that `cover` was measured over after focus.
-    async fn cover_refusal(&self, target: &Target, node: i64, cover: Cover) -> Option<Refusal> {
+    async fn cover_refusal(&self, target: &Target, node: i64, cover: Cover) -> Option<Outcome> {
         if !matches!(cover, Cover::Obstruction | Cover::Other) {
             return None;
         }
         let handed = (target.0.clone(), target.1.clone(), node, target.3.clone());
-        Some(Refusal { outcome: StepOutcome::Covered, detail: Some(self.covered_detail(&handed).await) })
+        Some((StepOutcome::Covered, Some(self.covered_detail(&handed).await)))
     }
 
     async fn guard_holds(&self, target: &Target) -> Result<bool, BrowserError> {
@@ -651,8 +665,7 @@ impl CdpPage {
     async fn await_popup(&self, session_id: &str, local_id: i64) {
         let script = format!(
             "new Promise(resolve => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             const owned = () => {{ const id = e.getAttribute('aria-controls') || e.getAttribute('aria-owns'); \
-             return id ? e.ownerDocument.getElementById(id) : null; }}; \
+             const owned = () => {OWNED_JS}(e); \
              const open = () => e.getAttribute('aria-expanded') === 'true' \
              || !!owned()?.checkVisibility({{checkOpacity: true, checkVisibilityCSS: true}}); \
              if (!e || open()) {{ resolve(true); return; }} \
@@ -694,7 +707,7 @@ impl CdpPage {
         // On the pointer route, the field focus landed on is checked for covers in the same evaluate, once focus took.
         let (handed, native_date, mut focused, mut covered): (Option<i64>, bool, Option<bool>, Option<Cover>) =
             match route {
-                Route::Refused(refusal) => return Ok((refusal.outcome, refusal.detail)),
+                Route::Refused(refusal) => return Ok(refusal),
                 Route::At(x, y) => {
                     // Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing. Focus alone
                     // bypasses pointer handlers that open autocomplete and calendar pickers.
@@ -762,7 +775,7 @@ impl CdpPage {
                 None => self.keys_reach(target, keyboard, Some(local_id)).await?,
             };
             if let Some(refusal) = refusal {
-                return Ok((refusal.outcome, refusal.detail));
+                return Ok(refusal);
             }
             if secret {
                 // A secret must be checked and inserted in one renderer task: CDP insertText would leave a
@@ -771,10 +784,7 @@ impl CdpPage {
                     "((id, text, origin) => {{ const e = window.__fastbrowse?.nodes.get(id); \
                      if (!e?.isConnected || (origin !== null && e.ownerDocument.location.origin !== origin)) return false; \
                      const doc = e.ownerDocument; if (e.getRootNode().activeElement !== e) return false; \
-                     if (typeof e.select === 'function') e.select(); else {{ const range = doc.createRange(); \
-                     range.selectNodeContents(e); const selection = doc.getSelection(); selection.removeAllRanges(); \
-                     selection.addRange(range); }} \
-                     return doc.execCommand('insertText', false, text); }})({local_id}, {}, {})",
+                     {SELECT_TEXT_JS}return doc.execCommand('insertText', false, text); }})({local_id}, {}, {})",
                     py_json(&json!(text)),
                     py_json(&json!(secret_origin))
                 );
@@ -787,11 +797,8 @@ impl CdpPage {
             // Whether the field asks for suggestions comes back with the check, so an ordinary field's fill does not
             // pay a round trip to learn it has none to wait for.
             let check = format!(
-                "((ok, e) => [!!ok, !!ok && !!e && (e.getAttribute('role') === 'combobox' || \
-                 e.type === 'search' || !!e.getAttribute('aria-autocomplete') || \
-                 !!((id => id && e.ownerDocument.getElementById(id))(\
-                 e.getAttribute('aria-controls') || e.getAttribute('aria-owns'))))])({}, \
-                 window.__fastbrowse?.nodes.get({local_id}))",
+                "((ok, e) => [!!ok, !!ok && !!e && {}(e)])({}, window.__fastbrowse?.nodes.get({local_id}))",
+                *SUGGESTS_JS,
                 landed_js(local_id, text)
             );
             let landed = self.evaluate(session_id, &check).await?;
@@ -849,8 +856,7 @@ impl CdpPage {
     /// Give an autocomplete field's suggestions time to arrive before the page is read.
     ///
     /// Typing settles the fingerprint immediately, but the suggestions it asks for arrive over the network afterwards,
-    /// so the snapshot caught an empty popup and Jev was asked to choose from a list that had not loaded. That is what
-    /// stalled `wiki-godel` at an uncertain next step with the query typed and nothing chosen. The wait is one round
+    /// so the snapshot caught an empty popup and Jev was asked to choose from a list that had not loaded. The wait is one round
     /// trip, resolves as soon as options appear and returns at once for a field that has no popup to wait for.
     ///
     /// The wait is best effort by construction. Typing into a search box can submit it, and a navigation discards the
@@ -861,10 +867,7 @@ impl CdpPage {
         // expansion on its own does not end the wait.
         let script = format!(
             "new Promise(resolve => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             const owned = () => {{ const id = e.getAttribute('aria-controls') || e.getAttribute('aria-owns'); \
-             return id ? e.ownerDocument.getElementById(id) : null; }}; \
-             const expects = !!e && (e.getAttribute('role') === 'combobox' || e.type === 'search' \
-             || !!e.getAttribute('aria-autocomplete') || !!owned()); \
+             const owned = () => {OWNED_JS}(e); const expects = !!e && {suggests}(e); \
              if (!expects) {{ resolve(false); return; }} \
              const listed = () => !!owned()?.querySelector('[role=\"option\"], li, td') \
              || !!e.ownerDocument.querySelector('[role=\"listbox\"] [role=\"option\"]'); \
@@ -874,7 +877,8 @@ impl CdpPage {
              observer.observe(e.ownerDocument.body, {{childList: true, subtree: true, attributes: true, \
              attributeFilter: ['aria-expanded']}}); \
              const timer = setTimeout(() => stop(false), {}); }})",
-            py_float(SUGGESTION_SECONDS * 1000.0)
+            py_float(SUGGESTION_SECONDS * 1000.0),
+            suggests = *SUGGESTS_JS
         );
         let _ = self.evaluate(session_id, &script).await;
     }
@@ -887,7 +891,7 @@ impl CdpPage {
             // The choice is set without the pointer, so only a cover the page means to be dealt with first refuses it.
             Point::Covered => {
                 if let Route::Refused(refusal) = self.route_around(target, false).await? {
-                    return Ok((refusal.outcome, refusal.detail));
+                    return Ok(refusal);
                 }
             }
             Point::At(..) => {}
@@ -924,7 +928,7 @@ impl CdpPage {
         })
     }
 
-    async fn key(&self, target: Option<&Target>, key: &str, point: Point) -> Result<Outcome, BrowserError> {
+    async fn key(&self, target: Option<&Target>, key: Key, point: Point) -> Result<Outcome, BrowserError> {
         let session_id = match target {
             Some(target) => target.0.clone(),
             None => self.session.active_session_id()?,
@@ -936,7 +940,7 @@ impl CdpPage {
                 // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
                 Point::Covered => {
                     if let Route::Refused(refusal) = self.route_around(target, false).await? {
-                        return Ok((refusal.outcome, refusal.detail));
+                        return Ok(refusal);
                     }
                 }
                 Point::At(..) => {}
@@ -945,21 +949,15 @@ impl CdpPage {
                 return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
             }
             if let Some(refusal) = self.keys_reach(target, point == Point::Covered, None).await? {
-                return Ok((refusal.outcome, refusal.detail));
+                return Ok(refusal);
             }
         }
         self.press_key(&session_id, key).await?;
         Ok((StepOutcome::Executed, None))
     }
 
-    async fn press_key(&self, session_id: &str, key: &str) -> Result<(), BrowserError> {
-        // Each key pressed: its code, the text it types and its Windows virtual key code.
-        let (code, text, virtual_key) = match key {
-            "Enter" => ("Enter", "\r", 13),
-            "Escape" => ("Escape", "", 27),
-            " " => ("Space", " ", 32),
-            _ => return Err(BrowserError::Failed(format!("unknown key {key}"))),
-        };
+    async fn press_key(&self, session_id: &str, key: Key) -> Result<(), BrowserError> {
+        let (key, code, text, virtual_key) = key.cdp();
         let down =
             json!({"type": "keyDown", "key": key, "code": code, "text": text, "windowsVirtualKeyCode": virtual_key});
         self.input(self.session.send("Input.dispatchKeyEvent", down, Some(session_id))).await?;
@@ -1216,7 +1214,7 @@ impl CdpPage {
     async fn cancel_drag(&self, session_id: &str, start: (f64, f64)) -> Result<(), BrowserError> {
         self.drag_move(session_id, start.0, start.1).await?;
         self.input(self.session.send("Input.cancelDragging", json!({}), Some(session_id))).await?;
-        self.key(None, "Escape", Point::Gone).await?;
+        self.key(None, Key::Escape, Point::Gone).await?;
         self.release(session_id, start.0, start.1).await
     }
 

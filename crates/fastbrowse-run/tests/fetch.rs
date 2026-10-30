@@ -296,7 +296,7 @@ async fn test_a_compressed_body_is_bounded_by_what_it_decodes_to() {
 #[tokio::test]
 async fn test_the_request_names_the_client() {
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request carrying no User-Agent
-    // and 200 to one that names it, and httpx sends its own default where this sends none.
+    // and 200 to one that names it.
     let http = serving(|request| {
         let agent = request.header("user-agent").unwrap_or_default();
         assert!(agent.starts_with("fastbrowse/"), "the request names the client, got {agent:?}");

@@ -1,6 +1,5 @@
-//! The contract for a decision model, first ported from `src/fastbrowse/jev.py` for Jev (TypeSafe System One): typed
-//! questions in and calibrated answers out, each model's [`DecisionProfile`], and the client trait every provider's
-//! client implements.
+//! The contract for a decision model, Jev (TypeSafe System One) first: typed questions in and calibrated answers out,
+//! each model's [`DecisionProfile`], and the client trait every provider's client implements.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize};

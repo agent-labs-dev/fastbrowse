@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer
 
 
 class Frozen(BaseModel):
-    # A field's docstring is the model's only guidance for that field when the class is a response schema.
+    # A field's docstring is its description in `model_json_schema`, which embedders read.
     model_config = ConfigDict(frozen=True, extra="forbid", use_attribute_docstrings=True)
 
 

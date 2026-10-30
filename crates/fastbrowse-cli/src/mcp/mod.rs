@@ -6,9 +6,9 @@
 //! fastbrowse-mcp --transport http --port 8765            # streamable HTTP on 127.0.0.1, at /mcp
 //! ```
 //!
-//! Python serves it through the `mcp` SDK's FastMCP. MCP is JSON-RPC, so the subset that server speaks is written here
-//! directly: initialize, ping, the list methods, `tools/call`, cancellation, progress and log notifications. Every
-//! reply is the bytes FastMCP 1.30 writes, error texts included.
+//! MCP is JSON-RPC, so the subset this server speaks is written here directly: initialize, ping, the list methods,
+//! `tools/call`, cancellation, progress and log notifications. Every reply is the bytes FastMCP 1.30 writes, error
+//! texts included.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -71,7 +71,7 @@ pub struct ServerConfig {
     pub cursor: bool,
     /// Bearer token every HTTP request but `/healthz` must carry. `None` is allowed only on loopback.
     pub mcp_token: Option<String>,
-    /// `_OVERRUN_GRACE_SECONDS`, which a test shortens.
+    /// [`OVERRUN_GRACE_SECONDS`], which a test shortens.
     pub grace_seconds: f64,
 }
 

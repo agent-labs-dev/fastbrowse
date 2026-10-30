@@ -116,6 +116,15 @@ pub fn find_word(text: &str, words: &[&str]) -> Option<(usize, usize)> {
     None
 }
 
+/// A list as pydantic words it: `a, b or c`.
+pub fn or_list(items: &[String]) -> String {
+    match items.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
+
 /// `repr(text)`: single quotes unless the text holds one and no double quote.
 pub fn repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };

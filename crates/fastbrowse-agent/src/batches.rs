@@ -173,7 +173,6 @@ pub async fn evaluate_batches(
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_batches.py, with the parts that need a real HTTP client left to the clients' port.
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
 

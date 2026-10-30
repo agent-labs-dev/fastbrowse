@@ -3,9 +3,9 @@ mod misc_support;
 
 use std::collections::HashSet;
 
-use common::{harness, sites};
+use common::{eval_active, harness, sites};
 use fastbrowse_core::page::BlockKind;
-use misc_support::{eval_active, text_of};
+use misc_support::text_of;
 
 // -- test_comment_context.py: reply controls belong to their comment record, including when only one form is open --
 

@@ -1,5 +1,4 @@
 //! Record a run's active tab to a video: Chrome's screencast frames, resampled to a steady rate by ffmpeg.
-//! `browser/recording.py`.
 //!
 //! The screencast sends a frame only when the page repaints, so a ticker repeats the latest frame at `FPS`; the
 //! video's timing is then the run's real timing. The recording follows tab switches, captions each step from when
@@ -98,7 +97,7 @@ pub struct Recording {
 }
 
 impl Recording {
-    /// `__aenter__`: start ffmpeg and the cast, and begin writing frames.
+    /// Start ffmpeg and the cast, and begin writing frames.
     pub async fn start(session: BrowserSession, path: &Path) -> Result<Self, RecordingError> {
         if session.grant().is_some() {
             return Err(RecordingError(
@@ -238,7 +237,7 @@ impl Recording {
         Ok(())
     }
 
-    /// `__aexit__`: stop the ticker, close the lossless pass and encode both videos.
+    /// Stop the ticker, close the lossless pass and encode both videos.
     pub async fn finish(mut self) -> Vec<PathBuf> {
         if let Some(ticker) = self.ticker.take() {
             ticker.abort();
@@ -484,7 +483,6 @@ fn describe(step: &StepResult) -> String {
 }
 
 fn srt_time(seconds: f64) -> String {
-    // Python's round() is half to even.
     let millis = (seconds * 1000.0).round_ties_even() as u64;
     format!("{:02}:{:02}:{:02},{:03}", millis / 3_600_000, millis / 60_000 % 60, millis / 1000 % 60, millis % 1000)
 }

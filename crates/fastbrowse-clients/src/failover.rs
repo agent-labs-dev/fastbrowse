@@ -14,30 +14,13 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
 use crate::http::Http;
-use crate::validation::{JevSpend, Lines, Paid, estimated_cost, exhausted, jev_spend, merged_cost};
+use crate::validation::{JevSpend, Lines, Paid, PaidOnDrop, estimated_cost, exhausted, jev_spend, merged_cost};
 
 pub struct FailoverDecisionClient {
     primary: Box<dyn DecisionClient>,
     backup: Box<dyn DecisionClient>,
     on_backup: AtomicBool,
     http: Http,
-}
-
-/// Records what the providers were paid into the enclosing scope when the call is dropped.
-struct PaidOnDrop {
-    paid: Paid,
-    parent: Option<JevSpend>,
-    armed: bool,
-}
-
-impl Drop for PaidOnDrop {
-    fn drop(&mut self) {
-        if self.armed
-            && let Some(parent) = &self.parent
-        {
-            parent.record(self.paid.lines());
-        }
-    }
 }
 
 impl FailoverDecisionClient {

@@ -1,4 +1,4 @@
-//! A remote Chrome from Browser Use Cloud, with its metered browser and proxy cost (`adapters/browser_use_cloud.py`).
+//! A remote Chrome from Browser Use Cloud, with its metered browser and proxy cost.
 //!
 //! ```text
 //! let mut cloud = BrowserUseCloudBrowser::new(api_key, BrowserUseCloudOptions::default())?;
@@ -8,13 +8,13 @@
 //! cloud.cost(); // metered lines, available after stop
 //! ```
 //!
-//! Python creates on `__aenter__` and stops on `__aexit__`, shielding both from cancellation. Rust cannot run async
-//! work in a dropped future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
+//! Creating and stopping the browser both have to survive cancellation. Rust cannot run async work in a dropped
+//! future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
 //! behind for `stop` to wait on, and a browser still known when this value drops is stopped by a task spawned then.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{BrowserConnection, CostBasis, CostComponent, CostLine};
@@ -38,9 +38,8 @@ const STOP_RETRY_SECONDS: f64 = 1.0;
 /// every attempt inside that window and gave up. The browser bills through the wait either way, so ten minutes, two
 /// edge delays, is worth spending to stop it; past that the run ends and the browser runs on to its timeout, logged.
 const STOP_WAIT_SECONDS: f64 = 600.0;
-/// `clients/validation.py`'s `RETRYABLE_STATUS`: statuses that say nothing about the request, so a repeat can clear
-/// them. 520 to 524 are Cloudflare's edge failing to reach the provider behind it.
-pub const RETRYABLE_STATUS: [u16; 12] = [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529];
+// 520 to 524 are Cloudflare's edge failing to reach the provider behind it.
+pub use crate::cdp::RETRYABLE_STATUS;
 
 /// Monotonic seconds, as Python's `time.monotonic`.
 pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
@@ -93,7 +92,7 @@ pub struct BrowserUseCloudOptions {
     pub viewport: Option<(u32, u32)>,
     pub allow_resizing: bool,
     pub extensions: Vec<String>,
-    /// The longest one request may take; run.py's httpx client allowed 60 seconds.
+    /// The longest one request may take.
     pub http_timeout: Duration,
 }
 
@@ -148,7 +147,7 @@ pub struct BrowserUseCloudBrowser {
 impl BrowserUseCloudBrowser {
     /// Validate the options and build the create body; nothing is sent until `start`.
     pub fn new(api_key: &str, options: BrowserUseCloudOptions) -> Result<Self, BrowserUseCloudError> {
-        let clock: Clock = Arc::new(monotonic);
+        let clock: Clock = Arc::new(fastbrowse_core::telemetry::monotonic);
         let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
         Self::with_seams(api_key, options, API_ORIGIN, clock, sleep)
     }
@@ -308,11 +307,6 @@ impl Drop for BrowserUseCloudBrowser {
             runtime.spawn(finish(self.api.clone(), self.state.clone(), self.creating.take()));
         }
     }
-}
-
-fn monotonic() -> f64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
 /// A JSON object with its keys in the order given, as Python's dict keeps them; serde_json's map sorts them.

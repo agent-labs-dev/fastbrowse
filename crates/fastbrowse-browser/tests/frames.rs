@@ -173,7 +173,6 @@ async fn test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_lates
     fake.stopped().await;
 
     assert_eq!(testing::background_len(&session), 0);
-    // Asserted last, so the rest of the test still checks what it can while the library bug below stands.
     let scheduled = testing::frame_scheduled(&session);
     {
         let script = fake.script();

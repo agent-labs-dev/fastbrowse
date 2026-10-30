@@ -61,7 +61,7 @@ from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Latency, Pro
 from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
 from fastbrowse.evals.tasks import LocalTask
-from fastbrowse.models import RunResult, SecretRef
+from fastbrowse.models import RunResult
 from fastbrowse.protocol import PROTOCOL_VERSION
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -296,14 +296,13 @@ class Drive:
     result: dict[str, Any] | None
     error: dict[str, Any] | None
     events: int
-    secrets_resolved: int
 
 
 async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, str], seconds: float) -> Drive:
     """Initialize, run one task, answer the run's callbacks, and shut down."""
     startup = wall = None
     result = error = None
-    events = resolved = 0
+    events = 0
     init_id = await agent.call("initialize", {"protocol_version": PROTOCOL_VERSION})
     run_id: int | None = None
     try:
@@ -328,7 +327,6 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
                 elif method == "run/event":
                     events += 1
                 elif method == "secrets/resolve":
-                    resolved += 1
                     name = message["params"]["name"]
                     await agent.send({"jsonrpc": "2.0", "id": message["id"], "result": secrets.get(name)})
                 elif method == "run/until":
@@ -342,7 +340,7 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
             while (message := await agent.receive()) is not None and message.get("id") != shutdown_id:
                 pass
     agent.close_stdin()
-    return Drive(startup, wall, result, error, events, resolved)
+    return Drive(startup, wall, result, error, events)
 
 
 IN_PROCESS = "in-process"
@@ -377,7 +375,7 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
     from fastbrowse import run_task
 
     spec = task.task
-    events = resolved = 0
+    events = 0
 
     async def on_event(_: object) -> None:
         nonlocal events
@@ -385,18 +383,7 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
 
     secrets = None
     if isinstance(spec, MockTask) and spec.secrets:
-        held = TaskSecrets(spec.secrets, base_url)
-
-        class Counted:
-            def available(self) -> tuple[SecretRef, ...]:
-                return held.available()
-
-            async def resolve(self, name: str, origin: str) -> str | None:
-                nonlocal resolved
-                resolved += 1
-                return await held.resolve(name, origin)
-
-        secrets = Counted()
+        secrets = TaskSecrets(spec.secrets, base_url)
     started = time.perf_counter()
     result = error = None
     try:
@@ -416,7 +403,7 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
         result = answered.model_dump(mode="json")
     except Exception as exc:
         error = {"message": f"{type(exc).__name__}: {exc}"}
-    return Drive(None, time.perf_counter() - started, result, error, events, resolved)
+    return Drive(None, time.perf_counter() - started, result, error, events)
 
 
 def normalized(result: RunResult | None, error: dict[str, Any] | None, grade: dict[str, Any]) -> dict[str, Any]:

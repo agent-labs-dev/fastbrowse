@@ -1,4 +1,4 @@
-//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver (`browser/cursor.py`).
+//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver.
 //!
 //! Cua Driver's `move_cursor` moves a synthetic overlay and leaves the user's pointer, focus and the browser alone
 //! (only `scope=desktop` would move the real pointer, which is never sent here). It is purely visual: the click
@@ -139,22 +139,6 @@ enum Failure {
     NoWindowScope,
     Io,
     Random,
-}
-
-impl Failure {
-    fn kind(self) -> &'static str {
-        match self {
-            Self::Timeout => "Timeout",
-            Self::DriverExited => "DriverExited",
-            Self::DriverRejected => "DriverRejected",
-            Self::BadReply => "BadReply",
-            Self::ToolFailed => "ToolFailed",
-            Self::MissingTools => "MissingTools",
-            Self::NoWindowScope => "NoWindowScope",
-            Self::Io => "Io",
-            Self::Random => "Random",
-        }
-    }
 }
 
 fn log_warning(message: &str) {
@@ -508,7 +492,7 @@ impl Inner {
     }
 
     async fn fail(&self, failure: Failure) {
-        log_warning(&format!("cursor feedback turned off for this run ({})", failure.kind()));
+        log_warning(&format!("cursor feedback turned off for this run ({failure:?})"));
         self.disabled.store(true, Ordering::SeqCst);
         self.driver.close().await;
     }
@@ -576,10 +560,11 @@ fn executable(path: &Path) -> bool {
 }
 
 fn session_name() -> Result<String, Failure> {
+    use data_encoding::HEXLOWER;
     use ring::rand::{SecureRandom, SystemRandom};
     let mut bytes = [0u8; 4];
     SystemRandom::new().fill(&mut bytes).map_err(|_| Failure::Random)?;
-    Ok(format!("fastbrowse-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+    Ok(format!("fastbrowse-{}", HEXLOWER.encode(&bytes)))
 }
 
 async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
@@ -629,7 +614,7 @@ pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
     match opened {
         Ok(session) => Some(CursorFeedback::new(guard.take(), session)),
         Err(failure) => {
-            log_warning(&format!("cursor feedback unavailable ({}); running without it", failure.kind()));
+            log_warning(&format!("cursor feedback unavailable ({failure:?}); running without it"));
             guard.take().close().await;
             None
         }

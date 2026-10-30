@@ -10,7 +10,7 @@ use url::Url;
 pub const GRANT_ERROR: &str = "allowed_origins entries are bare http(s) origins such as https://example.com";
 pub const EMPTY_ERROR: &str = "allowed_origins is empty: pass None for an unscoped run";
 
-/// Every way `parse_origin` and `parse_origins` refuse; both are `ValueError` in Python.
+/// Every way `parse_origin` and `parse_origins` refuse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OriginError {
     /// The entry is not a bare http(s) origin.
@@ -104,7 +104,7 @@ impl OriginGrant {
 
 #[cfg(test)]
 mod tests {
-    //! The cases from tests/test_page.py and tests/test_safety.py, then the behavior WHATWG changes, pinned.
+    //! The behavior WHATWG changes, pinned.
     use super::*;
 
     fn grant() -> OriginGrant {

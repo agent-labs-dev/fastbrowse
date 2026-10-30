@@ -1,4 +1,4 @@
-//! tests/test_run.py: run_task decisions that need no real browser.
+//! run_task decisions that need no real browser.
 
 use std::sync::Arc;
 

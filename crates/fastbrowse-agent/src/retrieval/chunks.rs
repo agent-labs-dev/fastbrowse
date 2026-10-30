@@ -335,7 +335,8 @@ pub(crate) fn source_marker(block: &Block) -> String {
     )
 }
 
-/// `_read_message`.
+/// The user message asking `question` of one chunk: the collected evidence and capture first, the marked source blocks,
+/// then the question and the requirement ids.
 pub(crate) fn read_message(
     page: &Page<'_>,
     part: &Chunk,
@@ -373,7 +374,7 @@ pub(crate) fn read_message(
     Message::user(content)
 }
 
-/// `_read_message(capture, part, question, requirement_ids, evidence)`, for callers holding only the capture.
+/// [`read_message`], for callers holding only the capture.
 pub fn read_message_for(
     capture: &Capture,
     part: &Chunk,
