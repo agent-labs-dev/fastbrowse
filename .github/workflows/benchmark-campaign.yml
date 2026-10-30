@@ -177,7 +177,20 @@ jobs:
           if test -n "$BROWSERBASE_API_KEY" && test -n "$BROWSERBASE_PROJECT_ID" && test -n "$BROWSERBASE_PLAN"; then
             browserbase=true
           elif test "$GROUP_SET" != fastbrowse; then
-            echo "::warning::no Browserbase credentials or BROWSERBASE_PLAN: the head-to-head runs without browserbase"
+            # An optional arm that cannot be measured is named here and skipped, never failed: the head-to-head still
+            # measures the arms that do have credentials, and the summary says which one was left out and why.
+            absent=""
+            test -n "$BROWSERBASE_API_KEY" || absent="$absent BROWSERBASE_API_KEY(secret)"
+            test -n "$BROWSERBASE_PROJECT_ID" || absent="$absent BROWSERBASE_PROJECT_ID(secret)"
+            test -n "$BROWSERBASE_PLAN" || absent="$absent BROWSERBASE_PLAN(variable)"
+            echo "::warning title=Browserbase arm skipped::the head-to-head runs without the browserbase arm; missing:$absent"
+            {
+              echo "### Arm skipped: browserbase"
+              echo
+              echo "The head-to-head group ran without the browserbase arm. The site shows it as not measured."
+              echo
+              echo "Missing repository configuration:$absent"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "browserbase=$browserbase" >> "$GITHUB_OUTPUT"
       - name: Build the group matrix
@@ -196,6 +209,16 @@ jobs:
             *) include="[$fastbrowse,$head_to_head]" ;;
           esac
           echo "matrix=$include" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Campaign arms"
+            echo
+            echo "Groups: \`$GROUP_SET\`. Arms measured: \`fastbrowse\`"
+            case "$GROUP_SET" in
+              fastbrowse) ;;
+              *) echo ", plus \`$vendors\` for the head-to-head group" ;;
+            esac
+            echo "."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   campaign:
     name: ${{ matrix.label }}
