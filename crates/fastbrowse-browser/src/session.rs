@@ -370,8 +370,8 @@ impl BrowserSession {
 
     /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
     ///
-    /// A timeout is not a failure: the caller re-reads the page and decides. This replaces the fixed-interval poll a
-    /// settle used to run, so the wait costs nothing while the page reports nothing new. The generation counts every
+    /// A timeout is not a failure: the caller re-reads the page and decides. The wait costs nothing while the page
+    /// reports nothing new. The generation counts every
     /// tab's events: a wake for another tab only makes a waiter re-check the page, which is what it would do anyway.
     pub async fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> bool {
         let mut generation = self.0.lifecycle.subscribe();
