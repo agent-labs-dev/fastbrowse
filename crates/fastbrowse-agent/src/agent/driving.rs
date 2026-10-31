@@ -210,8 +210,11 @@ impl Agent {
     /// What this step showed the run, in the trace, so a run can be checked against the pages it saw.
     pub(super) fn record_page(&self, state: &RunState, observation: &Observation) {
         self.event("page", || {
-            let controls: Vec<Value> =
-                observation.controls.iter().map(|control| json!({"label": control.label, "value": control.value})).collect();
+            let controls: Vec<Value> = observation
+                .controls
+                .iter()
+                .map(|control| json!({"label": control.label, "value": control.value}))
+                .collect();
             Map::from_iter([
                 ("step".into(), state.steps.len().into()),
                 ("url".into(), observation.url.clone().into()),
