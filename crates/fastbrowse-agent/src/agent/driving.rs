@@ -112,7 +112,11 @@ impl Agent {
             };
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
-            state.page_failed = decision.site_failure.is_some_and(|probability| probability >= EVEN_ODDS);
+            // A page can say it failed and still show the answer, as one with a stale Loading line does: the likelier
+            // of Jev's two readings stands.
+            state.page_failed = decision
+                .site_failure
+                .is_some_and(|failed| failed >= EVEN_ODDS && failed > decision.shows_answer.unwrap_or_default());
             // Going back from a commit that failed sends it again.
             let committed = std::mem::take(&mut state.committing);
             if committed
