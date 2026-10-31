@@ -44,7 +44,12 @@ impl Agent {
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
         if added > 0 {
-            state.compose = compose;
+            // Two picks that differ are not one answer, and only writing them up can say which stands.
+            let differs = facts
+                .iter()
+                .find(|fact| fact.answers)
+                .is_some_and(|new| state.notes.facts().iter().any(|fact| fact.answers && fact.text != new.text));
+            state.compose = compose || differs;
         }
         state.notes.remember_capture(&capture);
         for fact in facts {

@@ -1249,6 +1249,18 @@ async fn test_a_stale_click_on_a_page_that_moved_leaves_the_read_out_of_date() {
 }
 
 #[test]
+fn test_what_was_read_is_not_offered_as_words_of_the_task() {
+    let mut state = run_state();
+    state.task = "Order for Ada Lovelace".into();
+    let page = capture(&[(BlockKind::Paragraph, "Large")]);
+    let fact = Fact { answers: true, ..Fact::read("Large", block_evidence(&page, "s0"), FactReader::JevChoice) };
+    state.notes.add(fact);
+    let value = agent().value(&state, &field("Name"));
+    assert_eq!(value.group.len(), 4);
+    assert!(value.sources.contains_key(super::acting::IN_READ));
+}
+
+#[test]
 fn test_a_field_the_task_gives_no_value_for_is_not_called_empty() {
     let mut field = Control::new("1", "textbox", "Reference", [Operation::Fill]);
     field.value = Some(String::new());

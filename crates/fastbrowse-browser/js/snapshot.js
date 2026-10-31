@@ -523,11 +523,12 @@
       [...(e.parentElement?.children || [])].some(
         s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
       )));
-  // A table's header cell names its own row, and a caption its own table, never what sits outside them: a jQuery UI
+  // A table's header cell names its own row, a caption its own table and a legend its own fieldset, never what sits
+  // outside them: a form's "Customer name" was named after the "Pizza Size" fieldset below it, and a jQuery UI
   // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same. A title inside
   // a card names that card alone: a list's "More" button was named after the last product shown above it.
   const reaches = (title, element) => {
-    if (['th', 'caption'].includes(title.localName) && !title.parentElement.contains(element)) return false;
+    if (['th', 'caption', 'legend'].includes(title.localName) && !title.parentElement.contains(element)) return false;
     for (let e = title.parentElement; e && !e.contains(element); e = e.parentElement) if (isCard(e)) return false;
     return true;
   };

@@ -42,7 +42,15 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
         // A downloaded CSV's row is a table block with no cells to split.
         let found = match cells(value) {
             cells if block.kind == BlockKind::Table && !cells.is_empty() => cells,
-            _ => spans(value, SpanKind::Str),
+            _ => {
+                let mut found = spans(value, SpanKind::Str);
+                // A sentence of a longer passage reads as the whole of it: a two sentence quote was answered with its
+                // first. The passage stands beside its sentences.
+                if found.len() > 1 && block.kind != BlockKind::Record {
+                    found.insert(0, (0, text::len(value), value.to_string()));
+                }
+                found
+            }
         };
         for (start, end, raw) in found {
             if text::strip(&raw).is_empty() {

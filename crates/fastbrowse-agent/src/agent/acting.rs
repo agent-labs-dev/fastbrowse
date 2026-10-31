@@ -25,6 +25,9 @@ use crate::verification::page_state;
 
 /// The field's value is words of the task, which Jev marks.
 const IN_TASK: &str = "task";
+/// The field's value is words of what was read, which Jev marks. Offered with the task's words, a word read from the
+/// page was typed into every field of a form whose values the task gave.
+pub(super) const IN_READ: &str = "read";
 /// Nothing given belongs in the field.
 const NO_VALUE: &str = "none";
 /// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
@@ -45,13 +48,15 @@ fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
 }
 
 /// What a field's value is picked from.
-struct Value {
-    /// The task, then what was read.
+pub(super) struct Value {
+    /// The task.
     task: String,
+    /// What was read that answers the task.
+    read: String,
     label: String,
-    group: Vec<Word>,
+    pub(super) group: Vec<Word>,
     source_question: String,
-    sources: IndexMap<String, JsonValue>,
+    pub(super) sources: IndexMap<String, JsonValue>,
 }
 
 /// One question about the page, with the options it offers.
@@ -61,7 +66,7 @@ type Asked<'a> = (&'a str, String, IndexMap<String, JsonValue>);
 fn value_questions<'a>(
     state: &RunState,
     target: &Control,
-    task: &str,
+    (text, holder): (&str, &str),
     label: &str,
     group: &[Word],
     source_question: String,
@@ -79,14 +84,11 @@ fn value_questions<'a>(
     } else {
         format!(" Already typed here: {}. A value the page rejected is not typed again.", tried.join(", "))
     };
-    let options = word_options(task, group);
+    let options = word_options(text, group);
     let mut asked = vec![("source", source_question, sources)];
     if !group.is_empty() {
-        let span = |end: &str| {
-            format!(
-                "If the task states the value for {label}, which of its words {end} the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. When the task gives this field several values, the one it gives first comes first, and a later one follows once the page has refused the one before.{tried}"
-            )
-        };
+        let span =
+            |end: &str| format!("If {holder} states the value for {label}, which of its words {end} the value?{tried}");
         asked.push(("first", span("begins"), options.clone()));
         asked.push(("last", span("ends"), options));
     }
@@ -149,10 +151,10 @@ impl Agent {
                 }
             }
             if control.operations.contains(&Operation::Fill) && !is_password(control) {
-                let Value { task, label, group, sources, source_question } = self.value(state, control);
+                let Value { task, label, group, sources, source_question, .. } = self.value(state, control);
                 if group.len() <= max {
                     for (name, question, criteria) in
-                        value_questions(state, control, &task, &label, &group, source_question, sources)
+                        value_questions(state, control, (&task, "the task"), &label, &group, source_question, sources)
                     {
                         add(Operation::Fill, name, page_question(&state.task, &question, criteria));
                     }
@@ -215,6 +217,14 @@ impl Agent {
             Operation::Select => {
                 let target = require(target)?;
                 let raw = self.raw_target(target);
+                if raw.options.is_empty() {
+                    // A fetched page does not list a select's options, and a live one can fill it once another field is set.
+                    let reason = format!("{} offers no options yet", text::repr(&target.label));
+                    if self.page.over_http() {
+                        return Err(self.page.needs_browser(reason).into());
+                    }
+                    return Err(Unsure { reason, gives_up_as: Status::Stuck }.into());
+                }
                 let question = format!("Which option should {} be set to?", text::repr(&target.label));
                 let option = self.choose(state, observation, &question, &raw.options).await?;
                 Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
@@ -408,7 +418,79 @@ impl Agent {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        let Value { task, label, mut group, sources, source_question } = self.value(state, target);
+        let Value { mut task, read, label, group, sources, source_question } = self.value(state, target);
+        let mut group = self.narrowed(state, observation, &task, &label, group).await?;
+        let asked = value_questions(state, target, (&task, "the task"), &label, &group, source_question, sources);
+        let mut picks = match ahead_picks(decision, &asked) {
+            Some(picks) => picks,
+            None => self.ask_choices(state, observation, asked).await?,
+        };
+        let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
+        if source == IN_READ {
+            task = read;
+            group = words(&task, target.max_length);
+            group = self.narrowed(state, observation, &task, &label, group).await?;
+            let mut asked = value_questions(
+                state,
+                target,
+                (&task, "what was read"),
+                &label,
+                &group,
+                String::new(),
+                IndexMap::new(),
+            );
+            asked.retain(|(key, ..)| *key != "source");
+            picks.extend(self.ask_choices(state, observation, asked).await?);
+        }
+        if let Some(input) = source.strip_prefix("input:") {
+            return Ok(state.inputs.get(input).cloned().unwrap_or_default());
+        }
+        if let Some(name) = source.strip_prefix("secret:") {
+            return self.secret(name, &origin, asks_for_credentials(&self.raw_target(target))).await;
+        }
+        let word = |key: &str| {
+            let index = picks.get(key)?.parse::<usize>().ok()?;
+            group.iter().find(|word| word.index == index)
+        };
+        // A field with a limit takes the piece the value begins at, whatever the end was picked as.
+        let (first, last) = match (target.max_length, word("first"), word("last")) {
+            (Some(limit), Some(first), Some(last)) if last.end.saturating_sub(first.start) > limit => {
+                (Some(first), Some(first))
+            }
+            (Some(_), Some(first), Some(last)) if last.index < first.index => (Some(first), Some(first)),
+            (_, first, last) => (first, last),
+        };
+        match (source.as_str(), first, last) {
+            (IN_TASK | IN_READ, Some(first), Some(last)) if first.index <= last.index => {
+                // The two ends are picked apart, and each can land on a different value the task gives: the end is
+                // asked again knowing where this value begins.
+                let last = if first.index == last.index {
+                    last
+                } else {
+                    let rest: Vec<Word> = group.iter().filter(|word| word.index >= first.index).cloned().collect();
+                    let begins: String = task.chars().skip(first.start).take(first.end - first.start).collect();
+                    let question = format!(
+                        "The value for {label} begins at {}. Which word ends this one value?",
+                        text::repr(&begins)
+                    );
+                    let picked = self.ask_choice(state, observation, &question, word_options(&task, &rest)).await?;
+                    group.iter().find(|word| word.index.to_string() == picked).unwrap_or(last)
+                };
+                Ok(task.chars().skip(first.start).take(last.end - first.start).collect())
+            }
+            _ => Err(self.missing(state, observation, target)),
+        }
+    }
+
+    /// `group` cut down to what one choice can offer.
+    async fn narrowed(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        task: &str,
+        label: &str,
+        mut group: Vec<Word>,
+    ) -> Step<Vec<Word>> {
         let max = self.jev.profile().max_choice_options;
         // A task with more words than one choice can offer is narrowed first, over parts that overlap so a value
         // across any cut stands whole in one of them.
@@ -437,61 +519,19 @@ impl Agent {
             let chosen = picked.parse::<usize>().unwrap_or_default();
             group = parts[chosen].to_vec();
         }
-        let asked = value_questions(state, target, &task, &label, &group, source_question, sources);
-        let picks = match ahead_picks(decision, &asked) {
-            Some(picks) => picks,
-            None => self.ask_choices(state, observation, asked).await?,
-        };
-        let source = picks.get("source").map(String::as_str).unwrap_or(NO_VALUE);
-        if let Some(input) = source.strip_prefix("input:") {
-            return Ok(state.inputs.get(input).cloned().unwrap_or_default());
-        }
-        if let Some(name) = source.strip_prefix("secret:") {
-            return self.secret(name, &origin, asks_for_credentials(&self.raw_target(target))).await;
-        }
-        let word = |key: &str| {
-            let index = picks.get(key)?.parse::<usize>().ok()?;
-            group.iter().find(|word| word.index == index)
-        };
-        // A field with a limit takes the piece the value begins at, whatever the end was picked as.
-        let (first, last) = match (target.max_length, word("first"), word("last")) {
-            (Some(limit), Some(first), Some(last)) if last.end.saturating_sub(first.start) > limit => {
-                (Some(first), Some(first))
-            }
-            (Some(_), Some(first), Some(last)) if last.index < first.index => (Some(first), Some(first)),
-            (_, first, last) => (first, last),
-        };
-        match (source, first, last) {
-            (IN_TASK, Some(first), Some(last)) if first.index <= last.index => {
-                // The two ends are picked apart, and each can land on a different value the task gives: the end is
-                // asked again knowing where this value begins.
-                let last = if first.index == last.index {
-                    last
-                } else {
-                    let rest: Vec<Word> = group.iter().filter(|word| word.index >= first.index).cloned().collect();
-                    let begins: String = task.chars().skip(first.start).take(first.end - first.start).collect();
-                    let question = format!(
-                        "The value for {label} begins at {}. Which word ends this one value? Take the shortest span the field needs.",
-                        text::repr(&begins)
-                    );
-                    let picked = self.ask_choice(state, observation, &question, word_options(&task, &rest)).await?;
-                    group.iter().find(|word| word.index.to_string() == picked).unwrap_or(last)
-                };
-                Ok(task.chars().skip(first.start).take(last.end - first.start).collect())
-            }
-            _ => Err(self.missing(state, observation, target)),
-        }
+        Ok(group)
     }
 
     /// What a field's value is picked from, and the question that says where it comes from.
-    fn value(&self, state: &RunState, target: &Control) -> Value {
+    pub(super) fn value(&self, state: &RunState, target: &Control) -> Value {
         // Only what this field's own frame may receive: a password manager offers its names across every site it
         // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
         // page was never going to get, where needs_login says what the caller can fix.
         let secrets = self.secret_names(&self.target_origin(target));
-        // A value can come from a page, such as a code a site sent: the words offered are the task's, then what Jev read.
+        // A value can come from a page, such as a code a site sent.
         let read: Vec<&str> = state.notes.facts().iter().filter(|f| f.answers).map(|f| f.text.as_str()).collect();
-        let task = if read.is_empty() { state.task.clone() } else { format!("{}\n{}", state.task, read.join("\n")) };
+        let read = read.join("\n");
+        let task = state.task.clone();
         let group = words(&task, target.max_length);
         let mut sources: IndexMap<String, JsonValue> = state
             .inputs
@@ -501,11 +541,13 @@ impl Agent {
         for name in &secrets {
             sources.insert(format!("secret:{name}"), format!("The stored secret named {name} (value hidden)").into());
         }
-        sources.insert(
-            IN_TASK.into(),
-            "The task or what was read states this field's value, whole or as part of something longer.".into(),
-        );
-        sources.insert(NO_VALUE.into(), "Neither the task nor what was read gives a value for this field.".into());
+        sources
+            .insert(IN_TASK.into(), "The task states this field's value, whole or as part of something longer.".into());
+        if !read.is_empty() {
+            sources
+                .insert(IN_READ.into(), format!("The task does not state it, and what was read does: {read}").into());
+        }
+        sources.insert(NO_VALUE.into(), "Nothing given states a value for this field.".into());
         let mut label = text::repr(&target.label);
         if let Some(limit) = target.max_length {
             label = format!("{label}, which holds at most {limit} characters,");
@@ -515,7 +557,7 @@ impl Agent {
         let source_question = format!(
             "What should be typed into {label}? Stored secrets are this site's sign-in credentials, named by role, and are only for signing in to the account: when this field is a sign-in field, the username is also the account's email address or phone number. Any other field takes a value the task gives, and a search field takes what the task is looking for."
         );
-        Value { task, label, group, source_question, sources }
+        Value { task, read, label, group, source_question, sources }
     }
 
     /// Resolve replacement passwords separately from existing credentials, without model-written values.
