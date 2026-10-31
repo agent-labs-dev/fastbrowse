@@ -238,7 +238,11 @@ pub fn partial_answer(notes: &Notes) -> ComposedAnswer {
         counted.extend(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)));
         claims.push(claim);
     }
-    let result = assemble_answer(&claims, notes);
+    marked_partial(assemble_answer(&claims, notes))
+}
+
+/// `result`, stated as what a run that stopped short could say.
+pub fn marked_partial(result: ComposedAnswer) -> ComposedAnswer {
     ComposedAnswer {
         answer: text::strip(&format!("{PARTIAL_NOTICE}\n\n{}", result.answer)).to_string(),
         linked_answer: text::strip(&format!("{PARTIAL_NOTICE}\n\n{}", result.linked_answer)).to_string(),

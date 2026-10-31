@@ -42,7 +42,7 @@ use state::{Flow, RunState};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposedAnswer, partial_answer};
+use crate::retrieval::{ComposedAnswer, compose, marked_partial, partial_answer};
 use crate::verification::RecordSchema;
 
 /// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
@@ -327,6 +327,13 @@ impl Agent {
             if matches!(stop.status, Status::Stuck | Status::Unverified) && !state.notes.evidence().is_empty() {
                 // What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                 let notes = state.notes.clone();
+                // Records listed one after another answer no count: a list read to its end came back as a dump of it.
+                if state.compose
+                    && let Ok(composed) = compose(&*self.llm, &state.task, &notes, Some(&state.ledger)).await
+                {
+                    let partial = marked_partial(composed);
+                    return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, None);
+                }
                 return self.partial_result(&notes, Some(state), ledger, stop.status, error, None);
             }
             let wall = self.wall(stop);
@@ -408,10 +415,24 @@ impl Agent {
         if notes.facts().is_empty() {
             return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
         }
-        let partial = partial_answer(notes);
+        self.answered(&partial_answer(notes), notes, state, ledger, status, error, budget)
+    }
+
+    /// `partial` as the result of a run that ended as `status`, with the evidence it cites.
+    #[allow(clippy::too_many_arguments)]
+    fn answered(
+        &self,
+        partial: &ComposedAnswer,
+        notes: &Notes,
+        state: Option<&RunState>,
+        ledger: &Ledger,
+        status: Status,
+        error: Option<String>,
+        budget: Option<BudgetStop>,
+    ) -> RunResult {
         let cited =
             notes.expand_evidence_ids(partial.claims.iter().flat_map(|c| c.evidence_ids.iter().map(String::as_str)));
-        let (answer, citations) = self.public_answer(&partial);
+        let (answer, citations) = self.public_answer(partial);
         let evidence = notes.evidence().into_iter().filter(|(key, _)| cited.contains(key)).map(|(_, e)| e).collect();
         self.result(
             state,

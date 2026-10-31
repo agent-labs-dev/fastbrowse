@@ -10,7 +10,9 @@ mod chunks;
 mod fields;
 pub(crate) mod text;
 
-pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer, partial_answer, verdict};
+pub use answers::{
+    Claim, ComposedAnswer, assemble_answer, compose, draft_answer, marked_partial, partial_answer, verdict,
+};
 pub use choices::read_candidates;
 pub(crate) use choices::{PageRead, read_page};
 pub use chunks::page_quotes;
