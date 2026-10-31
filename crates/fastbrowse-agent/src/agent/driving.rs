@@ -77,7 +77,8 @@ impl Agent {
             let secrets = self.secret_names(&origin);
             // A held secret makes a sign-in wall work to do rather than a stop, but passes no CAPTCHA, so the bot check
             // is asked on every page a secret covers too.
-            let fresh = state.last_page.as_ref() != Some(&page);
+            // A page reported failed is judged afresh, since a "Loading..." page can fill in under the same document.
+            let fresh = state.last_page.as_ref() != Some(&page) || state.page_failed;
             let check_login = fresh && secrets.is_empty();
             // Jev's pick when it was asked again on this page is the decision here: asking once more would only ask
             // the same question without what went wrong.
@@ -120,6 +121,13 @@ impl Agent {
             state.page_failed = decision
                 .site_failure
                 .is_some_and(|failed| failed >= EVEN_ODDS && failed > decision.shows_answer.unwrap_or_default());
+            // A fetched page has not run its scripts: one stuck on "Loading..." has failed only if a browser says so.
+            if state.page_failed
+                && self.page.over_http()
+                && let Some(failure) = &state.site_failure
+            {
+                return Err(self.page.needs_browser(failure.message()).into());
+            }
             // Going back from a commit that failed sends it again.
             let committed = std::mem::take(&mut state.committing);
             if committed

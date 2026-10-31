@@ -87,8 +87,11 @@ fn value_questions<'a>(
     let options = word_options(text, group);
     let mut asked = vec![("source", source_question, sources)];
     if !group.is_empty() {
-        let span =
-            |end: &str| format!("If {holder} states the value for {label}, which of its words {end} the value?{tried}");
+        let span = |end: &str| {
+            format!(
+                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, the first comes first. A search takes what is looked for, not the request around it.{tried}"
+            )
+        };
         asked.push(("first", span("begins"), options.clone()));
         asked.push(("last", span("ends"), options));
     }
