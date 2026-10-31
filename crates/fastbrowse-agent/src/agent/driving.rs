@@ -678,10 +678,11 @@ impl Agent {
         }
         let Some(before) = state.acted_from.take() else { return };
         let Some(last) = state.history.last_mut() else { return };
-        let summary = effect(&before, observation, None).summary;
+        let done = effect(&before, observation, None);
+        last.added = done.added;
         last.effect = Some(match last.effect.take() {
-            Some(detail) => format!("{detail}; {summary}"),
-            None => summary,
+            Some(detail) => format!("{detail}; {}", done.summary),
+            None => done.summary,
         });
     }
 

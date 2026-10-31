@@ -130,6 +130,9 @@ pub struct HistoryEntry {
     /// unset otherwise, so the actions a model is shown do not each carry it.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub setting: Option<bool>,
+    /// The action added to the page without leaving it or taking anything away.
+    #[serde(skip)]
+    pub added: bool,
 }
 
 impl HistoryEntry {
@@ -144,6 +147,7 @@ impl HistoryEntry {
             effect: None,
             read_progress: false,
             setting: None,
+            added: false,
         }
     }
 }

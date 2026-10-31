@@ -1220,3 +1220,15 @@ async fn test_a_winner_jev_picks_from_the_notes_needs_no_composing() {
         .expect("an answer");
     assert!(answer.answer.contains("Shop A") && !answer.answer.contains("Shop B"));
 }
+
+#[test]
+fn test_a_control_that_added_and_stays_may_hold_more() {
+    let click = |added| {
+        let entry = HistoryEntry::new(Some(Operation::Click), Some("More"), StepOutcome::Executed, true);
+        vec![HistoryEntry { added, ..entry }]
+    };
+    let page = |label: &str| observation(&[Control::new("1", "button", label, [Operation::Click])]);
+    assert!(super::helpers::more_behind_fact(&click(true), &page("More")).is_some());
+    assert!(super::helpers::more_behind_fact(&click(true), &page("Other")).is_none());
+    assert!(super::helpers::more_behind_fact(&click(false), &page("More")).is_none());
+}

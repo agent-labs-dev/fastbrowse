@@ -135,6 +135,15 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
     })
 }
 
+/// The control that just added to this page and stays offered, which may hold more of what it added.
+pub(crate) fn more_behind_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
+    let last = history.last().filter(|entry| entry.added && entry.operation == Some(Operation::Click))?;
+    let target = last.target.as_ref()?;
+    observation.controls.iter().any(|control| describe(control) == *target).then(|| {
+        format!("Clicking {target} added records to this page, and it is still offered: there may be more behind it.")
+    })
+}
+
 /// The prose between an answer's links, with each link's destination between them.
 pub(crate) fn split_answer_links(text: &str) -> Vec<&str> {
     let mut pieces = Vec::new();

@@ -596,20 +596,12 @@ impl Agent {
         Ok(value)
     }
 
-    /// A field the task gives no value for is first a wrong pick, then a missing input.
+    /// A field the task gives no value for is a wrong pick, and a missing input if the run cannot go on without it.
     ///
-    /// Most such fields are optional, and the right move is to leave them on every page. Recovery is told once a page,
-    /// so it can take another step; a required field it sends the run back to still ends it here.
+    /// Most such fields are optional, and the right move is to leave them on every page. The field is then not offered
+    /// at this address, and a run that stalls here without it ends needing that input.
     fn missing(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
-        let key = (observation.page_key.clone(), target.label.clone(), target.context.clone());
-        if state.missing.contains(&key) {
-            return Stop::new(
-                Status::NeedsInput,
-                format!("{} needs a value the task does not give", text::repr(&target.label)),
-            )
-            .into();
-        }
-        state.missing.insert(key);
+        state.missing.insert((observation.url.clone(), target.label.clone(), target.context.clone()));
         Unsure {
             reason: format!(
                 "the task gives no value for {}: leave it unless the task cannot go on without it",

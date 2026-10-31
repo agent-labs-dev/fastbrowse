@@ -633,6 +633,9 @@ impl Agent {
             );
         }
         facts.extend(helpers::unsent_fact(&state.history, observation));
+        if state.compose {
+            facts.extend(helpers::more_behind_fact(&state.history, observation));
+        }
         if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.transient()) {
             let stood = state.steps.len().saturating_sub(failure.since);
             let mut fact = format!(

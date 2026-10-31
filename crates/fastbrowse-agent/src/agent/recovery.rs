@@ -51,6 +51,13 @@ pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, contex
         let problem = context.problem.take().unwrap_or_else(|| "The last action changed nothing.".to_string());
         withhold(offered, context, &problem, action.clone());
     }
+    // Told once, Jev still reaches for a field it has no value for, by any operation it offers.
+    offered.controls.retain(|control| {
+        !state
+            .missing
+            .iter()
+            .any(|(url, label, field)| *url == offered.url && control.label == *label && control.context == *field)
+    });
 }
 
 /// `decision`'s action, withheld from the ask that follows it.
@@ -82,7 +89,9 @@ impl Agent {
             {
                 return Err(failure.stop().into());
             }
-            return Err(Stop::new(gives_up_as, reason).into());
+            let without_value = state.missing.iter().any(|(url, ..)| *url == observation.url);
+            let status = if without_value { Status::NeedsInput } else { gives_up_as };
+            return Err(Stop::new(status, reason).into());
         }
         self.ask_jev_again(state, observation, &reason, withheld).await
     }
