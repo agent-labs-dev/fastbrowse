@@ -708,6 +708,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         let agent = Agent::new(page, jev.clone(), llm.clone())
             .with_config(config.clone())
             .with_secrets(host.secrets.clone())
+            .with_trace(http.trace.clone())
             .with_events(captioned(host.on_event.clone(), &recording));
         let run = RunOptions {
             start: task.start.clone(),
@@ -884,11 +885,13 @@ async fn fetched(
         HeadStart::begin(llm.clone(), &task.task, task.start.as_deref(), task.context.as_deref(), task.limits.clone());
     let head_stop = head.stopper();
     let ledger = head.ledger.clone();
+    let trace = http.trace.clone();
     let fetched = Arc::new(fetch::FetchedPage::new(http, origins, host.check_access.clone()));
     let page: Arc<dyn Page> = fetched.clone();
     let agent = Agent::new(page, jev, llm)
         .with_config(config.clone())
         .with_secrets(host.secrets.clone())
+        .with_trace(trace)
         .with_events(host.on_event.clone());
     let run = RunOptions {
         start: task.start.clone(),
