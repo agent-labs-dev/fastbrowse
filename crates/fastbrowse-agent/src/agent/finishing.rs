@@ -53,7 +53,7 @@ impl Agent {
             && (state.notes.facts().is_empty() || (!observation.document_key.is_empty() && unread))
         {
             let capture = self.capture().await?;
-            self.read(state, capture, observation, false).await?;
+            self.read(state, capture, observation, state.compose).await?;
         }
         // Ending on a failed page with nothing read is that failure, not a finished task.
         if state.notes.facts().is_empty()

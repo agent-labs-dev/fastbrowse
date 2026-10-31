@@ -1211,6 +1211,7 @@ impl CdpPage {
     /// mid-navigation is itself evidence of change. `SETTLE_SECONDS` bounds a page that never does any of this.
     #[doc(hidden)]
     pub async fn changed_since(&self, before: &str, requests: u64) -> Result<bool, BrowserError> {
+        let acted = !before.is_empty();
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
@@ -1242,7 +1243,9 @@ impl CdpPage {
                 out = settled => match out {
                     Ok((true, current)) => {
                         let differs = current.as_deref() != Some(before);
-                        if !self.session.requests_open_since(requests)
+                        // A load has its own end in `ready`; a request only holds an action. One that never
+                        // answers, as on a page's first load, would otherwise hold every run to the deadline.
+                        if !(acted && self.session.requests_open_since(requests))
                             && !self.session.navigating()
                             && self.lifecycle_mark() == mark
                         {
