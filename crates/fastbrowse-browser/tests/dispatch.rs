@@ -194,6 +194,41 @@ async fn test_an_element_the_page_makes_pressable_is_offered_and_pressed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_suggestion_list_is_left_behind_but_a_cover_that_stays_is_refused() {
+    let list = "<div id=list style=\\'display:none;position:absolute;left:0;top:40px;width:400px;height:200px;background:#eee\\'>Suggestions</div>";
+    for (stays, picks) in [(false, false), (true, false), (false, true)] {
+        let case = format!("stays={stays} picks={picks}");
+        let Some(h) = harness().await else { return };
+        h.goto("/todos.html").await;
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = '<form><input aria-label=From aria-autocomplete=list \
+                 style=\\'position:absolute;left:0;top:0\\'><input aria-label=To \
+                 style=\\'position:absolute;left:0;top:80px\\'></form>{list}'; \
+                 const [from, to] = document.querySelectorAll('input'), list = document.getElementById('list'); \
+                 from.onfocus = () => list.style.display = 'block'; \
+                 from.onblur = () => {{ if (!{stays}) list.style.display = 'none'; }}; \
+                 if ({picks}) {{ list.innerHTML = '<button style=\\'pointer-events:none\\'>Pick</button>'; }}"
+            ),
+        )
+        .await;
+        let obs = h.observe().await;
+        let from = find(&obs, "From").clone();
+        assert_eq!(h.page.act(&fill(&from, "10001"), &obs).await.expect("from").outcome, StepOutcome::Executed);
+        let obs = h.observe().await;
+        let name = if picks { "Pick" } else { "To" };
+        let next = find(&obs, name).clone();
+        let act = if picks { action(Operation::Click, &next) } else { fill(&next, "96162") };
+        let outcome = h.page.act(&act, &obs).await.expect("next").outcome;
+        let left = eval_active(&h.page, "document.activeElement.ariaLabel !== 'From'").await;
+        assert_eq!(outcome, if stays || picks { StepOutcome::Covered } else { StepOutcome::Executed }, "{case}");
+        assert_eq!(left, json!(!picks), "{case}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_link_inside_a_label_does_not_count_as_its_input() {
     // A link filling the label takes the click itself; the input never toggles.
     let Some(h) = harness().await else { return };

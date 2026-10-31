@@ -196,6 +196,23 @@ pub const DEEP_HIT_JS: &str = "const deepHit = (doc, x, y) => { let hit = doc.el
      const up = n => n.parentElement || (n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null); \
      const holds = (a, b) => { for (let n = b; n; n = up(n)) if (n === a) return true; return false; }; ";
 
+/// Takes focus off the suggesting field a covered control's cover may have come from. The list a suggesting field opens
+/// often names no owner, so it cannot be tied to the field, but leaving a field presses nothing and draws nothing: it
+/// is what moving to the next field does anyway. The control is hit-tested again afterwards, and a cover that stays
+/// is refused as before. A cover holding the control is a list being picked from, which leaving would close.
+pub static LEAVE_SUGGESTING_FIELD_JS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "((id) => {{ const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; {DEEP_HIT_JS} \
+         let field = e.ownerDocument.activeElement; \
+         while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement; \
+         if (!field || field === e || field.matches('body') || !{suggests}(field)) return false; \
+         const rect = e.getBoundingClientRect(); \
+         const hit = deepHit(e.ownerDocument, rect.left + rect.width / 2, rect.top + rect.height / 2); \
+         if (hit && holds(hit, e)) return false; field.blur(); return true; }})",
+        suggests = *SUGGESTS_JS,
+    )
+});
+
 /// What covers the control's centre, through its frames: an obstruction the page means to be dealt with first (a
 /// dialog, an open menu, a popover), a band fixed to the window (an anchored ad, a sticky footer, a chat bubble)
 /// that floats over whatever is scrolled beneath it, or anything else, such as a full-window backdrop or a panel

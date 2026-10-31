@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 use super::scripts::{
-    ACTIVATION_KEY_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, OBSTRUCTIONS, OWNED_JS,
-    PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
+    ACTIVATION_KEY_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, LEAVE_SUGGESTING_FIELD_JS,
+    OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::secs;
@@ -206,6 +206,17 @@ impl CdpPage {
                     self.before_action(target.as_ref(), hit_test, false, false, true, false).await?
                 }
                 other => other?,
+            };
+            let measured = match &target {
+                Some(target)
+                    if matches!(measured.2, Point::Covered)
+                        && matches!(action.operation, Operation::Click | Operation::Fill)
+                        && self.left_suggesting_field(target).await? =>
+                {
+                    drawn = false;
+                    self.before_action(Some(target), hit_test, false, false, true, false).await?
+                }
+                _ => measured,
             };
             let live_guard;
             (before_fingerprint, live_guard, point, announced, opens, address) = measured;
@@ -566,6 +577,16 @@ impl CdpPage {
             return refused(StepOutcome::Stale, Some(CHANGED.into()));
         }
         Ok(Route::Keyboard)
+    }
+
+    /// Whether focus left a suggesting field, and the page has drawn what that closed, for a control found covered.
+    async fn left_suggesting_field(&self, target: &Target) -> Result<bool, BrowserError> {
+        let script = format!("({})({})", *LEAVE_SUGGESTING_FIELD_JS, target.2);
+        let left = self.evaluate(&target.0, &script).await? == Value::Bool(true);
+        if left {
+            let _ = timeout(secs(0.5), self.evaluate(&target.0, PRESENTED_JS)).await;
+        }
+        Ok(left)
     }
 
     async fn cover(&self, session_id: &str, local_id: i64) -> Result<Cover, BrowserError> {
