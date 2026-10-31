@@ -157,7 +157,7 @@ struct Snapshot {
     viewport_text: String,
     /// Characters of visible text outside the viewport.
     #[serde(default)]
-    offscreen_text: i64,
+    offscreen_text: String,
     document_key: String,
     /// 1 when the viewport shows a picture, chart, drawing or video that no control carries; snapshot.js sends 0/1.
     #[serde(default)]
@@ -602,7 +602,7 @@ impl CdpPage {
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
                 viewport_text,
-                offscreen_text: main.map(|m| m.raw.offscreen_text).unwrap_or_default(),
+                offscreen_text: main.map(|m| m.raw.offscreen_text.clone()).unwrap_or_default(),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 tabs: self.session.tabs(),
@@ -664,7 +664,7 @@ impl CdpPage {
             document_key: String::new(),
             controls: vec![],
             viewport_text: String::new(),
-            offscreen_text: 0,
+            offscreen_text: String::new(),
             visual_content: false,
             tabs: self.session.tabs(),
             dialog: Some(dialog),

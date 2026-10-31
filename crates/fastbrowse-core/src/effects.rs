@@ -187,7 +187,7 @@ mod tests {
             document_key: String::new(),
             controls,
             viewport_text: String::new(),
-            offscreen_text: 0,
+            offscreen_text: String::new(),
             visual_content: false,
             tabs: vec![],
             dialog: None,

@@ -867,9 +867,9 @@
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
   // its own at all. Each child is read in its own coordinates, shifted by where its frame sits.
   const words = [];
-  // Visible text the viewport does not show, counted in characters: a read takes it in, and a page whose answer
-  // sits further down a long list is not one to scroll through screen by screen.
-  let offscreen_text = 0;
+  // Visible text the viewport does not show. Jev judging only the screen took a list below the fold for a page with
+  // nothing on it, and went past it unread.
+  const offscreen = [];
   const readFrames = (doc, dx, dy, read) => {
     for (const frame of doc.querySelectorAll('iframe,frame')) {
       const inner = childDocument(frame);
@@ -898,13 +898,14 @@
       if (top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth) {
         words.push(value);
       } else {
-        offscreen_text += value.length;
+        offscreen.push(value);
       }
     }
     readFrames(doc, dx, dy, readText);
   };
   readText(document, 0, 0);
   const viewport_text = words.join('\n');
+  const offscreen_text = offscreen.join('\n');
 
   // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
   // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,

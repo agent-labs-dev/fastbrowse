@@ -259,7 +259,7 @@ pub(crate) struct PageRead {
 }
 
 /// `read_page`: the facts Jev picks from this page, none when it says the page holds nothing for `task`. An answer it
-/// says must be composed keeps every candidate as a fact.
+/// says must be composed keeps every block as a fact.
 pub(crate) async fn read_page(
     jev: &dyn DecisionClient,
     capture: &Capture,
@@ -270,8 +270,8 @@ pub(crate) async fn read_page(
     shows: bool,
 ) -> Result<PageRead> {
     let page = Page::new(capture);
-    let all: Vec<&Block> = capture.blocks.iter().collect();
-    let mut candidates = page_read_candidates(&page, &all, jev.profile().max_choice_options);
+    let mut blocks: Vec<&Block> = capture.blocks.iter().collect();
+    let mut candidates = page_read_candidates(&page, &blocks, jev.profile().max_choice_options);
     let (mut state, mut asked) = read_request(&page, task, &candidates, None, shows);
     if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
         let (kept, narrowed, _) = focus(jev, &page, task, tokens, ledger, trace).await?;
@@ -280,6 +280,7 @@ pub(crate) async fn read_page(
         }
         candidates = narrowed;
         (state, asked) = read_request(&page, task, &candidates, Some(&kept), shows);
+        blocks = kept;
     }
     if let Some(ledger) = ledger {
         ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -300,9 +301,15 @@ pub(crate) async fn read_page(
         answer.choice.as_str()
     };
     if choice == SYNTHESIS {
-        let facts = candidates
+        // A whole block, so a table row stays one record: counted cell by cell, "London" had lost whose office it was,
+        // and a table of twelve came back as seven.
+        let facts = blocks
             .iter()
-            .map(|candidate| Fact::read(&candidate.value.to_str(), candidate.evidence.clone(), FactReader::JevChoice))
+            .filter(|block| !text::strip(page.slice(block.start, block.end)).is_empty())
+            .map(|block| {
+                let quote = evidence(&page, block, block.start, block.end);
+                Fact::read(text::strip(&quote.quote), quote.clone(), FactReader::JevChoice)
+            })
             .collect();
         return Ok(PageRead { facts, compose: true });
     }

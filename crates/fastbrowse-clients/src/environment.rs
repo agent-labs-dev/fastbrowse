@@ -55,10 +55,10 @@ use crate::system_one::{
 };
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
-/// The default LLM is Gemini 3.8 Flash, the one model every LLM purpose uses, because a second model is a second set
+/// The default LLM is Claude Sonnet 5.5, the one model every LLM purpose uses, because a second model is a second set
 /// of failure modes to explain. Jev is the decision model and is separate (crates/fastbrowse-core/src/decision.rs).
 /// FASTBROWSE_LLM_MODEL overrides every purpose.
-pub const DEFAULT_LLM: &str = "google/gemini-3.8-flash";
+pub const DEFAULT_LLM: &str = "anthropic/claude-sonnet-5.5";
 
 /// Through OpenRouter or the gateway, a model with a known best effort gets it unless FASTBROWSE_LLM_REASONING says
 /// otherwise; any other model gets no reasoning field and keeps its provider's default.

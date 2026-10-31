@@ -849,7 +849,7 @@ async fn test_an_observation_counts_the_page_text_outside_the_viewport() {
     .await;
     let observation = h.observe().await;
     assert_eq!(observation.viewport_text, "First row");
-    assert_eq!(observation.offscreen_text, "Mongolia 3086918".len() as i64);
+    assert_eq!(observation.offscreen_text, "Mongolia 3086918");
     h.close().await;
 }
 

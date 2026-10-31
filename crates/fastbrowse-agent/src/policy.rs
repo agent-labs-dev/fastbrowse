@@ -53,7 +53,7 @@ pub(crate) mod keys {
     }
 }
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text counts the characters of page text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, and next_page marks the\none the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task or subgoal names\none of those, choose the element whose context matches it.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
@@ -493,6 +493,7 @@ fn trim(
     fitting: Fitting<'_>,
 ) -> Option<(Observation, StepContext)> {
     let (original, page_text) = (context, observation.viewport_text.as_str());
+    let original_offscreen = observation.offscreen_text.as_str();
     let (mut observation, mut context) = (observation.clone(), context.clone());
     let history = std::mem::take(&mut context.history);
     // A value typed or a box ticked is still on the page however long ago it was set, so it is the last to go.
@@ -526,6 +527,11 @@ fn trim(
         let room = |text: &str, excess: i64| (dumped_len(text) as i64 - excess).max(0) as usize;
         let excess = fitting.excess(&observation, controls, &without(&context, 0));
         if excess > 0 {
+            observation.offscreen_text =
+                cut_text(&observation.offscreen_text, room(&observation.offscreen_text, excess), true);
+        }
+        let excess = fitting.excess(&observation, controls, &without(&context, 0));
+        if excess > 0 {
             observation.viewport_text =
                 cut_text(&observation.viewport_text, room(&observation.viewport_text, excess), true);
         }
@@ -538,7 +544,8 @@ fn trim(
     }
     let cut = context.history.len() < history.len()
         || context.notes != original.notes
-        || observation.viewport_text != page_text;
+        || observation.viewport_text != page_text
+        || observation.offscreen_text != original_offscreen;
     (cut && fitting.fits(&observation, controls, &context)).then_some((observation, context))
 }
 
@@ -981,7 +988,7 @@ async fn evaluate(
     let mut target_confidence: Option<f64> = None;
     if let Some(candidates) = request.targets.get(&operation) {
         let target_answer = choice_answer(&evaluation, &keys::target(operation))?;
-        target = Some(find_control(candidates, &target_answer.choice)?);
+        target = Some(find_control(candidates, destination_pick(candidates, &target_answer))?);
         target_confidence = Some(target_answer.confidence);
     } else if let Some(groups) = request.groups.get(&operation) {
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
@@ -1282,6 +1289,22 @@ fn noul_probability(evaluation: &Evaluation, key: &str) -> Option<f64> {
     evaluation.answers.get(key).and_then(Answer::probability)
 }
 
+/// Jev's pick, with links to one address counted as one destination: a shop's two next-page links split their vote,
+/// and a product beat both while they held the most between them.
+fn destination_pick<'a>(candidates: &'a [Control], answer: &'a ChoiceAnswer) -> &'a str {
+    let chance = |control: &Control| answer.probabilities.get(&control.id).copied().unwrap_or_default();
+    let mut votes: HashMap<&str, f64> = HashMap::new();
+    for control in candidates {
+        if let Some(href) = control.href.as_deref() {
+            *votes.entry(href).or_default() += chance(control);
+        }
+    }
+    let total = |control: &Control| control.href.as_deref().map_or(chance(control), |href| votes[href]);
+    let chosen = candidates.iter().find(|control| control.id == answer.choice).map_or(0.0, total);
+    let best = candidates.iter().max_by(|a, b| total(a).total_cmp(&total(b)));
+    best.filter(|best| total(best) > chosen).map_or(&answer.choice, |best| &best.id)
+}
+
 fn find_control(candidates: &[Control], control_id: &str) -> Result<Control> {
     candidates
         .iter()
@@ -1409,6 +1432,24 @@ mod tests {
     fn relevance_requests(jev: &Fake) -> Vec<IndexMap<String, Question>> {
         let scored = |key: &String| key.strip_prefix('r').is_some_and(|i| i.parse::<usize>().is_ok());
         jev.requests.lock().unwrap().iter().filter(|q| q.keys().all(scored)).cloned().collect()
+    }
+
+    #[test]
+    fn test_links_to_one_address_are_one_destination() {
+        let link = |id: &str, href: &str| {
+            let mut control = Control::new(id, "link", id, [Operation::Click]);
+            control.href = Some(href.to_string());
+            control
+        };
+        let controls = [link("next", "/2"), link("next again", "/2"), link("item", "/item")];
+        let probabilities = [("next".to_string(), 0.3), ("next again".to_string(), 0.3), ("item".to_string(), 0.4)];
+        let answer = ChoiceAnswer {
+            kind: Default::default(),
+            choice: "item".into(),
+            probabilities: probabilities.into_iter().collect(),
+            confidence: 0.4,
+        };
+        assert_ne!(destination_pick(&controls, &answer), "item");
     }
 
     #[test]
@@ -1550,11 +1591,11 @@ mod tests {
     fn test_jev_is_told_how_much_page_text_lies_outside_the_viewport() {
         let jev = fake(&[("operation", "read")], "");
         let mut page = observation((0..3).map(button).collect());
-        page.offscreen_text = 38_000;
+        page.offscreen_text = "Mongolia".into();
         let context = StepContext::new("Find the population listed for the last row");
         block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
         let states = jev.states.lock().unwrap();
-        assert_eq!(states[0]["page"]["offscreen_text"], 38_000);
+        assert_eq!(states[0]["page"]["offscreen_text"], "Mongolia");
         assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
     }
 

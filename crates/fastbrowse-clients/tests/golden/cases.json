@@ -6740,6 +6740,7 @@
    "kind": "settings",
    "which": "llm",
    "env": {
+    "FASTBROWSE_LLM_MODEL": "google/gemini-3.8-flash",
     "OPENROUTER_API_KEY": "o",
     "AI_GATEWAY_API_KEY": "g"
    }
@@ -6823,6 +6824,7 @@
    "kind": "settings",
    "which": "llm",
    "env": {
+    "FASTBROWSE_LLM_MODEL": "google/gemini-3.8-flash",
     "AI_GATEWAY_API_KEY": "g",
     "FASTBROWSE_LLM_REASONING": "medium"
    }

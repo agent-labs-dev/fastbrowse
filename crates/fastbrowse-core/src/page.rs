@@ -208,10 +208,9 @@ pub struct Observation {
     pub document_key: String,
     pub controls: Vec<Control>,
     pub viewport_text: String,
-    /// Characters of the page's visible text outside the viewport: text a read takes in that `viewport_text` leaves
-    /// out.
-    #[serde(default, deserialize_with = "lax::int_ge0")]
-    pub offscreen_text: i64,
+    /// The page's visible text outside the viewport.
+    #[serde(default)]
+    pub offscreen_text: String,
     /// Whether the page's visible state is carried by pixels: a chart, picture, drawing or video with no control
     /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
     #[serde(default, deserialize_with = "lax::boolean")]
@@ -572,7 +571,7 @@ mod tests {
             document_key: String::new(),
             controls: vec![],
             viewport_text: String::new(),
-            offscreen_text: 0,
+            offscreen_text: String::new(),
             visual_content: false,
             tabs: vec![],
             dialog: None,

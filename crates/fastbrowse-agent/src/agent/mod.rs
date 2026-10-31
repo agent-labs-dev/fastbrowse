@@ -577,7 +577,7 @@ impl Agent {
     }
 
     /// This page was read and no action has changed it since.
-    fn page_read(state: &RunState, observation: &Observation) -> bool {
+    pub(super) fn page_read(state: &RunState, observation: &Observation) -> bool {
         !observation.document_key.is_empty() && state.read_documents.get(&observation.document_key) == Some(&false)
     }
 
