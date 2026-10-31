@@ -14,7 +14,7 @@ pub struct Effect {
     pub summary: String,
     /// The address, or a surviving control's label, value, checked or selected state, changed.
     pub set_something: bool,
-    /// The page stayed and gained controls, losing none.
+    /// The page stayed and gained something, losing no control.
     pub added: bool,
     /// Something a person would see differs: a control, the address or the text in the viewport.
     pub changed: bool,
@@ -141,7 +141,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     }
     let shown: Vec<&Control> = new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect();
     let hidden: Vec<&Control> = old.iter().filter(|(key, _)| !new.contains_key(*key)).map(|(_, c)| *c).collect();
-    let added = !navigated && !shown.is_empty() && hidden.is_empty();
+    let stayed_whole = !navigated && hidden.is_empty();
     if !shown.is_empty() {
         parts.push(format!("showed {}", listed(&shown)));
     }
@@ -163,7 +163,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     } else {
         "nothing visible changed".to_string()
     };
-    Effect { summary, set_something: navigated || setting, added, changed }
+    Effect { summary, set_something: navigated || setting, added: stayed_whole && changed, changed }
 }
 
 #[cfg(test)]

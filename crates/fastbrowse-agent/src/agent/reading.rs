@@ -56,7 +56,9 @@ impl Agent {
         }
         state.notes.supersede(&capture.url, &capture.sha256, &capture.text);
         // A timer changes the capture hash, so only a new source quote is progress.
-        let progressed = read_sources(&state.notes).iter().any(|key| !known.contains(key));
+        // The same page read again in a browser after a fetch differs in small print, which is not new evidence.
+        let again = state.fetched.remove(&capture.url);
+        let progressed = !again && read_sources(&state.notes).iter().any(|key| !known.contains(key));
         self.event("read", || {
             Map::from_iter([
                 ("step".into(), state.steps.len().into()),

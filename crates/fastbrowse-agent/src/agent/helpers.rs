@@ -135,6 +135,28 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
     })
 }
 
+/// The fields still empty here on a task to carry out, leaving out those the task gives no value for: Jev confirmed
+/// a form with its one field empty when nothing said so.
+pub(crate) fn empty_fields_fact(
+    missing: &std::collections::HashSet<(String, String, Option<String>)>,
+    observation: &Observation,
+) -> Option<String> {
+    let empty: Vec<String> = observation
+        .controls
+        .iter()
+        .filter(|control| control.operations.contains(&Operation::Fill))
+        .filter(|control| control.value.as_deref().is_none_or(str::is_empty))
+        .filter(|control| !missing.iter().any(|(_, label, _)| *label == control.label))
+        .map(|control| text::repr(&control.label))
+        .collect();
+    (!empty.is_empty()).then(|| {
+        format!(
+            "No value has been entered on this page: {} are empty. A value the task states goes into its field before the form is confirmed.",
+            empty.join(", ")
+        )
+    })
+}
+
 /// The control that just added to this page and stays offered, which may hold more of what it added.
 pub(crate) fn more_behind_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
     let last = history.last().filter(|entry| entry.added && entry.operation == Some(Operation::Click))?;

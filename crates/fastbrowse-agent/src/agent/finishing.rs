@@ -39,6 +39,7 @@ impl Agent {
         if !acted && output_schema.is_none() && !self.asks_to_be_told(state, observation).await? {
             // What was read did not do it, so it answers nothing yet.
             state.notes = Notes::default();
+            state.to_carry_out = true;
             let reason = "The task asks for something to be carried out, and no step has done it.";
             if self.page.over_http() {
                 return Err(self.page.needs_browser(reason.into()).into());

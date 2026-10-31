@@ -210,6 +210,10 @@ pub(crate) struct RunState {
     /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
     /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
     pub read_whole: Vec<Capture>,
+    /// A DONE was refused because the task is something to carry out, not to be told.
+    pub to_carry_out: bool,
+    /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
+    pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
     pub committing: bool,
     /// Pages read, by content: a document can show several steps of one flow.
@@ -249,6 +253,7 @@ impl RunState {
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,
+            fetched: self.read_urls.clone(),
             picked: None,
             landing: None,
             idle: Vec::new(),
@@ -300,6 +305,8 @@ impl RunState {
             page_failed: false,
             compose: false,
             read_whole: Vec::new(),
+            to_carry_out: false,
+            fetched: HashSet::new(),
             committing: false,
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),

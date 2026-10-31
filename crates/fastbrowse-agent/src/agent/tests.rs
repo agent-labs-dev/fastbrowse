@@ -1247,3 +1247,14 @@ async fn test_a_stale_click_on_a_page_that_moved_leaves_the_read_out_of_date() {
     assert!(state.idle.is_empty());
     assert_eq!(state.read_documents.get(&after.document_key), Some(&true));
 }
+
+#[test]
+fn test_a_field_the_task_gives_no_value_for_is_not_called_empty() {
+    let mut field = Control::new("1", "textbox", "Reference", [Operation::Fill]);
+    field.value = Some(String::new());
+    let page = observation(&[field]);
+    let mut missing = std::collections::HashSet::new();
+    assert!(super::helpers::empty_fields_fact(&missing, &page).is_some_and(|fact| fact.contains("'Reference'")));
+    missing.insert((page.url.clone(), "Reference".to_string(), None));
+    assert!(super::helpers::empty_fields_fact(&missing, &page).is_none());
+}
