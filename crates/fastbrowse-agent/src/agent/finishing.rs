@@ -34,6 +34,12 @@ impl Agent {
             let capture = self.capture().await?;
             self.read(state, capture, observation).await?;
         }
+        // Ending on a failed page with nothing read is that failure, not a finished task.
+        if state.notes.facts().is_empty()
+            && let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.url == observation.url)
+        {
+            return Err(failure.stop().into());
+        }
         let result = Box::pin(self.conclude(state, output_schema)).await?;
         let reached = match until {
             Some(until) => until(self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url)).await,

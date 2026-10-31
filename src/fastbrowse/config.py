@@ -34,7 +34,7 @@ class TokenBudget(Frozen):
 
 class StallRules(Frozen):
     unchanged_actions: int = Field(default=3, gt=0)
-    max_recoveries: int = Field(default=2, ge=0)
+    max_recoveries: int = Field(default=1, ge=0)
 
 
 class Config(Frozen):

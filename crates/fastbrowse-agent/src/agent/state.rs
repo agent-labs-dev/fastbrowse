@@ -200,6 +200,8 @@ pub(crate) struct RunState {
     pub downloads_forbidden: Option<bool>,
     /// Documents read, by key, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<String, bool>,
+    /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
+    pub page_failed: bool,
     /// Jev said a read's answer must be composed, so the run ends on the LLM's writing of the notes.
     pub compose: bool,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
@@ -276,6 +278,7 @@ impl RunState {
             acted_from: None,
             downloads_forbidden: None,
             read_documents: HashMap::new(),
+            page_failed: false,
             compose: false,
             committing: false,
             read_pages: HashSet::new(),

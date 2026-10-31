@@ -112,10 +112,11 @@ impl Agent {
             };
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
+            state.page_failed = decision.site_failure.is_some_and(|probability| probability >= EVEN_ODDS);
             // Going back from a commit that failed sends it again.
             let committed = std::mem::take(&mut state.committing);
             if committed
-                && decision.site_failure.is_some_and(|probability| probability >= EVEN_ODDS)
+                && state.page_failed
                 && let Some(failure) = &state.site_failure
             {
                 return Err(failure.stop().into());

@@ -481,5 +481,94 @@
    ],
    "error": "net::ERR_CONNECTION_RESET"
   }
- }
+ },
+  {
+    "name": "a run that says done on a 404 page with nothing read ends as that failure",
+    "task": "Open the price list and show it.",
+    "start": "https://shop.test/missing",
+    "site": {
+      "start": "blank",
+      "screens": {
+        "blank": {
+          "observation": {
+            "url": "about:blank",
+            "title": "",
+            "page_key": "b0",
+            "captured_at": "2026-09-26T20:00:00Z",
+            "document_key": "b0",
+            "controls": [],
+            "viewport_text": "",
+            "tabs": []
+          },
+          "capture": {
+            "url": "about:blank",
+            "title": "",
+            "captured_at": "2026-09-26T20:00:00Z",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "text": "",
+            "blocks": [
+              {
+                "source_id": "s0",
+                "kind": "heading",
+                "frame_id": null,
+                "start": 0,
+                "end": 0
+              }
+            ]
+          }
+        },
+        "error": {
+          "observation": {
+            "url": "https://shop.test/missing",
+            "title": "Flights",
+            "page_key": "e1",
+            "captured_at": "2026-09-26T20:00:00Z",
+            "document_key": "e1",
+            "controls": [],
+            "viewport_text": "Not Found",
+            "tabs": [],
+            "response_status": 404
+          },
+          "capture": {
+            "url": "https://shop.test/missing",
+            "title": "Flights",
+            "captured_at": "2026-09-26T20:00:00Z",
+            "sha256": "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5",
+            "text": "Not Found",
+            "blocks": [
+              {
+                "source_id": "s0",
+                "kind": "heading",
+                "frame_id": null,
+                "start": 0,
+                "end": 9
+              }
+            ]
+          }
+        }
+      },
+      "urls": {
+        "https://shop.test/missing": "error"
+      },
+      "actions": []
+    },
+    "llm": {},
+    "jev": {
+      "pick": {
+        "operation": "done"
+      },
+      "noul": 0.1,
+      "nouls": {
+        "site_failure": 0.9
+      }
+    },
+    "limits": {
+      "max_steps": 30
+    },
+    "calls": [],
+    "expect": {
+      "status": "stuck",
+      "error": "HTTP 404"
+    }
+  }
 ]

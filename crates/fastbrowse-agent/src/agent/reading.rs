@@ -12,6 +12,10 @@ use crate::retrieval::{PageRead, read_page};
 impl Agent {
     /// Return whether the read added evidence, since only new evidence makes a read progress.
     pub(super) async fn read(&self, state: &mut RunState, capture: Capture, observation: &Observation) -> Step<bool> {
+        // What a failed page shows, an empty result included, is not what the task asked to be told.
+        if state.page_failed {
+            return Ok(false);
+        }
         // This content is read now, so the notes hold what the page shows.
         state.read_documents.insert(observation.document_key.clone(), false);
         state.read_pages.insert(observation.page_key.clone());

@@ -118,7 +118,7 @@ pub struct StallRules {
 
 impl Default for StallRules {
     fn default() -> Self {
-        StallRules { unchanged_actions: 3, max_recoveries: 2 }
+        StallRules { unchanged_actions: 3, max_recoveries: 1 }
     }
 }
 
