@@ -197,6 +197,10 @@ pub struct StepContext {
     /// The viewport as a PNG, given to a route that takes images.
     #[serde(skip)]
     pub screenshot: Option<Vec<u8>>,
+    /// The follow-ups each action would need, asked beside the decision. Questions the provider cannot take at speed
+    /// in one request stay follow-ups.
+    #[serde(skip)]
+    pub ahead: Vec<Ahead>,
     /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_actions: usize,
@@ -230,7 +234,24 @@ impl StepContext {
             page_facts: Vec::new(),
             reload: None,
             screenshot: None,
+            ahead: Vec::new(),
         }
+    }
+}
+
+/// A question that follows one action on one control, asked before Jev has picked that action.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ahead {
+    pub operation: Operation,
+    pub control: String,
+    /// What the follow-up calls this question.
+    pub name: String,
+    pub question: Question,
+}
+
+impl Ahead {
+    fn key(&self) -> String {
+        format!("{}:{}:{}", self.operation, self.control, self.name)
     }
 }
 
@@ -262,6 +283,9 @@ pub struct Decision {
     /// The controls Jev chose among, kept only when `Config.step_choices` asks for them.
     #[serde(skip)]
     pub offered: Vec<Control>,
+    /// Jev's answers to the questions asked ahead about this action, by what the follow-up calls them.
+    #[serde(skip)]
+    pub ahead: IndexMap<String, Answer>,
 }
 
 impl Decision {
@@ -880,8 +904,29 @@ pub fn build_request(
             ),
         );
     }
+    let state = state(observation, controls, context);
+    if context.screenshot.is_none() {
+        let written: usize = questions.iter().map(|(key, question)| key.len() + question.dump_json().len()).sum();
+        let mut room = LONG_CONTEXT_BYTES.saturating_sub(dumps(&state).len() + written);
+        let mut ahead: Vec<(usize, &Ahead)> = context
+            .ahead
+            .iter()
+            .filter(|ahead| offered.contains(&ahead.operation))
+            .filter(|ahead| controls.iter().any(|control| control.id == ahead.control))
+            .map(|ahead| (ahead.key().len() + ahead.question.dump_json().len(), ahead))
+            .collect();
+        // The smallest first, so a form's long value questions never push out what its buttons would commit.
+        ahead.sort_by_key(|(size, _)| *size);
+        for (size, ahead) in ahead {
+            if size > room {
+                break;
+            }
+            room -= size;
+            questions.insert(ahead.key(), ahead.question.clone());
+        }
+    }
     Request {
-        state: state(observation, controls, context),
+        state,
         images: context.screenshot.iter().map(|png| (screenshot_reference(png), png.clone())).collect(),
         questions,
         targets,
@@ -892,6 +937,10 @@ pub fn build_request(
         target_rules: target_rules.to_string(),
     }
 }
+
+/// OpenRouter's documented point past which a Jev request runs in TypeSafe's long-context mode, which TypeSafe says is
+/// slower and less accurate. An image puts a request there too. Questions asked ahead save a round trip only below it.
+const LONG_CONTEXT_BYTES: usize = 32_000;
 
 pub fn fits(request: &Request, config: &Config) -> bool {
     let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
@@ -998,6 +1047,14 @@ async fn evaluate(
         // A drag is only as certain as the weaker of its two ends.
         target_confidence = Some(target_confidence.map_or(destination_confidence, |t| t.min(destination_confidence)));
     }
+    let prefix = target.as_ref().map(|target| format!("{operation}:{}:", target.id));
+    let ahead: IndexMap<String, Answer> = prefix
+        .iter()
+        .flat_map(|prefix| {
+            let asked = request.questions.keys().filter(|key| key.starts_with(prefix.as_str()));
+            asked.filter_map(|key| Some((key[prefix.len()..].to_string(), evaluation.answers.get(key)?.clone())))
+        })
+        .collect();
     Ok(Decision {
         operation,
         url,
@@ -1015,6 +1072,7 @@ async fn evaluate(
         site_failure: noul_probability(&evaluation, "site_failure"),
         destination,
         offered: Vec::new(),
+        ahead,
     })
 }
 
@@ -1532,6 +1590,37 @@ mod tests {
             (&state["task"], &state["background"]),
             (&json!("Find the price"), &json!("Asked by email from Ana."))
         );
+    }
+
+    #[test]
+    fn test_follow_ups_go_with_the_decision_only_while_it_stays_out_of_long_context() {
+        let control = button(1);
+        let ahead = |content: &str| Ahead {
+            operation: Operation::Click,
+            control: control.id.clone(),
+            name: "irreversible".into(),
+            question: noul(content, "yes", "no"),
+        };
+        let page = observation(vec![control.clone()]);
+        let controls = std::slice::from_ref(&control);
+        let asked = |context: &StepContext| {
+            let request = build_request(&page, controls, context, &Config::default(), MAX_CHOICE_OPTIONS);
+            request.questions.keys().any(|key| key.ends_with(":irreversible"))
+        };
+
+        let mut context = StepContext::new("Find the price");
+        context.ahead = vec![ahead("Is this irreversible?")];
+        assert!(asked(&context));
+
+        context.ahead = vec![ahead(&"x".repeat(LONG_CONTEXT_BYTES))];
+        assert!(!asked(&context));
+
+        context.ahead = vec![ahead(&"x".repeat(LONG_CONTEXT_BYTES)), ahead("Is this irreversible?")];
+        assert!(asked(&context));
+
+        context.ahead = vec![ahead("Is this irreversible?")];
+        context.screenshot = Some(vec![0]);
+        assert!(!asked(&context));
     }
 
     #[test]

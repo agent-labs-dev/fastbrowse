@@ -567,6 +567,7 @@ impl Agent {
             page_facts,
             reload: state.reload_target(&observation.url),
             screenshot: None,
+            ahead: self.ahead(state, observation),
         })
     }
 

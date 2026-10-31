@@ -13,13 +13,13 @@ use fastbrowse_core::safety::{
     may_be_irreversible, requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use indexmap::IndexMap;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value as JsonValue, json};
 
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, navigation_question};
 use super::state::{Flow, RunState, Step, Stop, Unsure};
-use crate::policy::Decision;
+use crate::policy::{Ahead, Decision};
 use crate::retrieval::text::{Word, words};
 use crate::verification::page_state;
 
@@ -31,7 +31,7 @@ const NO_VALUE: &str = "none";
 const WORD_CONTEXT: usize = 3;
 
 /// The words Jev may pick from, each with where it stands in the task.
-fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, Value> {
+fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
     let chars: Vec<char> = task.chars().collect();
     shown
         .iter()
@@ -39,12 +39,125 @@ fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, Value> {
             let around: String = chars[word.before(WORD_CONTEXT)..word.after(WORD_CONTEXT)].iter().collect();
             let picked: String = chars[word.start..word.end].iter().collect();
             let piece = word.piece.map_or(String::new(), |(n, of)| format!(" (piece {n} of {of})"));
-            (word.index.to_string(), Value::from(format!("{}{piece} in: {around}", text::repr(&picked))))
+            (word.index.to_string(), JsonValue::from(format!("{}{piece} in: {around}", text::repr(&picked))))
         })
         .collect()
 }
 
+/// What a field's value is picked from.
+struct Value {
+    /// The task, then what was read.
+    task: String,
+    label: String,
+    group: Vec<Word>,
+    source_question: String,
+    sources: IndexMap<String, JsonValue>,
+}
+
+/// One question about the page, with the options it offers.
+type Asked<'a> = (&'a str, String, IndexMap<String, JsonValue>);
+
+/// What Jev is asked about a field: where its value comes from and, among `group`, where it begins and ends.
+fn value_questions<'a>(
+    state: &RunState,
+    target: &Control,
+    task: &str,
+    label: &str,
+    group: &[Word],
+    source_question: String,
+    sources: IndexMap<String, JsonValue>,
+) -> Vec<Asked<'a>> {
+    let described = describe(target);
+    let tried: Vec<String> = state
+        .history
+        .iter()
+        .filter(|entry| entry.operation == Some(Operation::Fill) && entry.target.as_deref() == Some(&described))
+        .filter_map(|entry| entry.text.as_deref().map(text::repr))
+        .collect();
+    let tried = if tried.is_empty() { String::new() } else { format!(" Already typed here: {}.", tried.join(", ")) };
+    let options = word_options(task, group);
+    let mut asked = vec![("source", source_question, sources)];
+    if !group.is_empty() {
+        let span = |end: &str| {
+            format!(
+                "If the task states the value for {label}, which of its words {end} the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. When the task gives this field several values, the one it gives first comes first, and a later one follows once the page has refused the one before.{tried}"
+            )
+        };
+        asked.push(("first", span("begins"), options.clone()));
+        asked.push(("last", span("ends"), options));
+    }
+    asked
+}
+
+fn page_question(task: &str, question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
+    let content = format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{question}");
+    Question::Choice(ChoiceQuestion::new(content, criteria))
+}
+
+/// Jev's picks from the decision's own request, when it answered all of `asked` there.
+fn ahead_picks(decision: &Decision, asked: &[Asked<'_>]) -> Option<IndexMap<String, String>> {
+    asked
+        .iter()
+        .map(|(key, _, options)| match decision.ahead.get(*key) {
+            Some(Answer::Choice(answer)) if options.contains_key(&answer.choice) => {
+                Some((key.to_string(), answer.choice.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What is asked before a control is pressed: whether that commits anything, and when the run is authorized, whether
+/// the task asked for it. A credential change is irreversible on the page's own structure, so Jev is not asked whether
+/// it is.
+fn gate_questions(
+    operation: Operation,
+    target: &Control,
+    destination: Option<&Control>,
+    controls: &[Control],
+) -> (Option<NoulQuestion>, NoulQuestion) {
+    let irreversible = (!changes_credentials(controls, target, operation))
+        .then(|| irreversible_question(operation, target, destination));
+    (irreversible, requested_question(&control_action(operation, target, controls)))
+}
+
 impl Agent {
+    /// The follow-ups each action on this page would need, to ask beside the decision. A password is never picked
+    /// from words, and a task too long for one choice is narrowed first, so those stay follow-ups.
+    pub(super) fn ahead(&self, state: &RunState, observation: &Observation) -> Vec<Ahead> {
+        let max = self.jev.profile().max_choice_options;
+        let mut ahead = Vec::new();
+        for control in &observation.controls {
+            let mut add = |operation: Operation, name: &str, question: Question| {
+                let (control, name) = (control.id.clone(), name.to_string());
+                ahead.push(Ahead { operation, control, name, question });
+            };
+            for operation in [Operation::Click, Operation::Enter] {
+                if !control.operations.contains(&operation) {
+                    continue;
+                }
+                let (irreversible, requested) = gate_questions(operation, control, None, &observation.controls);
+                if let Some(irreversible) = irreversible {
+                    add(operation, "irreversible", Question::Noul(irreversible));
+                }
+                if state.authorization.irreversible_actions {
+                    add(operation, "requested", Question::Noul(requested));
+                }
+            }
+            if control.operations.contains(&Operation::Fill) && !is_password(control) {
+                let Value { task, label, group, sources, source_question } = self.value(state, control);
+                if group.len() <= max {
+                    for (name, question, criteria) in
+                        value_questions(state, control, &task, &label, &group, source_question, sources)
+                    {
+                        add(Operation::Fill, name, page_question(&state.task, &question, criteria));
+                    }
+                }
+            }
+        }
+        ahead
+    }
+
     pub(super) async fn action(
         &self,
         state: &mut RunState,
@@ -64,8 +177,8 @@ impl Agent {
                     return Err(Stop::new(Status::NeedsInput, "navigation address contains a resolved secret").into());
                 }
                 self.gate_download(state, observation, decision, &caller_link(&url)).await?;
-                let irreversible = navigation_question(&state.task, &url);
-                let requested = requested_question(&state.task, &format!("open the address {url}.\n"));
+                let irreversible = navigation_question(&url);
+                let requested = requested_question(&format!("open the address {url}.\n"));
                 self.gate_question(state, observation, decision, &url, Some(irreversible), requested).await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
@@ -86,7 +199,7 @@ impl Agent {
             }
             Operation::Fill => {
                 let target = require(target)?;
-                let text = self.text(state, observation, target).await?;
+                let text = self.text(state, observation, decision, target).await?;
                 Ok(Action {
                     target_id: Some(target.id.clone()),
                     secret: self.reveals_text(&text),
@@ -121,7 +234,7 @@ impl Agent {
                     && let Some(irreversible) = dialog_question(&state.task, Some(dialog))
                 {
                     let action = format!("accept this {} dialog: {}.\n", dialog.kind, text::repr(&dialog.message));
-                    let requested = requested_question(&state.task, &action);
+                    let requested = requested_question(&action);
                     self.gate_question(state, observation, decision, &dialog.message, Some(irreversible), requested)
                         .await?;
                 }
@@ -150,11 +263,8 @@ impl Agent {
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
         }
-        // A credential change is irreversible on the page's own structure, so Jev is not asked whether it is.
-        let irreversible = (!changes_credentials(&observation.controls, target, decision.operation))
-            .then(|| irreversible_question(&state.task, decision.operation, target, decision.destination.as_ref()));
-        let requested =
-            requested_question(&state.task, &control_action(decision.operation, target, &observation.controls));
+        let (irreversible, requested) =
+            gate_questions(decision.operation, target, decision.destination.as_ref(), &observation.controls);
         self.gate_question(state, observation, decision, &label, irreversible, requested).await
     }
 
@@ -235,15 +345,18 @@ impl Agent {
             questions.insert("requested".to_string(), Question::Noul(requested));
         }
         if !questions.is_empty() {
-            state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-            // Only the address goes with the questions: the page's own text is what would argue a harmful action is
-            // harmless, and the control's label and form are already in them.
-            let evaluation = self
-                .jev
-                .evaluate(&json!({"page": {"url": observation.url, "title": observation.title}}), &questions)
-                .await?;
-            state.ledger.record([evaluation.cost.clone()])?;
-            let noul = |key: &str| match evaluation.answers.get(key) {
+            let asked_ahead = questions.keys().all(|key| matches!(decision.ahead.get(key), Some(Answer::Noul(_))));
+            let answers = if asked_ahead {
+                decision.ahead.clone()
+            } else {
+                state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+                // The control's label and form are already in the questions, so only the address goes with them.
+                let page = json!({"task": state.task, "page": {"url": observation.url, "title": observation.title}});
+                let evaluation = self.jev.evaluate(&page, &questions).await?;
+                state.ledger.record([evaluation.cost.clone()])?;
+                evaluation.answers
+            };
+            let noul = |key: &str| match answers.get(key) {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
                 _ => None,
             };
@@ -279,42 +392,20 @@ impl Agent {
     }
 
     /// The text a field gets: an input, a stored secret, or words Jev marks in the task, copied as the task has them.
-    pub(super) async fn text(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Step<String> {
+    pub(super) async fn text(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        target: &Control,
+    ) -> Step<String> {
         let origin = self.target_origin(target);
-        // Only what this field's own frame may receive: a password manager offers its names across every site it
-        // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
-        // page was never going to get, where needs_login says what the caller can fix.
-        let secrets = self.secret_names(&origin);
         if is_password(target) {
+            let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        // A value can come from a page, such as a code a site sent: the words offered are the task's, then what Jev read.
-        let read: Vec<&str> = state.notes.facts().iter().filter(|f| f.answers).map(|f| f.text.as_str()).collect();
-        let task = if read.is_empty() { state.task.clone() } else { format!("{}\n{}", state.task, read.join("\n")) };
-        let mut group = words(&task, target.max_length);
+        let Value { task, label, mut group, sources, source_question } = self.value(state, target);
         let max = self.jev.profile().max_choice_options;
-        let mut sources: IndexMap<String, Value> = state
-            .inputs
-            .iter()
-            .map(|(k, v)| (format!("input:{k}"), Value::from(format!("The provided value named {k}: {v}"))))
-            .collect();
-        for name in &secrets {
-            sources.insert(format!("secret:{name}"), format!("The stored secret named {name} (value hidden)").into());
-        }
-        sources.insert(
-            IN_TASK.into(),
-            "The task or what was read states this field's value, whole or as part of something longer.".into(),
-        );
-        sources.insert(NO_VALUE.into(), "Neither the task nor what was read gives a value for this field.".into());
-        let mut label = text::repr(&target.label);
-        if let Some(limit) = target.max_length {
-            label = format!("{label}, which holds at most {limit} characters,");
-        }
-        // Amazon labels its sign-in field "Enter mobile number or email", and Jev, seeing only a secret named
-        // `username`, chose the task. Only for signing in: a checkout's contact email is the task's value.
-        let source_question = format!(
-            "What should be typed into {label}? Stored secrets are this site's sign-in credentials, named by role, and are only for signing in to the account: when this field is a sign-in field, the username is also the account's email address or phone number. Any other field takes a value the task gives, and a search field takes what the task is looking for."
-        );
         // A task with more words than one choice can offer is narrowed first, over parts that overlap so a value
         // across any cut stands whole in one of them.
         while group.len() > max {
@@ -329,12 +420,12 @@ impl Agent {
                 .take(max)
                 .collect();
             let chars: Vec<char> = task.chars().collect();
-            let criteria: IndexMap<String, Value> = parts
+            let criteria: IndexMap<String, JsonValue> = parts
                 .iter()
                 .enumerate()
                 .map(|(n, part)| {
                     let shown: String = chars[part[0].start..part[part.len() - 1].end].iter().collect();
-                    (n.to_string(), Value::from(shown))
+                    (n.to_string(), JsonValue::from(shown))
                 })
                 .collect();
             let question = format!("Which part of the task holds the value for {label}, if any does?");
@@ -342,34 +433,11 @@ impl Agent {
             let chosen = picked.parse::<usize>().unwrap_or_default();
             group = parts[chosen].to_vec();
         }
-        let options = word_options(&task, &group);
-        let described = describe(target);
-        let tried: Vec<String> = state
-            .history
-            .iter()
-            .filter(|entry| entry.operation == Some(Operation::Fill) && entry.target.as_deref() == Some(&described))
-            .filter_map(|entry| entry.text.as_deref().map(text::repr))
-            .collect();
-        let tried =
-            if tried.is_empty() { String::new() } else { format!(" Already typed here: {}.", tried.join(", ")) };
-        let mut asked = vec![("source", source_question, sources)];
-        if !group.is_empty() {
-            asked.push((
-                "first",
-                format!(
-                    "If the task states the value for {label}, which of its words begins the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. When the task gives this field several values, the one it gives first comes first, and a later one follows once the page has refused the one before.{tried}"
-                ),
-                options.clone(),
-            ));
-            asked.push((
-                "last",
-                format!(
-                    "If the task states the value for {label}, which of its words ends the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. When the task gives this field several values, the one it gives first comes first, and a later one follows once the page has refused the one before.{tried}"
-                ),
-                options,
-            ));
-        }
-        let picks = self.ask_choices(state, observation, asked).await?;
+        let asked = value_questions(state, target, &task, &label, &group, source_question, sources);
+        let picks = match ahead_picks(decision, &asked) {
+            Some(picks) => picks,
+            None => self.ask_choices(state, observation, asked).await?,
+        };
         let source = picks.get("source").map(String::as_str).unwrap_or(NO_VALUE);
         if let Some(input) = source.strip_prefix("input:") {
             return Ok(state.inputs.get(input).cloned().unwrap_or_default());
@@ -381,10 +449,10 @@ impl Agent {
             let index = picks.get(key)?.parse::<usize>().ok()?;
             group.iter().find(|word| word.index == index)
         };
-        // A field with a limit takes one piece, whatever the end was picked as.
+        // A field with a limit takes the piece the value begins at, whatever the end was picked as.
         let (first, last) = match (target.max_length, word("first"), word("last")) {
             (Some(limit), Some(first), Some(last)) if last.end.saturating_sub(first.start) > limit => {
-                (Some(last), Some(last))
+                (Some(first), Some(first))
             }
             (Some(_), Some(first), Some(last)) if last.index < first.index => (Some(first), Some(first)),
             (_, first, last) => (first, last),
@@ -409,6 +477,41 @@ impl Agent {
             }
             _ => Err(self.missing(state, target)),
         }
+    }
+
+    /// What a field's value is picked from, and the question that says where it comes from.
+    fn value(&self, state: &RunState, target: &Control) -> Value {
+        // Only what this field's own frame may receive: a password manager offers its names across every site it
+        // holds, and offering one that cannot be typed here ended a sign-in at needs_input, naming a secret the
+        // page was never going to get, where needs_login says what the caller can fix.
+        let secrets = self.secret_names(&self.target_origin(target));
+        // A value can come from a page, such as a code a site sent: the words offered are the task's, then what Jev read.
+        let read: Vec<&str> = state.notes.facts().iter().filter(|f| f.answers).map(|f| f.text.as_str()).collect();
+        let task = if read.is_empty() { state.task.clone() } else { format!("{}\n{}", state.task, read.join("\n")) };
+        let group = words(&task, target.max_length);
+        let mut sources: IndexMap<String, JsonValue> = state
+            .inputs
+            .iter()
+            .map(|(k, v)| (format!("input:{k}"), JsonValue::from(format!("The provided value named {k}: {v}"))))
+            .collect();
+        for name in &secrets {
+            sources.insert(format!("secret:{name}"), format!("The stored secret named {name} (value hidden)").into());
+        }
+        sources.insert(
+            IN_TASK.into(),
+            "The task or what was read states this field's value, whole or as part of something longer.".into(),
+        );
+        sources.insert(NO_VALUE.into(), "Neither the task nor what was read gives a value for this field.".into());
+        let mut label = text::repr(&target.label);
+        if let Some(limit) = target.max_length {
+            label = format!("{label}, which holds at most {limit} characters,");
+        }
+        // Amazon labels its sign-in field "Enter mobile number or email", and Jev, seeing only a secret named
+        // `username`, chose the task. Only for signing in: a checkout's contact email is the task's value.
+        let source_question = format!(
+            "What should be typed into {label}? Stored secrets are this site's sign-in credentials, named by role, and are only for signing in to the account: when this field is a sign-in field, the username is also the account's email address or phone number. Any other field takes a value the task gives, and a search field takes what the task is looking for."
+        );
+        Value { task, label, group, source_question, sources }
     }
 
     /// Resolve replacement passwords separately from existing credentials, without model-written values.
@@ -449,7 +552,7 @@ impl Agent {
             .into()),
             [only] => self.secret(only, origin, true).await,
             _ => {
-                let criteria: IndexMap<String, Value> = secrets
+                let criteria: IndexMap<String, JsonValue> = secrets
                     .iter()
                     .map(|name| (name.clone(), format!("The stored secret named {name}").into()))
                     .collect();
@@ -529,7 +632,7 @@ impl Agent {
         let shown = self.jev.profile().max_choice_options;
         let keys: IndexMap<String, String> =
             options.iter().take(shown).enumerate().map(|(i, option)| (i.to_string(), option.clone())).collect();
-        let criteria: IndexMap<String, Value> =
+        let criteria: IndexMap<String, JsonValue> =
             keys.iter().map(|(key, option)| (key.clone(), self.mask(option).into())).collect();
         let picked = self.ask_choice(state, observation, question, criteria).await?;
         Ok(keys[&picked].clone())
@@ -540,7 +643,7 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         question: &str,
-        criteria: IndexMap<String, Value>,
+        criteria: IndexMap<String, JsonValue>,
     ) -> Step<String> {
         let picks = self.ask_choices(state, observation, vec![("pick", question.to_string(), criteria)]).await?;
         Ok(picks["pick"].clone())
@@ -549,8 +652,11 @@ impl Agent {
     /// Whether the task wants something reported back, rather than only something carried out.
     pub(super) async fn asks_to_be_told(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
         let criteria = IndexMap::from([
-            ("told".to_string(), Value::from("The task asks to be told something, such as a value, a name or a list.")),
-            ("carried_out".to_string(), Value::from("The task only asks for something to be carried out.")),
+            (
+                "told".to_string(),
+                JsonValue::from("The task asks to be told something, such as a value, a name or a list."),
+            ),
+            ("carried_out".to_string(), JsonValue::from("The task only asks for something to be carried out.")),
         ]);
         let question = "What does the task want at its end?";
         Ok(self.ask_choice(state, observation, question, criteria).await? == "told")
@@ -561,17 +667,14 @@ impl Agent {
         &self,
         state: &mut RunState,
         observation: &Observation,
-        asked: Vec<(&str, String, IndexMap<String, Value>)>,
+        asked: Vec<Asked<'_>>,
     ) -> Step<IndexMap<String, String>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let offered: IndexMap<String, HashSet<String>> =
             asked.iter().map(|(key, _, criteria)| (key.to_string(), criteria.keys().cloned().collect())).collect();
         let questions: IndexMap<String, Question> = asked
             .into_iter()
-            .map(|(key, question, criteria)| {
-                let content = format!("{UNTRUSTED}\n\n# Task\n{}\n\n{question}", state.task);
-                (key.to_string(), Question::Choice(ChoiceQuestion::new(content, criteria)))
-            })
+            .map(|(key, question, criteria)| (key.to_string(), page_question(&state.task, &question, criteria)))
             .collect();
         let dumped: Vec<String> = questions.values().map(Dump::dump_json).collect();
         let page = page_state(observation, &state.notes, &self.config.tokens, &dumped, None)?;
@@ -601,8 +704,8 @@ impl Agent {
             text::repr(&dialog.message)
         );
         let criteria = IndexMap::from([
-            ("accept".to_string(), Value::from("Accept / OK")),
-            ("dismiss".to_string(), Value::from("Dismiss / Cancel")),
+            ("accept".to_string(), JsonValue::from("Accept / OK")),
+            ("dismiss".to_string(), JsonValue::from("Dismiss / Cancel")),
         ]);
         Ok(self.ask_choice(state, observation, &question, criteria).await? == "accept")
     }

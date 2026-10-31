@@ -81,8 +81,8 @@ pub(crate) fn caller_link(url: &str) -> Control {
     control
 }
 
-pub(crate) fn navigation_question(task: &str, url: &str) -> NoulQuestion {
-    irreversible_question(task, Operation::Click, &caller_link(url), None)
+pub(crate) fn navigation_question(url: &str) -> NoulQuestion {
+    irreversible_question(Operation::Click, &caller_link(url), None)
 }
 
 pub(crate) fn decision_label(decision: &Decision) -> Option<String> {

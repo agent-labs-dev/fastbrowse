@@ -145,6 +145,7 @@ fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
         site_failure: None,
         destination: None,
         offered: Vec::new(),
+        ahead: IndexMap::new(),
     }
 }
 
@@ -299,7 +300,6 @@ fn test_a_source_keeps_its_identifying_context_without_unrelated_capture_changes
     assert_eq!(read_sources(&Notes::new([redraw])), changed);
 }
 
-// tests/test_download_gate.py
 
 // -- The one stall rule and the one budget-renewal rule -------------------------------------------------------------
 
@@ -544,7 +544,9 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
     let page = at("https://b.test/login", std::slice::from_ref(&password));
     agent.seen().raw = Some(page.clone());
     let mut state = run_state();
-    let Err(super::state::Flow::Stop(stop)) = agent.text(&mut state, &page, &password).await else {
+    let Err(super::state::Flow::Stop(stop)) =
+        agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &password).await
+    else {
         panic!("the field was filled");
     };
     assert_eq!(stop.status, Status::NeedsLogin);
@@ -684,8 +686,8 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         let finish = button("Finish");
         let observation = observation(std::slice::from_ref(&finish));
         let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(finish.clone())) };
-        let question = (!credential).then(|| irreversible_question(&state.task, Operation::Click, &finish, None));
-        let asked = requested_question(&state.task, &control_action(Operation::Click, &finish, &[]));
+        let question = (!credential).then(|| irreversible_question(Operation::Click, &finish, None));
+        let asked = requested_question(&control_action(Operation::Click, &finish, &[]));
         let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, asked).await;
         let case = format!("authorized {authorized}, credential {credential}, requested {requested}");
         assert_eq!(gated.is_ok(), acts, "{case}");
@@ -891,7 +893,10 @@ async fn test_a_choice_jev_was_not_offered_is_a_failed_decision_and_not_an_empty
     let mut state = run_state();
     state.inputs.insert("name".into(), "Ada".into());
     let page = observation(&[]);
-    let error = agent.text(&mut state, &page, &field("Name")).await.expect_err("an unusable pick");
+    let error = agent
+        .text(&mut state, &page, &code_decision(Operation::Fill, None), &field("Name"))
+        .await
+        .expect_err("an unusable pick");
     assert!(format!("{error:?}").contains("which was not offered"), "{error:?}");
 }
 
@@ -1140,4 +1145,26 @@ async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
 async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_screenshot() {
     let (clicked, page, jev) = click_where_seen(true, 0.9, true).await;
     assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && !jev.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_a_gate_answered_with_the_decision_asks_jev_nothing_more() {
+    use std::sync::atomic::Ordering;
+
+    use fastbrowse_core::safety::{control_action, irreversible_question, requested_question};
+
+    let jev = Arc::new(Gatekeeper { irreversible: 0.1, requested: 0.1, calls: Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let finish = button("Finish");
+    let page = observation(std::slice::from_ref(&finish));
+    let reversible = Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.1 });
+    let decision = Decision {
+        ahead: IndexMap::from([("irreversible".to_string(), reversible)]),
+        ..code_decision(Operation::Click, Some(finish.clone()))
+    };
+    let question = Some(irreversible_question(Operation::Click, &finish, None));
+    let asked = requested_question(&control_action(Operation::Click, &finish, &[]));
+    agent.gate_question(&mut state, &page, &decision, "Finish", question, asked).await.expect("a reversible click");
+    assert_eq!(jev.calls.load(Ordering::SeqCst), 0);
 }
