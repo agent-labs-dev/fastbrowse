@@ -1856,3 +1856,49 @@ async fn test_a_page_off_the_list_leaves_it_open_and_a_later_page_ends_it() {
         assert_eq!(agent.on_open_list(&mut state, &capture).await.ok(), Some(ended));
     }
 }
+
+/// A field writer that answers once released, at a metered price.
+struct HeldWriter(tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>);
+
+impl fastbrowse_core::llm::LLMClient for HeldWriter {
+    fn generate_value<'a>(
+        &'a self,
+        _: fastbrowse_core::models::LLMPurpose,
+        _: &'a [fastbrowse_core::llm::Message],
+        _: &'a dyn fastbrowse_core::llm::ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
+        Box::pin(async move {
+            if let Some(released) = self.0.lock().await.take() {
+                let _ = released.await;
+            }
+            Ok(Generation {
+                data: json!({"missing": false, "text": "90028", "values": []}),
+                cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.003)),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_a_field_write_dropped_by_a_redraw_is_billed_from_its_own_receipt() {
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let llm = HeldWriter(tokio::sync::Mutex::new(Some(released)));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(llm));
+    let state = run_state().await;
+    // A redraw drops the step's future with the request out.
+    let dropped = agent.written::<super::state::FieldText>(&state, Vec::new());
+    assert!(tokio::time::timeout(Duration::from_millis(10), dropped).await.is_err());
+    release.send(()).unwrap();
+    for _ in 0..100 {
+        if !state.ledger.state().lines.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let lines = state.ledger.state().lines.clone();
+    assert_eq!(
+        lines.iter().map(|line| (line.basis, line.dollars)).collect::<Vec<_>>(),
+        [(CostBasis::Metered, Some(0.003))]
+    );
+}

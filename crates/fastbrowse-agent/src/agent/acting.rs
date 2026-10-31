@@ -16,12 +16,13 @@ use fastbrowse_core::safety::{
 };
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, navigation_question, next_value};
-use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure};
+use super::state::{FieldText, Flow, RunState, Step, Stop, Unsure, cancelled};
 use super::{Agent, GENERATE};
 use crate::policy::Decision;
 use crate::support::generate;
@@ -595,17 +596,10 @@ impl Agent {
         context.insert("chosen_field".into(), field);
         context.insert("fields".into(), Value::Array(fields.values().map(Dump::dump_exclude_none).collect()));
         let messages = vec![Message::system(form_writer()), Message::user(dumps(&Value::Object(context)))];
-        let written =
-            match generate::<FormText>(&*self.llm, LLMPurpose::FieldText, &messages, Some(&state.ledger)).await {
-                Ok(generation) => {
-                    state.ledger.record([generation.cost.clone()])?;
-                    generation.data
-                }
-                Err(error) => {
-                    let flow = Flow::from(error);
-                    return if flow.is_llm() { Ok(()) } else { Err(flow) };
-                }
-            };
+        let written = match self.written::<FormText>(state, messages).await {
+            Ok(written) => written,
+            Err(flow) => return if flow.is_llm() { Ok(()) } else { Err(flow) },
+        };
         let ids: Vec<&String> = written.fields.iter().map(|f| &f.id).collect();
         self.event("form_values", || {
             Map::from_iter([("chosen".into(), target.id.clone().into()), ("fields".into(), json!(ids))])
@@ -647,11 +641,27 @@ impl Agent {
 
     /// The text for one field, or None when the writer says the value was never given.
     async fn write_field(&self, state: &mut RunState, messages: &[Message], target: &Control) -> Step<Option<String>> {
-        let generation =
-            generate::<FieldText>(&*self.llm, LLMPurpose::FieldText, messages, Some(&state.ledger)).await?;
-        state.ledger.record([generation.cost.clone()])?;
-        let written = generation.data;
+        let written = self.written::<FieldText>(state, messages.to_vec()).await?;
         Ok((!written.missing).then(|| due(&written, &state.history, &target.label)))
+    }
+
+    /// What the field writer answers, billed from its own receipt even when the step that asked is dropped.
+    ///
+    /// A page that redraws while a field is being written drops that step. The request is already out and costs what
+    /// any other does, but a request dropped in flight has no receipt, so it was charged the model's whole context
+    /// window at its dearest price: dollars on a call worth a fraction of a cent, and past any dollar cap a run set.
+    /// Its own task outlives the drop and records what the provider reports.
+    pub(super) async fn written<T>(&self, state: &RunState, messages: Vec<Message>) -> Step<T>
+    where
+        T: Schema + DeserializeOwned + Serialize + Send + 'static,
+    {
+        let (llm, ledger) = (self.llm.clone(), state.ledger.clone());
+        let writing = tokio::spawn(async move {
+            let generation = generate::<T>(&*llm, LLMPurpose::FieldText, &messages, Some(&ledger)).await?;
+            ledger.record([generation.cost])?;
+            Ok::<T, Flow>(generation.data)
+        });
+        writing.await.map_err(|_| Flow::Agent(cancelled()))?
     }
 
     pub(super) async fn value_absent(
