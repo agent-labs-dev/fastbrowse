@@ -301,7 +301,9 @@ impl Agent {
             choices: Vec::new(),
         };
         self.record_step(state, step, true, None).await?;
-        if data.give_up {
+        // A consult that gave up, or left nothing to follow, moved nothing, and no step follows it to say so: uncounted,
+        // Jev unsure on the same page consulted again until the step limit. A direction leaves the count to its step.
+        if !stalled && (data.give_up || state.directed.is_none()) {
             Box::pin(self.count_progress(state, false, observation, None, gives_up_as)).await?;
         }
         Ok(())

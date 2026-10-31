@@ -1342,9 +1342,9 @@ impl fastbrowse_core::decision::DecisionClient for Unsure {
     }
 }
 
-/// An LLM that answers every recovery with a scroll and counts the times it was asked.
+/// An LLM that answers every recovery with a scroll, or the operation given, and counts the times it was asked.
 #[derive(Default)]
-struct Recoverer(std::sync::atomic::AtomicUsize, bool);
+struct Recoverer(std::sync::atomic::AtomicUsize, bool, Option<&'static str>);
 
 impl fastbrowse_core::llm::LLMClient for Recoverer {
     fn generate_value<'a>(
@@ -1357,8 +1357,9 @@ impl fastbrowse_core::llm::LLMClient for Recoverer {
         Box::pin(async move {
             assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Recover);
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let operation = self.2.unwrap_or("scroll");
             let reply =
-                json!({"diagnosis": "Stuck", "next_subgoal": "Scroll on", "give_up": self.1, "operation": "scroll"});
+                json!({"diagnosis": "Stuck", "next_subgoal": "Scroll on", "give_up": self.1, "operation": operation});
             let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
         })
@@ -1384,7 +1385,7 @@ async fn stalled_on_apply(confidence: f64) -> (RunState, Arc<Unsure>, Arc<Recove
 async fn test_giving_up_ends_the_run_with_the_diagnosis() {
     let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
     let jev = Arc::new(Unsure(ScriptedJev::new(script), 0.1, Default::default()));
-    let llm = Arc::new(Recoverer(Default::default(), true));
+    let llm = Arc::new(Recoverer(Default::default(), true, None));
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
     let mut state = run_state().await;
     let apply = button("Apply");
@@ -1398,7 +1399,7 @@ async fn test_giving_up_ends_the_run_with_the_diagnosis() {
 
 #[tokio::test]
 async fn test_giving_up_on_a_consult_leaves_the_run_going() {
-    let llm = Arc::new(Recoverer(Default::default(), true));
+    let llm = Arc::new(Recoverer(Default::default(), true, None));
     let jev = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 0.1, Default::default()));
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
     let mut state = run_state().await;
@@ -1406,6 +1407,30 @@ async fn test_giving_up_on_a_consult_leaves_the_run_going() {
     agent.consult(&mut state, &page, "uncertain next step").await.expect("still going");
     assert!(state.gave_up.is_none());
     assert_eq!(state.hint.as_deref(), Some("Scroll on"));
+}
+
+#[tokio::test]
+async fn test_consults_that_direct_nothing_reach_the_stall_rule() {
+    let llm = Arc::new(Recoverer(Default::default(), false, Some("done")));
+    let jev = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 0.1, Default::default()));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
+    let mut state = run_state().await;
+    let page = observation(&[button("Next")]);
+    for _ in 0..3 {
+        agent.consult(&mut state, &page, "uncertain next step").await.expect("still going");
+    }
+    assert_eq!(state.recoveries, 1);
+}
+
+#[tokio::test]
+async fn test_a_consult_that_directs_a_step_leaves_the_stall_rule_to_that_step() {
+    let llm = Arc::new(Recoverer::default());
+    let jev = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 0.1, Default::default()));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
+    let mut state = run_state().await;
+    let page = observation(&[button("Next")]);
+    agent.consult(&mut state, &page, "uncertain next step").await.expect("still going");
+    assert_eq!(state.unchanged, 0);
 }
 
 #[tokio::test]

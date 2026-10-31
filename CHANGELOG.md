@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **An unsure run no longer consults until its step limit.** When Jev stayed unsure on a page and the recovery model named nothing the run could follow, the consult counted as nothing, so the run asked again until its steps ran out. Such a consult now counts as a step that moved nothing, and the stall rule ends the run.
 - **Only Jev finishes a run, and only a stall ends one on a give-up.** When Jev was unsure of its next step, the recovery model could tell the run to finish, and the run stopped there on a page that still owed work. It could also give up while the run was still moving. Recovery now never directs a finish, and a give-up stops a run only when it has stalled or needs something from the user.
 - **Jev is told what scrolling has not kept.** A run could scroll a long list hundreds of times and lose it all when the browser ended, because each scroll counted as progress and nothing was read. Jev now sees how many scrolls have passed since the last read, and that the notes hold nothing from them.
 - **A suggestion list left open no longer blocks the next field.** A list an address or search field opened could lie over the field below it, and the control was refused as covered again and again while Escape did not close it. When a control is found covered and focus is in a suggesting field, focus now leaves that field, as moving to the next field would, and the control is checked again. A cover that stays is still refused.
