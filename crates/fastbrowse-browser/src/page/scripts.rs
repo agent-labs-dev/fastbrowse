@@ -11,7 +11,6 @@ use crate::session::py_json;
 pub const SCROLL_EVENT_SECONDS: f64 = 3.0;
 /// A deadline, not a wait: a field with no editor to open settles on the first frame.
 pub const HANDOFF_SECONDS: f64 = 0.6;
-pub const HANDOFF_QUIET_SECONDS: f64 = 0.1;
 
 /// What a page draws over its content and means to be dealt with first. Naming a cover for recovery and routing
 /// around one read this one list: a small open menu fixed to the window looked like a band to one of them, and the
@@ -248,14 +247,18 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
 /// editor; typing into the original, now hidden behind it, reaches no suggestion list. A person types where focus
 /// went, so the fill follows focus to an editable field in the same document that covers the spot saved before the
 /// click, even if the original was detached. The editor can take focus a frame or a timer after the click, so the
-/// check waits for the click's DOM changes to go quiet, briefly, first.
+/// check waits for that focus, and the bound only ends a wait for a field that was replaced by nothing.
 pub static HANDED_FOCUS_JS: LazyLock<String> = LazyLock::new(|| {
     [
     "((id, secret) => new Promise(resolve => { const r = window.__fastbrowse, e = r?.nodes.get(id), was = r?.handoff; ",
     "if (!e || !was) { resolve(null); return; } ",
-    "const decide = () => { ",
+    "let late = false; const decide = () => { ",
     "if (e.ownerDocument !== was.doc || was.doc.defaultView?.document !== was.doc) return null; ",
     "const a = was.root.activeElement; ",
+    // An editor drawn over the field is still to take focus: the field's own focus is not the answer yet.
+    "const hit = was.doc.elementFromPoint(was.x, was.y); ",
+    "if (a === e && !late && hit && hit !== e && !e.contains(hit) && ",
+    "(hit.isContentEditable || ['INPUT', 'TEXTAREA'].includes(hit.tagName))) return null; ",
     "if (!a || a === e || e.contains(a) || secret) return e.isConnected ? id : null; ",
     "const text = a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && ",
     "!['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit']",
@@ -266,16 +269,12 @@ pub static HANDED_FOCUS_JS: LazyLock<String> = LazyLock::new(|| {
     "if (was.x < now.left || was.x > now.right || was.y < now.top || was.y > now.bottom) ",
     "return e.isConnected ? id : null; ",
     "if (!r.ids.has(a)) r.ids.set(a, r.next++); const n = r.ids.get(a); r.nodes.set(n, a); return n; }; ",
-    &format!("const deadline = performance.now() + {}; ", py_float(HANDOFF_SECONDS * 1000.0)),
-    "const poll = () => { const choice = decide(); ",
-    "if ((choice !== null && performance.now() - (r.lastMutation ?? 0) >= ",
-    &format!("{}) || performance.now() >= deadline) resolve(choice); ", py_float(HANDOFF_QUIET_SECONDS * 1000.0)),
-    "else setTimeout(poll, 20); }; ",
-    // Chrome can hold a cross-origin frame's animation frames indefinitely, and CI hung in pytest for an hour
-    // awaiting one; the timer starts the poll anyway once the deadline has passed.
-    "let started = false; const start = () => { if (!started) { started = true; poll(); } }; ",
-    &format!("setTimeout(start, {}); ", py_float(HANDOFF_SECONDS * 1000.0)),
-    "if (was.doc.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }))",
+    // A field that was replaced is waited for by the focus that names its successor.
+    "const finish = () => resolve(decide()); ",
+    "const settle = () => { was.doc.removeEventListener('focusin', settle, true); r.nativeClearTimeout(timer); ",
+    "finish(); }; ",
+    &format!("const timer = r.nativeSetTimeout(() => {{ late = true; settle(); }}, {}); ", py_float(HANDOFF_SECONDS * 1000.0)),
+    "was.doc.addEventListener('focusin', settle, true); if (decide() !== null) settle(); }))",
     ]
     .concat()
 });

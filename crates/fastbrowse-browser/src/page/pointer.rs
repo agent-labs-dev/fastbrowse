@@ -21,11 +21,12 @@ impl CdpPage {
         let before = self.fingerprint().await?;
         let (popups, window_opens, requests) =
             (self.session.popups(), self.session.window_opens(), self.session.requests_mark());
-        for kind in ["mousePressed", "mouseReleased"] {
+        let mouse = |kind| {
             let params = json!({"type": kind, "x": x * width, "y": y * height, "button": "left", "clickCount": 1});
-            self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await?;
-        }
-        let changed = self.changed_since(&before, true, requests).await?;
+            self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id)))
+        };
+        tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
+        let changed = self.changed_since(&before, requests).await?;
         let opened = self.session.follow_popup(&popups, self.session.window_opens() != window_opens).await?.is_some();
         Ok(ActResult {
             outcome: StepOutcome::Executed,

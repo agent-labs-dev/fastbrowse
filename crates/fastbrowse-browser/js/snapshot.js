@@ -41,49 +41,16 @@
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
-  if (!registry.track) {
-    const roots = new WeakSet();
-    const changed = () => {
-      registry.lastMutation = performance.now();
-    };
-    const observer = new MutationObserver(changed);
-    registry.track = root => {
-      if (roots.has(root)) return;
-      roots.add(root);
-      observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
-      // Input handlers can defer a navigation or redraw without mutating yet. Start the quiet clock at the
-      // event, so the reply's travel time counts toward settling even when the action changes nothing.
-      for (const event of [
-        'input',
-        'change',
-        'scroll',
-        'wheel',
-        'pointermove',
-        'pointerdown',
-        'pointerup',
-        'keydown',
-        'keyup',
-      ])
-        root.addEventListener(event, changed, true);
-      changed();
-    };
-    registry.track(document);
-  }
   const clock = () => ({
     ready: document.readyState === 'interactive' || document.readyState === 'complete',
-    quietFor: performance.now() - registry.lastMutation,
     hidden: document.hidden,
   });
-  // The settle loop reads the clock alone until the page has gone quiet: the walk below reads every element and
-  // all the page's text, which on a large page costs more than the poll interval leaves room for.
-  if (mode === 'quiet') return clock();
   if (mode === 'fingerprint') {
     let hash = 2166136261;
     const hashText = text => {
       for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
     };
     const include = root => {
-      registry.track(root);
       hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
@@ -365,7 +332,6 @@
   let inaccessible = 0;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
-    registry.track(root);
     const listed = new Set(root.querySelectorAll(SELECTOR));
     for (const e of root.querySelectorAll('*')) {
       if (listed.has(e) || pressable(e)) yield e;

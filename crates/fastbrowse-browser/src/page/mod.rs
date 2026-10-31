@@ -38,10 +38,6 @@ use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
 pub(crate) const SETTLE_SECONDS: f64 = 5.0;
-pub(crate) const SETTLE_POLL_SECONDS: f64 = 0.1;
-pub(crate) const SETTLE_QUIET_SECONDS: f64 = 0.2;
-/// How long a settle waits for the page to draw a frame before it starts polling without one.
-pub(crate) const SETTLE_FRAME_SECONDS: f64 = 0.5;
 /// How many times one reading of the page starts again after the document it was reading was replaced. A
 /// self-clearing bot check such as PyPI's "Client Challenge" runs its script and then replaces itself with the page,
 /// and an observation in flight across that swap failed with CDP -32000 and ended the run as an error. This bounds
@@ -493,10 +489,11 @@ impl CdpPage {
     /// Wait for the document that replaced the one a read lost to be interactive and quiet, as `navigate` does.
     async fn await_document(&self) -> Result<(), BrowserError> {
         let session_id = self.session.active_session_id()?;
+        let requests = self.session.requests_mark();
         let settle = async {
             if self.ready(&session_id, SETTLE_SECONDS).await? {
                 // Unsettled by the deadline is still a readable page, as after `navigate`.
-                let _ = self.settled_fingerprint(SETTLE_SECONDS).await;
+                self.changed_since("", requests).await?;
             }
             Ok::<(), BrowserError>(())
         };
@@ -504,7 +501,6 @@ impl CdpPage {
         match self.until_dialog(settle).await {
             Some(Err(BrowserError::ContextLost(_))) => {
                 // The new document can be replaced in turn while this waits; the next read is what counts.
-                self.wait_for_lifecycle(self.lifecycle_mark(), SETTLE_POLL_SECONDS).await;
                 Ok(())
             }
             Some(Err(error)) => Err(error),
@@ -928,25 +924,25 @@ impl CdpPage {
              return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id)) !== r.observed.get(id)); }})({})",
             py_json(&json!(ids))
         );
-        // One renderer call waits for the guard to change, as `settled_fingerprint` waits for quiet: a poll from here
-        // paid a cloud round trip per interval and could let the wait outlast the change it was watching for.
+        // One renderer call hears every change: the page's own mutations say when to look again, and the time given
+        // only ends the watch.
         let watch = format!(
-            "new Promise(resolve => {{ const changed = () => {check}; \
-             const deadline = performance.now() + {}; \
-             const poll = () => {{ \
-             let moved = false; try {{ moved = changed(); }} catch {{ resolve(true); return; }} \
-             if (moved) {{ resolve(true); return; }} \
-             if (performance.now() >= deadline) {{ resolve(false); return; }} \
-             setTimeout(poll, {}); }}; poll(); }})",
+            "new Promise(resolve => {{ const r = window.__fastbrowse; if (!r?.observed) {{ resolve(true); return; }} \
+             const changed = () => {check}; \
+             const stop = moved => {{ observer.disconnect(); r.nativeClearTimeout(timer); resolve(moved); }}; \
+             const look = () => {{ let moved = true; try {{ moved = changed(); }} catch {{}} \
+             if (moved) stop(true); }}; \
+             const observer = new MutationObserver(look); \
+             observer.observe(document, {{childList: true, subtree: true, attributes: true, characterData: true}}); \
+             const timer = r.nativeSetTimeout(() => stop(false), {}); look(); }})",
             py_float(timeout_seconds * 1000.0),
-            py_float(SETTLE_POLL_SECONDS * 1000.0)
         );
         let Ok(changed) = self.evaluate(&session_id, &watch).await else {
             // A navigation destroys the context mid-check; `act` refuses the old controls on its own.
             return Ok(false);
         };
         if truthy(&changed) {
-            let _ = self.settled_fingerprint(SETTLE_SECONDS).await;
+            let _ = self.changed_since("", self.session.requests_mark()).await;
             return Ok(true);
         }
         Ok(false)
@@ -1124,6 +1120,7 @@ impl CdpPage {
         // they are shown.
         let mut failure = "NavigationError".to_owned();
         let mut timed_out = false;
+        let requests = self.session.requests_mark();
         for attempt in 0..NAVIGATE_ATTEMPTS {
             if attempt > 0 {
                 sleep(secs(NAVIGATE_RETRY_SECONDS * f64::from(1u32 << (attempt - 1)))).await;
@@ -1148,7 +1145,7 @@ impl CdpPage {
             }
             if self.ready(&session_id, load_timeout_seconds).await? {
                 // Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
-                let _ = self.settled_fingerprint(SETTLE_SECONDS).await;
+                let _ = self.changed_since("", requests).await;
                 return Ok(());
             }
             failure = "TimeoutError".to_owned();
@@ -1206,24 +1203,17 @@ impl CdpPage {
 
     /// Wait for the page to settle after an action, then report whether it changed.
     ///
-    /// A click that navigates returns before the navigation starts, so an immediate fingerprint would describe the old
-    /// page. Settled means an interactive document with a quiet DOM. A blocking JavaScript dialog freezes the renderer,
-    /// and an evaluate that fails mid-navigation is itself evidence of change. A page that has not changed while a
-    /// fetch or XHR request started after `requests` (a `requests_mark`) is open has not answered yet, so the settle
-    /// waits for the response, within the same deadline: a quick-add cart redrew 0.5s after its quiet DOM was read,
-    /// and the run took the add for a click that did nothing and added the item again.
+    /// Settled is what the browser says: no navigation of the page is on its way, no fetch, XHR or script request
+    /// started after `requests` (a `requests_mark`) is open, and the tasks the action queued have run. A click that navigates has requested it by the time the input is answered, and a request a
+    /// handler starts is reported before the reply to the read that follows. A quick-add cart redrew 0.5s after its
+    /// DOM went quiet, and the run took the add for a click that did nothing and added the item again: its open
+    /// request is what holds the settle now. A blocking JavaScript dialog freezes the renderer, and a read that fails
+    /// mid-navigation is itself evidence of change. `SETTLE_SECONDS` bounds a page that never does any of this.
     #[doc(hidden)]
-    pub async fn changed_since(&self, before: &str, input_settling: bool, requests: u64) -> Result<bool, BrowserError> {
+    pub async fn changed_since(&self, before: &str, requests: u64) -> Result<bool, BrowserError> {
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
-        // Fills already check retention after insertion. Other inputs start the top renderer's quiet clock; events in
-        // a separate frame cannot reach it, so those still need the delay.
-        if !input_settling {
-            // Let the renderer's own quiet clock start. The page's lifecycle events say when the document is still
-            // moving, so this waits on the page rather than a flat interval that expires regardless.
-            self.wait_for_lifecycle(self.lifecycle_mark(), SETTLE_QUIET_SECONDS).await;
-        }
         // A deadline reached while the page sat quiet and unchanged, waiting only on a request that never answered,
         // is a page the action left as it was; one reached while the page kept moving is a change.
         let mut unchanged = false;
@@ -1238,16 +1228,29 @@ impl CdpPage {
             // Taken before the read: a request that finishes while the page is read bumps it, and its handler's redraw
             // emits no lifecycle event of its own, so the page is read again rather than judged unchanged.
             let mark = self.lifecycle_mark();
-            let settled = self.settled_fingerprint(remaining.as_secs_f64());
+            if self.session.navigating() {
+                unchanged = false;
+                tokio::select! {
+                    () = &mut dialog => return Ok(true),
+                    _ = self.wait_for_lifecycle(mark, remaining.as_secs_f64()) => continue,
+                }
+            }
+            let settled = self.settled_fingerprint();
             tokio::select! {
                 () = &mut dialog => return Ok(true),
                 () = sleep(remaining) => return Ok(!unchanged),
                 out = settled => match out {
-                    Ok((true, current)) if current.as_deref() != Some(before) => return Ok(true),
-                    Ok((true, _)) if !self.session.requests_open_since(requests) && self.lifecycle_mark() == mark => {
-                        return Ok(false);
+                    Ok((true, current)) => {
+                        let differs = current.as_deref() != Some(before);
+                        if !self.session.requests_open_since(requests)
+                            && !self.session.navigating()
+                            && self.lifecycle_mark() == mark
+                        {
+                            return Ok(differs);
+                        }
+                        unchanged = !differs;
                     }
-                    Ok((quiet, _)) => unchanged = quiet,
+                    Ok((false, _)) => unchanged = false,
                     // Navigation destroys the promise with its execution context, which is itself a change, so a
                     // deadline reached here is not read as a page left as it was. Only this read is retried.
                     Err(_) => unchanged = false,
@@ -1269,32 +1272,14 @@ impl CdpPage {
     }
 
     #[doc(hidden)]
-    pub async fn settled_fingerprint(&self, timeout_seconds: f64) -> Result<(bool, Option<String>), BrowserError> {
-        // Poll inside the renderer: a cloud round trip can exceed the entire old per-poll timeout. Hidden tabs throttle
-        // timers, so return a single sample for the caller to poll in that case. The fingerprint walks the whole
-        // document, so it is taken only once the clock says quiet, or as the wait ends; taking it tracks any shadow
-        // root or frame added since, which restarts the quiet clock.
+    pub async fn settled_fingerprint(&self) -> Result<(bool, Option<String>), BrowserError> {
+        // A message comes back after the tasks queued before it, so what the action queued has run. It needs no frame
+        // and no timer: a cloud browser that draws nothing holds both back.
         let script = format!(
-            "new Promise(resolve => {{ const sample = {page_js}; \
-             const deadline = performance.now() + {deadline}; \
-             const quietOf = state => state.ready && state.quietFor >= {quiet}; \
-             const poll = () => {{ \
-             let state = sample('quiet'); \
-             if (quietOf(state) || state.hidden || performance.now() >= deadline) state = sample('fingerprint'); \
-             const quiet = quietOf(state); \
-             if (quiet || state.hidden || performance.now() >= deadline) {{ \
-             resolve([quiet, state.ready ? state.fingerprint : null]); return; }} \
-             setTimeout(poll, state.ready && !quiet ? Math.min({poll}, \
-             Math.max(1, {quiet} - state.quietFor)) \
-             : {poll}); }}; \
-             let started = false; const start = () => {{ if (!started) {{ started = true; poll(); }} }}; \
-             setTimeout(start, {frame}); \
-             if (document.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }})",
+            "new Promise(resolve => {{ const sample = {page_js}; const {{port1, port2}} = new MessageChannel(); \
+             port1.onmessage = () => {{ const state = sample('fingerprint'); port1.close(); \
+             resolve([state.ready, state.ready ? state.fingerprint : null]); }}; port2.postMessage(0); }})",
             page_js = self.page_js,
-            deadline = py_float(timeout_seconds * 1000.0),
-            quiet = py_float(SETTLE_QUIET_SECONDS * 1000.0),
-            poll = py_float(SETTLE_POLL_SECONDS * 1000.0),
-            frame = py_float(SETTLE_FRAME_SECONDS * 1000.0),
         );
         let result = self.evaluate(&self.session.active_session_id()?, &script).await?;
         match result.as_array().map(Vec::as_slice) {

@@ -2,11 +2,10 @@ mod common;
 mod misc_support;
 
 use std::collections::HashSet;
-use std::time::Instant;
 
 use common::{Harness, eval_active, harness, sites, wait_until};
 use fastbrowse_core::page::BlockKind;
-use misc_support::{content_capture, path, set_body, text_of, texts, visible};
+use misc_support::{content_capture, path, set_body, text_of, texts};
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
@@ -664,28 +663,5 @@ async fn test_a_document_without_snapshot_installs_it_on_the_first_call() {
     let observation = h.observe().await;
     assert!(!observation.controls.is_empty());
     assert_eq!(eval_active(&h.session, "!!globalThis.__fastbrowseScripts").await, serde_json::json!(true));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_settle_waits_for_a_shadow_root_added_while_it_reads_the_clock() {
-    let Some(h) = harness().await else { return };
-    // A hidden tab returns one sample instead of waiting for quiet.
-    visible(&h.session).await;
-    h.page.navigate(&sites().main, None).await.expect("navigate");
-    // The host lands in the light DOM once; everything after happens inside its shadow root, which the document's
-    // observer cannot see until a full sample starts watching it.
-    eval_active(
-        &h.session,
-        "(() => { const host = document.createElement('div'); document.body.append(host); \
-         const root = host.attachShadow({mode: 'open'}); let n = 0; \
-         const tick = () => { root.textContent = String(n++); if (n < 16) setTimeout(tick, 50); }; tick(); })()",
-    )
-    .await;
-    let started = Instant::now();
-    let (stable, _) = h.page.settled_fingerprint(3.0).await.expect("settle");
-    assert!(stable);
-    // 16 changes 50ms apart end about 750ms in; settling needs 200ms of quiet after the last.
-    assert!(started.elapsed().as_secs_f64() >= 0.8);
     h.close().await;
 }

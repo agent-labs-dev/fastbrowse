@@ -265,11 +265,7 @@ impl CdpPage {
         {
             self.until_dialog(self.await_popup(&target.0, target.2)).await;
         }
-        let active_now = self.session.active_session_id().ok();
-        let input_settling = action.operation == Operation::Fill
-            || (!matches!(action.operation, Operation::Back | Operation::SwitchTab | Operation::Dialog)
-                && target.as_ref().is_none_or(|t| Some(&t.0) == active_now.as_ref()));
-        let mut changed = self.changed_since(&before_fingerprint, input_settling, requests).await?;
+        let mut changed = self.changed_since(&before_fingerprint, requests).await?;
         if matches!(action.operation, Operation::Click | Operation::Enter)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {
@@ -1088,10 +1084,12 @@ impl CdpPage {
         if outcome != StepOutcome::Executed {
             return Ok((outcome, detail));
         }
-        for kind in ["mousePressed", "mouseReleased"] {
+        // Sent together and in order: Chrome runs them in turn, and a round trip between them buys nothing.
+        let mouse = |kind| {
             let params = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1});
-            self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&target.0))).await?;
-        }
+            self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&target.0)))
+        };
+        tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
         Ok((StepOutcome::Executed, None))
     }
 
@@ -1413,12 +1411,13 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
          {mask}e.ownerDocument.defaultView.focus(); e.focus({{preventScroll: true}}); \
          if (!e.isConnected || e.getRootNode().activeElement !== e) return false; \
          return new Promise(resolve => {{ \
-         const deadline = Date.now() + {deadline}; \
+         const view = e.ownerDocument.defaultView; \
+         const stop = done => {{ view.removeEventListener('focus', check); clearTimeout(timer); resolve(done); }}; \
          const check = () => {{ if (!e.isConnected || e.getRootNode().activeElement !== e) \
-         {{ resolve(false); return; }} \
-         if (e.ownerDocument.hasFocus()) {{ {prepare}resolve(true); return; }} \
-         if (Date.now() > deadline) {{ resolve(false); return; }} \
-         setTimeout(check, 10); }}; check(); }}); }})",
+         {{ stop(false); return; }} \
+         if (e.ownerDocument.hasFocus()) {{ {prepare}stop(true); }} }}; \
+         view.addEventListener('focus', check); \
+         const timer = setTimeout(() => stop(false), {deadline}); check(); }}); }})",
         deadline = py_float(FOCUS_SETTLE_SECONDS * 1000.0),
     )
 }

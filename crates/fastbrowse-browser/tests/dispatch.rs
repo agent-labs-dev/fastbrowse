@@ -477,7 +477,8 @@ async fn test_uncertain_press_is_never_replayed() {
     let obs = h.observe().await;
     let error = h.page.act(&action(Operation::Click, find(&obs, "One way")), &obs).await.expect_err("press is lost");
     assert_eq!(error.to_string(), format!("Input.dispatchMouseEvent failed (CDP {PROXY_ERROR})"));
-    assert_eq!(eval_active(&h.page, "[presses, clicks]").await, json!([["target"], []]));
+    // Press and release travel together, so the release has already left: what must hold is one press, never two.
+    assert_eq!(eval_active(&h.page, "presses").await, json!(["target"]));
     h.close().await;
 }
 
