@@ -479,7 +479,7 @@ impl Agent {
                 };
                 Ok(task.chars().skip(first.start).take(last.end - first.start).collect())
             }
-            _ => Err(self.missing(state, target)),
+            _ => Err(self.missing(state, observation, target)),
         }
     }
 
@@ -598,10 +598,10 @@ impl Agent {
 
     /// A field the task gives no value for is first a wrong pick, then a missing input.
     ///
-    /// Most such fields are optional, and the right move is to leave them. Recovery is told once, so it can pick
-    /// another step; a required field it sends the run back to still ends it here.
-    fn missing(&self, state: &mut RunState, target: &Control) -> Flow {
-        let key = (target.label.clone(), target.context.clone());
+    /// Most such fields are optional, and the right move is to leave them on every page. Recovery is told once a page,
+    /// so it can take another step; a required field it sends the run back to still ends it here.
+    fn missing(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
+        let key = (observation.page_key.clone(), target.label.clone(), target.context.clone());
         if state.missing.contains(&key) {
             return Stop::new(
                 Status::NeedsInput,

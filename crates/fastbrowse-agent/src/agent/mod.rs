@@ -565,7 +565,7 @@ impl Agent {
             no_value_fields: state
                 .missing
                 .iter()
-                .map(|(label, _)| label.clone())
+                .map(|(_, label, _)| label.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect(),

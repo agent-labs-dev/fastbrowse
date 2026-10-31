@@ -220,8 +220,8 @@ pub(crate) struct RunState {
     pub visited: IndexMap<String, ()>,
     /// A decision was dropped because the page redrew under it, so nothing is watched until an action is taken.
     pub redecided: bool,
-    /// Fields the task gives no value for, which recovery has been told about once, by label and context.
-    pub missing: HashSet<(String, Option<String>)>,
+    /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
+    pub missing: HashSet<(String, String, Option<String>)>,
 }
 
 impl RunState {
