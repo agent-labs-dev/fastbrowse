@@ -87,7 +87,7 @@ on:
         type: boolean
         default: false
       refresh_competitors:
-        description: Also run Browser Use and Browser Harness live and write the rows of the competitor reference. Needs a full head-to-head group
+        description: Also run Browser Use and Browser Harness live and write the rows of the competitor reference. A smoke writes none. Needs the head-to-head group
         required: true
         type: boolean
         default: false
@@ -134,8 +134,8 @@ jobs:
           REFRESH: ${{ inputs.refresh_competitors }}
           GROUPS_CHOSEN: ${{ inputs.groups }}
         run: |
-          if test "$REFRESH" = true && { test "$SMOKE" = true || test "$GROUPS_CHOSEN" = fastbrowse; }; then
-            echo "::error::refresh_competitors needs a full run of the head-to-head group"; exit 1
+          if test "$REFRESH" = true && test "$GROUPS_CHOSEN" = fastbrowse; then
+            echo "::error::refresh_competitors needs the head-to-head group"; exit 1
           fi
           case "$REPEAT" in
             ''|*[!0-9]*) echo "repeat must be an integer, got '$REPEAT'"; exit 1 ;;
