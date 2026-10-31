@@ -951,6 +951,7 @@ impl Agent {
             page_facts,
             page_read: Self::page_read(state, observation),
             reload: state.reload_target(&observation.url),
+            open_list: state.list_url.clone().filter(|_| !state.continuing.is_empty()),
             screenshot: None,
         })
     }

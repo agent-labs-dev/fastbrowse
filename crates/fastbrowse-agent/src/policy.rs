@@ -64,6 +64,15 @@ fn untrusted(rules: &str) -> String {
 
 pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTION_RULES));
 pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
+/// Asked of a step while a list is open. Stated in `page_facts` alone this moved neither pick: replayed on recorded
+/// steps, Jev left a list for a record's link and finished off it until its own questions said what an open list means.
+const OPEN_LIST_TARGET: &str = "\nWhile a list being read goes on, the control that turns to its next page or loads more of it is the target: a record's own links lead away from the list.";
+
+fn open_list_action(list: &str) -> String {
+    format!(
+        "\nA list being read goes on: its last page read is {list}, and the notes hold only the pages read so far, so a total or comparison over it cannot be finished yet. Show the rest and read it: turn to its next page, load more of it, or narrow it with the page's own filter or sort. On any other page, a record's own page included, the list is not in view: go back to it."
+    )
+}
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
 pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
@@ -219,6 +228,9 @@ pub struct StepContext {
     /// The page's own address when a site failure that can clear stands on it, offered to navigate to as a reload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<String>,
+    /// The last page read of a list the reader saw go on, which the run has to come back to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_list: Option<String>,
     /// The viewport as a PNG, given to a route that takes images.
     #[serde(skip)]
     pub screenshot: Option<Vec<u8>>,
@@ -256,6 +268,7 @@ impl StepContext {
             page_facts: Vec::new(),
             page_read: false,
             reload: None,
+            open_list: None,
             screenshot: None,
         }
     }
@@ -322,6 +335,8 @@ pub struct Request {
     pub destinations: Vec<Control>,
     pub destination_groups: Vec<Vec<Control>>,
     pub navigation_groups: Vec<Vec<String>>,
+    /// The rules a target is chosen by, again when a group's pick asks for its element.
+    pub target_rules: String,
 }
 
 /// Completed relevance scores for one document and exact task context, including cancelled passes.
@@ -834,12 +849,17 @@ pub fn build_request(
     if let Some(reload) = context.reload.as_ref().filter(|url| !urls.contains(url)) {
         urls.push(reload.clone());
     }
+    if let Some(list) = context.open_list.as_ref().filter(|url| **url != observation.url && !urls.contains(url)) {
+        urls.push(list.clone());
+    }
     let offered = offered_operations(observation, &indexed, context, &urls);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
+    let list_rule = context.open_list.as_deref().map(open_list_action).unwrap_or_default();
+    let target_rules = format!("{}{}", *TARGET, if context.open_list.is_some() { OPEN_LIST_TARGET } else { "" });
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            NEXT_ACTION.as_str(),
+            format!("{}{list_rule}", *NEXT_ACTION),
             offered.iter().map(|op| (op.as_str().to_string(), Value::from(operation_label(*op)))),
         )
         .into(),
@@ -881,12 +901,12 @@ pub fn build_request(
         }
         let candidates = &indexed[operation];
         if candidates.len() <= limit {
-            questions.insert(keys::target(*operation), target_question(*operation, candidates).into());
+            questions.insert(keys::target(*operation), target_question(*operation, candidates, &target_rules).into());
             targets.insert(*operation, candidates.clone());
             continue;
         }
         let parts = chunks(candidates, size);
-        questions.insert(keys::group(*operation), group_question(*operation, &parts, &TARGET).into());
+        questions.insert(keys::group(*operation), group_question(*operation, &parts, &target_rules).into());
         groups.insert(*operation, parts);
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
@@ -955,6 +975,7 @@ pub fn build_request(
         destinations: drops,
         destination_groups: drop_groups,
         navigation_groups,
+        target_rules,
     }
 }
 
@@ -1003,7 +1024,8 @@ async fn evaluate(
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
         let key = keys::target(operation);
-        let questions = IndexMap::from([(key.clone(), target_question(operation, group).into())]);
+        let questions =
+            IndexMap::from([(key.clone(), target_question(operation, group, &request.target_rules).into())]);
         let inner = ask(&questions).await?;
         let target_answer = choice_answer(&inner, &key)?;
         target = Some(find_control(group, &target_answer.choice)?);
@@ -1256,13 +1278,13 @@ fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
     )
 }
 
-fn target_question(operation: Operation, candidates: &[Control]) -> ChoiceQuestion {
+fn target_question(operation: Operation, candidates: &[Control], rules: &str) -> ChoiceQuestion {
     // Sending only the label and pointing Jev at the shared state for the rest is two thirds smaller on a dense page,
     // and it was tried. It bought no measured latency, because the request was never the slow part, and a criterion
     // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
     // the attributes in front of it.
     choice(
-        dumps(&json!({"rules": *TARGET, "operation": operation.as_str()})),
+        dumps(&json!({"rules": rules, "operation": operation.as_str()})),
         candidates.iter().map(|c| (c.id.clone(), Value::Object(target_element(c, operation)))),
     )
 }
@@ -1611,6 +1633,23 @@ mod tests {
         let read = block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
         assert_eq!((read.operation, read.target.map(|c| c.id)), (Operation::Click, Some("b2".into())));
         assert!(!jev.requests.lock().unwrap()[1].contains_key("read_assessment"));
+    }
+
+    #[test]
+    fn test_an_open_list_is_put_in_the_questions_that_can_leave_it() {
+        let page = observation(vec![button(1)]);
+        let mut context = StepContext::new("Count the quotes by one author across every page");
+        let rules = |request: &Request| {
+            let written = |key: &str| request.questions[key].dump_json();
+            (written(keys::OPERATION), written(&keys::target(Operation::Click)))
+        };
+        let closed = rules(&build_request(&page, &page.controls, &context, &Config::default(), 40));
+        assert!(!closed.0.contains("A list being read goes on") && !closed.1.contains("list being read goes on"));
+        context.open_list = Some("https://example.com/page/2/".into());
+        let request = build_request(&page, &page.controls, &context, &Config::default(), 40);
+        let open = rules(&request);
+        assert!(open.0.contains("its last page read is https://example.com/page/2/"));
+        assert!(open.1.contains("a record's own links lead away from the list"));
     }
 
     #[test]
