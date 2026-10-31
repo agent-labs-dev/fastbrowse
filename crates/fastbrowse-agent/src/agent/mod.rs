@@ -418,7 +418,7 @@ impl Agent {
             }
             (result, loop_returned, needs_browser)
         });
-        let (mut result, mut loop_returned, needs_browser) = scoped.await;
+        let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
         if needs_browser {
             // Once the head start is settled, a run that needs a browser reports what the ledger spent and nothing
             // else: no budget check and no ending frame.

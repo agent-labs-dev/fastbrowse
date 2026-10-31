@@ -329,6 +329,32 @@ impl Trace {
         span.outcome = if result.is_ok() { "ok" } else { "error" };
         result
     }
+
+    /// Trace how long the run waited on one phase of a step, on the clock `call` spans use, so a run's time can be
+    /// split into what it waited on: a browser round trip is in no model call's span. A phase dropped before it
+    /// finished is traced too, as a redraw drops one.
+    pub async fn phase<F: Future>(&self, phase: &'static str, future: F) -> F::Output {
+        let _phase = Phase { trace: self, phase, began: monotonic() };
+        future.await
+    }
+}
+
+struct Phase<'a> {
+    trace: &'a Trace,
+    phase: &'static str,
+    began: f64,
+}
+
+impl Drop for Phase<'_> {
+    fn drop(&mut self) {
+        self.trace.event("phase", || {
+            let mut record = Map::new();
+            record.insert("phase".into(), self.phase.into());
+            record.insert("began".into(), self.began.into());
+            record.insert("ended".into(), monotonic().into());
+            record
+        });
+    }
 }
 
 struct Span<'a> {
