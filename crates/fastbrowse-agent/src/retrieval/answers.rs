@@ -109,7 +109,7 @@ impl Schema for AnswerDraft {
     }
 }
 
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told, as things stand at the end of the notes, not how the work was done. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value.\n\n# Trust\n";
 
 /// The answer Jev said must be composed, written by the LLM from the notes. A claim citing nothing the notes hold is
 /// dropped: every claim stands on its quotes.

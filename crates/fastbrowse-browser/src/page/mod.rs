@@ -119,6 +119,8 @@ struct SnapshotControl {
     options: Vec<String>,
     input_type: Option<String>,
     input_name: Option<String>,
+    #[serde(default)]
+    max_length: Option<usize>,
     autocomplete: Option<String>,
     submit_semantics: Option<String>,
     checked: Option<bool>,
@@ -356,6 +358,7 @@ fn control_from_raw(
         options: c.options.clone(),
         input_type: c.input_type.clone(),
         input_name: c.input_name.clone(),
+        max_length: c.max_length,
         autocomplete: c.autocomplete.clone(),
         submit_semantics: c.submit_semantics.clone(),
         checked: c.checked,

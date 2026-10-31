@@ -38,7 +38,8 @@ fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, Value> {
         .map(|word| {
             let around: String = chars[word.before(WORD_CONTEXT)..word.after(WORD_CONTEXT)].iter().collect();
             let picked: String = chars[word.start..word.end].iter().collect();
-            (word.index.to_string(), Value::from(format!("{} in: {around}", text::repr(&picked))))
+            let piece = word.piece.map_or(String::new(), |(n, of)| format!(" (piece {n} of {of})"));
+            (word.index.to_string(), Value::from(format!("{}{piece} in: {around}", text::repr(&picked))))
         })
         .collect()
 }
@@ -290,7 +291,7 @@ impl Agent {
         // A value can come from a page, such as a code a site sent: the words offered are the task's, then what Jev read.
         let read: Vec<&str> = state.notes.facts().iter().filter(|f| f.answers).map(|f| f.text.as_str()).collect();
         let task = if read.is_empty() { state.task.clone() } else { format!("{}\n{}", state.task, read.join("\n")) };
-        let mut group = words(&task);
+        let mut group = words(&task, target.max_length);
         let max = self.jev.profile().max_choice_options;
         let mut sources: IndexMap<String, Value> = state
             .inputs
@@ -305,7 +306,10 @@ impl Agent {
             "The task or what was read states this field's value, whole or as part of something longer.".into(),
         );
         sources.insert(NO_VALUE.into(), "Neither the task nor what was read gives a value for this field.".into());
-        let label = text::repr(&target.label);
+        let mut label = text::repr(&target.label);
+        if let Some(limit) = target.max_length {
+            label = format!("{label}, which holds at most {limit} characters,");
+        }
         // Amazon labels its sign-in field "Enter mobile number or email", and Jev, seeing only a secret named
         // `username`, chose the task. Only for signing in: a checkout's contact email is the task's value.
         let source_question = format!(
@@ -339,19 +343,28 @@ impl Agent {
             group = parts[chosen].to_vec();
         }
         let options = word_options(&task, &group);
+        let described = describe(target);
+        let tried: Vec<String> = state
+            .history
+            .iter()
+            .filter(|entry| entry.operation == Some(Operation::Fill) && entry.target.as_deref() == Some(&described))
+            .filter_map(|entry| entry.text.as_deref().map(text::repr))
+            .collect();
+        let tried =
+            if tried.is_empty() { String::new() } else { format!(" Already typed here: {}.", tried.join(", ")) };
         let mut asked = vec![("source", source_question, sources)];
         if !group.is_empty() {
             asked.push((
                 "first",
                 format!(
-                    "If the task states the value for {label}, which of its words begins the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. A value kept for later, in case something fails, is not the value yet."
+                    "If the task states the value for {label}, which of its words begins the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. When the task gives this field several values, the one it gives first comes first, and a later one follows once the page has refused the one before.{tried}"
                 ),
                 options.clone(),
             ));
             asked.push((
                 "last",
                 format!(
-                    "If the task states the value for {label}, which of its words ends the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. A value kept for later, in case something fails, is not the value yet."
+                    "If the task states the value for {label}, which of its words ends the value? Take the shortest span the field needs: a search takes what is looked for, not the request around it. When the task gives this field several values, the one it gives first comes first, and a later one follows once the page has refused the one before.{tried}"
                 ),
                 options,
             ));
@@ -368,8 +381,30 @@ impl Agent {
             let index = picks.get(key)?.parse::<usize>().ok()?;
             group.iter().find(|word| word.index == index)
         };
-        match (source, word("first"), word("last")) {
+        // A field with a limit takes one piece, whatever the end was picked as.
+        let (first, last) = match (target.max_length, word("first"), word("last")) {
+            (Some(limit), Some(first), Some(last)) if last.end.saturating_sub(first.start) > limit => {
+                (Some(last), Some(last))
+            }
+            (Some(_), Some(first), Some(last)) if last.index < first.index => (Some(first), Some(first)),
+            (_, first, last) => (first, last),
+        };
+        match (source, first, last) {
             (IN_TASK, Some(first), Some(last)) if first.index <= last.index => {
+                // The two ends are picked apart, and each can land on a different value the task gives: the end is
+                // asked again knowing where this value begins.
+                let last = if first.index == last.index {
+                    last
+                } else {
+                    let rest: Vec<Word> = group.iter().filter(|word| word.index >= first.index).cloned().collect();
+                    let begins: String = task.chars().skip(first.start).take(first.end - first.start).collect();
+                    let question = format!(
+                        "The value for {label} begins at {}. Which word ends this one value? Take the shortest span the field needs.",
+                        text::repr(&begins)
+                    );
+                    let picked = self.ask_choice(state, observation, &question, word_options(&task, &rest)).await?;
+                    group.iter().find(|word| word.index.to_string() == picked).unwrap_or(last)
+                };
                 Ok(task.chars().skip(first.start).take(last.end - first.start).collect())
             }
             _ => Err(self.missing(state, target)),
@@ -509,6 +544,16 @@ impl Agent {
     ) -> Step<String> {
         let picks = self.ask_choices(state, observation, vec![("pick", question.to_string(), criteria)]).await?;
         Ok(picks["pick"].clone())
+    }
+
+    /// Whether the task wants something reported back, rather than only something carried out.
+    pub(super) async fn asks_to_be_told(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let criteria = IndexMap::from([
+            ("told".to_string(), Value::from("The task asks to be told something, such as a value, a name or a list.")),
+            ("carried_out".to_string(), Value::from("The task only asks for something to be carried out.")),
+        ]);
+        let question = "What does the task want at its end?";
+        Ok(self.ask_choice(state, observation, question, criteria).await? == "told")
     }
 
     /// Several choices about this page in one request, each answer one its question offered.

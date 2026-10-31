@@ -86,6 +86,9 @@ pub struct Control {
     pub input_type: Option<String>,
     #[serde(default)]
     pub input_name: Option<String>,
+    /// The most characters this field accepts, when it sets a limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
     #[serde(default)]
     pub autocomplete: Option<String>,
     /// The form submission triggered by Enter in a field or clicking a submit button.
@@ -133,6 +136,7 @@ impl Control {
             options: Vec::new(),
             input_type: None,
             input_name: None,
+            max_length: None,
             autocomplete: None,
             submit_semantics: None,
             checked: None,

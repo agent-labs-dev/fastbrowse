@@ -40,6 +40,13 @@ impl Agent {
         {
             return Err(failure.stop().into());
         }
+        // DONE on nothing read, when the task wants to be told something, is a step short of the answer.
+        if output_schema.is_none() && state.notes.facts().is_empty() && self.asks_to_be_told(state, observation).await?
+        {
+            let reason = "Nothing read so far answers the task, so it is not done.";
+            self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
+            return Ok(None);
+        }
         let result = Box::pin(self.conclude(state, output_schema)).await?;
         let reached = match until {
             Some(until) => until(self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url)).await,

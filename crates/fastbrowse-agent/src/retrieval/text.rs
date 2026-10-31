@@ -269,6 +269,15 @@ pub(crate) fn spans(value: &str, kind: SpanKind) -> Vec<(usize, usize, String)> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_word_past_a_limit_is_cut_into_numbered_pieces() {
+        let cut = super::words("code 42 x", Some(1));
+        let pieces: Vec<_> = cut.iter().map(|word| (word.start, word.piece)).collect();
+        assert_eq!(cut.len(), 7);
+        assert_eq!(pieces[4], (5, Some((1, 2))));
+        assert_eq!(pieces[6], (8, None));
+    }
+
     use super::*;
 
     #[test]
@@ -297,6 +306,8 @@ pub(crate) struct Word {
     pub index: usize,
     pub start: usize,
     pub end: usize,
+    /// Which piece this is, and of how many, of a word cut to a limit.
+    pub piece: Option<(usize, usize)>,
     /// The start of each word, this one's included, so context around it is found by counting words.
     starts: std::sync::Arc<Vec<usize>>,
     ends: std::sync::Arc<Vec<usize>>,
@@ -315,7 +326,8 @@ impl Word {
 }
 
 /// `value`'s whitespace-separated words with the punctuation around each trimmed off.
-pub(crate) fn words(value: &str) -> Vec<Word> {
+/// A word longer than `limit` characters is cut into pieces of that size.
+pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
     let chars: Vec<char> = value.chars().collect();
     let mut spans: Vec<(usize, usize)> = Vec::new();
     let mut from = None;
@@ -333,11 +345,32 @@ pub(crate) fn words(value: &str) -> Vec<Word> {
             _ => {}
         }
     }
+    let mut pieces: Vec<Option<(usize, usize)>> = vec![None; spans.len()];
+    if let Some(limit) = limit.filter(|limit| *limit > 0) {
+        let cut: Vec<((usize, usize), Option<(usize, usize)>)> = spans
+            .iter()
+            .flat_map(|&(start, end)| {
+                let count = (end - start).div_ceil(limit);
+                (start..end)
+                    .step_by(limit)
+                    .enumerate()
+                    .map(move |(n, from)| ((from, (from + limit).min(end)), (count > 1).then_some((n + 1, count))))
+            })
+            .collect();
+        (spans, pieces) = cut.into_iter().unzip();
+    }
     let starts: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.0).collect());
     let ends: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.1).collect());
     spans
         .iter()
         .enumerate()
-        .map(|(index, &(start, end))| Word { index, start, end, starts: starts.clone(), ends: ends.clone() })
+        .map(|(index, &(start, end))| Word {
+            index,
+            start,
+            end,
+            piece: pieces[index],
+            starts: starts.clone(),
+            ends: ends.clone(),
+        })
         .collect()
 }

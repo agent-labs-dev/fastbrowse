@@ -865,7 +865,7 @@ pub fn build_request(
     questions.insert(
         "site_failure".into(),
         noul(
-            "Does this page report that the site failed to deliver what was asked, instead of showing it? An error message in place of results, a request the site says went wrong, a temporary outage, rate limit or maintenance notice, a browser error page, or a load that has not finished across steps are failures, even when the page also shows an empty result such as no matches. An ordinary empty result the site reports as an answer, a form, or a page still showing its content is not.",
+            "Does this page report that the site failed to deliver what was asked, instead of showing it? An error message in place of results, a request the site says went wrong, a temporary outage, rate limit or maintenance notice, a browser error page, or a load that has not finished across steps are failures, even when the page also shows an empty result such as no matches. An ordinary empty result the site reports as an answer, a form, a form rejecting a value entered in it, or a page still showing its content is not.",
             "The page reports that the site failed or has not finished delivering the content.",
             "The page shows the site's content or its ordinary answer, empty or not.",
         ),

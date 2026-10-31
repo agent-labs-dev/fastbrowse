@@ -485,6 +485,7 @@
       sensitive: secret(source),
       input_type: source.type || null,
       input_name: source.getAttribute('name') || null,
+      max_length: source.maxLength > 0 ? source.maxLength : null,
       autocomplete: source.getAttribute('autocomplete') || null,
       frame_origin: e.ownerDocument.location.origin,
       frame_path: framePath(e.ownerDocument),

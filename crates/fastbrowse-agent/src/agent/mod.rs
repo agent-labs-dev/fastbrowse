@@ -559,13 +559,24 @@ impl Agent {
     fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
         let mut facts = Vec::new();
         if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
-            facts.push(format!(
-                "This page answered HTTP {status}: the address did not load successfully in this browser session."
-            ));
+            facts.push(format!("This page answered HTTP {status}."));
         }
         if Self::page_read(state, observation) {
             facts
                 .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
+        }
+        let here = url::Url::parse(&observation.url).ok();
+        let read_links: Vec<String> = observation
+            .controls
+            .iter()
+            .filter(|control| {
+                let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
+                leads_to.is_some_and(|url| state.read_urls.contains(url.as_str()))
+            })
+            .map(|control| fastbrowse_core::py::text::repr(&control.label))
+            .collect();
+        if !read_links.is_empty() {
+            facts.push(format!("These links lead to pages already read: {}.", read_links.join(", ")));
         }
         let document = &observation.document_key;
         let read = state.read_documents.get(document).copied();

@@ -19,6 +19,7 @@ impl Agent {
         // This content is read now, so the notes hold what the page shows.
         state.read_documents.insert(observation.document_key.clone(), false);
         state.read_pages.insert(observation.page_key.clone());
+        state.read_urls.insert(observation.url.clone());
         let mut capture = capture;
         if text::strip(&capture.text).is_empty() {
             // An empty page may still be rendering; only new content warrants a read.
@@ -35,7 +36,10 @@ impl Agent {
         let PageRead { facts, compose } =
             read_page(&*self.jev, &capture, &state.task, tokens, Some(&ledger), &self.trace).await?;
         let added = facts.len();
-        state.compose |= compose;
+        // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
+        if added > 0 {
+            state.compose = compose;
+        }
         state.notes.remember_capture(&capture);
         for fact in facts {
             state.notes.add(fact);

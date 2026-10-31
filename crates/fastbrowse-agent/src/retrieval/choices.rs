@@ -25,6 +25,7 @@ use crate::memory::{Fact, fact_id, unique};
 const FOCUS_WINDOW_CHARS: i64 = 1500;
 /// The key the task's one choice goes under.
 const CHOICE: &str = "task";
+const ABSENT: &str = "absent";
 /// What Jev answers when no one candidate states the answer.
 const SYNTHESIS: &str = "synthesis";
 
@@ -112,7 +113,7 @@ fn read_request(
     // Jev judges the task's meaning in this same call; word lists or passage length cannot reliably tell a scalar lookup
     // from synthesis.
     let mut instructions = format!(
-        "{UNTRUSTED}\n\nTask: {task}\nHow does this page answer the task? Select absent when the page holds no evidence for it, not even part of it. Observed DOM metadata can evidence absence within its stated scope, such as zero visible h1 headings. An explicit empty-result message is a finding: select the candidate stating it. Select a candidate when that candidate alone states what answers it; a total the page states is one candidate, counting items is not. Select synthesis when the answer must be composed from several facts, on this page or across pages: lists, comparisons, summaries, explanations, counts or calculations. This page holding one of those facts is reason to select it."
+        "{UNTRUSTED}\n\nTask: {task}\nHow does this page answer the task? Select absent when the page holds no evidence for it, not even part of it. Observed DOM metadata can evidence absence within its stated scope, such as zero visible h1 headings. An explicit empty-result message is a finding: select the candidate stating it. Select a candidate when that candidate alone states what answers it. Select synthesis when the answer must be composed from several facts, on this page or across pages: lists, comparisons, summaries, explanations, counts or calculations. This page holding one of those facts is reason to select it."
     );
     if groups.len() < candidates.len() {
         instructions.push_str(" Repeated values share one candidate with all their source contexts. A value answers only when a source states it for the requested record and field.");
@@ -122,7 +123,7 @@ fn read_request(
             .push_str(" The passages that fit are shown, most relevant first; other passages have been omitted.");
     }
     let mut offered = criteria;
-    offered.insert("absent".into(), "This page contains no evidence for the task; skip reading it.".into());
+    offered.insert(ABSENT.into(), "This page contains no evidence for the task; skip reading it.".into());
     offered.insert(
         SYNTHESIS.into(),
         "The answer must be composed from several facts, and this page holds at least one.".into(),
@@ -285,14 +286,23 @@ pub(crate) async fn read_page(
     }
     let Some(Answer::Choice(answer)) = evaluation.answers.get(CHOICE) else { return Ok(PageRead::default()) };
     let groups = read_groups(&candidates);
-    if answer.choice == SYNTHESIS {
+    // Absent is one option against every way the page could hold evidence: it stands only when more likely than them
+    // together, and otherwise Jev's likeliest of them is the pick.
+    let absent = answer.probabilities.get(ABSENT).copied().unwrap_or_default();
+    let choice = if answer.choice == ABSENT && absent < 0.5 {
+        let others = answer.probabilities.iter().filter(|(key, _)| *key != ABSENT);
+        others.max_by(|a, b| a.1.total_cmp(b.1)).map_or(ABSENT, |(key, _)| key.as_str())
+    } else {
+        answer.choice.as_str()
+    };
+    if choice == SYNTHESIS {
         let facts = candidates
             .iter()
             .map(|candidate| Fact::read(&candidate.value.to_str(), candidate.evidence.clone(), FactReader::JevChoice))
             .collect();
         return Ok(PageRead { facts, compose: true });
     }
-    let Some(group) = groups.get(&answer.choice) else { return Ok(PageRead::default()) };
+    let Some(group) = groups.get(choice) else { return Ok(PageRead::default()) };
     let selected = &group[0];
     let context: Vec<Fact> = if group.len() > 1 {
         group.iter().map(|c| Fact::read(&c.value.to_str(), c.evidence.clone(), FactReader::JevChoice)).collect()

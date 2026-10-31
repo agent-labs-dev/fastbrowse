@@ -208,6 +208,8 @@ pub(crate) struct RunState {
     pub committing: bool,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
+    /// The addresses of pages read, so Jev can be told which links lead back to one.
+    pub read_urls: HashSet<String>,
     /// The initial address, retained even when an HTTP failure removes it from completion evidence.
     pub started_url: Option<String>,
     pub caller_start: Option<String>,
@@ -282,6 +284,7 @@ impl RunState {
             compose: false,
             committing: false,
             read_pages: HashSet::new(),
+            read_urls: HashSet::new(),
             started_url: None,
             caller_start: None,
             start_landing_url: None,
