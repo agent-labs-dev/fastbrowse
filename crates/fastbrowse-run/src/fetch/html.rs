@@ -6,7 +6,8 @@
 use std::cell::RefCell;
 
 use encoding_rs::{Encoding, UTF_8};
-use fastbrowse_core::page::BlockKind;
+use fastbrowse_core::models::Operation;
+use fastbrowse_core::page::{BlockKind, Control};
 use fastbrowse_core::py::text;
 use html5ever::Attribute;
 use html5ever::tendril::StrTendril;
@@ -183,6 +184,9 @@ struct Reader<'a> {
     cell_header: bool,
     header_row: Option<usize>,
     hidden: Vec<String>,
+    controls: Vec<Control>,
+    /// The control whose element is open, which its text labels.
+    labelling: Option<(usize, String, String)>,
 }
 
 impl<'a> Reader<'a> {
@@ -206,7 +210,43 @@ impl<'a> Reader<'a> {
             cell_header: false,
             header_row: None,
             hidden: Vec::new(),
+            controls: Vec::new(),
+            labelling: None,
         }
+    }
+
+    /// The control a start tag makes, as the served markup describes it.
+    fn control(&mut self, tag: &str, attrs: &[Attribute]) {
+        let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| a.value.to_string());
+        let kind = get("type").unwrap_or_default().to_ascii_lowercase();
+        let (role, operations): (&str, &[Operation]) = match tag {
+            "a" if get("href").is_some_and(|href| !href.is_empty()) => ("link", &[Operation::Click]),
+            "button" => ("button", &[Operation::Click]),
+            "select" => ("combobox", &[Operation::Select]),
+            "textarea" => ("textbox", &[Operation::Fill]),
+            "input" => match kind.as_str() {
+                "hidden" => return,
+                "submit" | "button" | "reset" | "image" => ("button", &[Operation::Click]),
+                "checkbox" | "radio" => (kind.as_str(), &[Operation::Click]),
+                "file" => ("button", &[Operation::Upload]),
+                _ => ("textbox", &[Operation::Fill, Operation::Enter]),
+            },
+            _ => return,
+        };
+        let named = ["aria-label", "placeholder", "title", "value", "name"];
+        let label = named.iter().find_map(|name| get(name).filter(|value| !clean(value).is_empty()));
+        let id = format!("fetched-{}", self.controls.len());
+        let mut control = Control::new(&id, role, &clean(&label.unwrap_or_default()), operations.iter().copied());
+        control.context = self.headings.last().map(|(_, heading)| heading.clone());
+        control.href = get("href").filter(|_| tag == "a").map(|href| join(self.url, &href));
+        control.input_type = (tag == "input").then_some(kind.clone()).filter(|kind| !kind.is_empty());
+        control.input_name = get("name");
+        control.next_page = get("rel").filter(|rel| rel.split_whitespace().any(|rel| rel == "next")).map(|_| true);
+        control.download = get("download").map(|_| true);
+        if matches!(tag, "a" | "button") {
+            self.labelling = Some((self.controls.len(), tag.to_string(), String::new()));
+        }
+        self.controls.push(control);
     }
 
     fn start(&mut self, tag: &str, attrs: &[Attribute]) {
@@ -228,6 +268,7 @@ impl<'a> Reader<'a> {
             self.skip += 1;
             return;
         }
+        self.control(tag, attrs);
         if tag == "br" {
             self.add("\n");
             return;
@@ -284,6 +325,13 @@ impl<'a> Reader<'a> {
     }
 
     fn end(&mut self, tag: &str) {
+        if let Some((index, _, text)) = self.labelling.take_if(|(_, open, _)| open == tag) {
+            // What the element says for itself names it before any attribute does.
+            let text = clean(&text);
+            if !text.is_empty() {
+                self.controls[index].label = text;
+            }
+        }
         if self.hidden.last().is_some_and(|hidden| hidden == tag) {
             self.hidden.pop();
             self.skip = self.skip.saturating_sub(1);
@@ -352,6 +400,9 @@ impl<'a> Reader<'a> {
         }
         if self.skip > 0 {
             return;
+        }
+        if let Some((_, _, text)) = &mut self.labelling {
+            text.push_str(data);
         }
         self.add(data);
     }
@@ -470,9 +521,15 @@ pub fn join(base: &str, href: &str) -> String {
 
 /// The document's title and its blocks, in reading order.
 pub fn blocks(html: &str, url: &str) -> (String, Vec<Found>) {
+    let (title, found, _) = read(html, url);
+    (title, found)
+}
+
+/// The document's title, its blocks in reading order, and the controls its markup offers.
+pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>) {
     let mut reader = tokenize(html, Sink(RefCell::new(Reader::new(url)))).0.into_inner();
     reader.flush(None, None, false);
-    (clean(&reader.title), reader.blocks)
+    (clean(&reader.title), reader.blocks, reader.controls)
 }
 
 /// The first `<meta>` charset in a document's first 1024 bytes, which is where the HTML standard's prescan looks for
@@ -545,6 +602,30 @@ mod tests {
         assert_eq!(title, "A & <b>B");
         let texts: Vec<&str> = found.iter().map(|b| b.text.as_str()).collect();
         assert_eq!(texts, ["x & y \u{a9}", "1 < 2"]);
+    }
+
+    #[test]
+    fn the_markup_names_its_links_and_fields() {
+        let (_, _, controls) = read(
+            "<h2>Pages</h2><a href='/b' rel='next'>More <b>items</b></a><a href='/c'><img src=x></a>\
+             <div hidden><a href='/secret'>x</a></div><table><tr><td><a href=/d>In a row</a></table>\
+             <form><input type=hidden name=t><input name=q placeholder='Search'><button>Go</button></form>",
+            "https://a.example/list",
+        );
+        let shown: Vec<(&str, &str, Option<&str>)> =
+            controls.iter().map(|c| (c.role.as_str(), c.label.as_str(), c.href.as_deref())).collect();
+        assert_eq!(
+            shown,
+            [
+                ("link", "More items", Some("https://a.example/b")),
+                ("link", "", Some("https://a.example/c")),
+                ("link", "In a row", Some("https://a.example/d")),
+                ("textbox", "Search", None),
+                ("button", "Go", None),
+            ]
+        );
+        assert_eq!(controls[0].next_page, Some(true));
+        assert_eq!(controls[0].context.as_deref(), Some("Pages"));
     }
 
     #[test]

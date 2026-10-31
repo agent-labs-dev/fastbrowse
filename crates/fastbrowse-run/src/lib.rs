@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use fastbrowse_agent::agent::{Agent, RunOptions};
+use fastbrowse_agent::agent::{Agent, Resume, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
 use fastbrowse_browser::adapters::browser_use_cloud::{BrowserUseCloudBrowser, BrowserUseCloudOptions};
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
@@ -637,6 +637,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     };
     let mut fetch_spent: Vec<CostLine> = Vec::new();
     let mut limits = task.limits.clone();
+    let mut resume = None;
     if host.open_browser.is_some() || reads_first(&task) {
         let began = std::time::Instant::now();
         let read =
@@ -654,6 +655,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             Map::from_iter([("reason".into(), Value::from(read.result.error.clone().unwrap_or_default()))])
         });
         fetch_spent = read.result.cost.lines;
+        resume = read.resume;
     }
     let chrome = task.chrome.clone().unwrap_or_else(|| settings.local_chrome());
     // A `chrome` argument names local Chrome; with no browser named at all the run takes the cloud one.
@@ -732,6 +734,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             ledger: None,
             authorization: task.authorization.clone(),
             until: host.until.clone(),
+            resume: resume.take(),
         };
         let result = agent.run(&task.task, run).await.map_err(|error| refused(&error.to_string()))?;
         // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
@@ -839,6 +842,8 @@ struct Read {
     needs_browser: bool,
     /// The attempt ledger's counters and lines when it ended.
     spent: LedgerState,
+    /// The attempt itself, for a browser to carry on from.
+    resume: Option<Resume>,
 }
 
 /// `task` read over HTTP, with no browser started at all.
@@ -875,7 +880,7 @@ async fn fetched(
             recordings: Vec::new(),
             wall: None,
         };
-        return Ok(Read { result, needs_browser: false, spent: LedgerState::default() });
+        return Ok(Read { result, needs_browser: false, spent: LedgerState::default(), resume: None });
     }
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
     let trace = http.trace.clone();
@@ -899,6 +904,7 @@ async fn fetched(
         ledger: Some(ledger.clone()),
         authorization: task.authorization.clone(),
         until: host.until.clone(),
+        resume: None,
     };
     let outcome = host.cancel.guard(agent.run(&task.task, run)).await?;
     let result = outcome.map_err(|error| RunError::Invalid(error.to_string()))?;
@@ -909,7 +915,7 @@ async fn fetched(
     let needs_browser =
         matches!(result.status, Status::Blocked | Status::Unverified) && (fetched.needed_browser() || bot_check);
     let spent = ledger.state().clone();
-    Ok(Read { result, needs_browser, spent })
+    Ok(Read { result, needs_browser, spent, resume: agent.resume() })
 }
 
 #[cfg(test)]

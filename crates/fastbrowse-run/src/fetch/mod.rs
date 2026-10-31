@@ -5,10 +5,11 @@
 //! document, turns its markup into the same `Capture` blocks a browser capture produces, and lets the rest of the run
 //! read and cite it unchanged.
 //!
-//! What it cannot do is act. There are no controls in a fetched document, and pixels are not rendered, so a step that
-//! would click or fill ends the run as blocked with the reason rather than pretending. Anything a page builds with
-//! scripts is likewise invisible here, and a document with no readable text is read as exactly that: [`NotFetched`],
-//! with the browser left as the only reader.
+//! A link is followed the same way, so a run that only walks from one document to another stays off a browser. What
+//! it cannot do is act: a fetched document's form controls are offered as what the page has, and pixels are not
+//! rendered, so a step that would fill or press one ends the run as blocked with the reason rather than pretending.
+//! Anything a page builds with scripts is likewise invisible here, and a document with no readable text is read as
+//! exactly that: [`NotFetched`], with the browser left as the only reader.
 
 pub mod html;
 
@@ -24,15 +25,15 @@ use fastbrowse_browser::session::{CheckAccess, check_browser_access};
 use fastbrowse_browser::urlsplit::urlsplit;
 use fastbrowse_clients::http::Http;
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::models::Artifact;
+use fastbrowse_core::models::{Artifact, Operation, StepOutcome};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, BrowserError, Capture, Observation, Page, PageResult, Tab,
+    ActResult, Action, Block, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult, Tab,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
 
-use html::{Found, blocks, clean, join};
+use html::{Found, clean, join, read};
 
 /// A page that never finishes arriving would hold a run for its whole deadline, so the read is bounded.
 const TIMEOUT_SECONDS: f64 = 15.0;
@@ -157,13 +158,19 @@ fn decoded<'a>(coding: Option<&str>, body: &'a [u8]) -> Result<Cow<'a, [u8]>, No
     Ok(Cow::Owned(out))
 }
 
-/// `url` as a `Capture`, read over HTTP, or [`NotFetched`] with the reason a browser is needed.
-pub async fn fetch_capture(
+/// One document read over HTTP: what it says and the controls its markup offers.
+pub struct Fetched {
+    pub capture: Capture,
+    pub controls: Vec<Control>,
+}
+
+/// `url` read over HTTP, or [`NotFetched`] with the reason a browser is needed.
+pub async fn fetch_document(
     http: &Http,
     url: &str,
     allowed_origins: Option<&[String]>,
     seconds: f64,
-) -> Result<Capture, NotFetched> {
+) -> Result<Fetched, NotFetched> {
     eligible(url, allowed_origins)?;
     // The codings this decodes. A server may compress whatever it is asked, as python.org's CDN gzips a
     // request for identity, so asking for these costs nothing a refusal would have saved.
@@ -217,24 +224,25 @@ pub async fn fetch_capture(
             return Err(refused("the document is empty"));
         }
         let found = Found { kind: BlockKind::Paragraph, text: clean(&body), heading_path: Vec::new(), href: None };
-        return Ok(capture(&final_url, String::new(), vec![found]));
+        return Ok(Fetched { capture: capture(&final_url, String::new(), vec![found]), controls: Vec::new() });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };
         return Err(refused(format!("{named} is not a document read as text")));
     }
-    let (title, found) = blocks(&body, &final_url);
+    let (title, found, controls) = read(&body, &final_url);
     if found.iter().all(|block| block.text.is_empty()) {
         // A page whose markup is scripts and styles has nothing to quote: the browser is the only reader of what they
         // build, and reading the shell as the page would answer from nothing.
         return Err(refused("the page renders its content with scripts, so the markup holds no readable text"));
     }
-    Ok(capture(&final_url, title, found))
+    Ok(Fetched { capture: capture(&final_url, title, found), controls })
 }
 
 #[derive(Default)]
 struct Loaded {
     capture: Option<Capture>,
+    controls: Vec<Control>,
     generation: u64,
 }
 
@@ -242,7 +250,8 @@ struct Loaded {
 ///
 /// Everything above the page seam reads `Capture` blocks and cites their spans, so a fetched document is read and
 /// cited exactly as a captured one. The methods that would move a page or inspect pixels return
-/// [`BrowserError::NeedsBrowser`], which ends the run as blocked instead of failing a step or inventing an answer.
+/// [`BrowserError::NeedsBrowser`], which ends the run as blocked instead of failing a step or inventing an answer. A
+/// click on a link is the one action it takes, by opening the link's address.
 pub struct FetchedPage {
     http: Http,
     origins: Option<Vec<String>>,
@@ -281,6 +290,27 @@ impl FetchedPage {
         let capture = self.loaded.lock().unwrap().capture.clone();
         capture.ok_or_else(|| self.needs_browser("no page has been fetched yet"))
     }
+
+    /// The address a click on `id` opens: a link to another document. A link to a place in this one, or one a script
+    /// answers, is the browser's to follow.
+    fn link_target(&self, id: &str) -> Option<String> {
+        let loaded = self.loaded.lock().unwrap();
+        let link = loaded.controls.iter().find(|control| control.id == id && control.role == "link")?;
+        let target = url::Url::parse(link.href.as_deref()?).ok()?;
+        let mut here = url::Url::parse(&loaded.capture.as_ref()?.url).ok()?;
+        here.set_fragment(target.fragment());
+        (matches!(target.scheme(), "http" | "https") && target != here && link.download.is_none())
+            .then(|| target.to_string())
+    }
+
+    async fn open(&self, url: &str) -> Result<(), NotFetched> {
+        let fetched = fetch_document(&self.http, url, self.origins.as_deref(), TIMEOUT_SECONDS).await?;
+        let mut loaded = self.loaded.lock().unwrap();
+        loaded.capture = Some(fetched.capture);
+        loaded.controls = fetched.controls;
+        loaded.generation += 1;
+        Ok(())
+    }
 }
 
 impl Page for FetchedPage {
@@ -300,7 +330,7 @@ impl Page for FetchedPage {
                 captured_at: capture.captured_at,
                 response_status: None,
                 document_key: capture.sha256.clone(),
-                controls: Vec::new(),
+                controls: self.loaded.lock().unwrap().controls.clone(),
                 viewport_text: capture.text.clone(),
                 offscreen_text: 0,
                 visual_content: false,
@@ -330,17 +360,13 @@ impl Page for FetchedPage {
     fn navigate<'a>(&'a self, url: &'a str, back_to: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
         Box::pin(async move {
             self.gate().await?;
-            let capture = match fetch_capture(&self.http, url, self.origins.as_deref(), TIMEOUT_SECONDS).await {
-                Ok(capture) => capture,
+            match self.open(url).await {
+                Ok(()) => Ok(()),
                 // A guessed address, not the caller's page: the loop falls back to `start` on a browser failure, and
                 // concluding that the task needs a browser here would end the run.
-                Err(NotFetched(message)) if back_to.is_some() => return Err(BrowserError::Failed(message)),
-                Err(NotFetched(message)) => return Err(self.needs_browser(message)),
-            };
-            let mut loaded = self.loaded.lock().unwrap();
-            loaded.capture = Some(capture);
-            loaded.generation += 1;
-            Ok(())
+                Err(NotFetched(message)) if back_to.is_some() => Err(BrowserError::Failed(message)),
+                Err(NotFetched(message)) => Err(self.needs_browser(message)),
+            }
         })
     }
 
@@ -351,13 +377,20 @@ impl Page for FetchedPage {
         })
     }
 
-    fn act<'a>(&'a self, _action: &'a Action, _observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+    fn act<'a>(&'a self, action: &'a Action, _observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
             self.gate().await?;
-            Err(self.needs_browser(
-                "this run reads pages over HTTP and has no controls to act on; run it again without fetch mode to use \
-                 a browser",
-            ))
+            let link = (action.operation == Operation::Click)
+                .then(|| action.target_id.as_deref().and_then(|id| self.link_target(id)))
+                .flatten();
+            let Some(url) = link else {
+                return Err(self.needs_browser(
+                    "this run reads pages over HTTP and can only follow links; run it again without fetch mode to \
+                     use a browser",
+                ));
+            };
+            self.open(&url).await.map_err(|NotFetched(message)| self.needs_browser(message))?;
+            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: true })
         })
     }
 

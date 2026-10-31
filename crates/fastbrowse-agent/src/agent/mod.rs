@@ -67,6 +67,14 @@ pub struct RunOptions {
     pub ledger: Option<Arc<Ledger>>,
     pub authorization: Option<Authorization>,
     pub until: Option<UntilCheck>,
+    /// The run a page without a browser ended, which this one carries on from where it stopped.
+    pub resume: Option<Resume>,
+}
+
+/// A run that ended on a page without a browser: what it knew, and where it stood.
+pub struct Resume {
+    state: RunState,
+    url: String,
 }
 
 /// What the agent learns about the page as it goes, kept apart from the run so the page and the models can be asked
@@ -78,6 +86,8 @@ struct Seen {
     /// The last observation `observe` returned, which the finish judges again only if the page changed since.
     observed: Option<Observation>,
     artifact_start: usize,
+    /// The ended run, kept for a browser to carry on from.
+    resume: Option<Resume>,
 }
 
 pub struct Agent {
@@ -131,6 +141,11 @@ impl Agent {
         self
     }
 
+    /// The run just ended, for one with a browser to carry on from. Only a run that reached a page has one.
+    pub fn resume(&self) -> Option<Resume> {
+        self.seen().resume.take()
+    }
+
     fn seen(&self) -> MutexGuard<'_, Seen> {
         self.seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -176,13 +191,14 @@ impl Agent {
         // provider call that never returns.
         let deadline = ledger.limits.max_seconds.map(|seconds| began + Duration::from_secs_f64(seconds));
         let mut slot: Option<RunState> = None;
+        let resume = options.resume.take();
         let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
-            let body = Box::pin(self.body(task, &options, &ledger, &mut slot));
+            let body = Box::pin(self.body(task, &options, resume, &ledger, &mut slot));
             let outcome = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline.into(), body).await.ok(),
                 None => Some(body.await),
             };
-            match outcome {
+            let ended = match outcome {
                 Some(Ok(result)) => (result, true, false),
                 Some(Err(Flow::Browser(BrowserError::NeedsBrowser(message)))) => {
                     (blocked_without_browser(message), false, true)
@@ -201,7 +217,11 @@ impl Agent {
                     );
                     (result, false, false)
                 }
+            };
+            if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
+                self.seen().resume = Some(Resume { state, url: page.url });
             }
+            ended
         });
         let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
         if needs_browser {
@@ -231,9 +251,15 @@ impl Agent {
         &self,
         task: &str,
         options: &RunOptions,
+        resume: Option<Resume>,
         ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
+        if let Some(Resume { state, url }) = resume {
+            self.trace.phase("open", self.page.navigate(&url, None)).await?;
+            let state = slot.insert(state.carried_on(ledger.clone()));
+            return Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await;
+        }
         let start = options.start.as_deref();
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first

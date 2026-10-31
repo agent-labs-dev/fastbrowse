@@ -226,6 +226,21 @@ impl RunState {
         self.site_failure.as_ref().filter(|failure| failure.url == url && failure.transient()).map(|f| f.url.clone())
     }
 
+    /// This run on a new page under `ledger`: everything it learned, and nothing about an action still in flight.
+    pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
+        RunState {
+            ledger,
+            picked: None,
+            landing: None,
+            acted_from: None,
+            unchanged: 0,
+            committing: false,
+            redecided: false,
+            last_page: None,
+            ..self
+        }
+    }
+
     pub fn new(
         task: String,
         inputs: IndexMap<String, String>,

@@ -12,7 +12,7 @@ use fastbrowse_core::models::Operation;
 use fastbrowse_core::page::{Action, BlockKind, BrowserError, Page};
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_run::fetch::html::blocks;
-use fastbrowse_run::fetch::{FetchedPage, NotFetched, eligible, fetch_capture};
+use fastbrowse_run::fetch::{FetchedPage, NotFetched, eligible, fetch_document};
 use serde_json::Value;
 
 const PAGE: &str = r#"<!doctype html>
@@ -54,7 +54,7 @@ fn html(body: &str) -> Http {
 }
 
 async fn fetched(http: &Http, url: &str) -> Result<fastbrowse_core::page::Capture, NotFetched> {
-    fetch_capture(http, url, None, 15.0).await
+    fetch_document(http, url, None, 15.0).await.map(|fetched| fetched.capture)
 }
 
 #[test]
@@ -153,7 +153,8 @@ async fn test_a_redirect_outside_the_grant_is_refused() {
         }
     });
     let shop = ["https://shop.example.com".to_string()];
-    let error = fetch_capture(&http, "https://shop.example.com/orders", Some(&shop), 15.0).await.unwrap_err();
+    let error =
+        fetch_document(&http, "https://shop.example.com/orders", Some(&shop), 15.0).await.err().expect("refused");
     assert!(error.0.contains("outside the origins"), "{error}");
 }
 
@@ -172,12 +173,13 @@ async fn test_a_redirect_inside_the_grant_is_followed() {
 }
 
 #[tokio::test]
-async fn test_a_fetched_page_reads_but_cannot_act() {
+async fn test_a_fetched_page_reads_and_follows_links_but_cannot_act() {
     let page = FetchedPage::new(html(PAGE), None, None);
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
     assert_eq!(observation.url, "https://shop.example.com/orders");
-    assert!(observation.controls.is_empty());
+    let labels: Vec<&str> = observation.controls.iter().map(|control| control.label.as_str()).collect();
+    assert_eq!(labels, ["Home", "returns policy", "Download the report"]);
     assert!(!observation.viewport_text.is_empty());
     assert_eq!(page.address().await.expect("address"), observation.url);
     assert!(page.capture().await.expect("capture").text.contains("| Kettle | 34.50 |"));
@@ -185,9 +187,34 @@ async fn test_a_fetched_page_reads_but_cannot_act() {
     // A step that would act has nothing to act on, and a run that pretends otherwise answers from a page it never saw.
     let action = Action { target_id: Some("1".into()), ..Action::new(Operation::Click) };
     let error = page.act(&action, &observation).await.unwrap_err();
-    assert!(matches!(&error, BrowserError::NeedsBrowser(message) if message.contains("no controls")), "{error}");
+    assert!(matches!(&error, BrowserError::NeedsBrowser(message) if message.contains("only follow links")), "{error}");
     let error = page.screenshot().await.unwrap_err();
     assert!(matches!(&error, BrowserError::NeedsBrowser(message) if message.contains("no pixels")), "{error}");
+}
+
+#[tokio::test]
+async fn test_a_click_on_a_link_opens_it_and_anything_else_needs_a_browser() {
+    let http = serving(|request| {
+        let body = if request.url.ends_with("/next") {
+            "<h1>Next</h1>"
+        } else {
+            "<a href='/next'>Next</a><a href='#top'>Top</a><a href='javascript:go()'>Go</a><button>Press</button>"
+        };
+        Response::new(200, body).with_header("content-type", "text/html")
+    });
+    let page = FetchedPage::new(http, None, None);
+    page.navigate("https://shop.example.com/", None).await.expect("navigate");
+    let observation = page.observe().await.expect("observe");
+    for label in ["Top", "Go", "Press"] {
+        let id = observation.controls.iter().find(|control| control.label == label).expect("offered").id.clone();
+        let action = Action { target_id: Some(id), ..Action::new(Operation::Click) };
+        assert!(page.act(&action, &observation).await.unwrap_err().needs_browser(), "{label}");
+    }
+    let id = observation.controls[0].id.clone();
+    let opened = page.act(&Action { target_id: Some(id), ..Action::new(Operation::Click) }, &observation).await;
+    assert!(opened.expect("followed").page_changed);
+    assert_eq!(page.address().await.expect("address"), "https://shop.example.com/next");
+    assert!(page.observe().await.expect("observe").controls.is_empty());
 }
 
 #[tokio::test]

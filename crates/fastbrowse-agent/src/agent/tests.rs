@@ -232,6 +232,21 @@ fn test_an_upload_is_judged_by_the_page_not_by_a_value() {
     assert_eq!(progress("a.pdf", None, false, Operation::Upload, &[]), None);
 }
 
+#[test]
+fn test_a_run_carried_on_keeps_what_it_learned_and_no_action_in_flight() {
+    let ledger = Arc::new(Ledger::new(Limits::default()));
+    let mut state = RunState::new("t".into(), IndexMap::new(), Vec::new(), Authorization::default(), ledger.clone());
+    state.compose = true;
+    state.history.push(HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, false));
+    state.unchanged = 2;
+    state.landing = Some(None);
+    let browser = Arc::new(Ledger::new(Limits::default()));
+    let carried = state.carried_on(browser.clone());
+    assert!(carried.compose && carried.history.len() == 1);
+    assert!(carried.unchanged == 0 && carried.landing.is_none());
+    assert!(Arc::ptr_eq(&carried.ledger, &browser));
+}
+
 #[tokio::test]
 async fn test_http_error_visit_cannot_evidence_navigation_completion() {
     let agent = agent();

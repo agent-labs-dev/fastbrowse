@@ -44,8 +44,9 @@ because an order total is gone once the order is placed. The step state's `page_
 and has not changed since, and when it changed after it was last read. Every READ Jev picks goes to the reader. A read
 that adds no new source quote counts toward the stall rule like any other step that moved nothing.
 
-Fetch reads the same way: by default a run reads pages over HTTP, and a step that needs a browser starts one and runs
-the task again on it. `fetch` forbids the browser, and `browser` starts one from the first step.
+Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
+offered as what it has. A step only a browser can take starts one on the same page, and the run carries on with
+what it knows. `fetch` forbids the browser, and `browser` starts one from the first step.
 
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step.
