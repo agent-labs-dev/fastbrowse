@@ -1,0 +1,1634 @@
+{
+ "answers": {
+  "shop-numbered": 10,
+  "products-numbered": 6,
+  "tablets-load-more": 8,
+  "django-next": 7,
+  "gutenberg-next": 5,
+  "datatable-client-pages": 12
+ },
+ "evidence": {
+  "tablets": {
+   "records": 21,
+   "items": [
+    [
+     "Lenovo IdeaTab",
+     69.99
+    ],
+    [
+     "IdeaTab A3500L",
+     88.99
+    ],
+    [
+     "Acer Iconia",
+     96.99
+    ],
+    [
+     "Galaxy Tab 3",
+     97.99
+    ],
+    [
+     "Iconia B1-730HD",
+     99.99
+    ],
+    [
+     "Memo Pad HD 7",
+     101.99
+    ],
+    [
+     "Asus MeMO Pad",
+     102.99
+    ],
+    [
+     "Amazon Kindle",
+     103.99
+    ],
+    [
+     "Galaxy Tab 3",
+     107.99
+    ],
+    [
+     "IdeaTab A8-50",
+     121.99
+    ],
+    [
+     "MeMO Pad 7",
+     130.99
+    ],
+    [
+     "IdeaTab A3500-H",
+     148.99
+    ],
+    [
+     "IdeaTab S5000",
+     172.99
+    ],
+    [
+     "Galaxy Tab 4",
+     233.99
+    ],
+    [
+     "Galaxy Tab",
+     251.99
+    ],
+    [
+     "MeMo PAD FHD 10",
+     320.99
+    ],
+    [
+     "Galaxy Note",
+     399.99
+    ],
+    [
+     "Galaxy Note",
+     489.99
+    ],
+    [
+     "iPad Mini Retina",
+     537.99
+    ],
+    [
+     "Galaxy Note 10.1",
+     587.99
+    ],
+    [
+     "Apple iPad Air",
+     603.99
+    ]
+   ]
+  },
+  "products": {
+   "records": 25,
+   "items": [
+    [
+     "Box of Chocolate Candy",
+     24.99
+    ],
+    [
+     "Dark Red Energy Potion",
+     4.99
+    ],
+    [
+     "Teal Energy Potion",
+     4.99
+    ],
+    [
+     "Red Energy Potion",
+     4.99
+    ],
+    [
+     "Blue Energy Potion",
+     4.99
+    ],
+    [
+     "Dragon Energy Potion",
+     4.99
+    ],
+    [
+     "Hiking Boots for Outdoor Adventures",
+     89.99
+    ],
+    [
+     "Women's High Heel Sandals",
+     59.99
+    ],
+    [
+     "Running Shoes for Men",
+     49.99
+    ],
+    [
+     "Kids' Light-Up Sneakers",
+     29.99
+    ],
+    [
+     "Classic Leather Sneakers",
+     79.99
+    ],
+    [
+     "Cat-Ear Beanie",
+     14.99
+    ],
+    [
+     "Box of Chocolate Candy",
+     24.99
+    ],
+    [
+     "Dark Red Energy Potion",
+     4.99
+    ],
+    [
+     "Teal Energy Potion",
+     4.99
+    ],
+    [
+     "Red Energy Potion",
+     4.99
+    ],
+    [
+     "Blue Energy Potion",
+     4.99
+    ],
+    [
+     "Dragon Energy Potion",
+     4.99
+    ],
+    [
+     "Hiking Boots for Outdoor Adventures",
+     89.99
+    ],
+    [
+     "Women's High Heel Sandals",
+     59.99
+    ],
+    [
+     "Running Shoes for Men",
+     49.99
+    ],
+    [
+     "Kids' Light-Up Sneakers",
+     29.99
+    ],
+    [
+     "Classic Leather Sneakers",
+     79.99
+    ],
+    [
+     "Cat-Ear Beanie",
+     14.99
+    ],
+    [
+     "Box of Chocolate Candy",
+     24.99
+    ]
+   ]
+  },
+  "shop": {
+   "records": 188,
+   "items": [
+    [
+     "Abominable Hoodie",
+     69.0
+    ],
+    [
+     "Adrienne Trek Jacket",
+     57.0
+    ],
+    [
+     "Aeon Capri",
+     48.0
+    ],
+    [
+     "Aero Daily Fitness Tee",
+     24.0
+    ],
+    [
+     "Aether Gym Pant",
+     74.0
+    ],
+    [
+     "Affirm Water Bottle",
+     7.0
+    ],
+    [
+     "Aim Analog Watch",
+     45.0
+    ],
+    [
+     "Ajax Full-Zip Sweatshirt",
+     69.0
+    ],
+    [
+     "Ana Running Short",
+     40.0
+    ],
+    [
+     "Angel Light Running Short",
+     42.0
+    ],
+    [
+     "Antonia Racer Tank",
+     34.0
+    ],
+    [
+     "Apollo Running Short",
+     32.5
+    ],
+    [
+     "Arcadio Gym Short",
+     20.0
+    ],
+    [
+     "Argus All-Weather Tank",
+     22.0
+    ],
+    [
+     "Ariel Roll Sleeve Sweatshirt",
+     39.0
+    ],
+    [
+     "Artemis Running Short",
+     45.0
+    ],
+    [
+     "Atlas Fitness Tank",
+     18.0
+    ],
+    [
+     "Atomic Endurance Running Tee (Crew-Neck)",
+     29.0
+    ],
+    [
+     "Atomic Endurance Running Tee (V-neck)",
+     28.0
+    ],
+    [
+     "Augusta Pullover Jacket",
+     57.0
+    ],
+    [
+     "Autumn Pullie",
+     57.0
+    ],
+    [
+     "Balboa Persistence Tee",
+     29.0
+    ],
+    [
+     "Bardot Capri",
+     48.0
+    ],
+    [
+     "Beaumont Summit Kit",
+     42.0
+    ],
+    [
+     "Bella Tank",
+     29.0
+    ],
+    [
+     "Bess Yoga Short",
+     28.0
+    ],
+    [
+     "Bolo Sport Watch",
+     49.0
+    ],
+    [
+     "Breathe-Easy Tank",
+     34.0
+    ],
+    [
+     "Bruno Compete Hoodie",
+     63.0
+    ],
+    [
+     "Caesar Warm-Up Pant",
+     35.0
+    ],
+    [
+     "Carina Basic Capri",
+     51.0
+    ],
+    [
+     "Cassia Funnel Sweatshirt",
+     48.0
+    ],
+    [
+     "Cassius Sparring Tank",
+     18.0
+    ],
+    [
+     "Celeste Sports Bra",
+     39.0
+    ],
+    [
+     "Chaz Kangeroo Hoodie",
+     52.0
+    ],
+    [
+     "Chloe Compete Tank",
+     39.0
+    ],
+    [
+     "Circe Hooded Ice Fleece",
+     68.0
+    ],
+    [
+     "Clamber Watch",
+     54.0
+    ],
+    [
+     "Cobalt CoolTech\u2122 Fitness Short",
+     44.0
+    ],
+    [
+     "Compete Track Tote",
+     32.0
+    ],
+    [
+     "Cora Parachute Pant",
+     75.0
+    ],
+    [
+     "Cronus Yoga Pant",
+     48.0
+    ],
+    [
+     "Crown Summit Backpack",
+     38.0
+    ],
+    [
+     "Cruise Dual Analog Watch",
+     55.0
+    ],
+    [
+     "Daphne Full-Zip Hoodie",
+     59.0
+    ],
+    [
+     "Daria Bikram Pant",
+     51.0
+    ],
+    [
+     "Dash Digital Watch",
+     92.0
+    ],
+    [
+     "Deion Long-Sleeve EverCool\u2122 Tee",
+     39.0
+    ],
+    [
+     "Deirdre Relaxed-Fit Capri",
+     63.0
+    ],
+    [
+     "Desiree Fitness Tee",
+     24.0
+    ],
+    [
+     "Diana Tights",
+     59.0
+    ],
+    [
+     "Didi Sport Watch",
+     92.0
+    ],
+    [
+     "Diva Gym Tee",
+     32.0
+    ],
+    [
+     "Driven Backpack",
+     36.0
+    ],
+    [
+     "Dual Handle Cardio Ball",
+     12.0
+    ],
+    [
+     "Echo Fit Compression Short",
+     24.0
+    ],
+    [
+     "Electra Bra Top",
+     39.0
+    ],
+    [
+     "Elisa EverCool\u2122 Tee",
+     29.0
+    ],
+    [
+     "Endeavor Daytrip Backpack",
+     33.0
+    ],
+    [
+     "Endurance Watch",
+     49.0
+    ],
+    [
+     "Eos V-Neck Hoodie",
+     54.0
+    ],
+    [
+     "Erica Evercool Sports Bra",
+     39.0
+    ],
+    [
+     "Erika Running Short",
+     45.0
+    ],
+    [
+     "Erikssen CoolTech\u2122 Fitness Tank",
+     29.0
+    ],
+    [
+     "Fiona Fitness Short",
+     29.0
+    ],
+    [
+     "Frankie  Sweatshirt",
+     60.0
+    ],
+    [
+     "Fusion Backpack",
+     59.0
+    ],
+    [
+     "Gabrielle Micro Sleeve Top",
+     28.0
+    ],
+    [
+     "Geo Insulated Jogging Pant",
+     51.0
+    ],
+    [
+     "Go-Get\u2019r Pushup Grips",
+     19.0
+    ],
+    [
+     "Gobi HeatTec\u00ae Tee",
+     29.0
+    ],
+    [
+     "Grayson Crewneck Sweatshirt",
+     64.0
+    ],
+    [
+     "Gwen Drawstring Bike Short",
+     50.0
+    ],
+    [
+     "Gwyn Endurance Tee",
+     24.0
+    ],
+    [
+     "Harmony Lumaflex\u2122 Strength Band Kit",
+     22.0
+    ],
+    [
+     "Hawkeye Yoga Short",
+     29.0
+    ],
+    [
+     "Helena Hooded Fleece",
+     55.0
+    ],
+    [
+     "Helios Endurance Tank",
+     32.0
+    ],
+    [
+     "Helios EverCool\u2122 Tee",
+     24.0
+    ],
+    [
+     "Hera Pullover Hoodie",
+     48.0
+    ],
+    [
+     "Hero Hoodie",
+     54.0
+    ],
+    [
+     "Hollister Backyard Sweatshirt",
+     52.0
+    ],
+    [
+     "Hyperion Elements Jacket",
+     51.0
+    ],
+    [
+     "Ida Workout Parachute Pant",
+     48.0
+    ],
+    [
+     "Impulse Duffle",
+     74.0
+    ],
+    [
+     "Ina Compression Short",
+     49.0
+    ],
+    [
+     "Ingrid Running Jacket",
+     84.0
+    ],
+    [
+     "Iris Workout Top",
+     29.0
+    ],
+    [
+     "Jade Yoga Jacket",
+     32.0
+    ],
+    [
+     "Josie Yoga Jacket",
+     56.25
+    ],
+    [
+     "Joust Duffle Bag",
+     34.0
+    ],
+    [
+     "Juliana Short-Sleeve Tee",
+     42.0
+    ],
+    [
+     "Jupiter All-Weather Trainer",
+     56.99
+    ],
+    [
+     "Karissa V-Neck Tee",
+     32.0
+    ],
+    [
+     "Karmen Yoga Pant",
+     39.0
+    ],
+    [
+     "Kenobi Trail Jacket",
+     47.0
+    ],
+    [
+     "Kratos Gym Pant",
+     57.0
+    ],
+    [
+     "Lando Gym Jacket",
+     99.0
+    ],
+    [
+     "Layla Tee",
+     29.0
+    ],
+    [
+     "Leah Yoga Top",
+     39.0
+    ],
+    [
+     "Livingston All-Purpose Tight",
+     75.0
+    ],
+    [
+     "Logan  HeatTec\u00ae Tee",
+     24.0
+    ],
+    [
+     "Lono Yoga Short",
+     32.0
+    ],
+    [
+     "Lucia Cross-Fit Bra",
+     39.0
+    ],
+    [
+     "Luma Analog Watch",
+     43.0
+    ],
+    [
+     "Mach Street Sweatshirt",
+     62.0
+    ],
+    [
+     "Marco Lightweight Active Hoodie",
+     74.0
+    ],
+    [
+     "Mars HeatTech\u2122 Pullover",
+     66.0
+    ],
+    [
+     "Maxima Drawstring Short",
+     28.0
+    ],
+    [
+     "Maya Tunic",
+     29.0
+    ],
+    [
+     "Meteor Workout Short",
+     32.5
+    ],
+    [
+     "Miko Pullover Hoodie",
+     69.0
+    ],
+    [
+     "Mimi All-Purpose Short",
+     44.0
+    ],
+    [
+     "Minerva LumaTech\u2122 V-Tee",
+     32.0
+    ],
+    [
+     "Mithra Warmup Pant",
+     28.0
+    ],
+    [
+     "Mona Pullover Hoodlie",
+     57.0
+    ],
+    [
+     "Montana Wind Jacket",
+     49.0
+    ],
+    [
+     "Nadia Elements Shell",
+     69.0
+    ],
+    [
+     "Neve Studio Dance Jacket",
+     69.0
+    ],
+    [
+     "Nona Fitness Tank",
+     39.0
+    ],
+    [
+     "Nora Practice Tank",
+     39.0
+    ],
+    [
+     "Olivia 1/4 Zip Light Jacket",
+     77.0
+    ],
+    [
+     "Orestes Fitness Short",
+     35.0
+    ],
+    [
+     "Orestes Yoga Pant",
+     66.0
+    ],
+    [
+     "Orion Two-Tone Fitted Jacket",
+     72.0
+    ],
+    [
+     "Oslo Trek Hoodie",
+     42.0
+    ],
+    [
+     "Overnight Duffle",
+     45.0
+    ],
+    [
+     "Phoebe Zipper Sweatshirt",
+     59.0
+    ],
+    [
+     "Pierce Gym Short",
+     27.0
+    ],
+    [
+     "Portia Capri",
+     49.0
+    ],
+    [
+     "Prima Compete Bra Top",
+     24.0
+    ],
+    [
+     "Primo Endurance Tank",
+     29.0
+    ],
+    [
+     "Proteus Fitness Jackshirt",
+     45.0
+    ],
+    [
+     "Pursuit Lumaflex\u2122 Tone Band",
+     16.0
+    ],
+    [
+     "Push It Messenger Bag",
+     45.0
+    ],
+    [
+     "Quest Lumaflex\u2122 Band",
+     19.0
+    ],
+    [
+     "Radiant Tee",
+     22.0
+    ],
+    [
+     "Rapha  Sports Short",
+     35.0
+    ],
+    [
+     "Riona Full Zip Jacket",
+     60.0
+    ],
+    [
+     "Rival Field Messenger",
+     45.0
+    ],
+    [
+     "Rocco Gym Tank",
+     24.0
+    ],
+    [
+     "Ryker LumaTech\u2122 Tee (Crew-neck)",
+     32.0
+    ],
+    [
+     "Ryker LumaTech\u2122 Tee (V-neck)",
+     28.0
+    ],
+    [
+     "Sahara Leggings",
+     75.0
+    ],
+    [
+     "Savvy Shoulder Tote",
+     32.0
+    ],
+    [
+     "Selene Yoga Hoodie",
+     42.0
+    ],
+    [
+     "Sinbad Fitness Tank",
+     29.0
+    ],
+    [
+     "Sol Active Short",
+     32.0
+    ],
+    [
+     "Sparta Gym Tank",
+     29.0
+    ],
+    [
+     "Sprite Foam Roller",
+     19.0
+    ],
+    [
+     "Sprite Foam Yoga Brick",
+     5.0
+    ],
+    [
+     "Sprite Stasis Ball 55 cm",
+     23.0
+    ],
+    [
+     "Sprite Stasis Ball 55 cm",
+     23.0
+    ],
+    [
+     "Sprite Stasis Ball 55 cm",
+     23.0
+    ],
+    [
+     "Sprite Stasis Ball 65 cm",
+     27.0
+    ],
+    [
+     "Sprite Stasis Ball 65 cm",
+     27.0
+    ],
+    [
+     "Sprite Stasis Ball 65 cm",
+     27.0
+    ],
+    [
+     "Sprite Stasis Ball 75 cm",
+     32.0
+    ],
+    [
+     "Sprite Stasis Ball 75 cm",
+     32.0
+    ],
+    [
+     "Sprite Stasis Ball 75 cm",
+     32.0
+    ],
+    [
+     "Sprite Yoga Strap 10 foot",
+     21.0
+    ],
+    [
+     "Sprite Yoga Strap 6 foot",
+     14.0
+    ],
+    [
+     "Sprite Yoga Strap 8 foot",
+     17.0
+    ],
+    [
+     "Stark Fundamental Hoodie",
+     42.0
+    ],
+    [
+     "Stellar Solar Jacket",
+     75.0
+    ],
+    [
+     "Strike Endurance Tee",
+     39.0
+    ],
+    [
+     "Strive Shoulder Pack",
+     32.0
+    ],
+    [
+     "Summit Watch",
+     54.0
+    ],
+    [
+     "Supernova Sport Pant",
+     45.0
+    ],
+    [
+     "Sybil Running Short",
+     44.0
+    ],
+    [
+     "Sylvia Capri",
+     42.0
+    ],
+    [
+     "Taurus Elements Shell",
+     65.0
+    ],
+    [
+     "Teton Pullover Hoodie",
+     70.0
+    ],
+    [
+     "Thorpe Track Pant",
+     68.0
+    ],
+    [
+     "Tiberius Gym Tank",
+     18.0
+    ],
+    [
+     "Tiffany Fitness Tee",
+     28.0
+    ],
+    [
+     "Torque Power Short",
+     32.5
+    ],
+    [
+     "Tristan Endurance Tank",
+     29.0
+    ],
+    [
+     "Troy Yoga Short",
+     24.0
+    ],
+    [
+     "Typhon Performance Fleece-lined Jacket",
+     60.0
+    ],
+    [
+     "Viktor LumaTech\u2122 Pant",
+     46.0
+    ],
+    [
+     "Voyage Yoga Bag",
+     32.0
+    ],
+    [
+     "Vulcan Weightlifting Tank",
+     28.0
+    ],
+    [
+     "Wayfarer Messenger Bag",
+     45.0
+    ],
+    [
+     "Zeppelin Yoga Pant",
+     82.0
+    ],
+    [
+     "Zing Jump Rope",
+     12.0
+    ],
+    [
+     "Zoe Tank",
+     29.0
+    ],
+    [
+     "Zoltan Gym Tee",
+     29.0
+    ]
+   ]
+  },
+  "django": {
+   "records": 41,
+   "titles": [
+    "2023 Malcolm Tredinnick Memorial Prize awarded to Djangonaut Space",
+    "Django 5.0 released",
+    "Django bugfix release: 4.2.8",
+    "2024 DSF Board Election Results",
+    "Django 5.0 release candidate 1 released",
+    "2024 DSF Board Candidates",
+    "Django security releases issued: 4.2.7, 4.1.13, and 3.2.23",
+    "Django 5.0 beta 1 released",
+    "Djangonaut Space now accepting applications for our next contributor mentorship cohort",
+    "Nominations for 2023 Malcolm Tredinnick Memorial Prize",
+    "Announcing DjangoCon Europe 2024 in Vigo, Spain!",
+    "2024 DSF Board Nominations",
+    "Announcing DSF Working Groups",
+    "Django security releases issued: 4.2.6, 4.1.12, and 3.2.22",
+    "Django 5.0 alpha 1 released",
+    "Last call for DjangoCon US Hotel Reservations",
+    "2023 Django Developers Survey",
+    "Django security releases issued: 4.2.5, 4.1.11, and 3.2.21",
+    "Django bugfix release: 4.2.4",
+    "PyCharm & DSF Campaign 2023",
+    "Django security releases issued: 4.2.3, 4.1.10, and 3.2.20",
+    "Django bugfix release: 4.2.2",
+    "Django 5.x Steering Council Election Results",
+    "May 2023 Grants",
+    "Announcing DjangoCon Africa 2023",
+    "Django security releases issued: 4.2.1, 4.1.9, and 3.2.19",
+    "Django 5.x Steering Council Candidate Registration",
+    "Django 5.x Technical Board Candidate Registration",
+    "Announcement of 5.x Technical Board Election Registration",
+    "Django bugfix release: 4.1.8",
+    "Django 4.2 released",
+    "Welcome our new Fellow - Natalia Bidart",
+    "Want to host DjangoCon Europe 2024?",
+    "Django 4.2 release candidate 1 released",
+    "Django Developers Survey 2022 Results",
+    "Django 4.2 beta 1 released",
+    "Django security releases issued: 4.1.7, 4.0.10, and 3.2.18",
+    "DSF calls for applicants for a Django Fellow",
+    "Django security releases issued: 4.1.6, 4.0.9, and 3.2.17",
+    "Django 4.2 alpha 1 released",
+    "Django bugfix release: 4.1.5"
+   ]
+  },
+  "gutenberg": {
+   "records": 66,
+   "books": [
+    [
+     "The Interesting Narrative of the Life of Olaudah Equiano, Or Gustavus Vassa, The African",
+     "Olaudah Equiano"
+    ],
+    [
+     "Missionary Travels and Researches in South Africa",
+     "David Livingstone"
+    ],
+    [
+     "The Story of an African Farm",
+     "Olive Schreiner"
+    ],
+    [
+     "Travels in West Africa: Congo Fran\u00e7ais, Corisco and Cameroons",
+     "Mary Henrietta Kingsley"
+    ],
+    [
+     "The Suppression of the African Slave Trade to the United States of America",
+     "W. E. B. Du Bois"
+    ],
+    [
+     "How I found Livingstone :  Travels, adventures, and discoveres in Central Africa, including an account of four months' residence with Dr. Livingstone",
+     "Henry M. Stanley"
+    ],
+    [
+     "Native Life in South Africa\r",
+     "Sol. T. Plaatje"
+    ],
+    [
+     "The Man-Eaters of Tsavo, and Other East African Adventures",
+     "J. H. Patterson"
+    ],
+    [
+     "The History of the Rise, Progress and Accomplishment of the Abolition of the African Slave-Trade, by the British Parliament (1839)",
+     "Thomas Clarkson"
+    ],
+    [
+     "Travels in the Interior of Africa \u2014 Volume 01",
+     "Mungo Park"
+    ],
+    [
+     "First Footsteps in East Africa",
+     "Sir Richard Francis Burton"
+    ],
+    [
+     "The Last Journals of David Livingstone, in Central Africa, from 1865 to His Death, Volume I (of 2), 1866-1868",
+     "David Livingstone"
+    ],
+    [
+     "Stories by English Authors: Africa (Selected by Scribners)",
+     ""
+    ],
+    [
+     "South African Memories\r",
+     "Lady Sarah Isabella Augusta Wilson"
+    ],
+    [
+     "Travels in the Interior of Africa \u2014 Volume 02",
+     "Mungo Park"
+    ],
+    [
+     "An Account of Timbuctoo and Housa Territories in the Interior of Africa",
+     "active 1820 Abd Salam Shabeeny"
+    ],
+    [
+     "Benita, an African romance",
+     "H. Rider Haggard"
+    ],
+    [
+     "An African Millionaire: Episodes in the Life of the Illustrious Colonel Clay",
+     "Grant Allen"
+    ],
+    [
+     "Narrative of a Voyage to Senegal in 1816\r",
+     "Alexandre Corr\u00e9ard and Jean Baptiste Henri Savigny"
+    ],
+    [
+     "The Last Journals of David Livingstone, in Central Africa, from 1865 to His Death, Volume II (of  2), 1869-1873\r",
+     "David Livingstone"
+    ],
+    [
+     "Two Trips to Gorilla Land and the Cataracts of the Congo, Volume 1",
+     "Sir Richard Francis Burton"
+    ],
+    [
+     "In Africa: Hunting Adventures in the Big Game Country",
+     "John T. McCutcheon"
+    ],
+    [
+     "A Yellow God: An Idol of Africa",
+     "H. Rider Haggard"
+    ],
+    [
+     "A Journal of a Tour in the Congo Free State",
+     "Marcus R. P. Dorman"
+    ],
+    [
+     "Narrative of a Mission to Central Africa Performed in the Years 1850-51, Volume 1",
+     "James Richardson"
+    ],
+    [
+     "Two Trips to Gorilla Land and the Cataracts of the Congo, Volume 2",
+     "Sir Richard Francis Burton"
+    ],
+    [
+     "An Essay on the Slavery and Commerce of the Human Species, Particularly the African",
+     "Thomas Clarkson"
+    ],
+    [
+     "In the Heart of Africa",
+     "Sir Samuel White Baker"
+    ],
+    [
+     "A Winter Tour in South Africa",
+     "Frederick Young"
+    ],
+    [
+     "Narrative of a Mission to Central Africa Performed in the Years 1850-51, Volume 2",
+     "James Richardson"
+    ],
+    [
+     "Dream Life and Real Life: A Little African Story",
+     "Olive Schreiner"
+    ],
+    [
+     "A Narrative of the Most Remarkable Particulars in the Life of James Albert Ukawsaw Gronniosaw, an African Prince, as Related by Himself",
+     "James Albert Ukawsaw Gronniosaw"
+    ],
+    [
+     "The Congo and Coasts of Africa",
+     "Richard Harding Davis"
+    ],
+    [
+     "The Adventures of Dick Maitland: A Tale of Unknown Africa",
+     "Harry Collingwood"
+    ],
+    [
+     "The Black Man's Place in South Africa",
+     "active 1922-1937 Peter Nielsen"
+    ],
+    [
+     "African Camp Fires",
+     "Stewart Edward White"
+    ],
+    [
+     "Travels of Richard and John Lander into the interior of Africa, for the discovery of the course and termination of the Niger\r",
+     "Robert Huish"
+    ],
+    [
+     "The Journal of a Mission to the Interior of Africa, in the Year 1805\r",
+     "Mungo Park"
+    ],
+    [
+     "Observations Upon the Windward Coast of Africa\r",
+     "Joseph Corry"
+    ],
+    [
+     "The History of the Rise, Progress and Accomplishment of the Abolition of the African Slave Trade by the British Parliament (1808), Volume II",
+     "Thomas Clarkson"
+    ],
+    [
+     "Life and Travels of Mungo Park",
+     "Mungo Park"
+    ],
+    [
+     "A Middy of the Slave Squadron: A West African Story",
+     "Harry Collingwood"
+    ],
+    [
+     "Great African Travellers: From Mungo Park to Livingstone and Stanley",
+     "William Henry Giles Kingston"
+    ],
+    [
+     "The Sea-Witch; Or, The African Quadroon: A Story of the Slave Coast",
+     "Maturin M. Ballou"
+    ],
+    [
+     "The Principal Navigations, Voyages, Traffiques and Discoveries of the English Nation \u2014 Volume 06\r",
+     "Richard Hakluyt"
+    ],
+    [
+     "Wild Beasts and Their Ways, Reminiscences of Europe, Asia, Africa and America \u2014 Volume 1",
+     "Sir Samuel White Baker"
+    ],
+    [
+     "The Congo Rovers: A Story of the Slave Squadron",
+     "Harry Collingwood"
+    ],
+    [
+     "The History of the Rise, Progress and Accomplishment of the Abolition of the African Slave Trade by the British Parliament (1808), Volume I",
+     "Thomas Clarkson"
+    ],
+    [
+     "Journal of an African Cruiser\r",
+     "Horatio Bridge"
+    ],
+    [
+     "Ned Garth; Or, Made Prisoner in Africa: A Tale of the Slave Trade",
+     "William Henry Giles Kingston"
+    ],
+    [
+     "A Rip Van Winkle of the Kalahari, and Other Tales of South-West Africa",
+     "Fred C. Cornell"
+    ],
+    [
+     "Blue Aloes: Stories of South Africa",
+     "Cynthia Stockley"
+    ],
+    [
+     "The Boy Aviators in Africa; Or, an Aerial Ivory Trail",
+     "John Henry Goldfrap"
+    ],
+    [
+     "The two supercargoes :  or, Adventures in savage Africa",
+     "William Henry Giles Kingston"
+    ],
+    [
+     "Reminiscences of a South African Pioneer",
+     "W. C. Scully"
+    ],
+    [
+     "The African Trader; Or, The Adventures of Harry Bayford",
+     "William Henry Giles Kingston"
+    ],
+    [
+     "The Mission; or Scenes in Africa",
+     "Frederick Marryat"
+    ],
+    [
+     "Beitr\u00e4ge zur Entdeckung und Erforschung Africa's. (German)",
+     "Gerhard Rohlfs"
+    ],
+    [
+     "Land und Volk in Afrika, Berichte aus den Jahren 1865-1870 (German)",
+     "Gerhard Rohlfs"
+    ],
+    [
+     "Von Tripolis nach Alexandrien - 2. Band (German)",
+     "Gerhard Rohlfs"
+    ],
+    [
+     "In Search of the Okapi",
+     "Ernest Glanville"
+    ],
+    [
+     "The Rover Boys in the Jungle; Or, Stirring Adventures in Africa",
+     "Edward Stratemeyer"
+    ],
+    [
+     "Mein erster Aufenthalt in Marokko und Reise s\u00fcdlich vom Atlas durch die Oasen Draa und Tafilet. (German)",
+     "Gerhard Rohlfs"
+    ],
+    [
+     "Le Tour du Monde; Afrique Orientale\r (French)",
+     "Various"
+    ],
+    [
+     "Von Tripolis nach Alexandrien - 1. Band (German)",
+     "Gerhard Rohlfs"
+    ],
+    [
+     "People of Africa",
+     "Edith A. How"
+    ]
+   ]
+  },
+  "datatable": {
+   "records": 57,
+   "by_office": {
+    "Edinburgh": 9,
+    "Tokyo": 5,
+    "San Francisco": 14,
+    "New York": 11,
+    "London": 12,
+    "Sydney": 2,
+    "Singapore": 4
+   },
+   "rows": [
+    [
+     "Tiger Nixon",
+     "System Architect",
+     "Edinburgh",
+     "61"
+    ],
+    [
+     "Garrett Winters",
+     "Accountant",
+     "Tokyo",
+     "63"
+    ],
+    [
+     "Ashton Cox",
+     "Junior Technical Author",
+     "San Francisco",
+     "66"
+    ],
+    [
+     "Cedric Kelly",
+     "Senior JavaScript Developer",
+     "Edinburgh",
+     "22"
+    ],
+    [
+     "Airi Satou",
+     "Accountant",
+     "Tokyo",
+     "33"
+    ],
+    [
+     "Brielle Williamson",
+     "Integration Specialist",
+     "New York",
+     "61"
+    ],
+    [
+     "Herrod Chandler",
+     "Sales Assistant",
+     "San Francisco",
+     "59"
+    ],
+    [
+     "Rhona Davidson",
+     "Integration Specialist",
+     "Tokyo",
+     "55"
+    ],
+    [
+     "Colleen Hurst",
+     "JavaScript Developer",
+     "San Francisco",
+     "39"
+    ],
+    [
+     "Sonya Frost",
+     "Software Engineer",
+     "Edinburgh",
+     "23"
+    ],
+    [
+     "Jena Gaines",
+     "Office Manager",
+     "London",
+     "30"
+    ],
+    [
+     "Quinn Flynn",
+     "Support Lead",
+     "Edinburgh",
+     "22"
+    ],
+    [
+     "Charde Marshall",
+     "Regional Director",
+     "San Francisco",
+     "36"
+    ],
+    [
+     "Haley Kennedy",
+     "Senior Marketing Designer",
+     "London",
+     "43"
+    ],
+    [
+     "Tatyana Fitzpatrick",
+     "Regional Director",
+     "London",
+     "19"
+    ],
+    [
+     "Michael Silva",
+     "Marketing Designer",
+     "London",
+     "66"
+    ],
+    [
+     "Paul Byrd",
+     "Chief Financial Officer (CFO)",
+     "New York",
+     "64"
+    ],
+    [
+     "Gloria Little",
+     "Systems Administrator",
+     "New York",
+     "59"
+    ],
+    [
+     "Bradley Greer",
+     "Software Engineer",
+     "London",
+     "41"
+    ],
+    [
+     "Dai Rios",
+     "Personnel Lead",
+     "Edinburgh",
+     "35"
+    ],
+    [
+     "Jenette Caldwell",
+     "Development Lead",
+     "New York",
+     "30"
+    ],
+    [
+     "Yuri Berry",
+     "Chief Marketing Officer (CMO)",
+     "New York",
+     "40"
+    ],
+    [
+     "Caesar Vance",
+     "Pre-Sales Support",
+     "New York",
+     "21"
+    ],
+    [
+     "Doris Wilder",
+     "Sales Assistant",
+     "Sydney",
+     "23"
+    ],
+    [
+     "Angelica Ramos",
+     "Chief Executive Officer (CEO)",
+     "London",
+     "47"
+    ],
+    [
+     "Gavin Joyce",
+     "Developer",
+     "Edinburgh",
+     "42"
+    ],
+    [
+     "Jennifer Chang",
+     "Regional Director",
+     "Singapore",
+     "28"
+    ],
+    [
+     "Brenden Wagner",
+     "Software Engineer",
+     "San Francisco",
+     "28"
+    ],
+    [
+     "Fiona Green",
+     "Chief Operating Officer (COO)",
+     "San Francisco",
+     "48"
+    ],
+    [
+     "Shou Itou",
+     "Regional Marketing",
+     "Tokyo",
+     "20"
+    ],
+    [
+     "Michelle House",
+     "Integration Specialist",
+     "Sydney",
+     "37"
+    ],
+    [
+     "Suki Burks",
+     "Developer",
+     "London",
+     "53"
+    ],
+    [
+     "Prescott Bartlett",
+     "Technical Author",
+     "London",
+     "27"
+    ],
+    [
+     "Gavin Cortez",
+     "Team Leader",
+     "San Francisco",
+     "22"
+    ],
+    [
+     "Martena Mccray",
+     "Post-Sales support",
+     "Edinburgh",
+     "46"
+    ],
+    [
+     "Unity Butler",
+     "Marketing Designer",
+     "San Francisco",
+     "47"
+    ],
+    [
+     "Howard Hatfield",
+     "Office Manager",
+     "San Francisco",
+     "51"
+    ],
+    [
+     "Hope Fuentes",
+     "Secretary",
+     "San Francisco",
+     "41"
+    ],
+    [
+     "Vivian Harrell",
+     "Financial Controller",
+     "San Francisco",
+     "62"
+    ],
+    [
+     "Timothy Mooney",
+     "Office Manager",
+     "London",
+     "37"
+    ],
+    [
+     "Jackson Bradshaw",
+     "Director",
+     "New York",
+     "65"
+    ],
+    [
+     "Olivia Liang",
+     "Support Engineer",
+     "Singapore",
+     "64"
+    ],
+    [
+     "Bruno Nash",
+     "Software Engineer",
+     "London",
+     "38"
+    ],
+    [
+     "Sakura Yamamoto",
+     "Support Engineer",
+     "Tokyo",
+     "37"
+    ],
+    [
+     "Thor Walton",
+     "Developer",
+     "New York",
+     "61"
+    ],
+    [
+     "Finn Camacho",
+     "Support Engineer",
+     "San Francisco",
+     "47"
+    ],
+    [
+     "Serge Baldwin",
+     "Data Coordinator",
+     "Singapore",
+     "64"
+    ],
+    [
+     "Zenaida Frank",
+     "Software Engineer",
+     "New York",
+     "63"
+    ],
+    [
+     "Zorita Serrano",
+     "Software Engineer",
+     "San Francisco",
+     "56"
+    ],
+    [
+     "Jennifer Acosta",
+     "Junior JavaScript Developer",
+     "Edinburgh",
+     "43"
+    ],
+    [
+     "Cara Stevens",
+     "Sales Assistant",
+     "New York",
+     "46"
+    ],
+    [
+     "Hermione Butler",
+     "Regional Director",
+     "London",
+     "47"
+    ],
+    [
+     "Lael Greer",
+     "Systems Administrator",
+     "London",
+     "21"
+    ],
+    [
+     "Jonas Alexander",
+     "Developer",
+     "San Francisco",
+     "30"
+    ],
+    [
+     "Shad Decker",
+     "Regional Director",
+     "Edinburgh",
+     "51"
+    ],
+    [
+     "Michael Bruce",
+     "JavaScript Developer",
+     "Singapore",
+     "29"
+    ],
+    [
+     "Donna Snider",
+     "Customer Support",
+     "New York",
+     "27"
+    ]
+   ]
+  }
+ }
+}
