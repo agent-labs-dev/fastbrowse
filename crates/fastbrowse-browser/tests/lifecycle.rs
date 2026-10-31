@@ -1,5 +1,3 @@
-//! tests/browser/test_lifecycle.py: failure and cancellation paths that need deterministic transport responses.
-//!
 //! Each test drives a `BrowserSession` against `FakeChrome`, test_lifecycle.py's `CdpTransport` behind a socket.
 //!
 //! Ported as unit tests in adapters, src/adapters/browser_use_cloud.rs:
