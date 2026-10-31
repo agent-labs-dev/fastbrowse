@@ -140,7 +140,9 @@ pub(crate) fn more_behind_fact(history: &[HistoryEntry], observation: &Observati
     let last = history.last().filter(|entry| entry.added && entry.operation == Some(Operation::Click))?;
     let target = last.target.as_ref()?;
     observation.controls.iter().any(|control| describe(control) == *target).then(|| {
-        format!("Clicking {target} added records to this page, and it is still offered: there may be more behind it.")
+        format!(
+            "Clicking {target} added records to this page and it is still offered, so the page has not run out of records to add: the list is not whole yet."
+        )
     })
 }
 

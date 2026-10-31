@@ -6,7 +6,7 @@ use std::sync::Arc;
 use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::LLMError;
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
-use fastbrowse_core::page::{BrowserError, Observation};
+use fastbrowse_core::page::{BrowserError, Capture, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
 
@@ -206,6 +206,8 @@ pub(crate) struct RunState {
     pub page_failed: bool,
     /// Jev said a read's answer must be composed, so the run ends on the LLM's writing of the notes.
     pub compose: bool,
+    /// Pages read for one fact, in case a later read says the answer is composed from all of them.
+    pub read_whole: Vec<Capture>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
     pub committing: bool,
     /// Pages read, by content: a document can show several steps of one flow.
@@ -286,6 +288,7 @@ impl RunState {
             read_documents: HashMap::new(),
             page_failed: false,
             compose: false,
+            read_whole: Vec::new(),
             committing: false,
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),

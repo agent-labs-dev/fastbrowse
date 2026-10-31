@@ -7,7 +7,7 @@ use serde_json::Map;
 use super::Agent;
 use super::helpers::read_sources;
 use super::state::{RunState, Step};
-use crate::retrieval::{PageRead, read_page};
+use crate::retrieval::{PageRead, read_page, whole_page_facts};
 
 impl Agent {
     /// Return whether the read added evidence, since only new evidence makes a read progress.
@@ -49,6 +49,17 @@ impl Agent {
         state.notes.remember_capture(&capture);
         for fact in facts {
             state.notes.add(fact);
+        }
+        // Jev can pick one fact from a list's first page and only see on the next that the answer is composed.
+        state.read_whole.retain(|read| read.url != capture.url);
+        if compose {
+            for read in std::mem::take(&mut state.read_whole) {
+                for fact in whole_page_facts(&read) {
+                    state.notes.add(fact);
+                }
+            }
+        } else if added > 0 {
+            state.read_whole.push(capture.clone());
         }
         state.notes.supersede(&capture.url, &capture.sha256, &capture.text);
         // A timer changes the capture hash, so only a new source quote is progress.

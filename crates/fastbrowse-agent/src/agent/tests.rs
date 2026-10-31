@@ -1232,3 +1232,18 @@ fn test_a_control_that_added_and_stays_may_hold_more() {
     assert!(super::helpers::more_behind_fact(&click(true), &page("Other")).is_none());
     assert!(super::helpers::more_behind_fact(&click(false), &page("More")).is_none());
 }
+
+#[tokio::test]
+async fn test_a_stale_click_on_a_page_that_moved_leaves_the_read_out_of_date() {
+    let before = observation(&[button("More")]);
+    let after = observation(&[]);
+    let agent = agent();
+    let mut state = run_state();
+    state.read_documents.insert(before.document_key.clone(), false);
+    state.history.push(HistoryEntry::new(Some(Operation::Click), Some("More"), StepOutcome::Stale, false));
+    state.idle.push(Some((Operation::Click, Some("More".into()))));
+    state.acted_from = Some(before.clone());
+    agent.note_effect(&mut state, &after);
+    assert!(state.idle.is_empty());
+    assert_eq!(state.read_documents.get(&after.document_key), Some(&true));
+}

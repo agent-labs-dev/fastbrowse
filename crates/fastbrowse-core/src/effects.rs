@@ -16,6 +16,8 @@ pub struct Effect {
     pub set_something: bool,
     /// The page stayed and gained controls, losing none.
     pub added: bool,
+    /// Something a person would see differs: a control, the address or the text in the viewport.
+    pub changed: bool,
 }
 
 /// Identify a page state by what can be done on it, ignoring text that changes on its own (clocks, ads).
@@ -153,14 +155,15 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     }
     // A form that refuses a submit can say why in its text alone, as Sauce Demo's checkout shows "Error: First Name is
     // required" and changes no control.
+    let changed = !parts.is_empty() || before.viewport_text != after.viewport_text;
     let summary = if !parts.is_empty() {
         parts.join("; ")
-    } else if before.viewport_text != after.viewport_text {
+    } else if changed {
         "only the page text changed".to_string()
     } else {
         "nothing visible changed".to_string()
     };
-    Effect { summary, set_something: navigated || setting, added }
+    Effect { summary, set_something: navigated || setting, added, changed }
 }
 
 #[cfg(test)]

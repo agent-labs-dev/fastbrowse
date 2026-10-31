@@ -680,6 +680,15 @@ impl Agent {
         let Some(last) = state.history.last_mut() else { return };
         let done = effect(&before, observation, None);
         last.added = done.added;
+        // A click can change the page after it reports nothing: one that came back stale because the page moved the
+        // control away, or one that added only text. Either way what was read is out of date and the click worked.
+        if done.changed && last.operation == Some(Operation::Click) {
+            let clicked = Some((Operation::Click, last.target.clone()));
+            state.idle.retain(|action| *action != clicked);
+            if let Some(read) = state.read_documents.get_mut(&observation.document_key) {
+                *read = true;
+            }
+        }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),
             None => done.summary,

@@ -89,7 +89,11 @@ impl Agent {
             {
                 return Err(failure.stop().into());
             }
-            let without_value = state.missing.iter().any(|(url, ..)| *url == observation.url);
+            let without_value = observation.controls.iter().any(|control| {
+                state.missing.iter().any(|(url, label, field)| {
+                    *url == observation.url && control.label == *label && control.context == *field
+                })
+            });
             let status = if without_value { Status::NeedsInput } else { gives_up_as };
             return Err(Stop::new(status, reason).into());
         }

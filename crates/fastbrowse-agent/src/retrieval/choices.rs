@@ -258,6 +258,22 @@ pub(crate) struct PageRead {
     pub compose: bool,
 }
 
+/// A page as notes to compose from, one fact per whole block, so a table row stays one record: counted cell by cell,
+/// "London" had lost whose office it was, and a table of twelve came back as seven. Every block, not the passages that
+/// narrowed a question: a count from those misses the records in the passages left out.
+pub(crate) fn whole_page_facts(capture: &Capture) -> Vec<Fact> {
+    let page = Page::new(capture);
+    capture
+        .blocks
+        .iter()
+        .filter(|block| !text::strip(page.slice(block.start, block.end)).is_empty())
+        .map(|block| {
+            let quote = evidence(&page, block, block.start, block.end);
+            Fact::read(text::strip(&quote.quote), quote.clone(), FactReader::JevChoice)
+        })
+        .collect()
+}
+
 /// `read_page`: the facts Jev picks from this page, none when it says the page holds nothing for `task`. An answer it
 /// says must be composed keeps every block as a fact.
 pub(crate) async fn read_page(
@@ -300,18 +316,7 @@ pub(crate) async fn read_page(
         answer.choice.as_str()
     };
     if choice == SYNTHESIS {
-        // A whole block, so a table row stays one record: counted cell by cell, "London" had lost whose office it was,
-        // and a table of twelve came back as seven. Every block of the page, not the passages that narrowed the
-        // question: a count from those misses the records in the passages left out.
-        let facts = blocks
-            .iter()
-            .filter(|block| !text::strip(page.slice(block.start, block.end)).is_empty())
-            .map(|block| {
-                let quote = evidence(&page, block, block.start, block.end);
-                Fact::read(text::strip(&quote.quote), quote.clone(), FactReader::JevChoice)
-            })
-            .collect();
-        return Ok(PageRead { facts, compose: true });
+        return Ok(PageRead { facts: whole_page_facts(capture), compose: true });
     }
     let Some(group) = groups.get(choice) else { return Ok(PageRead::default()) };
     let selected = &group[0];
