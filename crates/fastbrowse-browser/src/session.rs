@@ -8,7 +8,6 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use data_encoding::BASE64;
 use fastbrowse_core::BoxFuture;
@@ -273,6 +272,11 @@ pub(crate) struct State {
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
     pub(crate) dialog_urls: HashMap<String, String>,
     pub(crate) input_navigations: u32,
+    /// Top frames of each session with a navigation requested or a document loading that has not reached
+    /// DOMContentLoaded.
+    pub(crate) navigating: HashSet<(String, String)>,
+    /// Frames with a parent, whose loading is not the page's.
+    pub(crate) subframes: HashSet<String>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -638,26 +642,33 @@ impl BrowserSession {
         self.0.state.lock().unwrap().requests_started
     }
 
+    /// Whether the active tab's page has a navigation on its way.
+    pub fn navigating(&self) -> bool {
+        let Ok(active) = self.active_session_id() else { return false };
+        self.0.state.lock().unwrap().navigating.iter().any(|(session, _)| *session == active)
+    }
+
     /// Whether a fetch or XHR request started after `mark` is still waiting for its response.
     ///
     /// A page that answers a click with a request (a cart that adds over fetch, then redraws) leaves its document as
     /// it was until the response arrives, so an unchanged page with one open is not yet an action that did nothing.
     pub fn requests_open_since(&self, mark: u64) -> bool {
+        crate::cdp::mark(&format!("DBG open {:?} mark={mark}", self.0.state.lock().unwrap().requests_open));
         self.0.state.lock().unwrap().requests_open.values().any(|started| *started > mark)
     }
 
     /// Whether a download landed since `since`, waiting briefly for the intercept's own task.
     ///
     /// The capture runs off the request-paused event in its own task, so it can complete a moment after the
-    /// navigation it belongs to aborts. A short bounded wait tells a download abort from a plain failure without
-    /// racing that task; a download that never came is not this kind of abort.
+    /// navigation it belongs to aborts. With no response paused, no capture is coming: that is not this kind of abort.
     pub async fn download_settled(&self, since: u32, timeout_seconds: f64) -> bool {
         let deadline = Instant::now() + secs(timeout_seconds);
         while self.downloads_settled() <= since {
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() || self.0.state.lock().unwrap().paused.is_empty() {
                 return false;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.wait_for_lifecycle(self.lifecycle_mark(), remaining.as_secs_f64()).await;
         }
         true
     }
@@ -1207,6 +1218,15 @@ impl Shared {
         }
     }
 
+    /// A navigation of `params`' frame has arrived, or stopped without a document.
+    fn landed(&self, params: &Value, session: Option<&str>) {
+        let Some(session) = session else { return };
+        let key = (session.to_owned(), str_of(&params["frameId"]));
+        if self.state.lock().unwrap().navigating.remove(&key) {
+            self.lifecycle.send_modify(|generation| *generation += 1);
+        }
+    }
+
     pub(crate) fn on_event(self: &Arc<Self>, event: &Event) {
         let params = &event.params;
         let session = event.session.as_deref();
@@ -1222,13 +1242,33 @@ impl Shared {
                 }
             }
             "Page.windowOpen" => self.state.lock().unwrap().window_opens += 1,
+            "Page.frameAttached" => {
+                self.state.lock().unwrap().subframes.insert(str_of(&params["frameId"]));
+            }
+            "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
+                if let Some(session) = session {
+                    let frame = str_of(&params["frameId"]);
+                    let mut state = self.state.lock().unwrap();
+                    if !state.subframes.contains(&frame) {
+                        state.navigating.insert((session.to_owned(), frame));
+                    }
+                }
+            }
+            "Page.frameStoppedLoading" | "Page.navigatedWithinDocument" => self.landed(params, session),
             // A frame reported a lifecycle transition (init, DOMContentLoaded, load, networkIdle...).
-            "Page.lifecycleEvent" => self.lifecycle.send_modify(|generation| *generation += 1),
-            // Only the page's own calls: a document, image or script request is the load lifecycle events report.
-            "Network.requestWillBeSent" if matches!(params["type"].as_str(), Some("Fetch" | "XHR")) => {
+            "Page.lifecycleEvent" => {
+                if params["name"] == "DOMContentLoaded" {
+                    self.landed(params, session);
+                }
+                self.lifecycle.send_modify(|generation| *generation += 1);
+            }
+            // The scripts a page loads as it goes: a menu's bundle arrives after its click. Fetch and XHR are counted in
+            // the page, which alone can tell the ones an input caused.
+            "Network.requestWillBeSent" if params["type"].as_str() == Some("Script") => {
                 if let Some(session) = session {
                     let mut state = self.state.lock().unwrap();
                     let key = (session.to_owned(), str_of(&params["requestId"]));
+                    crate::cdp::mark(&format!("DBG req {} {} {:?}", key.1, params["type"], params["request"]["url"]));
                     // A redirect sends this again under the same id: the request keeps the age it started with.
                     if !state.requests_open.contains_key(&key) {
                         state.requests_started += 1;
@@ -1240,6 +1280,7 @@ impl Shared {
             "Network.loadingFinished" | "Network.loadingFailed" => {
                 if let Some(session) = session {
                     let key = (session.to_owned(), str_of(&params["requestId"]));
+                    crate::cdp::mark(&format!("DBG end {}", key.1));
                     if self.state.lock().unwrap().requests_open.remove(&key).is_some() {
                         // Wakes a settle waiting on lifecycle events to look at the page again.
                         self.lifecycle.send_modify(|generation| *generation += 1);
@@ -1254,6 +1295,7 @@ impl Shared {
                 state.frame_sessions.retain(|(_, sid)| *sid != child);
                 // A target that went away answers nothing more.
                 state.requests_open.retain(|(sid, _), _| *sid != child);
+                state.navigating.retain(|(sid, _)| *sid != child);
             }
             // A scoped run adopts popups where they attach paused, not here, after their first request may have left.
             "Target.targetCreated" if self.grant.is_none() => {
@@ -1662,6 +1704,8 @@ async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
     // (navigation, tab close), which is fine to swallow here.
     let _ = shared.session().send("Fetch.continueRequest", json!({"requestId": request_id}), Some(&session_id)).await;
     shared.state.lock().unwrap().paused.remove(&(request_id, session_id));
+    // Wakes `download_settled`.
+    shared.lifecycle.send_modify(|generation| *generation += 1);
 }
 
 #[allow(clippy::too_many_arguments)]

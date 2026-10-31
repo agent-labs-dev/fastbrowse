@@ -284,7 +284,14 @@ impl Cdp {
         if self.0.out.send(Outgoing::Text(message.to_string())).is_err() {
             return Err(self.0.closed_error());
         }
-        rx.await.unwrap_or_else(|_| Err(self.0.closed_error()))
+        let head = message["params"]["expression"]
+            .as_str()
+            .map(|e| e.chars().take(30).collect::<String>())
+            .unwrap_or_default();
+        let t0 = std::time::Instant::now();
+        let out = rx.await.unwrap_or_else(|_| Err(self.0.closed_error()));
+        mark(&format!("cdp {method} {:.0}ms {head:?}", t0.elapsed().as_secs_f64() * 1000.0));
+        out
     }
 
     /// `_BrowserClient.send_raw`: a command under the reply, liveness and command deadlines, its failure mapped to
@@ -461,5 +468,16 @@ struct PendingGuard<'a> {
 impl Drop for PendingGuard<'_> {
     fn drop(&mut self) {
         self.inner.state.lock().unwrap().pending.remove(&self.id);
+    }
+}
+
+/// TEMPORARY timing log.
+pub fn mark(what: &str) {
+    if let Ok(path) = std::env::var("FB_CDP_LOG") {
+        use std::io::Write;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{now:.3} {what}");
+        }
     }
 }

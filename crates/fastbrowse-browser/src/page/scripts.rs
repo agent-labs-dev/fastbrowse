@@ -11,7 +11,6 @@ use crate::session::py_json;
 pub const SCROLL_EVENT_SECONDS: f64 = 3.0;
 /// A deadline, not a wait: a field with no editor to open settles on the first frame.
 pub const HANDOFF_SECONDS: f64 = 0.6;
-pub const HANDOFF_QUIET_SECONDS: f64 = 0.1;
 
 /// What a page draws over its content and means to be dealt with first. Naming a cover for recovery and routing
 /// around one read this one list: a small open menu fixed to the window looked like a band to one of them, and the
@@ -266,16 +265,13 @@ pub static HANDED_FOCUS_JS: LazyLock<String> = LazyLock::new(|| {
     "if (was.x < now.left || was.x > now.right || was.y < now.top || was.y > now.bottom) ",
     "return e.isConnected ? id : null; ",
     "if (!r.ids.has(a)) r.ids.set(a, r.next++); const n = r.ids.get(a); r.nodes.set(n, a); return n; }; ",
-    &format!("const deadline = performance.now() + {}; ", py_float(HANDOFF_SECONDS * 1000.0)),
-    "const poll = () => { const choice = decide(); ",
-    "if ((choice !== null && performance.now() - (r.lastMutation ?? 0) >= ",
-    &format!("{}) || performance.now() >= deadline) resolve(choice); ", py_float(HANDOFF_QUIET_SECONDS * 1000.0)),
-    "else setTimeout(poll, 20); }; ",
-    // Chrome can hold a cross-origin frame's animation frames indefinitely, and CI hung in pytest for an hour
-    // awaiting one; the timer starts the poll anyway once the deadline has passed.
-    "let started = false; const start = () => { if (!started) { started = true; poll(); } }; ",
-    &format!("setTimeout(start, {}); ", py_float(HANDOFF_SECONDS * 1000.0)),
-    "if (was.doc.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }))",
+    // A timer in a frame is not among those the top document counts, so a field that was replaced is waited for by
+    // the focus that names its successor.
+    "const finish = () => resolve(decide()); ",
+    "const settle = () => { was.doc.removeEventListener('focusin', settle, true); r.nativeClearTimeout(timer); ",
+    &format!("if (was.doc.hidden) finish(); else r.whenQuiet({}).then(finish); }}; ", py_float(HANDOFF_SECONDS * 1000.0)),
+    &format!("const timer = r.nativeSetTimeout(settle, {}); ", py_float(HANDOFF_SECONDS * 1000.0)),
+    "was.doc.addEventListener('focusin', settle, true); if (decide() !== null) settle(); }))",
     ]
     .concat()
 });

@@ -271,7 +271,7 @@ async fn test_navigation_after_observe_rejects_old_control() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_hidden_tab_requires_dom_quiet() {
+async fn test_hidden_tab_answers_with_no_idle_period() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(settling_site(), None).await.expect("navigate");
@@ -285,10 +285,7 @@ async fn test_hidden_tab_requires_dom_quiet() {
         assert_eq!(eval_active(&h.session, "document.hidden").await, json!(true));
         eval_active(&h.session, "document.body.setAttribute('data-state', 'new')").await;
         let (stable, fingerprint) = h.page.settled_fingerprint(1.0).await.expect("fingerprint");
-        assert!(!stable && fingerprint.is_some());
-        sleep(Duration::from_secs_f64(0.25)).await;
-        let (stable, current) = h.page.settled_fingerprint(1.0).await.expect("fingerprint");
-        assert!(stable && current == fingerprint);
+        assert!(stable && fingerprint.is_some());
     };
     let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(checked)).await;
     let _ = h.session.send("Target.closeTarget", json!({"targetId": other["targetId"]}), None).await;
@@ -350,7 +347,7 @@ async fn test_deferred_input_changes_are_settled_before_observation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_noop_input_still_waits_for_quiet() {
+async fn test_noop_input_reports_no_change() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
@@ -358,9 +355,6 @@ async fn test_noop_input_still_waits_for_quiet() {
     let obs = h.observe().await;
     let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Idle").id), &obs).await.expect("act");
     assert!(result.outcome == StepOutcome::Executed && !result.page_changed, "{result:?}");
-    let quiet = eval_active(&h.session, "performance.now() - window.__fastbrowse.lastMutation").await;
-    let quiet = quiet.as_f64().expect("a number");
-    assert!(quiet >= seams::settle_quiet_seconds() * 1000.0, "{quiet}");
     h.close().await;
 }
 
@@ -471,4 +465,21 @@ async fn test_a_page_whose_timers_never_fire_cannot_hold_the_pointer() {
         assert_eq!(result.outcome, StepOutcome::Executed, "{timer}");
         h.close().await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_endless_animation_a_click_starts_does_not_hold_the_action() {
+    let Some(h) = harness().await else { return };
+    common::eval_active(
+        &h.session,
+        "document.body.innerHTML = `<canvas></canvas><button>Start</button>`; \
+         document.querySelector('button').onclick = () => { const spin = () => requestAnimationFrame(spin); spin(); \
+         document.querySelector('canvas').dataset.on = '1'; };",
+    )
+    .await;
+    let obs = h.observe().await;
+    let started = std::time::Instant::now();
+    h.page.act(&targeted(Operation::Click, &find(&obs, "Start").id), &obs).await.expect("act");
+    assert!(started.elapsed().as_secs_f64() < 2.0, "{:?}", started.elapsed());
+    h.close().await;
 }

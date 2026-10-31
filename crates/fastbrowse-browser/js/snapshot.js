@@ -39,20 +39,50 @@
   registry.nativeSetTimeout ||= window.setTimeout.bind(window);
   registry.nativeClearTimeout ||= window.clearTimeout.bind(window);
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
+  // Waits inside the page that want to hear of each change as it happens.
+  registry.onChange ||= new Set();
+  // Resolves once the page's queued tasks have run with no change, or false at the bound. A
+  // message comes back after the tasks queued before it, and needs no frame or idle period: a cloud browser that draws
+  // nothing held idle callbacks for seconds. Between changes this waits on the next change, so it costs no polling.
+  registry.whenQuiet ||= bound =>
+    new Promise(resolve => {
+      const { port1, port2 } = new MessageChannel();
+      let since = null;
+      const stop = quiet => {
+        registry.onChange.delete(look);
+        registry.nativeClearTimeout(timer);
+        port1.close();
+        resolve(quiet);
+      };
+      const look = () => {
+        if (since !== null) return;
+        since = performance.now();
+        port2.postMessage(0);
+      };
+      port1.onmessage = () => {
+        const moved = registry.lastMutation > since;
+        since = null;
+        if (moved) look();
+        else stop(true);
+      };
+      const timer = registry.nativeSetTimeout(() => stop(false), bound);
+      registry.onChange.add(look);
+      look();
+    });
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
   if (!registry.track) {
     const roots = new WeakSet();
     const changed = () => {
       registry.lastMutation = performance.now();
+      for (const listener of registry.onChange) listener();
     };
     const observer = new MutationObserver(changed);
     registry.track = root => {
       if (roots.has(root)) return;
       roots.add(root);
       observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
-      // Input handlers can defer a navigation or redraw without mutating yet. Start the quiet clock at the
-      // event, so the reply's travel time counts toward settling even when the action changes nothing.
+      // Input handlers can defer a navigation or redraw without mutating yet, so an input event counts as a change.
       for (const event of [
         'input',
         'change',

@@ -10,7 +10,7 @@ use tokio::time::{Instant, sleep, timeout};
 
 use super::scripts::{
     ACTIVATION_KEY_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, LEAVE_SUGGESTING_FIELD_JS,
-    OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
+    OBSTRUCTIONS, PRESENTED_JS, SELECT_TEXT_JS, UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::secs;
@@ -27,12 +27,6 @@ const DRAG_STEP_SECONDS: f64 = 0.01;
 const MEASURE_DRAWN_SECONDS: f64 = 2.0;
 /// A deadline, not a wait: focus normally lands in one or two ticks. A loaded CI runner took over 0.3s.
 const FOCUS_SETTLE_SECONDS: f64 = 1.0;
-/// Long enough for a suggestion request to come back over a slow connection, and paid only by a field that
-/// advertises a popup at all.
-const SUGGESTION_SECONDS: f64 = 1.2;
-/// A lazily built menu or dialog arrived 0.15-0.7s after the click on the pages this was measured on. Paid only by a
-/// control that advertised a popup and had not opened one yet.
-const POPUP_SECONDS: f64 = 1.2;
 /// A download's bytes are taken off the paused response in a task of its own, which normally finishes before the
 /// click's settle does. Paid only by a click whose own input began a navigation and left the page unchanged.
 const DOWNLOAD_SETTLE_SECONDS: f64 = 1.5;
@@ -114,13 +108,13 @@ fn parse_cover(value: &Value) -> Result<Cover, BrowserError> {
     })
 }
 
-/// `[fingerprint, live guard, hit-test point, popup announced, opens a window, address]` from the pre-action check.
+/// `[fingerprint, live guard, hit-test point, opens a window, address]` from the pre-action check.
 /// The address is the active page's own `location.href`, read in the same evaluation.
-type TargetState = (String, Option<String>, Point, bool, bool, String);
+type TargetState = (String, Option<String>, Point, bool, String);
 
 fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
-    let shape = "tuple[str, str | None, _Point, bool, bool, str]";
-    let Some([fingerprint, guard, point, announced, opens, address]) = value.as_array().map(Vec::as_slice) else {
+    let shape = "tuple[str, str | None, _Point, bool, str]";
+    let Some([fingerprint, guard, point, opens, address]) = value.as_array().map(Vec::as_slice) else {
         return Err(bad(shape));
     };
     let fingerprint = fingerprint.as_str().ok_or_else(|| bad(shape))?.to_owned();
@@ -134,7 +128,6 @@ fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
         fingerprint,
         guard,
         point,
-        announced.as_bool().ok_or_else(|| bad(shape))?,
         opens.as_bool().ok_or_else(|| bad(shape))?,
         address.as_str().ok_or_else(|| bad(shape))?.to_owned(),
     ))
@@ -170,7 +163,7 @@ impl CdpPage {
         // A pending dialog already blocks the renderer's main thread; evaluating now would hang.
         let mut before_fingerprint = String::new();
         let mut point = Point::Gone;
-        let (mut announced, mut opens) = (false, false);
+        let mut opens = false;
         let mut address = String::new();
         let active = self.session.active_session_id()?;
         // The pointer must move only once the browser has drawn the layout the point was measured in. Waiting for that
@@ -219,7 +212,7 @@ impl CdpPage {
                 _ => measured,
             };
             let live_guard;
-            (before_fingerprint, live_guard, point, announced, opens, address) = measured;
+            (before_fingerprint, live_guard, point, opens, address) = measured;
             if let Some(target) = &target
                 && live_guard != target.3
             {
@@ -250,7 +243,9 @@ impl CdpPage {
         let window_opens = self.session.window_opens();
         let requests = self.session.requests_mark();
         let downloads_before = self.session.downloads_settled();
+        crate::cdp::mark("act dispatch-begin");
         let (outcome, mut detail) = self.dispatch(action, target.as_ref(), point, drawn).await?;
+        crate::cdp::mark("act dispatch-end");
         if outcome != StepOutcome::Executed {
             return Ok(ActResult {
                 outcome,
@@ -259,17 +254,9 @@ impl CdpPage {
                 moved: false,
             });
         }
-        if action.operation == Operation::Click
-            && let Some(target) = &target
-            && announced
-        {
-            self.until_dialog(self.await_popup(&target.0, target.2)).await;
-        }
-        let active_now = self.session.active_session_id().ok();
-        let input_settling = action.operation == Operation::Fill
-            || (!matches!(action.operation, Operation::Back | Operation::SwitchTab | Operation::Dialog)
-                && target.as_ref().is_none_or(|t| Some(&t.0) == active_now.as_ref()));
-        let mut changed = self.changed_since(&before_fingerprint, input_settling, requests).await?;
+        let mut changed = self.changed_since(&before_fingerprint, requests).await?;
+        crate::cdp::mark(&format!("act settled changed={changed}"));
+        if let Ok(sid) = self.session.active_session_id() { let v = self.evaluate(&sid, "(()=>{const r=window.__fastbrowse;const d=r.dbg;r.dbg=[];return JSON.stringify([performance.now(),d])})()").await; crate::cdp::mark(&format!("DBG timers {v:?}")); }
         if matches!(action.operation, Operation::Click | Operation::Enter)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {
@@ -676,30 +663,6 @@ impl CdpPage {
         }
     }
 
-    /// Give a menu, picker or dialog the click opens time to arrive before the page is observed.
-    ///
-    /// A header that mutates the moment it is clicked settles the fingerprint and quiets the DOM before the dialog's
-    /// own bundle has loaded, so the next observation still shows the page as it was and the agent acts on whatever
-    /// else is on screen. The wait is bounded, resolves the instant the control reports itself expanded or the element
-    /// it controls becomes visible, and is paid only by a control that said a popup was coming. Best effort by
-    /// construction: a click that navigates discards the promise.
-    async fn await_popup(&self, session_id: &str, local_id: i64) {
-        let script = format!(
-            "new Promise(resolve => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             const owned = () => {OWNED_JS}(e); \
-             const open = () => e.getAttribute('aria-expanded') === 'true' \
-             || !!owned()?.checkVisibility({{checkOpacity: true, checkVisibilityCSS: true}}); \
-             if (!e || open()) {{ resolve(true); return; }} \
-             const stop = ok => {{ observer.disconnect(); clearTimeout(timer); resolve(ok); }}; \
-             const observer = new MutationObserver(() => {{ if (open()) stop(true); }}); \
-             observer.observe(e.ownerDocument.documentElement, {{childList: true, subtree: true, \
-             attributes: true}}); \
-             const timer = setTimeout(() => stop(false), {}); }})",
-            py_float(POPUP_SECONDS * 1000.0)
-        );
-        let _ = self.evaluate(session_id, &script).await;
-    }
-
     async fn fill(
         &self,
         target: Option<&Target>,
@@ -779,7 +742,6 @@ impl CdpPage {
         if !secret && native_date {
             return self.fill_native_date(session_id, local_id, text).await;
         }
-        let mut suggests = false;
         for attempt in 0..2 {
             if attempt > 0 || focused.is_none() {
                 let activate = focused.is_none();
@@ -815,20 +777,8 @@ impl CdpPage {
             } else {
                 self.session.send("Input.insertText", json!({"text": text}), Some(session_id)).await?;
             }
-            // Whether the field asks for suggestions comes back with the check, so an ordinary field's fill does not
-            // pay a round trip to learn it has none to wait for.
-            let check = format!(
-                "((ok, e) => [!!ok, !!ok && !!e && {}(e)])({}, window.__fastbrowse?.nodes.get({local_id}))",
-                *SUGGESTS_JS,
-                landed_js(local_id, text)
-            );
-            let landed = self.evaluate(session_id, &check).await?;
-            let (landed, wants) = match landed.as_array().map(Vec::as_slice) {
-                Some([Value::Bool(landed), Value::Bool(wants)]) => (*landed, *wants),
-                _ => return Err(bad("tuple[bool, bool]")),
-            };
-            suggests = wants;
-            if landed {
+            let landed = self.evaluate(session_id, &landed_js(local_id, text)).await?;
+            if landed == Value::Bool(true) {
                 break;
             }
             // An editor that took focus after the hand-off looked, and so never got the text, is typed into once more,
@@ -843,9 +793,6 @@ impl CdpPage {
                 Some(handed) if attempt == 0 && handed != local_id => local_id = handed,
                 _ => return Ok((StepOutcome::Failed, Some("field did not retain the supplied text".into()))),
             }
-        }
-        if suggests {
-            self.await_suggestions(session_id, local_id).await;
         }
         Ok((StepOutcome::Executed, None))
     }
@@ -872,36 +819,6 @@ impl CdpPage {
             Value::Bool(true) => (StepOutcome::Executed, None),
             _ => (StepOutcome::Failed, Some("field did not retain the supplied ISO value".into())),
         })
-    }
-
-    /// Give an autocomplete field's suggestions time to arrive before the page is read.
-    ///
-    /// Typing settles the fingerprint immediately, but the suggestions it asks for arrive over the network afterwards,
-    /// so the snapshot caught an empty popup and Jev was asked to choose from a list that had not loaded. The wait is one round
-    /// trip, resolves as soon as options appear and returns at once for a field that has no popup to wait for.
-    ///
-    /// The wait is best effort by construction. Typing into a search box can submit it, and a navigation discards the
-    /// renderer promise awaited here, so a fill that worked would fail on the wait that was only there to help it. A
-    /// page that moved on has answered the question.
-    async fn await_suggestions(&self, session_id: &str, local_id: i64) {
-        // A popup that is open is not a popup that is populated, and an empty one is exactly what is waited out, so
-        // expansion on its own does not end the wait.
-        let script = format!(
-            "new Promise(resolve => {{ const e = window.__fastbrowse?.nodes.get({local_id}); \
-             const owned = () => {OWNED_JS}(e); const expects = !!e && {suggests}(e); \
-             if (!expects) {{ resolve(false); return; }} \
-             const listed = () => !!owned()?.querySelector('[role=\"option\"], li, td') \
-             || !!e.ownerDocument.querySelector('[role=\"listbox\"] [role=\"option\"]'); \
-             if (listed()) {{ resolve(true); return; }} \
-             const stop = ok => {{ observer.disconnect(); clearTimeout(timer); resolve(ok); }}; \
-             const observer = new MutationObserver(() => {{ if (listed()) stop(true); }}); \
-             observer.observe(e.ownerDocument.body, {{childList: true, subtree: true, attributes: true, \
-             attributeFilter: ['aria-expanded']}}); \
-             const timer = setTimeout(() => stop(false), {}); }})",
-            py_float(SUGGESTION_SECONDS * 1000.0),
-            suggests = *SUGGESTS_JS
-        );
-        let _ = self.evaluate(session_id, &script).await;
     }
 
     async fn select(&self, target: Option<&Target>, option: &str, point: Point) -> Result<Outcome, BrowserError> {
@@ -1124,7 +1041,7 @@ impl CdpPage {
             let Some(checked) = checked else {
                 return Ok((StepOutcome::Failed, Some("pointer movement opened a dialog before press".into()), point));
             };
-            let (_, guard, fresh, _, _, _) = checked?;
+            let (_, guard, fresh, _, _) = checked?;
             if guard != target.3 || fresh == Point::Gone {
                 return Ok((StepOutcome::Stale, Some("control changed before pointer press".into()), point));
             }
@@ -1172,7 +1089,7 @@ impl CdpPage {
         }
         // The drop target is hit-tested exactly as the source is: its point is only computed when the live guard still
         // matches the observed one, so a target that moved or was covered since the observation is stale.
-        let (_, _, drop_point, _, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
+        let (_, _, drop_point, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
         if !matches!(drop_point, Point::At(..)) {
             return Ok((StepOutcome::Stale, Some("drop target disconnected".into())));
         }
@@ -1182,7 +1099,7 @@ impl CdpPage {
             return Ok((outcome, detail));
         }
         // Pointer entry on the source can repurpose the destination after its first guard check.
-        let (_, _, drop_point, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+        let (_, _, drop_point, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
         let Point::At(end_x, end_y) = drop_point else {
             return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into())));
         };
@@ -1199,7 +1116,7 @@ impl CdpPage {
                 .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
             if step == 1 {
-                let (_, _, landed, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+                let (_, _, landed, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
                 if !matches!(landed, Point::At(..)) {
                     self.cancel_drag(session_id, (start_x, start_y)).await?;
                     return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into())));
@@ -1218,7 +1135,7 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
-            let (_, _, landed, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+            let (_, _, landed, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
             let Point::At(x, y) = landed else { break };
             if (x, y) == at {
                 self.release(session_id, at.0, at.1).await?;
@@ -1299,7 +1216,7 @@ impl CdpPage {
     ) -> Result<TargetState, BrowserError> {
         let Some(target) = target else {
             let (fingerprint, address) = self.fingerprint_and_address().await?;
-            return Ok((fingerprint, None, Point::Gone, false, false, address));
+            return Ok((fingerprint, None, Point::Gone, false, address));
         };
         let (session_id, local_id, guard) = (&target.0, target.2, &target.3);
         let active = self.session.active_session_id()?;
@@ -1338,24 +1255,21 @@ impl CdpPage {
         }
         script.push_str(&format!(
             "const e = r?.nodes.get({local_id}); \
-             const announced = !!e && e.getAttribute('aria-expanded') !== 'true' && \
-             (!!e.getAttribute('aria-haspopup') || e.getAttribute('aria-expanded') === 'false' || \
-             !!e.getAttribute('aria-controls') || !!e.getAttribute('aria-owns')); \
              const fresh = name => (name ?? '').trim().toLowerCase() === '_blank'; \
              const link = e?.closest('a[href],area[href]'); \
              const opens = !!e && ((!!link && fresh(link.hasAttribute('target') ? link.getAttribute('target') \
              : e.ownerDocument.querySelector('base[target]')?.getAttribute('target'))) || \
              (!!e.form && ['submit', 'image'].includes(e.type) && \
              fresh(e.getAttribute('formtarget') ?? e.form.getAttribute('target')))); \
-             return [fingerprint, guard, point, announced, opens, location.href]; }})()"
+             return [fingerprint, guard, point, opens, location.href]; }})()"
         ));
         let state = async { parse_target_state(&self.evaluate(session_id, &script).await?) };
         if same_session || after_move {
             return state.await;
         }
-        let ((fingerprint, address), (_, live_guard, point, announced, opens, _)) =
+        let ((fingerprint, address), (_, live_guard, point, opens, _)) =
             tokio::try_join!(self.fingerprint_and_address(), state)?;
-        Ok((fingerprint, live_guard, point, announced, opens, address))
+        Ok((fingerprint, live_guard, point, opens, address))
     }
 
     /// The active page's fingerprint and `location.href`, in one evaluation.
@@ -1404,8 +1318,8 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
     };
     // activeElement is set by focus() before it returns, but hasFocus() is answered by the browser's focus controller,
     // which does not run inside the task that called focus(). For a field inside an iframe it therefore reads false for
-    // a tick or two, so judging it here in the same task rejects a field that is in fact focused. Poll instead of
-    // guessing. Every condition is rechecked on the tick that succeeds: waiting for the focus signal means focus can
+    // a tick or two, so judging it here in the same task rejects a field that is in fact focused. The window's focus
+    // event says when it has. Every condition is rechecked then: waiting for the focus signal means focus can
     // move meanwhile, and reporting success on a stale activeElement would authorize keystrokes to whatever holds focus.
     format!(
         "((id, activated) => {{ const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; \
@@ -1413,12 +1327,13 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
          {mask}e.ownerDocument.defaultView.focus(); e.focus({{preventScroll: true}}); \
          if (!e.isConnected || e.getRootNode().activeElement !== e) return false; \
          return new Promise(resolve => {{ \
-         const deadline = Date.now() + {deadline}; \
+         const view = e.ownerDocument.defaultView; \
+         const stop = done => {{ view.removeEventListener('focus', check); clearTimeout(timer); resolve(done); }}; \
          const check = () => {{ if (!e.isConnected || e.getRootNode().activeElement !== e) \
-         {{ resolve(false); return; }} \
-         if (e.ownerDocument.hasFocus()) {{ {prepare}resolve(true); return; }} \
-         if (Date.now() > deadline) {{ resolve(false); return; }} \
-         setTimeout(check, 10); }}; check(); }}); }})",
+         {{ stop(false); return; }} \
+         if (e.ownerDocument.hasFocus()) {{ {prepare}stop(true); }} }}; \
+         view.addEventListener('focus', check); \
+         const timer = setTimeout(() => stop(false), {deadline}); check(); }}); }})",
         deadline = py_float(FOCUS_SETTLE_SECONDS * 1000.0),
     )
 }

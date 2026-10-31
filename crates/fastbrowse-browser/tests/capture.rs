@@ -2,10 +2,10 @@ mod common;
 mod misc_support;
 
 use std::collections::HashSet;
-use std::time::Instant;
 
 use common::{Harness, eval_active, harness, sites, wait_until};
-use fastbrowse_core::page::BlockKind;
+use fastbrowse_core::models::Operation;
+use fastbrowse_core::page::{Action, BlockKind};
 use misc_support::{content_capture, path, set_body, text_of, texts, visible};
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
@@ -677,15 +677,17 @@ async fn test_settle_waits_for_a_shadow_root_added_while_it_reads_the_clock() {
     // observer cannot see until a full sample starts watching it.
     eval_active(
         &h.session,
-        "(() => { const host = document.createElement('div'); document.body.append(host); \
-         const root = host.attachShadow({mode: 'open'}); let n = 0; \
-         const tick = () => { root.textContent = String(n++); if (n < 16) setTimeout(tick, 50); }; tick(); })()",
+        "document.body.innerHTML = '<button>Go</button>'; window.ticks = 0; \
+         document.querySelector('button').onclick = () => { const host = document.createElement('div'); \
+         document.body.append(host); const root = host.attachShadow({mode: 'open'}); \
+         const tick = () => { root.textContent = String(window.ticks++); if (window.ticks < 16) setTimeout(tick, 50); }; \
+         tick(); };",
     )
     .await;
-    let started = Instant::now();
-    let (stable, _) = h.page.settled_fingerprint(3.0).await.expect("settle");
-    assert!(stable);
-    // 16 changes 50ms apart end about 750ms in; settling needs 200ms of quiet after the last.
-    assert!(started.elapsed().as_secs_f64() >= 0.8);
+    let obs = h.observe().await;
+    let go = obs.controls.iter().find(|c| c.label == "Go").expect("button").id.clone();
+    let click = Action { target_id: Some(go), ..Action::new(Operation::Click) };
+    h.page.act(&click, &obs).await.expect("act");
+    assert_eq!(eval_active(&h.session, "window.ticks").await, serde_json::json!(16));
     h.close().await;
 }

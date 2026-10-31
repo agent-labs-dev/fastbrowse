@@ -25,7 +25,7 @@ impl CdpPage {
             let params = json!({"type": kind, "x": x * width, "y": y * height, "button": "left", "clickCount": 1});
             self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await?;
         }
-        let changed = self.changed_since(&before, true, requests).await?;
+        let changed = self.changed_since(&before, requests).await?;
         let opened = self.session.follow_popup(&popups, self.session.window_opens() != window_opens).await?.is_some();
         Ok(ActResult {
             outcome: StepOutcome::Executed,

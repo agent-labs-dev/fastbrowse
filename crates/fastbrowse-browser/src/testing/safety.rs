@@ -12,17 +12,12 @@ use tokio::time::Instant;
 use crate::cdp::secs;
 use crate::error::BrowserError;
 use crate::page::act::Point;
-use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_QUIET_SECONDS, SETTLE_SECONDS};
+use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_SECONDS};
 use crate::session::{BrowserSession, Shared, SnapshotScript, State, py_json};
 
 /// The longest an action waits for the page to settle.
 pub fn settle_seconds() -> f64 {
     SETTLE_SECONDS
-}
-
-/// How long the DOM must be still to count as settled.
-pub fn settle_quiet_seconds() -> f64 {
-    SETTLE_QUIET_SECONDS
 }
 
 /// A child frame's full read budget.

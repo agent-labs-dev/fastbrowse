@@ -611,7 +611,7 @@ async fn test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation() {
         if toward == Toward::Browser
             && hold.load(Ordering::SeqCst)
             && method(&value) == "Runtime.evaluate"
-            && value["params"]["expression"].as_str().is_some_and(|e| e.contains("const announced = "))
+            && value["params"]["expression"].as_str().is_some_and(|e| e.contains("const opens = "))
         {
             counted.fetch_add(1, Ordering::SeqCst);
             return None;
