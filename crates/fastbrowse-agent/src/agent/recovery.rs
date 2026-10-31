@@ -45,6 +45,14 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
     context.problem = Some(problem);
 }
 
+/// Leave the actions that moved nothing out of an ask on `offered`.
+pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, context: &mut StepContext) {
+    for action in &state.idle {
+        let problem = context.problem.take().unwrap_or_else(|| "The last action changed nothing.".to_string());
+        withhold(offered, context, &problem, action.clone());
+    }
+}
+
 /// `decision`'s action, withheld from the ask that follows it.
 pub(super) fn withheld(decision: &Decision) -> Withheld {
     Some((decision.operation, decision_label(decision)))
@@ -90,7 +98,10 @@ impl Agent {
         let secrets = self.secret_names(&origin_of(&observation.url));
         let mut context = self.context(state, observation, secrets, false, false)?;
         let mut offered = observation.clone();
-        withhold(&mut offered, &mut context, reason, withheld);
+        context.problem = Some(reason.to_string());
+        leave_out_idle(state, &mut offered, &mut context);
+        let reason = context.problem.take().unwrap_or_default();
+        withhold(&mut offered, &mut context, &reason, withheld);
         context.screenshot = self.viewport().await?;
         let decision = decide(
             &*self.jev,

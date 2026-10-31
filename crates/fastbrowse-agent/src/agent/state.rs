@@ -194,6 +194,8 @@ pub(crate) struct RunState {
     /// The action whose page change the next observation judges: a new page state, or one revisited after new
     /// evidence, is progress.
     pub landing: Option<Withheld>,
+    /// The actions that moved nothing since the last one that did. Done again they do the same, so asks leave them out.
+    pub idle: Vec<Withheld>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
@@ -236,6 +238,7 @@ impl RunState {
             ledger,
             picked: None,
             landing: None,
+            idle: Vec::new(),
             acted_from: None,
             unchanged: 0,
             committing: false,
@@ -277,6 +280,7 @@ impl RunState {
             reached: HashMap::new(),
             evidence_reads: 0,
             landing: None,
+            idle: Vec::new(),
             acted_from: None,
             downloads_forbidden: None,
             read_documents: HashMap::new(),

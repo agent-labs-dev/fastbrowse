@@ -516,10 +516,21 @@
       e =>
         (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
     ));
+  // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
+  const isCard = memo(e =>
+    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
+    (!!e.getAttribute('class') &&
+      [...(e.parentElement?.children || [])].some(
+        s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
+      )));
   // A table's header cell names its own row, and a caption its own table, never what sits outside them: a jQuery UI
-  // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same.
-  const reaches = (title, element) =>
-    !['th', 'caption'].includes(title.localName) || title.parentElement.contains(element);
+  // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same. A title inside
+  // a card names that card alone: a list's "More" button was named after the last product shown above it.
+  const reaches = (title, element) => {
+    if (['th', 'caption'].includes(title.localName) && !title.parentElement.contains(element)) return false;
+    for (let e = title.parentElement; e && !e.contains(element); e = e.parentElement) if (isCard(e)) return false;
+    return true;
+  };
   // The title nearest before the element names its section; the scope's first title is the fallback, and the
   // only answer when `nearest` is false.
   const sectionOf = (scope, element, label, nearest = true) => {
@@ -733,13 +744,6 @@
   // card shows the same icon: one left alone, or drawn by another icon set, would name no card and leave the choice
   // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
   // that says anything besides it.
-  // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
-  const isCard = e =>
-    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
-    (!!e.getAttribute('class') &&
-      [...(e.parentElement?.children || [])].some(
-        s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
-      ));
   const nearestName = (element, label) => {
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {

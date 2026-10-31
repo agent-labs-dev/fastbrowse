@@ -74,7 +74,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Click => "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
-        Operation::Fill => "Enter or replace text in an editable field.",
+        Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
         Operation::Select => "Select a value in an observed dropdown.",
         Operation::Enter => "Press Enter in a text field to submit or search for what it already contains.",
         Operation::Upload => "Attach one of the task's files to a file input.",

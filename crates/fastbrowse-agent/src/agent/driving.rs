@@ -17,7 +17,7 @@ use fastbrowse_core::safety::origin_of;
 use serde_json::{Map, Value, json};
 
 use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
-use super::recovery::{Withheld, withheld};
+use super::recovery::{Withheld, leave_out_idle, withheld};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
 use crate::policy::{Decision, HistoryEntry, decide};
@@ -92,12 +92,14 @@ impl Agent {
             let decision = match picked {
                 Some(picked) => picked,
                 None => {
-                    let context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    let mut offered = observation.clone();
+                    leave_out_idle(state, &mut offered, &mut context);
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
                         let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
                         let config = &self.config;
-                        Ok(decide(&*self.jev, &observation, &context, config, ledger, cache, &self.trace).await?)
+                        Ok(decide(&*self.jev, &offered, &context, config, ledger, cache, &self.trace).await?)
                     });
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(decision) = decided else {
@@ -387,7 +389,8 @@ impl Agent {
         if decision.operation == Operation::Read {
             frame = if frames { self.frame().await? } else { None };
             let capture = self.capture().await?;
-            let read_progress = self.trace.phase("read", Box::pin(self.read(state, capture, observation, false))).await?;
+            let read_progress =
+                self.trace.phase("read", Box::pin(self.read(state, capture, observation, false))).await?;
             progressed = Some(read_progress);
             if read_progress {
                 renew(state);
@@ -573,9 +576,11 @@ impl Agent {
         if progressed {
             state.unchanged = 0;
             state.hint = None;
+            state.idle.clear();
             return Ok(());
         }
         state.unchanged += 1;
+        state.idle.push(stalled.clone());
         if state.unchanged >= self.config.stall.unchanged_actions {
             let reason = format!("no_progress ({})", state.unchanged);
             Box::pin(self.recover(state, observation, &reason, gives_up_as, stalled)).await?;

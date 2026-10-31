@@ -1319,6 +1319,25 @@ async fn test_same_named_siblings_are_told_apart_by_their_own_visible_descriptor
     h.close().await;
 }
 
+/// A list's "More" button, named after the last product above it, read as that product's own and was not the list's.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_card_title_does_not_name_a_control_past_the_card() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r#"document.body.innerHTML = '<main><h2>Tablets</h2><div>'
+        + '<div class="card"><h4>Fire 7</h4></div><div class="card"><h4>Memo Pad</h4></div>'
+        + '</div><button>More</button></main>'"#,
+    )
+    .await;
+    let obs = observe_until(&h.page, "More").await;
+    let more = obs.controls.iter().find(|c| c.label == "More").unwrap();
+    assert_eq!(more.context.as_deref(), Some("Tablets"));
+    h.close().await;
+}
+
 /// A jQuery UI datepicker's Next and days were named "Su", its weekday header, so every month read alike: the
 /// run could not tell which month it was on and went back and forth past the one it wanted.
 #[tokio::test(flavor = "multi_thread")]
