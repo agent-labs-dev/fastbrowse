@@ -144,11 +144,15 @@ arrow landed on nothing, and a glide past the two-second call bound turned the f
 `set_agent_cursor_motion` for a fixed 550 ms glide, which lands on each click about half a second after it, and
 waits up to six seconds for a move. Shorter glides land sooner but cross the screen in a few frames.
 
-The glide a move is drawn with follows its distance, from `GLIDE_MS` up to `GLIDE_MAX_MS`: one fixed duration
-made a sweep across the page the same length as a hop between neighbours, so the long move crossed several times
-faster and could not be followed. The floor is the value tuned to land the arrow on every click, and the cap keeps
-a long move from trailing the clicks. The paced value is sent with `set_agent_cursor_motion` only when it changes,
-and a driver without that tool keeps the glide it was started with.
+The glide a move is drawn with is paced to a travel speed, not to a duration: it takes as long as its distance
+needs at `GLIDE_PX_PER_S`, between `GLIDE_MS` and `GLIDE_MAX_MS`. One fixed duration made a sweep across the page
+the same length as a hop between neighbours, so the long move crossed four or five times faster and could not be
+followed. The floor is the value tuned to land the arrow on every click, and the cap keeps one sweep from holding
+up the step behind it. On the measured replay a sweep peaked at 1,350-2,400px/s and now peaks near 750px/s.
+`glide_duration_ms` is only the glide length under `timing: fixed`; every other timing keeps the style's own curve
+and ignores the number, so the run asks for `fixed` when it sets a glide and again when it re-paces one. The paced
+value is sent with `set_agent_cursor_motion` only when it changes, and a driver without that tool keeps the glide
+it was started with.
 
 Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
 0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The driver offers no click

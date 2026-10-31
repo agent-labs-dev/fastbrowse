@@ -39,18 +39,23 @@ const CALL_SECONDS: Duration = Duration::from_secs(2);
 //
 // One fixed duration for every move still makes a sweep across the page the same length as a hop between two
 // neighbouring controls, so the long move crosses four or five times faster and is gone before it can be followed.
-// The glide is paced by the distance it covers instead, between the value tuned above and a ceiling that still
-// lands before the next step: on a 1600x1000 replay the old whole moves ran at 1,350-2,400px/s, and a 900ms
-// ceiling brings them under about 1,100px/s without moving the short hops that already read well.
+//
+// The glide is paced to a travel speed instead of by a duration: a move takes as long as its distance needs at
+// `GLIDE_PX_PER_S`, so a sweep and a hop are crossed at the same pace, between the value tuned above and a ceiling
+// that keeps one step from holding up the next for long. On the 1290x910 saucedemo replay the old whole moves ran
+// at a 1,350-2,400px/s peak; at this budget a sweep peaks near 750px/s, which is the pace a hand crosses a screen.
+//
+// `glide_duration_ms` is only the glide length under `timing: fixed`; every other timing keeps the style's own
+// curve and ignores it, so the run asks for `fixed` before it sends a duration at all.
 const GLIDE_MS: f64 = 550.0;
-const GLIDE_MAX_MS: f64 = 900.0;
-/// Glide time added per device pixel travelled, on top of `GLIDE_MS`.
-const GLIDE_MS_PER_PX: f64 = 0.35;
+const GLIDE_MAX_MS: f64 = 2200.0;
+/// Device pixels a glide covers per second: the pace the arrow travels at, whatever the distance.
+const GLIDE_PX_PER_S: f64 = 500.0;
 
-/// The glide to ask for on a move `distance` device pixels long: the tuned floor for a short hop, stretched by
-/// the distance so a long sweep is not several times faster, and capped so the arrow still lands between steps.
+/// The glide to ask for on a move `distance` device pixels long: long enough to cross at `GLIDE_PX_PER_S`, no
+/// shorter than the tuned floor that lands a short hop, and capped so a step is not held up behind a long sweep.
 fn glide_ms(distance: f64) -> f64 {
-    (GLIDE_MS + distance.max(0.0) * GLIDE_MS_PER_PX).clamp(GLIDE_MS, GLIDE_MAX_MS)
+    (distance.max(0.0) / GLIDE_PX_PER_S * 1000.0).clamp(GLIDE_MS, GLIDE_MAX_MS)
 }
 // A driver that ignores the fixed glide still lands within its own 5s ceiling; waiting that long is not a failure.
 const MOVE_SECONDS: Duration = Duration::from_secs(6);
@@ -533,7 +538,12 @@ impl Inner {
             // Cleared while the request is in flight, so a dropped reply is re-sent with the next move.
             *sent = None;
         }
-        let arguments = json!({"session": self.session, "idle_hide_ms": 0, "glide_duration_ms": glide_ms});
+        let arguments = json!({
+            "session": self.session,
+            "idle_hide_ms": 0,
+            "timing": "fixed",
+            "glide_duration_ms": glide_ms
+        });
         self.driver.tool("set_agent_cursor_motion", arguments).await?;
         *lock(&self.sent_glide) = Some(glide_ms);
         Ok(())
@@ -700,7 +710,10 @@ async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
     // A driver without this tool keeps its own defaults.
     let mut motion = false;
     if tools.contains_key("set_agent_cursor_motion") {
-        let arguments = json!({"session": session, "idle_hide_ms": 0, "glide_duration_ms": GLIDE_MS});
+        // `fixed` is the timing that reads `glide_duration_ms`; the driver's own default timing ignores it and
+        // keeps its style's curve, which is how a "550ms" glide still crossed at 1,350-2,400px/s.
+        let arguments =
+            json!({"session": session, "idle_hide_ms": 0, "timing": "fixed", "glide_duration_ms": GLIDE_MS});
         match driver.tool("set_agent_cursor_motion", arguments).await {
             Ok(_) => motion = true,
             Err(failure) => {
@@ -932,9 +945,29 @@ if mode == "linger":
         assert_eq!(glide_ms(0.0), GLIDE_MS);
         assert!(glide_ms(120.0) < glide_ms(600.0));
         assert!(glide_ms(600.0) > glide_ms(200.0));
-        // Capped, so the arrow still lands before the next step rather than trailing the clicks.
-        assert_eq!(glide_ms(5_000.0), GLIDE_MAX_MS);
+        // Capped, so a step is not held up for long behind one sweep.
+        assert_eq!(glide_ms(50_000.0), GLIDE_MAX_MS);
         assert_eq!(glide_ms(f64::MAX), GLIDE_MAX_MS);
+    }
+
+    #[test]
+    fn a_move_crosses_at_one_pace_whatever_its_distance() {
+        // The pace is the point: two moves of different lengths take time in proportion, so the longer one is not
+        // crossed several times faster. Checked over the distances the replay actually ran.
+        // Below the cap a move takes exactly the time its distance needs. A move at the cap is the one exception,
+        // and slower rather than faster, which is the safe direction.
+        for distance in [275.0, 400.0, 600.0, 765.0] {
+            let pace = distance / (glide_ms(distance) / 1000.0);
+            assert!((pace - GLIDE_PX_PER_S).abs() < 1e-9, "{distance}px crossed at {pace}px/s");
+        }
+        // Under the floor a move is a short hop: it keeps the tuned 550ms rather than a fraction of it.
+        assert_eq!(glide_ms(250.0), GLIDE_MS);
+        // A 1290px sweep, the whole viewport of the measured replay, runs into the 2.2s cap and is crossed at about
+        // 590px/s: slower than the budget, where the old fixed 550ms glide crossed it at about 2,300px/s.
+        assert!((glide_ms(1_290.0) - GLIDE_MAX_MS).abs() < 1e-9);
+        assert!(1_290.0 / (glide_ms(1_290.0) / 1000.0) < 600.0);
+        // A 765px move, the cart-to-checkout sweep in the replay, is not capped and gets its full time.
+        assert!(glide_ms(765.0) > 1_500.0);
     }
 
     #[test]
