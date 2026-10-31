@@ -79,7 +79,7 @@ impl Agent {
             let origin = origin_of(&raw.url);
             let page = (raw.url.clone(), raw.document_key.clone());
             if state.planning.done() {
-                state.await_plan().await?;
+                self.trace.phase("plan_wait", state.await_plan()).await?;
             }
             let secrets = self.secret_names(&origin);
             // A held secret makes a sign-in wall work to do rather than a stop, but passes no CAPTCHA, so the bot check
@@ -109,7 +109,7 @@ impl Agent {
                         withhold(&mut offered, &mut context, &recovering.problem, recovering.withheld);
                     }
                     let redecided = state.redecided;
-                    let deciding = self.decide_looking(state, &offered, &context);
+                    let deciding = self.trace.phase("decide", self.decide_looking(state, &offered, &context));
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(decision) = decided else {
                         self.redecide(state, &observation);
@@ -167,11 +167,11 @@ impl Agent {
             }
             if uncertain && state.ready_plan.is_none() {
                 // Unsure without the requirements: the plan is already in flight and costs less than recovery.
-                state.await_plan().await?;
+                self.trace.phase("plan_wait", state.await_plan()).await?;
                 continue;
             }
             if decision.operation == Operation::Read {
-                state.await_plan().await?;
+                self.trace.phase("plan_wait", state.await_plan()).await?;
                 Box::pin(self.step(state, &observation, &decision, decided_by)).await?;
                 continue;
             }
@@ -180,11 +180,13 @@ impl Agent {
             if decision.operation == Operation::Escalate || (uncertain && !not_acting(decision.operation)) {
                 let reason = format!("uncertain next step ({:.2})", decision.confidence());
                 state.fallback = Some(self.fallback(&decision, &reason));
-                Box::pin(self.consult(state, &observation, &reason)).await?;
+                self.trace.phase("recover", Box::pin(self.consult(state, &observation, &reason))).await?;
                 continue;
             }
             if decision.operation == Operation::Done {
-                if let Some(result) = Box::pin(self.finish(state, output_schema, until)).await? {
+                if let Some(result) =
+                    self.trace.phase("finish", Box::pin(self.finish(state, output_schema, until))).await?
+                {
                     return Ok(result);
                 }
                 continue;
@@ -192,7 +194,9 @@ impl Agent {
             match Box::pin(self.step(state, &observation, &decision, decided_by)).await {
                 Err(Flow::Unsure(unsure)) => {
                     let left_out = withheld(&decision);
-                    Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as, left_out)).await?;
+                    let recovering =
+                        Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as, left_out));
+                    self.trace.phase("recover", recovering).await?;
                 }
                 other => other?,
             }
@@ -335,8 +339,8 @@ impl Agent {
             None => None,
             Some(proposing) => {
                 // Cancelling a dispatched shortcut loses its bill and stops capped runs; the head start owns cleanup.
-                let waited =
-                    tokio::time::timeout(Duration::from_secs_f64(SHORTCUT_WAIT_SECONDS), proposing.wait()).await;
+                let waited = tokio::time::timeout(Duration::from_secs_f64(SHORTCUT_WAIT_SECONDS), proposing.wait());
+                let waited = self.trace.phase("shortcut_wait", waited).await;
                 match waited {
                     Ok(Some(Ok(proposal))) => Some(proposal),
                     Ok(Some(Err(error))) => match Flow::from(error) {
@@ -350,7 +354,7 @@ impl Agent {
         let shortcut = proposal.and_then(|proposal| accept(proposal.url.as_deref(), start));
         // A shortcut is a page to start on. One naming a file would save it before any step's download gate could ask.
         let Some(shortcut) = shortcut.filter(|shortcut| !starts_download(&caller_link(shortcut))) else {
-            self.page.navigate(start, None).await?;
+            self.trace.phase("open", self.page.navigate(start, None)).await?;
             return Ok((Vec::new(), HashSet::new()));
         };
         let landed = async {
@@ -359,8 +363,8 @@ impl Agent {
             let landed = self.page.address().await?;
             let status = self.page.response_status().await?;
             Ok::<_, BrowserError>((landed, status))
-        }
-        .await;
+        };
+        let landed = self.trace.phase("open", landed).await;
         let (landed, status) = match landed {
             Ok((landed, status)) => (Some(landed), status),
             Err(error) if error.needs_browser() => return Err(error.into()),
@@ -485,7 +489,8 @@ impl Agent {
         if decision.operation == Operation::Read {
             frame = if frames { self.frame().await? } else { None };
             let capture = self.capture().await?;
-            let read_progress = Box::pin(self.read(state, Some(capture), Some(observation))).await?;
+            let read_progress =
+                self.trace.phase("read", Box::pin(self.read(state, Some(capture), Some(observation)))).await?;
             progressed = Some(read_progress);
             if read_progress {
                 renew(state);
@@ -502,7 +507,7 @@ impl Agent {
         } else {
             let redecided = state.redecided;
             let target = decision.target.as_ref().map(|target| target.id.clone());
-            let building = self.action(state, observation, decision, decided_by);
+            let building = self.trace.phase("build_action", self.action(state, observation, decision, decided_by));
             let action = match self.unless_redrawn(redecided, building, observation, target.as_deref()).await? {
                 Watched::Done(action) => action,
                 Watched::Redrawn => {
@@ -527,7 +532,7 @@ impl Agent {
                 self.page.withhold_frames(true);
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            let mut result = self.page.act(&action, &raw).await?;
+            let mut result = self.trace.phase("act", self.page.act(&action, &raw)).await?;
             if result.outcome == StepOutcome::Stale
                 && let Some(target) = &decision.target
                 && let Some(retried) = self.act_on_twin(&action, observation, target).await?
@@ -812,7 +817,7 @@ impl Agent {
 
     /// Every observation models see has resolved secret values blanked, wherever the page echoes them.
     pub(super) async fn observe(&self) -> Step<Observation> {
-        let observation = self.page.observe().await?;
+        let observation = self.trace.phase("observe", self.page.observe()).await?;
         let revealed = self.reveals(&observation);
         let redactor = self.redactor();
         let mask = |value: &str| redactor.mask(value);
@@ -874,7 +879,7 @@ impl Agent {
     }
 
     pub(super) async fn capture(&self) -> Step<Capture> {
-        let capture = self.page.capture().await?;
+        let capture = self.trace.phase("capture", self.page.capture()).await?;
         let redactor = self.redactor();
         let mask = |value: &str| redactor.mask(value);
         let text = mask(&capture.text);
@@ -940,7 +945,7 @@ impl Agent {
         if self.seen().secret_on_screen {
             return Ok(Vec::new());
         }
-        match self.page.screenshot().await {
+        match self.trace.phase("screenshot", self.page.screenshot()).await {
             Ok(image) => Ok(vec![image]),
             Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(Vec::new()),
             Err(error) => Err(error.into()),
@@ -1018,11 +1023,11 @@ impl Agent {
     /// The check is made against a fresh reading of the page rather than the last observation, which was taken before
     /// the action ran, and the action may be the one that put the secret there.
     pub(super) async fn frame(&self) -> Step<Option<Vec<u8>>> {
-        let now = self.page.observe().await?;
+        let now = self.trace.phase("frame", self.page.observe()).await?;
         if self.reveals(&now) {
             return Ok(None);
         }
-        match self.page.screenshot().await {
+        match self.trace.phase("frame", self.page.screenshot()).await {
             Ok(image) => Ok(Some(image)),
             Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(None),
             Err(error) => Err(error.into()),
