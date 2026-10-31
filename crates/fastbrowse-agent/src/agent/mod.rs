@@ -326,7 +326,7 @@ impl Agent {
             let error = stop.error.as_deref().map(|error| self.redact(error));
             if matches!(stop.status, Status::Stuck | Status::Unverified) && !state.notes.evidence().is_empty() {
                 // What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
-                let notes = state.notes.clone();
+                let notes = if state.compose { state.notes_to_compose() } else { state.notes.clone() };
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 if state.compose
                     && let Ok(composed) = compose(&*self.llm, &state.task, &notes, Some(&state.ledger)).await

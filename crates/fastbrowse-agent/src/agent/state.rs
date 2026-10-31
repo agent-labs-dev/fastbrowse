@@ -14,6 +14,7 @@ use super::recovery::Withheld;
 use crate::error::AgentError;
 use crate::memory::Notes;
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
+use crate::retrieval::whole_page_facts;
 
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
@@ -206,7 +207,8 @@ pub(crate) struct RunState {
     pub page_failed: bool,
     /// Jev said a read's answer must be composed, so the run ends on the LLM's writing of the notes.
     pub compose: bool,
-    /// Pages read for one fact, in case a later read says the answer is composed from all of them.
+    /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
+    /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
     pub read_whole: Vec<Capture>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
     pub committing: bool,
@@ -235,6 +237,15 @@ impl RunState {
     }
 
     /// This run on a new page under `ledger`: everything it learned, and nothing about an action still in flight.
+    /// The notes with the pages read for one fact whole.
+    pub fn notes_to_compose(&self) -> Notes {
+        let mut notes = self.notes.clone();
+        for fact in self.read_whole.iter().flat_map(whole_page_facts) {
+            notes.add(fact);
+        }
+        notes
+    }
+
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,

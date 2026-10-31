@@ -115,7 +115,7 @@ impl Agent {
             None => None,
         };
         let answered = if state.compose {
-            let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
+            let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             match self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await? {
                 Some(chosen) => Some(chosen),
                 None => Some(self.trace.phase("compose", compose(&*self.llm, &task, &notes, Some(&ledger))).await?),
