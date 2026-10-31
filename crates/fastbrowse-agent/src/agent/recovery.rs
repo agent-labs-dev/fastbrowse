@@ -62,7 +62,7 @@ impl Schema for Recovery {
     }
 }
 
-const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. When the notes answer every open requirement and no unverified outputs remain, the next subgoal is to finish. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. A site failure (an error shown in place of content, an outage, a load that never finished, a navigation the browser could not complete) is not the task's answer, even where the page also shows an empty result: retry it with a retry control the page offers or by navigating to the page's own address when it is listed, or take another route, before finishing or giving up. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
+const RECOVERY: &str = "# Recovery\nThe browsing agent is not making progress. Diagnose why from the screenshot and history, then give one concrete next subgoal: a single operation, naming the index of the observed control it acts on, with no alternatives. A read, scroll, back or escape acts on the page and names no control. scroll moves down; scroll_up moves up. navigate opens one listed caller-supplied address: copy it into url and name no control. Use it when another requested site has no observed link. Never invent an address. A read takes in the whole page, so scroll only to reach a control, load more, or position content the task explicitly asks to see in the viewport. Unverified answer outputs remain open even when a requirement has other cited fields. Gather their missing quotes instead of finishing from the same partial notes. Recovery memory records earlier diagnoses and subgoals; use the recent steps to judge whether to try another way. For a covered control, dismiss the observed overlay before trying the underlying control again. Do not alternate the same blocked click with scrolling. For a reversible filter, tab or sort selection, an unchanged selection and result set do not prove the click took effect. If that selection is still required and its control is visible, retry the selection rather than scrolling to look for results that never changed. This does not permit repeating a transaction or submission. A successful submission may have changed the page before it was read. Read and check the outcome before submitting again; do not create another transaction to repair an uncertain report. Manage an existing transaction through its observed controls or links. HTTP failures describe this browser session, not what the site permits in general. A site failure (an error shown in place of content, an outage, a load that never finished, a navigation the browser could not complete) is not the task's answer, even where the page also shows an empty result: retry it with a retry control the page offers or by navigating to the page's own address when it is listed, or take another route, before finishing or giving up. An opening shortcut is a guessed address. If its page leaves requirements open and its controls change nothing, use back toward the caller's start page and choose from the controls there instead of repeating actions on the guessed page. Dates are relative to the supplied current date.\n\n# Trust\n";
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
 pub(super) type Withheld = Option<(Operation, Option<String>)>;
@@ -232,7 +232,12 @@ impl Agent {
         // Giving up says the task cannot progress without the user, so the run ends here with that diagnosis.
         // Asked of the model rather than carried from the step that raised it: a missing value can surface
         // recoveries later, after an attempt to go on without it has failed for its absence.
-        state.gave_up = data.give_up.then(|| GaveUp {
+        // A consult is Jev being unsure on a run that may still be moving, and the stall rule is what says it stopped:
+        // only a stalled recovery, or one naming what the user must supply, ends the run. A plain give-up on a consult
+        // once stopped a run mid-list with a false claim that it could not go on. It still counts as a step that moved
+        // nothing, so a page that truly is a dead end reaches the stall rule.
+        let give_up = data.give_up && (stalled || data.needs_input || data.needs_login);
+        state.gave_up = give_up.then(|| GaveUp {
             status: if data.needs_input {
                 Status::NeedsInput
             } else if gives_up_as == Status::Unverified {
@@ -243,7 +248,7 @@ impl Agent {
             said_login: data.needs_login,
             diagnosis: self.redact(&data.diagnosis),
         });
-        if data.give_up {
+        if give_up {
             return Err(self.stop_recovering(state, observation, gives_up_as, detail).await?);
         }
         let diagnosis = self.redact(&data.diagnosis);
@@ -295,7 +300,11 @@ impl Agent {
             fallback: None,
             choices: Vec::new(),
         };
-        self.record_step(state, step, true, None).await
+        self.record_step(state, step, true, None).await?;
+        if data.give_up {
+            Box::pin(self.count_progress(state, false, observation, None, gives_up_as)).await?;
+        }
+        Ok(())
     }
 
     /// The stop once recovery has run out: the status the last give-up diagnosed, or `gives_up_as`, with an HTTP

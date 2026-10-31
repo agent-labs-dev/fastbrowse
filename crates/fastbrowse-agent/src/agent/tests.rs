@@ -1397,6 +1397,18 @@ async fn test_giving_up_ends_the_run_with_the_diagnosis() {
 }
 
 #[tokio::test]
+async fn test_giving_up_on_a_consult_leaves_the_run_going() {
+    let llm = Arc::new(Recoverer(Default::default(), true));
+    let jev = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 0.1, Default::default()));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
+    let mut state = run_state().await;
+    let page = observation(&[button("Next")]);
+    agent.consult(&mut state, &page, "uncertain next step").await.expect("still going");
+    assert!(state.gave_up.is_none());
+    assert_eq!(state.hint.as_deref(), Some("Scroll on"));
+}
+
+#[tokio::test]
 async fn test_a_stall_jev_is_sure_of_is_answered_without_the_llm() {
     let (state, jev, llm) = stalled_on_apply(0.9).await;
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);

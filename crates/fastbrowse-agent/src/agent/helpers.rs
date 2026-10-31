@@ -27,15 +27,7 @@ pub(crate) fn not_acting(operation: Operation) -> bool {
 
 /// Recovery can direct page operations without a control; directed DONE still requires verification.
 pub(crate) fn page_operation(operation: Operation) -> bool {
-    matches!(
-        operation,
-        Operation::Read
-            | Operation::Scroll
-            | Operation::ScrollUp
-            | Operation::Back
-            | Operation::Escape
-            | Operation::Done
-    )
+    matches!(operation, Operation::Read | Operation::Scroll | Operation::ScrollUp | Operation::Back | Operation::Escape)
 }
 
 pub(crate) fn parse(url: &str) -> Option<Url> {
