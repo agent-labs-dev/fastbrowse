@@ -1,5 +1,3 @@
-//! tests/clients/test_openai_compatible.py and test_attempt_deadline.py.
-//!
 //! Python shortens its retry and deadline constants by monkeypatching them; here they stay Python's and the clock is
 //! paused, so a full retry ladder passes at once. Python cancels a task and lets an abandoned
 //! request run to its deadline so its receipt can be read; here the future is dropped, and a request in flight is
@@ -12,15 +10,15 @@ use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::{Script, Step, answering, reply, result_model, text};
+use common::{Model, Script, Step, answering, reply, result_model, text};
 use fastbrowse_clients::http::{Http, Response, TransportError};
 use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, Role};
-use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose, Limits, MaybeUnavailable};
+use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose, Limits};
 use fastbrowse_core::py::base64;
 use fastbrowse_core::schema::{Field, ModelTy, Ty, json_schema, strict_schema};
-use fastbrowse_core::telemetry::Ledger;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 
@@ -39,11 +37,10 @@ async fn generate(
     llm: &OpenAICompatibleLLM,
     purpose: LLMPurpose,
     messages: &[Message],
-    cap: i64,
     ledger: Option<&Ledger>,
 ) -> Result<Generation<Value>, LLMError> {
     let schema = result_model();
-    llm.generate_value(purpose, messages, &schema, cap, ledger).await
+    llm.generate_value(purpose, messages, &schema, ledger).await
 }
 
 fn completion(content: Value, usage: Value) -> Step {
@@ -101,7 +98,7 @@ async fn test_schema_repair_keeps_images_and_accounts_for_both_calls() {
     let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Read, "reader");
     let message =
         Message { role: Role::User, content: "Count".into(), images: vec![Bytes(png.clone()), Bytes(jpeg.clone())] };
-    let result = generate(&llm, LLMPurpose::Read, &[message], 42, None).await.unwrap();
+    let result = generate(&llm, LLMPurpose::Read, &[message], None).await.unwrap();
     assert_eq!(result.data["count"], 3);
     assert_eq!(result.cost.basis, CostBasis::Metered);
     assert_eq!(result.cost.dollars, Some(0.002));
@@ -113,7 +110,8 @@ async fn test_schema_repair_keeps_images_and_accounts_for_both_calls() {
     }
     let bodies = script.bodies();
     let body = &bodies[0];
-    assert_eq!((body["model"].clone(), body["max_tokens"].clone()), (json!("reader"), json!(42)));
+    assert_eq!(body["model"], "reader");
+    assert!(body.get("max_tokens").is_none(), "no output cap is sent");
     // Strict output requires every property and no defaults; a docstring is the field's only guidance.
     let json_schema = &body["response_format"]["json_schema"];
     let schema = &json_schema["schema"];
@@ -146,7 +144,7 @@ async fn test_unknown_price_retains_all_token_counts() {
             completion(json!(r#"{"count":0}"#), json!({"prompt_tokens": 7, "completion_tokens": 2, "cost": second})),
         ]);
         let llm = client(script.http(), "https://llm.test", LLMPurpose::Plan, "planner");
-        let result = generate(&llm, LLMPurpose::Plan, &[], 2000, None).await.unwrap();
+        let result = generate(&llm, LLMPurpose::Plan, &[], None).await.unwrap();
         assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Unknown, None));
         assert_eq!((result.cost.input_tokens, result.cost.output_tokens), (14, 4));
     }
@@ -159,7 +157,7 @@ async fn test_exactly_one_retry_then_llm_error() {
     let content = format!(r#"{{"{key}":1}}"#);
     let script = Script::new([completion(json!(content), Value::Null), completion(json!(content), Value::Null)]);
     let llm = keyed(key, script.http(), "https://llm.test", LLMPurpose::Plan, "planner");
-    let error = generate(&llm, LLMPurpose::Plan, &[], 2000, None).await.unwrap_err();
+    let error = generate(&llm, LLMPurpose::Plan, &[], None).await.unwrap_err();
     assert!(error.to_string().contains("after one retry"), "{error}");
     assert_eq!(script.requests().len(), 2);
     assert!(!error.to_string().contains(key));
@@ -170,7 +168,7 @@ async fn test_invalid_image_is_not_silently_dropped() {
     let script = Script::new([]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Plan, "planner");
     let message = Message { role: Role::User, content: "See image".into(), images: vec![Bytes(b"GIF89a".to_vec())] };
-    let error = generate(&llm, LLMPurpose::Plan, &[message], 2000, None).await.unwrap_err();
+    let error = generate(&llm, LLMPurpose::Plan, &[message], None).await.unwrap_err();
     assert!(error.to_string().contains("PNG and JPEG"));
     assert!(script.requests().is_empty(), "an unsupported image must fail before sending");
 }
@@ -182,7 +180,7 @@ async fn test_an_overloaded_model_is_retried_then_reported_without_a_schema_repa
     let rate_limited = format!("rate limited{}", "x".repeat(2000));
     let script = Script::new((0..6).map(|_| text(429, &rate_limited)));
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Plan, "planner");
-    let error = generate(&llm, LLMPurpose::Plan, &[], 2000, None).await.unwrap_err();
+    let error = generate(&llm, LLMPurpose::Plan, &[], None).await.unwrap_err();
     assert!(matches!(error, LLMError::RetriesExhausted(_)));
     assert!(error.to_string().contains("429") && error.to_string().len() < 500);
     assert_eq!(script.requests().len(), 6);
@@ -196,11 +194,10 @@ async fn test_a_retry_reserves_its_own_call_and_keeps_an_unreadable_attempts_cos
     let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Read, "reader");
     let messages = [Message::user("Count")];
     let ledger = Ledger::new(Limits { max_llm_calls: Some(1), ..Limits::default() });
-    let error = generate(&llm, LLMPurpose::Read, &messages, 2000, Some(&ledger)).await.unwrap_err();
+    let error = generate(&llm, LLMPurpose::Read, &messages, Some(&ledger)).await.unwrap_err();
     assert!(matches!(error, LLMError::Budget(_)));
     assert_eq!(script.requests().len(), 1);
-    let result =
-        generate(&llm, LLMPurpose::Read, &messages, 2000, Some(&Ledger::new(Limits::default()))).await.unwrap();
+    let result = generate(&llm, LLMPurpose::Read, &messages, Some(&Ledger::new(Limits::default()))).await.unwrap();
     // The first attempt's usage could not be read, so the total cannot claim to be metered.
     assert_eq!(script.requests().len(), 3);
     assert_eq!(result.data["count"], 1);
@@ -212,7 +209,7 @@ async fn test_an_error_status_retry_does_not_add_llm_cost() {
     let script = Script::new([text(503, ""), completion(json!(r#"{"count":1}"#), json!({"cost": 0.01}))]);
     let ledger = Ledger::new(Limits { max_llm_calls: Some(2), ..Limits::default() });
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let result = generate(&llm, LLMPurpose::Read, &[], 2000, Some(&ledger)).await.unwrap();
+    let result = generate(&llm, LLMPurpose::Read, &[], Some(&ledger)).await.unwrap();
     ledger.record([result.cost.clone()]).unwrap();
     assert_eq!(ledger.state().llm_calls, 2);
     assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Metered, Some(0.01)));
@@ -220,93 +217,57 @@ async fn test_an_error_status_retry_does_not_add_llm_cost() {
 }
 
 #[tokio::test]
-async fn test_a_truncated_response_is_retried_with_a_larger_output_cap() {
-    let script = Script::new([truncated(r#"{"count":"cut off mid-str"#), stopped(r#"{"count":5}"#, None)]);
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let result = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap();
+async fn test_a_response_cut_off_sends_no_cap_and_is_asked_once_more() {
+    // A provider's decoder can write whitespace inside the JSON until the model's maximum; asked again, it answered.
+    let script = Script::new([truncated(r#"{"count":""#), stopped(r#"{"count":5}"#, None)]);
+    let llm = client(script.http(), "https://llm.test", LLMPurpose::Compose, "composer");
+    let result = generate(&llm, LLMPurpose::Compose, &[], None).await.unwrap();
     assert_eq!(result.data["count"], 5);
-    assert_eq!(caps(&script), [json!(100), json!(400)]);
-    assert_eq!(result.cost.output_tokens, 9);
-}
-
-#[tokio::test]
-async fn test_a_response_truncated_twice_is_reported_as_truncation_not_as_a_schema_failure() {
-    let script = Script::new([truncated(r#"{"count":""#), truncated(r#"{"count":""#)]);
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let error = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap_err();
-    assert!(error.to_string().contains("truncated at the 400 token output cap"), "{error}");
-    assert!(!error.to_string().contains("schema"));
     assert_eq!(script.requests().len(), 2);
+    assert_eq!(caps(&script), [Value::Null, Value::Null]);
 }
 
 #[tokio::test]
 async fn test_a_response_that_ran_out_of_tokens_before_any_text_is_truncation() {
-    // A reasoning model can spend the whole cap before it writes; that is not an empty or refused completion.
+    // A reasoning model can spend its whole output maximum before it writes; that is not an empty or refused completion.
     let empty = || reply(200, json!({"choices": [{"message": {"content": null}, "finish_reason": "length"}]}));
     let script = Script::new([empty(), empty()]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let error = generate(&llm, LLMPurpose::Read, &[], 2000, None).await.unwrap_err();
-    assert!(error.to_string().contains("truncated"));
+    let error = generate(&llm, LLMPurpose::Read, &[], None).await.unwrap_err();
+    assert!(error.to_string().contains("cut off"));
     assert_eq!(script.requests().len(), 2);
 }
 
 #[tokio::test]
 async fn test_json_that_ends_mid_value_is_truncation_even_when_the_provider_says_it_stopped() {
-    let script = Script::new([stopped(r#"{"count":"cut off mid-str"#, None), stopped(r#"{"count":2}"#, None)]);
+    let cut = || stopped(r#"{"count":"cut off mid-str"#, Some(7));
+    let script = Script::new([cut(), cut()]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let result = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap();
-    assert_eq!(result.data["count"], 2);
-    assert_eq!(caps(&script), [json!(100), json!(400)]);
-}
-
-#[tokio::test]
-async fn test_json_that_ends_mid_value_short_of_the_cap_is_a_provider_fault_not_truncation() {
-    let script = Script::new([stopped(r#"{"count":"cut off"#, Some(7)), stopped(r#"{"count":"cut off"#, Some(7))]);
-    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let error = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap_err();
-    assert!(matches!(error, LLMError::RetriesExhausted(_)));
-    assert!(error.to_string().contains("ended mid-JSON at 7 of 100"), "{error}");
-    assert!(error.is_unavailable());
-    assert_eq!(caps(&script), [json!(100), json!(100)]);
-}
-
-#[tokio::test]
-async fn test_a_short_reply_after_another_retry_is_still_asked_for_again() {
-    // After a schema repair, and after the cap grew.
-    for replies in [
-        [(r#"{"count":"five"}"#, 7), (r#"{"count":"cut off"#, 7), (r#"{"count":5}"#, 7)],
-        [(r#"{"count":"cut off"#, 100), (r#"{"count":"cut off"#, 7), (r#"{"count":5}"#, 7)],
-    ] {
-        let script = Script::new(replies.map(|(content, written)| stopped(content, Some(written))));
-        let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-        let result = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap();
-        assert_eq!(result.data["count"], 5);
-        assert_eq!(script.requests().len(), 3);
-    }
+    let error = generate(&llm, LLMPurpose::Read, &[], None).await.unwrap_err();
+    assert!(error.to_string().contains("cut off before its JSON ended (read)"), "{error}");
+    assert!(!error.to_string().contains("schema"));
+    assert_eq!(script.requests().len(), 2);
 }
 
 #[tokio::test]
 async fn test_complete_json_marked_truncated_never_becomes_a_citable_read() {
     let script = Script::new([truncated(r#"{"count":5}"#), truncated(r#"{"count":5}"#)]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
-    let error = generate(&llm, LLMPurpose::Read, &[], 100, None).await.unwrap_err().to_string();
-    assert!(error.contains("truncated") && error.ends_with("(read)"), "{error}");
-    assert_eq!(caps(&script), [json!(100), json!(400)]);
+    let error = generate(&llm, LLMPurpose::Read, &[], None).await.unwrap_err().to_string();
+    assert!(error.contains("cut off") && error.ends_with("(read)"), "{error}");
+    assert_eq!(script.requests().len(), 2);
 }
 
 #[test]
-fn test_a_strict_schema_leaves_array_caps_to_validation() {
-    // A provider answered HTTP 400 to every read whose claims list carried `maxItems: 60`. Validation keeping the cap
-    // is the response model's part, so only the schema half of the Python test is here.
-    let capped = ModelTy::frozen(
-        "Capped",
-        vec![Field::default("items", Ty::list(Ty::Str).constrained("maxItems", 60), json!([]))],
+fn test_a_strict_schema_states_the_array_bounds_validation_enforces() {
+    // A model is held only to rules it was told: the bound validation checks goes out in the schema.
+    let bounded = ModelTy::frozen(
+        "Bounded",
+        vec![Field::default("items", Ty::list(Ty::Str).constrained("maxItems", 2), json!([]))],
     )
     .ty();
-    let schema = json_schema(&capped);
-    assert!(schema.to_string().contains("maxItems"));
-    let strict = strict_schema(&schema).unwrap().to_string();
-    assert!(!strict.contains("maxItems") && !strict.contains("default"));
+    let strict = strict_schema(&json_schema(&bounded)).unwrap().to_string();
+    assert!(strict.contains("\"maxItems\":2") && !strict.contains("default"), "{strict}");
 }
 
 #[test]
@@ -329,7 +290,7 @@ async fn test_cancelled_generation_records_dispatched_costs_and_paid_retries_onc
             let script = Script::new(steps);
             let ledger = capped(max_dollars);
             let llm = client(script.http(), "https://llm.test", LLMPurpose::Plan, "planner");
-            assert!(cancelled(generate(&llm, LLMPurpose::Plan, &[], 2000, Some(&ledger)), &script.cancel).await);
+            assert!(cancelled(generate(&llm, LLMPurpose::Plan, &[], Some(&ledger)), &script.cancel).await);
             let lines = ledger.state().lines.clone();
             assert_eq!(lines.len(), if paid_retry { 2 } else { 1 });
             assert_eq!((lines.last().unwrap().basis, lines.last().unwrap().dollars), (CostBasis::Unknown, None));
@@ -349,7 +310,7 @@ async fn test_cancelled_generation_before_dispatch_does_not_wait_or_record_spend
     let script = Script::new([]);
     let ledger = capped(Some(0.25));
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Plan, "planner");
-    drop(generate(&llm, LLMPurpose::Plan, &[], 2000, Some(&ledger)));
+    drop(generate(&llm, LLMPurpose::Plan, &[], Some(&ledger)));
     assert!(script.requests().is_empty());
     assert!(ledger.state().lines.is_empty());
     ledger.check(0.0).unwrap();
@@ -363,7 +324,7 @@ async fn test_abandoned_generation_is_charged_for_its_request_in_flight() {
         let script = Script::new([Step::Cancel]);
         let ledger = capped(Some(0.25));
         let llm = client(script.http(), "https://llm.test", purpose, "model");
-        assert!(cancelled(generate(&llm, purpose, &[], 2000, Some(&ledger)), &script.cancel).await);
+        assert!(cancelled(generate(&llm, purpose, &[], Some(&ledger)), &script.cancel).await);
         assert_eq!(ledger.state().llm_calls, 1);
         let lines = ledger.state().lines.clone();
         assert_eq!(lines.len(), 1);
@@ -397,7 +358,7 @@ async fn test_missing_field_cost_recovers_matching_provider_receipt() {
     });
     let ledger = capped(Some(0.25));
     let llm = client(http, OPENROUTER, LLMPurpose::FieldText, "writer");
-    let result = generate(&llm, LLMPurpose::FieldText, &[], 2000, Some(&ledger)).await.unwrap();
+    let result = generate(&llm, LLMPurpose::FieldText, &[], Some(&ledger)).await.unwrap();
     ledger.record([result.cost.clone()]).unwrap();
     assert_eq!(seen.lock().unwrap()[1], "https://openrouter.ai/api/v1/generation?id=generation-1");
     assert_eq!((result.cost.dollars, result.cost.basis), (Some(0.001), CostBasis::Metered));
@@ -418,7 +379,7 @@ async fn test_untrusted_or_missing_receipt_keeps_spend_guard() {
             "writer",
         );
         let ledger = capped(Some(0.25));
-        let result = generate(&llm, LLMPurpose::FieldText, &[], 2000, Some(&ledger)).await.unwrap();
+        let result = generate(&llm, LLMPurpose::FieldText, &[], Some(&ledger)).await.unwrap();
         assert!(ledger.record([result.cost]).unwrap_err().to_string().contains("cannot be enforced"));
     }
 }
@@ -428,7 +389,7 @@ async fn test_cancelled_receipt_lookup_retains_unknown_generation_charge() {
     let script = Script::new([reply(200, without_cost("generation-1")), Step::Cancel]);
     let ledger = capped(Some(0.25));
     let llm = client(script.http(), OPENROUTER, LLMPurpose::FieldText, "writer");
-    assert!(cancelled(generate(&llm, LLMPurpose::FieldText, &[], 2000, Some(&ledger)), &script.cancel).await);
+    assert!(cancelled(generate(&llm, LLMPurpose::FieldText, &[], Some(&ledger)), &script.cancel).await);
     let lines = ledger.state().lines.clone();
     assert_eq!(lines.len(), 1);
     assert_eq!((lines[0].basis, lines[0].input_tokens), (CostBasis::Unknown, 7));
@@ -440,7 +401,7 @@ async fn test_gateway_byok_receipt_includes_estimated_provider_spend() {
     for base_url in ["https://ai-gateway.vercel.sh/v1", OPENROUTER] {
         let receipt = json!({"data": {"id": "generation-byok", "is_byok": true, "total_cost": 0.001, "upstream_inference_cost": 0.3}});
         let llm = client(receipts(without_cost("generation-byok"), receipt), base_url, LLMPurpose::FieldText, "writer");
-        let result = generate(&llm, LLMPurpose::FieldText, &[], 2000, None).await.unwrap();
+        let result = generate(&llm, LLMPurpose::FieldText, &[], None).await.unwrap();
         assert_eq!(result.cost.basis, CostBasis::Estimated);
         assert!(approx(result.cost.dollars.unwrap(), 0.301));
         assert!(capped(Some(0.25)).record([result.cost]).is_err());
@@ -457,7 +418,7 @@ async fn test_byok_receipt_without_valid_upstream_keeps_unknown_cost() {
             }
             let completion = json!({"id": "byok", "choices": [{"message": {"content": r#"{"count":3}"#}}]});
             let llm = client(receipts(completion, json!({"data": receipt})), base_url, LLMPurpose::FieldText, "writer");
-            let result = generate(&llm, LLMPurpose::FieldText, &[], 2000, None).await.unwrap();
+            let result = generate(&llm, LLMPurpose::FieldText, &[], None).await.unwrap();
             assert_eq!(result.cost.basis, CostBasis::Unknown, "{upstream:?} {base_url}");
             assert!(capped(Some(0.25)).record([result.cost]).unwrap_err().to_string().contains("cannot be enforced"));
         }
@@ -481,7 +442,7 @@ async fn test_receipt_does_not_double_count_normal_provider_spend() {
             // A distrusted receipt on OpenRouter goes on to a price lookup; this one has no price list, so it stays
             // unknown as the Python test's handler leaves it.
             let llm = client(receipts(completion, json!({"data": receipt})), base_url, LLMPurpose::FieldText, "writer");
-            let result = generate(&llm, LLMPurpose::FieldText, &[], 2000, None).await.unwrap();
+            let result = generate(&llm, LLMPurpose::FieldText, &[], None).await.unwrap();
             assert_eq!(result.cost.basis, basis, "{byok:?} {base_url}");
             match amount {
                 None => assert_eq!(result.cost.dollars, None),
@@ -518,7 +479,7 @@ async fn test_requests_without_a_response_are_bounded_so_a_capped_run_can_go_on(
         Message { role: Role::User, content: "Write".into(), images: vec![Bytes(b"\x89PNG\r\n\x1a\n0".to_vec())] };
     let ledger = capped(Some(28.0));
     let llm = client(http, OPENROUTER, LLMPurpose::FieldText, "writer");
-    let error = generate(&llm, LLMPurpose::FieldText, &[image], 2000, Some(&ledger)).await.unwrap_err();
+    let error = generate(&llm, LLMPurpose::FieldText, &[image], Some(&ledger)).await.unwrap_err();
     assert!(matches!(error, LLMError::RetriesExhausted(_)), "{error}");
     assert_eq!(*looked_up.lock().unwrap(), ["/api/v1/models/writer/endpoints"]);
     let lines = ledger.state().lines.clone();
@@ -526,6 +487,26 @@ async fn test_requests_without_a_response_are_bounded_so_a_capped_run_can_go_on(
     assert!(lines.iter().all(|line| line.basis == CostBasis::Bounded));
     assert!(approx(ledger.breakdown().known_dollars(), 6.0 * CEILING));
     ledger.check(0.0).unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_the_context_window_is_the_largest_an_endpoint_lists_and_is_read_once() {
+    let looked_up = Arc::new(Mutex::new(0));
+    let count = looked_up.clone();
+    let http = answering(move |_| {
+        *count.lock().unwrap() += 1;
+        ok(Response::json(200, &endpoints()))
+    });
+    let llm = client(http, OPENROUTER, LLMPurpose::Read, "reader");
+    assert_eq!(llm.context_tokens(LLMPurpose::Read).await, Some(2000));
+    assert_eq!(llm.context_tokens(LLMPurpose::Read).await, Some(2000));
+    assert_eq!(llm.context_tokens(LLMPurpose::Plan).await, None, "no model for the purpose");
+    assert_eq!(*looked_up.lock().unwrap(), 1);
+    // A host that lists no windows is not asked.
+    let script = Script::default();
+    let llm = client(script.http(), "https://llm.test", LLMPurpose::Read, "reader");
+    assert_eq!(llm.context_tokens(LLMPurpose::Read).await, None);
+    assert!(script.requests().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -541,11 +522,49 @@ async fn test_a_response_without_cost_or_receipt_is_bounded() {
     });
     let ledger = capped(Some(28.0));
     let llm = client(http, OPENROUTER, LLMPurpose::Plan, "writer");
-    let result = generate(&llm, LLMPurpose::Plan, &[], 2000, Some(&ledger)).await.unwrap();
+    let result = generate(&llm, LLMPurpose::Plan, &[], Some(&ledger)).await.unwrap();
     ledger.record([result.cost.clone()]).unwrap();
     assert_eq!(result.cost.basis, CostBasis::Bounded);
     assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.000004 * 1.05));
     assert_eq!(result.cost.input_tokens, 7);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
+    // The gateway's endpoints payload as it serves one: a dearer priority tier on one endpoint, a peak multiplier and
+    // a dearer zone on the other. The dearest is the zone's 0.0000025 at peak, 0.000005, against 0.0000045 on the
+    // priority tier.
+    let looked_up = Arc::new(Mutex::new(Vec::new()));
+    let record = looked_up.clone();
+    let http = answering(move |request| {
+        if request.url.ends_with("/endpoints") {
+            record.lock().unwrap().push(url::Url::parse(&request.url).unwrap().path().to_string());
+            return ok(Response::json(
+                200,
+                &json!({"data": {"endpoints": [
+                    {"context_length": 1000, "pricing": {"prompt": "0.0000003", "completion": "0.0000025", "request": "0",
+                        "discount": 0, "service_tiers": {"priority": {"prompt": "0.00000054", "completion": "0.0000045"}}}},
+                    {"context_length": 2000, "pricing": {"prompt": "0.0000005", "completion": "0.000002", "web_search": "0",
+                        "peak_pricing": {"multiplier": 2, "windows": [{"start_minute_utc": 60, "end_minute_utc": 240}]}},
+                        "inference_regions": [{"scope": "zone", "geo_region": "us",
+                            "pricing": {"prompt": "0.00000075", "completion": "0.0000025"}}]},
+                    {"context_length": 1000, "pricing": {"prompt": "0.0000001"}, "inference_regions": null},
+                ]}}),
+            ));
+        }
+        if request.method.as_str() == "GET" {
+            return ok(Response::json(404, &json!({"error": "Usage event not found"})));
+        }
+        ok(Response::json(200, &without_cost("gen_1")))
+    });
+    let ledger = capped(Some(28.0));
+    let llm = client(http, "https://ai-gateway.vercel.sh/v1", LLMPurpose::Plan, "google/writer");
+    let result = generate(&llm, LLMPurpose::Plan, &[], Some(&ledger)).await.unwrap();
+    ledger.record([result.cost.clone()]).unwrap();
+    assert_eq!(*looked_up.lock().unwrap(), ["/v1/models/google/writer/endpoints"]);
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.000005 * 1.05));
+    ledger.check(0.0).unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -563,7 +582,7 @@ async fn test_a_price_with_no_ceiling_keeps_the_spend_guard() {
         });
         let ledger = capped(Some(28.0));
         let llm = client(http, OPENROUTER, LLMPurpose::Plan, "writer");
-        let error = generate(&llm, LLMPurpose::Plan, &[], 2000, Some(&ledger)).await.unwrap_err();
+        let error = generate(&llm, LLMPurpose::Plan, &[], Some(&ledger)).await.unwrap_err();
         assert!(matches!(error, LLMError::Budget(_)) && error.to_string().contains("cannot be enforced"), "{error}");
         assert!(ledger.breakdown().has_unknown());
         // No ceiling is cached from a price that cannot hold one, so each unanswered request asks again.
@@ -584,25 +603,124 @@ fn test_extra_fields_cannot_replace_the_ones_the_client_sets() {
 }
 
 #[tokio::test]
+async fn test_an_error_that_echoes_a_key_from_a_custom_header_is_scrubbed() {
+    let script = Script::new([Step::Reply(Response::json(400, &json!({"error": {"message": "bad key sk-custom"}})))]);
+    let options = LLMOptions { auth_header: Some("x-gateway-key"), ..LLMOptions::default() };
+    let models = HashMap::from([(LLMPurpose::Read, "m".to_string())]);
+    let llm = OpenAICompatibleLLM::new("sk-custom", script.http(), "https://llm.test", models, options).unwrap();
+    let error = generate(&llm, LLMPurpose::Read, &[Message::user("?")], None).await.unwrap_err().to_string();
+    assert_eq!(script.requests()[0].header("x-gateway-key"), Some("sk-custom"));
+    assert!(!error.contains("sk-custom"), "{error}");
+}
+
+#[tokio::test]
 async fn test_a_keyless_client_sends_no_authorization_and_scrubs_nothing() {
     let reply = || completion(json!(r#"{"count": 1, "local": 2}"#), Value::Null);
     let script = Script::new([reply(), reply()]);
     let options = LLMOptions { provider_routing: None, ..LLMOptions::default() };
     let models = HashMap::from([(LLMPurpose::Read, "qwen".to_string())]);
     let llm = OpenAICompatibleLLM::new("", script.http(), "http://127.0.0.1:8000/v1", models, options).unwrap();
-    let error = generate(&llm, LLMPurpose::Read, &[Message::user("?")], 2000, None).await.unwrap_err().to_string();
+    let error = generate(&llm, LLMPurpose::Read, &[Message::user("?")], None).await.unwrap_err().to_string();
     let requests = script.requests();
     assert!(!requests.is_empty() && requests.iter().all(|request| request.header("authorization").is_none()));
     // No placeholder key stands in for a missing one, so nothing in an error is mistaken for it and blanked.
     assert!(error.contains("local") && !error.contains("[api key]"), "{error}");
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_trickling_response_is_bounded_by_attempt_deadline() {
-    // test_attempt_deadline.py: a body that keeps trickling resets a read timeout, so the attempt has an elapsed
-    // deadline too. A transport that never finishes stands in for the trickle; the deadline drops it.
-    let script = Script::new([Step::Stall]);
-    let error = script.http().post_json("https://provider.test", &json!({}), &[], 0.05).await.unwrap_err();
+/// A provider on a local socket that sends its response head, then `chunks` body pieces `gap` apart.
+async fn trickling(chunks: &'static [&'static str], gap: std::time::Duration) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = socket.read(&mut request).await.unwrap();
+        let length: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\n\r\n");
+        socket.write_all(head.as_bytes()).await.unwrap();
+        for chunk in chunks {
+            tokio::time::sleep(gap).await;
+            socket.write_all(chunk.as_bytes()).await.unwrap();
+        }
+        std::future::pending::<()>().await;
+    });
+    format!("http://{address}/v1/chat/completions")
+}
+
+#[tokio::test]
+async fn test_a_long_answer_that_keeps_arriving_is_read_to_its_end() {
+    // A model writing a long answer is not cut off: the provider's keep-alive bytes show it is still working, so only
+    // silence ends an attempt, never the time the answer takes in all.
+    let chunks: &[&str] = &["\n ", "\n ", "\n ", "{\"ok\": ", "true}"];
+    let url = trickling(chunks, std::time::Duration::from_millis(100)).await;
+    let response = Http::hyper().post_json(&url, &json!({}), &[], 0.3).await.unwrap();
+    assert_eq!(response.json_value(), Some(json!({"ok": true})));
+}
+
+#[tokio::test]
+async fn test_a_provider_that_falls_silent_times_out() {
+    let url = trickling(&["\n ", "{}"], std::time::Duration::from_millis(500)).await;
+    let error = Http::hyper().post_json(&url, &json!({}), &[], 0.1).await.unwrap_err();
     assert_eq!(error, TransportError::Timeout("TimeoutError"));
+}
+
+#[tokio::test]
+async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whole() {
+    // On 12 of 21 DeepSeek endpoints the decoder answered null for every optional object, so no read claim was cited.
+    let cite = ModelTy::frozen("Cite", vec![Field::required("first", Ty::Str), Field::required("last", Ty::Str)]).ty();
+    let tally =
+        ModelTy::frozen("Tally", vec![Field::required("span", cite.clone()), Field::required("prefix", Ty::Str)]).ty();
+    let claim = ModelTy::frozen(
+        "Claim",
+        vec![
+            Field::required("cite", Ty::optional(cite)).doc("The blocks the claim reads."),
+            Field::required("field", Ty::optional(tally)),
+        ],
+    )
+    .ty();
+    let reply = json!({"cite__first": "main/:5", "cite__last": "main/:6", "field__span__first": null,
+        "field__span__last": null, "field__prefix": null});
+    let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
+    let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Read, "deepseek/deepseek-v4.1-flash-1017");
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let result = llm.generate_value(LLMPurpose::Read, &[message], &Model(claim), None).await.unwrap();
+    assert_eq!(result.data, json!({"cite": {"first": "main/:5", "last": "main/:6"}, "field": null}));
+    let body = &script.bodies()[0];
+    let schema = &body["response_format"]["json_schema"]["schema"];
+    let names: Vec<&String> = schema["properties"].as_object().unwrap().keys().collect();
+    assert_eq!(names, ["cite__first", "cite__last", "field__span__first", "field__span__last", "field__prefix"]);
+    assert_eq!(schema["required"], json!(names));
+    assert_eq!(schema["properties"]["cite__first"]["anyOf"][1], json!({"type": "null"}));
+    assert_eq!(schema["properties"]["cite__first"]["description"], "The blocks the claim reads.");
+    assert_eq!(body["temperature"], 0.0);
+}
+
+#[tokio::test]
+async fn test_a_half_answered_optional_object_comes_back_as_none_rather_than_failing_validation() {
+    // DeepSeek answered a comparison's operator without its limit, and a tally field without its span: the original
+    // schema allows no object there, but not half of one, so both runs failed validation twice and stopped.
+    let cite = ModelTy::frozen("Cite", vec![Field::required("first", Ty::Str), Field::required("last", Ty::Str)]).ty();
+    let tally =
+        ModelTy::frozen("Tally", vec![Field::required("span", cite.clone()), Field::required("prefix", Ty::Str)]).ty();
+    let claim = ModelTy::frozen(
+        "Claim",
+        vec![Field::required("cite", Ty::optional(cite)), Field::required("field", Ty::optional(tally))],
+    )
+    .ty();
+    let reply = json!({"cite__first": "main/:5", "cite__last": null, "field__span__first": null,
+        "field__span__last": null, "field__prefix": "Total"});
+    let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
+    let trace = Trace::collecting();
+    let models = HashMap::from([(LLMPurpose::Read, "deepseek/deepseek-v4.1-flash-1017".to_string())]);
+    let llm =
+        OpenAICompatibleLLM::new("key", script.traced(&trace), "https://llm.test/v1/", models, LLMOptions::default())
+            .unwrap();
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let result = llm.generate_value(LLMPurpose::Read, &[message], &Model(claim), None).await.unwrap();
+    assert_eq!(result.data, json!({"cite": null, "field": null}));
     assert_eq!(script.requests().len(), 1);
+    // What the reply lost is in the trace, not only in the result.
+    let dropped: Vec<Value> = trace.events().into_iter().filter(|e| e["event"] == "half_objects_dropped").collect();
+    assert_eq!(dropped, [json!({"event": "half_objects_dropped", "purpose": "read", "paths": ["cite", "field"]})]);
 }

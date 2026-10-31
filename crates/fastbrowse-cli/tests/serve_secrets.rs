@@ -1,4 +1,4 @@
-//! tests/test_serve_secrets.py: secrets over the serve protocol. The refs go to the server, and a value comes back
+//! Secrets over the serve protocol. The refs go to the server, and a value comes back
 //! only when it is typed.
 
 mod common;
@@ -7,8 +7,10 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use common::{CHROME, FakeClient, binary, browser_event, result, run_params, runner, serving, settings, step_event};
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
+use common::{
+    CHROME, Call, FakeClient, binary, browser_event, result, run_params, runner, serving, settings, step_event,
+};
+use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{RunResult, SecretRef, Status};
 use serde_json::{Value, json};
 
@@ -36,20 +38,24 @@ impl Typist {
 
     fn runner(&self) -> Arc<dyn Runner> {
         let typist = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let typist = typist.clone();
             async move {
-                *typist.got_resolver.lock().unwrap() = Some(args.secrets.is_some());
-                *typist.refs.lock().unwrap() = args.secrets.as_ref().map(|secrets| secrets.available());
-                (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+                *typist.got_resolver.lock().unwrap() = Some(args.host.secrets.is_some());
+                *typist.refs.lock().unwrap() = args.host.secrets.as_ref().map(|secrets| secrets.available());
+                (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
                 for (index, (name, origin)) in typist.typed.iter().enumerate() {
-                    let secrets = args.secrets.clone().unwrap();
-                    let value = args.cancel.guard(secrets.resolve(name, origin)).await?;
-                    if args.cancel.is_tripped() {
+                    let secrets = args.host.secrets.clone().unwrap();
+                    let value = args
+                        .host
+                        .cancel
+                        .guard(fastbrowse_core::safety::resolve_secret(&*secrets, name, origin))
+                        .await?;
+                    if args.host.cancel.is_tripped() {
                         return Err(RunError::Cancelled);
                     }
                     typist.resolved.lock().unwrap().push(value);
-                    (args.on_event.as_ref().unwrap())(step_event(index as i64 + 1, None)).await;
+                    (args.host.on_event.as_ref().unwrap())(step_event(index as i64 + 1, None)).await;
                 }
                 let count = typist.resolved.lock().unwrap().iter().filter(|value| value.is_some()).count();
                 Ok(RunResult {
@@ -234,7 +240,7 @@ async fn test_a_reply_that_is_neither_text_nor_null_raises_without_repeating_it(
         let done = exchange(&mut client, run_params("run-1", json!({"secrets": [password()]})), vec![answer]).await;
         assert_eq!(
             done.reply["result"]["error"],
-            "secrets/resolve: the result cannot be used: Input should be a valid string"
+            "secrets/resolve: the result cannot be used: expected a string or null"
         );
         assert!(typist.resolved().is_empty());
         let written = String::from_utf8_lossy(&client.written).to_string();
@@ -272,15 +278,15 @@ async fn test_input_ending_while_a_value_is_awaited_stops_the_server() {
 #[tokio::test]
 async fn test_secrets_that_are_not_refs_are_refused_without_repeating_them() {
     for (secrets, named) in [
-        (json!([{"name": "SHOP_PASSWORD"}]), "secrets.0.origins"),
-        (json!([{"name": "SHOP_PASSWORD", "origins": [SHOP], "value": VALUE}]), "secrets.0.value"),
+        (json!([{"name": "SHOP_PASSWORD"}]), "secrets[0]: missing field `origins`"),
+        (json!([{"name": "SHOP_PASSWORD", "origins": [SHOP], "value": VALUE}]), "secrets[0].value"),
         (json!({"SHOP_PASSWORD": VALUE}), "secrets"),
     ] {
         let typist = Typist::new(&[]);
         let mut client = serving(typist.runner(), settings());
         let response = client.request("run", Some(run_params("run-1", json!({"secrets": secrets})))).await;
         assert_eq!(response["error"]["code"], -32602);
-        assert!(response["error"]["message"].as_str().unwrap().contains(named));
+        assert!(response["error"]["message"].as_str().unwrap().contains(named), "{response}");
         assert!(!response.to_string().contains(VALUE));
         assert!(typist.got_resolver.lock().unwrap().is_none());
     }

@@ -26,10 +26,9 @@ import sys
 import tomllib
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+from npm_platform_package import TARGETS
 
-# The targets `scripts/npm_platform_package.py` assembles a package for.
-TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64")
+REPO = Path(__file__).resolve().parent.parent
 
 _WORKSPACE_VERSION = re.compile(r'(?m)^(\[workspace\.package\]\n(?:[^\[\n].*\n)*?version = ")[^"]*(")')
 # The Java client's own version in `java/pom.xml`: the first `<version>`, right after its `<artifactId>`.

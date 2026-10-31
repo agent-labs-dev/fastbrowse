@@ -14,7 +14,7 @@ use fastbrowse_core::models::{
 use fastbrowse_core::safety::{origin_of, resolve_secret};
 use serde_json::{Value, json};
 
-use crate::runner::{RunArgs, RunError, Runner};
+use crate::runner::{Host, RunError, RunTask, Runner};
 use crate::serve::Transport;
 
 type Outcome = Result<RunResult, RunError>;
@@ -49,14 +49,15 @@ fn step(index: i64) -> Event {
             facts: Vec::new(),
             page_changed: None,
             duration_ms: 1,
+            fallback: None,
             choices: Vec::new(),
         },
         frame: None,
     })
 }
 
-async fn emit(args: &RunArgs, event: Event) {
-    if let Some(on_event) = &args.on_event {
+async fn emit(host: &Host, event: Event) {
+    if let Some(on_event) = &host.on_event {
         on_event(event).await;
     }
 }
@@ -66,8 +67,8 @@ fn length(requests: &Requests) -> usize {
 }
 
 /// Waits to be stopped, then closes its "browser" (a short pause and a file written) before it answers.
-async fn until_stopped(args: &RunArgs, closed: Option<String>) -> Outcome {
-    args.cancel.tripped().await;
+async fn until_stopped(host: &Host, closed: Option<String>) -> Outcome {
+    host.cancel.tripped().await;
     // A real browser takes a moment to close, and the server has to wait for it.
     tokio::time::sleep(Duration::from_millis(50)).await;
     if let Some(path) = closed {
@@ -76,27 +77,27 @@ async fn until_stopped(args: &RunArgs, closed: Option<String>) -> Outcome {
     Err(RunError::Cancelled)
 }
 
-async fn run(name: &str, args: RunArgs, requests: Requests) -> Outcome {
+async fn run(name: &str, task: RunTask, host: Host, requests: Requests) -> Outcome {
     match name {
         "tests.serve_scripts:echo" => {
-            emit(&args, browser(None, None)).await;
-            Ok(RunResult { answer: Some(format!("echo: {}", args.task)), ..result(Status::Complete) })
+            emit(&host, browser(None, None)).await;
+            Ok(RunResult { answer: Some(format!("echo: {}", task.task)), ..result(Status::Complete) })
         }
         "tests.serve_scripts:browse_until_cancelled" => {
-            emit(&args, browser(None, None)).await;
-            let path = args.task.clone();
-            until_stopped(&args, Some(path)).await
+            emit(&host, browser(None, None)).await;
+            let path = task.task.clone();
+            until_stopped(&host, Some(path)).await
         }
         "tests.serve_scripts:type_secret" => {
-            let start = args.start.clone().unwrap_or_default();
-            let value = match &args.secrets {
+            let start = task.start.clone().unwrap_or_default();
+            let value = match &host.secrets {
                 Some(secrets) => {
                     let name = secrets.available().first().map(|secret| secret.name.clone()).unwrap_or_default();
-                    args.cancel.guard(resolve_secret(secrets.as_ref(), &name, &origin_of(&start))).await?
+                    host.cancel.guard(resolve_secret(secrets.as_ref(), &name, &origin_of(&start))).await?
                 }
                 None => None,
             };
-            emit(&args, browser(None, None)).await;
+            emit(&host, browser(None, None)).await;
             let answer = match value {
                 None => "nothing to type".to_string(),
                 Some(value) => format!("typed {} characters", value.chars().count()),
@@ -106,100 +107,99 @@ async fn run(name: &str, args: RunArgs, requests: Requests) -> Outcome {
         "scripted_run:echo" => {
             let params = requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).last().cloned();
             let attachments: Vec<Value> =
-                args.attachments.iter().map(|attachment| json!(attachment.content.0)).collect();
+                task.attachments.iter().map(|attachment| json!(attachment.content.0)).collect();
             let data = json!({"params": params, "attachments": attachments});
-            Ok(RunResult { answer: Some(args.task.clone()), data, ..result(Status::Complete) })
+            Ok(RunResult { answer: Some(task.task.clone()), data, ..result(Status::Complete) })
         }
         "scripted_run:found" => {
-            let found = args.inputs.as_ref().and_then(|inputs| inputs.get("found")).cloned().unwrap_or_default();
-            let found: Value =
-                serde_json::from_str(&found).map_err(|error| RunError::Failed(format!("JSONDecodeError: {error}")))?;
-            let model = args
-                .output_schema
-                .as_ref()
-                .ok_or_else(|| RunError::Failed("AttributeError: no output schema".into()))?;
-            let data = model.validate(&found).map_err(|error| RunError::Failed(format!("ValidationError: {error}")))?;
+            let found = task.inputs.as_ref().and_then(|inputs| inputs.get("found")).cloned().unwrap_or_default();
+            let found: Value = serde_json::from_str(&found).map_err(|error| RunError::Invalid(error.to_string()))?;
+            let schema = task.output_schema.clone().ok_or_else(|| RunError::Invalid("no output schema".into()))?;
+            let model = fastbrowse_core::output_schema::output_model(&Value::Object(schema))
+                .map_err(|error| RunError::UnsupportedSchema(error.to_string()))?;
+            let data = model.validate(&found).map_err(|error| RunError::Invalid(error.to_string()))?;
             Ok(RunResult { data, ..result(Status::Complete) })
         }
         "scripted_run:request_count" => Ok(RunResult { data: json!(length(&requests)), ..result(Status::Complete) }),
         "scripted_run:three_events" => {
-            emit(&args, browser(Some("https://live.example/1"), Some("browser-1"))).await;
-            emit(&args, step(0)).await;
-            emit(&args, step(1)).await;
+            emit(&host, browser(Some("https://live.example/1"), Some("browser-1"))).await;
+            emit(&host, step(0)).await;
+            emit(&host, step(1)).await;
             Ok(result(Status::Complete))
         }
         "scripted_run:needs_login" => {
             Ok(RunResult { error: Some("the site asked for a password".into()), ..result(Status::NeedsLogin) })
         }
         "scripted_run:never_ends" => {
-            emit(&args, browser(None, None)).await;
-            until_stopped(&args, None).await
+            emit(&host, browser(None, None)).await;
+            until_stopped(&host, None).await
         }
         "scripted_run:exits" => {
-            emit(&args, browser(None, None)).await;
+            emit(&host, browser(None, None)).await;
             std::process::exit(7)
         }
         "scripted_run:killed" => {
-            emit(&args, browser(None, None)).await;
+            emit(&host, browser(None, None)).await;
             let _ = std::process::Command::new("kill").args(["-9", &std::process::id().to_string()]).status();
-            until_stopped(&args, None).await
+            until_stopped(&host, None).await
         }
         "scripted_run:until_cancelled" => {
-            let closed = args.inputs.as_ref().and_then(|inputs| inputs.get("closed")).cloned();
-            emit(&args, browser(None, None)).await;
+            let closed = task.inputs.as_ref().and_then(|inputs| inputs.get("closed")).cloned();
+            emit(&host, browser(None, None)).await;
             match closed {
                 None => Ok(RunResult { data: json!(length(&requests)), ..result(Status::Complete) }),
-                Some(path) => until_stopped(&args, Some(path)).await,
+                Some(path) => until_stopped(&host, Some(path)).await,
             }
         }
         "scripted_run:types_secrets" => {
-            let inputs = args.inputs.clone().unwrap_or_default();
+            let inputs = task.inputs.clone().unwrap_or_default();
             let name = inputs.get("name").cloned().unwrap_or_default();
             let origin = inputs.get("origin").cloned().unwrap_or_default();
-            let secrets = args.secrets.clone().ok_or_else(|| RunError::Failed("AttributeError: no secrets".into()))?;
-            let first = args.cancel.guard(secrets.resolve(&name, &origin)).await?;
-            let second = args.cancel.guard(secrets.resolve(&name, &origin)).await?;
-            if args.cancel.is_tripped() {
+            let secrets = host.secrets.clone().ok_or_else(|| RunError::Invalid("no secrets".into()))?;
+            let first = host.cancel.guard(resolve_secret(secrets.as_ref(), &name, &origin)).await?;
+            let second = host.cancel.guard(resolve_secret(secrets.as_ref(), &name, &origin)).await?;
+            if host.cancel.is_tripped() {
                 return Err(RunError::Cancelled);
             }
             Ok(RunResult { data: json!([first, second]), ..result(Status::Complete) })
         }
         "scripted_run:ends_on_an_order" => {
-            let passed = match &args.until {
+            let passed = match &host.until {
                 None => true,
-                Some(until) => args.cancel.guard(until("https://shop.example/orders/17".into())).await?,
+                Some(until) => host.cancel.guard(until("https://shop.example/orders/17".into())).await?,
             };
-            if args.cancel.is_tripped() {
+            if host.cancel.is_tripped() {
                 return Err(RunError::Cancelled);
             }
             Ok(result(if passed { Status::Complete } else { Status::Unverified }))
         }
         "scripted_run:two_frames" => {
-            let Some(on_frame) = &args.on_frame else {
+            let Some(on_frame) = &host.on_frame else {
                 return Ok(RunResult { data: json!(0), ..result(Status::Complete) });
             };
             on_frame((0..=255).collect()).await;
             on_frame(b"\xff\xd8 second".to_vec()).await;
-            emit(&args, step(0)).await;
+            emit(&host, step(0)).await;
             Ok(RunResult { data: json!(2), ..result(Status::Complete) })
         }
         // `run_task` on a real browser, the script in the task standing where the models do. The binary's smoke run, which has no model keys, is this.
         "fastbrowse.scripted:run_task" => {
-            let script = fastbrowse_agent::scripted::steps(&args.task)
-                .map_err(|error| RunError::Failed(format!("ValueError: {error}")))?;
+            let script =
+                fastbrowse_agent::scripted::steps(&task.task).map_err(|error| RunError::Invalid(error.to_string()))?;
             let jev = Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(script));
-            crate::runner::run_task_with(args, Some(jev), Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM))).await
+            let host = Host { jev: Some(jev), llm: Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM)), ..host };
+            fastbrowse_run::run_task(task, host).await
         }
-        // tests/test_mcp_server.py's `Recorder`: the events a run sends, then a cited answer with a download.
+        // The events a run sends, then a cited answer with a download.
         "tests.test_mcp_server:Recorder" => {
-            emit(&args, browser(Some("https://live.example.com/session"), None)).await;
+            emit(&host, browser(Some("https://live.example.com/session"), None)).await;
             let answered = mcp_result();
             for index in 0..answered.steps.len() {
-                emit(&args, mcp_step(index as i64)).await;
+                emit(&host, mcp_step(index as i64)).await;
             }
             Ok(answered)
         }
-        _ => Err(RunError::Failed(format!("NameError: {name}"))),
+        _ => Err(RunError::Invalid(format!("no scripted run is named {name}"))),
     }
 }
 
@@ -263,14 +263,12 @@ const NAMES: [&str; 17] = [
     "scripted_run:two_frames",
 ];
 
-/// The run `name` stands for, as `--run-task` names it. `__main__:x` is how the SDK's scripted server names its runs.
+/// The run `name` stands for, as `--run-task` names it.
 pub fn named(name: &str, requests: Requests) -> Option<Arc<dyn Runner>> {
-    let name = match name.strip_prefix("__main__:") {
-        Some(run) => format!("scripted_run:{run}"),
-        None => name.to_string(),
-    };
     let name: &'static str = NAMES.iter().find(|known| **known == name)?;
-    Some(Arc::new(move |args: RunArgs| -> BoxFuture<'static, Outcome> { Box::pin(run(name, args, requests.clone())) }))
+    Some(Arc::new(move |task: RunTask, host: Host| -> BoxFuture<'static, Outcome> {
+        Box::pin(run(name, task, host, requests.clone()))
+    }))
 }
 
 /// A transport that notes the params of every `run` line it hands on, as the SDK's scripted server does.
@@ -343,10 +341,15 @@ pub fn setup(run_task: Option<&str>, transport: Arc<dyn Transport>) -> (Arc<dyn 
         Some(TestServer::OutlivesShutdown) | None => {}
     }
     let requests: Requests = Arc::default();
-    match run_task.and_then(|name| named(&name, requests.clone())) {
-        Some(runner) => (runner, protocol, Arc::new(Noting { inner: transport, requests })),
+    match run_task {
+        Some(name) => (known(&name, requests.clone()), protocol, Arc::new(Noting { inner: transport, requests })),
         None => (crate::runner::default_runner(), protocol, transport),
     }
+}
+
+/// The stand-in `name` names. A typo here must not fall through to the real runner, a real browser and a paid model.
+pub fn known(name: &str, requests: Requests) -> Arc<dyn Runner> {
+    named(name, requests).unwrap_or_else(|| panic!("no stand-in run named {name:?}"))
 }
 
 /// After `serve` returns: `outlives_shutdown` never exits, and shrugs off a polite signal.
@@ -363,4 +366,15 @@ pub async fn linger() {
     // Windows sends no polite signal to shrug off, so there it only never exits.
     #[cfg(not(unix))]
     std::future::pending::<()>().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "no stand-in run named")]
+    fn a_stand_in_name_that_names_nothing_stops_rather_than_starting_the_real_runner() {
+        known("scripted_run:nope", Requests::default());
+    }
 }

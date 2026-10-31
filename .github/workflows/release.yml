@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
           enable-cache: false
@@ -93,11 +93,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
 
-  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, the
-  # live campaign (every group and suite, three repeats) and both official suites (three repeats), all on this tag.
-  # A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is a
-  # dispatch, so a campaign that runs for hours never holds this run open, and the campaign opens the site pull
-  # request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
+  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, both
+  # official suites for fastbrowse (three repeats), then the live campaign (every group and suite, three repeats), all
+  # on this tag. A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is
+  # a dispatch, so runs that take hours never hold this run open. The official workflow dispatches the campaign itself
+  # once it has passed, naming its own rows, so every group lands in one candidate on one build, and the campaign opens
+  # the site pull request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
   benchmarks:
     needs: [build, github-release]
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -126,7 +127,7 @@ jobs:
             echo "$GITHUB_REF_NAME is a patch release without 'Benchmarks: run' in its tag message; no benchmarks run"
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Dispatch the evals, the campaign and the official suites
+      - name: Dispatch the evals and the official suites, which dispatch the campaign
         if: steps.decide.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -136,11 +137,9 @@ jobs:
           test -n "$PARALLAX_SHA" || { echo "::error::missing repository variable PARALLAX_SHA"; exit 1; }
           # The release already ran the fixture suites, as a called workflow; a candidate binds to a dispatched run.
           gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
-          gh workflow run benchmark-campaign.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f campaign_id="release-$VERSION" -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" \
-            -f groups=all
           gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all
+            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all \
+            -f campaign_id="release-$VERSION"
 
   pypi:
     needs: github-release
@@ -174,7 +173,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.13"
           enable-cache: false
@@ -240,7 +239,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.13"
           enable-cache: false

@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/citations.py`: WICG text-fragment deep links derived from captured quotes.
+//! WICG text-fragment deep links derived from captured quotes.
 
 use std::fmt;
 
@@ -41,7 +41,6 @@ pub fn text_fragment(url: &str, text: &str) -> Result<String, EmptyQuote> {
 
 #[cfg(test)]
 mod tests {
-    //! Mirrors tests/test_citations.py.
     use super::*;
     use percent_encoding::percent_decode_str;
 

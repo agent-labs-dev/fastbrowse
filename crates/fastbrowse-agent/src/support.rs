@@ -1,7 +1,6 @@
 //! What the ported modules share and Python gets from its runtime: a typed `generate` through a `dyn` client, and
 //! `asyncio.gather` over requests sent side by side.
 
-use std::future::Future;
 use std::task::Poll;
 
 use fastbrowse_core::BoxFuture;
@@ -18,14 +17,13 @@ pub(crate) async fn generate<T>(
     llm: &dyn LLMClient,
     purpose: LLMPurpose,
     messages: &[Message],
-    max_output_tokens: i64,
     ledger: Option<&Ledger>,
 ) -> Result<Generation<T>, LLMError>
 where
     T: Schema + DeserializeOwned + Serialize,
 {
     let schema = Typed::<T>::default();
-    let generated = llm.generate_value(purpose, messages, &schema, max_output_tokens, ledger).await?;
+    let generated = llm.generate_value(purpose, messages, &schema, ledger).await?;
     let data = serde_json::from_value(generated.data).map_err(|error| LLMError::Failed(error.to_string()))?;
     Ok(Generation { data, cost: generated.cost })
 }
@@ -53,29 +51,6 @@ pub(crate) async fn try_join_all<'a, T, E>(futures: Vec<BoxFuture<'a, Result<T, 
             return Poll::Pending;
         }
         Poll::Ready(Ok(std::mem::take(&mut results).into_iter().flatten().collect()))
-    })
-    .await
-}
-
-/// Two futures of different types run side by side to their ends: `gather` of two tasks with `return_exceptions`.
-pub(crate) async fn join2<A, B>(a: impl Future<Output = A>, b: impl Future<Output = B>) -> (A, B) {
-    let (mut a, mut b) = (std::pin::pin!(a), std::pin::pin!(b));
-    let (mut first, mut second) = (None, None);
-    std::future::poll_fn(move |cx| {
-        if first.is_none()
-            && let Poll::Ready(value) = a.as_mut().poll(cx)
-        {
-            first = Some(value);
-        }
-        if second.is_none()
-            && let Poll::Ready(value) = b.as_mut().poll(cx)
-        {
-            second = Some(value);
-        }
-        if first.is_some() && second.is_some() {
-            return Poll::Ready((first.take().expect("polled to its end"), second.take().expect("polled to its end")));
-        }
-        Poll::Pending
     })
     .await
 }

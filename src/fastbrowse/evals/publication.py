@@ -41,7 +41,8 @@ from typing import Any, Literal, TypeGuard
 
 from pydantic import BaseModel, ConfigDict
 
-from fastbrowse.evals import baseline, versions
+from fastbrowse.evals import baseline, catalog, versions
+from fastbrowse.evals.status import TIMING_BASIS, Ending
 from fastbrowse.evals.storage import ArchiveReceipt, read_archive
 from fastbrowse.models import Limits
 
@@ -66,7 +67,7 @@ REGRESSION_COST_FLOOR_DOLLARS = 0.001
 _LEDGER_SUFFIX = ".attempts.jsonl"
 _HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
-_LIVE_SUITES = ("core", "dev", "heldout", "stretch-dev", "stretch-heldout")
+_LIVE_SUITES = tuple(catalog.SUITES)
 
 
 class Finding(BaseModel):
@@ -317,11 +318,10 @@ def _finding(severity: Literal["refuse", "regress", "advise"], check: str, detai
 
 def _suite_ids() -> dict[str, tuple[str, ...]]:
     """Every suite this build knows, so a row's suite version can be checked against the tasks it ran."""
-    from fastbrowse.evals.catalog import SUITES
     from fastbrowse.evals.mock_tasks import TASKS as MOCK
     from fastbrowse.evals.tasks import TASKS as LOCAL
 
-    known = {name: tuple(task.id for task in tasks) for name, tasks in SUITES.items()}
+    known = {name: tuple(task.id for task in tasks) for name, tasks in catalog.SUITES.items()}
     known["local"] = tuple(task.id for task in LOCAL)
     known["mock"] = tuple(task.id for task in MOCK)
     return known
@@ -337,18 +337,22 @@ def _shape(row: Mapping[str, Any]) -> list[Finding]:
         problems.append(_finding(REFUSE, "shape", f"{where}: task_version is not an integer"))
     if not _number(row.get("seconds")) or row["seconds"] < 0:
         problems.append(_finding(REFUSE, "shape", f"{where}: seconds is not a finite non-negative number"))
+    if row.get("timing_basis") not in (None, TIMING_BASIS):
+        problems.append(_finding(REFUSE, "shape", f"{where}: seconds include opening or closing the browser session"))
     if row.get("dollars") is not None and (not _number(row.get("dollars")) or row["dollars"] < 0):
         problems.append(_finding(REFUSE, "shape", f"{where}: dollars is neither null nor a finite non-negative number"))
-    for field in ("passed", "correct"):
-        if not isinstance(row.get(field), bool):
-            problems.append(_finding(REFUSE, "shape", f"{where}: {field} is not a boolean"))
-    if row.get("passed") is True and row.get("correct") is not True:
-        problems.append(_finding(REFUSE, "grade", f"{where}: passed a row whose grade is not correct"))
+    if not isinstance(row.get("passed"), bool):
+        problems.append(_finding(REFUSE, "shape", f"{where}: passed is not a boolean"))
     return problems
 
 
+ATTEMPT_SECONDS = 600.0
+"""The owner's limit on one attempt of any arm, past which it is DNF, a failure."""
+
+
 def _uncapped(run: Mapping[str, Any]) -> bool:
-    """start-gate-v1: the approved budget only decided whether a new run started; no agent had any limit."""
+    """start-gate-v1: the approved budget only decided whether a new run started, and no agent had any limit but the
+    one wall-clock limit on an attempt, which a run records (`ATTEMPT_SECONDS`, or none on earlier runs)."""
     try:
         limits = Limits.model_validate(run.get("agent_limits"), strict=True)
     except ValueError:
@@ -356,8 +360,11 @@ def _uncapped(run: Mapping[str, Any]) -> bool:
     budget = run.get("budget_usd")
     return (
         run.get("agent_limits") == limits.model_dump(mode="json")
-        and all(value is None for value in limits.model_dump().values())
-        and all(name in run and run[name] is None for name in ("max_steps", "max_seconds", "max_dollars"))
+        and all(value is None for name, value in limits.model_dump().items() if name != "max_seconds")
+        and limits.max_seconds in (None, ATTEMPT_SECONDS)
+        and all(name in run and run[name] is None for name in ("max_steps", "max_dollars"))
+        and "max_seconds" in run
+        and run["max_seconds"] == limits.max_seconds
         and _number(budget)
         and budget > 0
     )
@@ -473,7 +480,7 @@ def _protocol(row: Mapping[str, Any]) -> list[Finding]:
     # same viewport: a pass at another size would not be the same navigation task.
     if (
         row.get("arm") in {"fastbrowse", "fastbrowse-pool", "jev-ultrafast"}
-        and row.get("normalized_status") != "unavailable"
+        and row.get("normalized_status") != Ending.UNAVAILABLE
     ):
         try:
             page = PageEvidence.model_validate(row.get("final_page"))
@@ -584,7 +591,7 @@ def _selected_matches(entry: Mapping[str, Any], row: Mapping[str, Any]) -> list[
     """The retained attempt is the row: its time, cost and grade cannot differ from what was published."""
     where = _where(row)
     problems = []
-    for field in ("seconds", "dollars", "unknown_cost", "correct", "passed"):
+    for field in ("seconds", "timing_basis", "dollars", "unknown_cost", "passed"):
         if field in row and field in entry and entry.get(field) != row.get(field):
             problems.append(_finding(REFUSE, "ledger", f"{where}: the selected attempt's {field} differs from the row"))
     return problems
@@ -667,16 +674,21 @@ def _ledger(
     )
 
 
-def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return [row for row in rows if row.get("normalized_status") != "unavailable"]
-
-
 def _distinct_repeats(rows: Sequence[Mapping[str, Any]]) -> set[object]:
     """The repeats that measured this group. Duplicates are refused elsewhere, so a set cannot hide one."""
-    return {row.get("repeat") for row in _measured(rows) if row.get("repeat") is not None}
+    return {row.get("repeat") for row in versions._measured(rows) if row.get("repeat") is not None}
 
 
-_MATCHED_CONFIG = ("providers", "model", "text_model", "max_steps", "step_cap", "step_cap_unit", "decision_cap")
+_MATCHED_CONFIG = (
+    "providers",
+    "model",
+    "text_model",
+    "max_steps",
+    "step_cap",
+    "step_cap_unit",
+    "decision_cap",
+    "timing_basis",
+)
 
 
 def _published_release(row: Mapping[str, Any]) -> str | None:
@@ -726,7 +738,7 @@ def _over(base: float, candidate: float, floor: float) -> bool:
     return base > 0 and candidate > base * REGRESSION_FACTOR and candidate - base > floor
 
 
-def _moves(
+def moves(
     where: str,
     release: str,
     measured_base: Sequence[Mapping[str, Any]],
@@ -734,29 +746,33 @@ def _moves(
 ) -> list[Finding]:
     """Efficiency moves gate a release; wall time does not.
 
-    Wall time and cloud load move together, so a median wall-time comparison is noise across releases. The calls a
-    run made and its model throughput are properties of the build, so those are what a release is compared on, and
-    wall time stays a diagnostic.
+    Wall time and cloud load move together, so a median wall-time comparison is noise across releases. LLM calls and
+    model throughput are properties of the build, so those are what a release is compared on, and wall time stays a
+    diagnostic. Jev calls are not compared: Jev decides every step, so asking it more is how the agent works, not a
+    regression.
     """
     findings = []
-    for field, label in (("llm_calls", "LLM calls"), ("jev_calls", "Jev calls")):
-        base_calls = _median_metric(measured_base, field)
-        candidate_calls = _median_metric(measured_candidate, field)
-        if (
-            base_calls is not None
-            and candidate_calls is not None
-            and _over(base_calls, candidate_calls, REGRESSION_CALL_FLOOR)
-        ):
-            findings.append(
-                _finding(
-                    REGRESS,
-                    "efficiency",
-                    f"{where}: median {candidate_calls:.0f} {label} against {release} {base_calls:.0f}; "
-                    f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_CALL_FLOOR:.0f}",
-                )
+    base_calls = _median_metric(measured_base, "llm_calls")
+    candidate_calls = _median_metric(measured_candidate, "llm_calls")
+    if base_calls is None or candidate_calls is None:
+        findings.append(_finding(ADVISE, "efficiency", f"{where}: LLM calls not compared, a side lacks them"))
+    if (
+        base_calls is not None
+        and candidate_calls is not None
+        and _over(base_calls, candidate_calls, REGRESSION_CALL_FLOOR)
+    ):
+        findings.append(
+            _finding(
+                REGRESS,
+                "efficiency",
+                f"{where}: median {candidate_calls:.0f} LLM calls against {release} {base_calls:.0f}; "
+                f"over {round((REGRESSION_FACTOR - 1) * 100)}% and more than {REGRESSION_CALL_FLOOR:.0f}",
             )
+        )
     base_tps = _median_metric(measured_base, "tokens_per_second")
     candidate_tps = _median_metric(measured_candidate, "tokens_per_second")
+    if base_tps is None or candidate_tps is None:
+        findings.append(_finding(ADVISE, "efficiency", f"{where}: tokens/s not compared, a side lacks them"))
     if (
         base_tps is not None
         and candidate_tps is not None
@@ -774,7 +790,9 @@ def _moves(
         )
     base_prices = _prices(measured_base)
     candidate_prices = _prices(measured_candidate)
-    if len(base_prices) == len(measured_base) and len(candidate_prices) == len(measured_candidate):
+    if len(base_prices) != len(measured_base) or len(candidate_prices) != len(measured_candidate):
+        findings.append(_finding(ADVISE, "efficiency", f"{where}: cost not compared, a side has unpriced rows"))
+    else:
         base_cost = statistics.median(base_prices)
         candidate_cost = statistics.median(candidate_prices)
         if _over(base_cost, candidate_cost, REGRESSION_COST_FLOOR_DOLLARS):
@@ -833,7 +851,7 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
     for key, candidate in sorted(groups.items(), key=lambda item: (str(item[0][0]), str(item[0][1]))):
         suite, task, revision, config = key
         where = f"{task} v{revision}"
-        measured_candidate = _measured(candidate)
+        measured_candidate = versions._measured(candidate)
         candidate_repeats = _distinct_repeats(candidate)
         # A live comparison rests on repeats, not rows: this blocks a new task, a bumped task version or a
         # re-routed task with one attempt even before any baseline exists, and duplicate rows cannot count. The
@@ -863,7 +881,9 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
         # A baseline is counted by measured rows rather than distinct repeats: older published files may predate
         # the repeat field, and the baseline's own integrity was checked when it was published.
         rated = [
-            release for release in matching if len(_measured(releases[release][config])) >= REGRESSION_MIN_ATTEMPTS
+            release
+            for release in matching
+            if len(versions._measured(releases[release][config])) >= REGRESSION_MIN_ATTEMPTS
         ]
         if not rated:
             newest = max(matching, key=versions._release_key)
@@ -871,13 +891,13 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
                 _finding(
                     ADVISE,
                     "baseline",
-                    f"{where}: baseline {newest} has {len(_measured(releases[newest][config]))} attempts; "
+                    f"{where}: baseline {newest} has {len(versions._measured(releases[newest][config]))} attempts; "
                     f"fewer than {REGRESSION_MIN_ATTEMPTS} is not a rate",
                 )
             )
             continue
         release = max(rated, key=versions._release_key)
-        measured_base = _measured(releases[release][config])
+        measured_base = versions._measured(releases[release][config])
         passed_base = sum(row.get("passed") is True for row in measured_base)
         passed_candidate = sum(row.get("passed") is True for row in measured_candidate)
         if passed_candidate / len(measured_candidate) < passed_base / len(measured_base):
@@ -889,7 +909,7 @@ def _regression(rows: Sequence[Mapping[str, Any]], baselines_: Sequence[Mapping[
                     f"{passed_base}/{len(measured_base)}; a per-task pass rate cannot decline",
                 )
             )
-        findings += _moves(where, release, measured_base, measured_candidate)
+        findings += moves(where, release, measured_base, measured_candidate)
     return findings
 
 
@@ -929,7 +949,6 @@ def gate(
     release: str | None = None,
     ledger: Sequence[Mapping[str, Any]] | None = None,
     baselines_: Sequence[Mapping[str, Any]] = (),
-    lock: Mapping[str, Mapping[str, Any]] | None = None,
     require_ledger: bool = False,
     require_coverage: bool | None = None,
     require_clean: bool = True,
@@ -946,7 +965,7 @@ def gate(
             findings=(_finding(REFUSE, "shape", "no rows: a publication with no results is not a publication"),),
             operational=Operational(selected_attempts=0),
         )
-    lock = versions.load_lock() if lock is None else lock
+    lock = versions.load_lock()
     suites = _suite_ids()
     findings: list[Finding] = []
     for row in rows_:
@@ -1012,6 +1031,9 @@ def main(argv: list[str]) -> int:
     ledger_file = args.ledger or ledger_path(args.rows)
     ledger = read_jsonl(ledger_file) if ledger_file.exists() else None
     release = args.release or _release_of(rows_)
+    if release is None:
+        print("BLOCKED the rows do not all record one fastbrowse_version; pass --release to name the one expected")
+        return 1
     report = gate(
         rows_,
         release=release,

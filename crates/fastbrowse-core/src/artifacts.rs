@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/artifacts.py`: a filesystem `ArtifactSink`. Hosts with their own storage implement the
+//! A filesystem `ArtifactSink`. Hosts with their own storage implement the
 //! trait instead.
 
 use std::path::{Path, PathBuf};

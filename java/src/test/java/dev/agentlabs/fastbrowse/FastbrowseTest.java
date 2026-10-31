@@ -9,8 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import dev.agentlabs.fastbrowse.protocol.Limits;
 import dev.agentlabs.fastbrowse.protocol.Protocol;
 import dev.agentlabs.fastbrowse.protocol.RunResult;
@@ -53,7 +53,7 @@ class FastbrowseTest {
             return Path.of(named);
         }
         Path built = Path.of("..", "target", "debug", "fastbrowse").toAbsolutePath();
-        assumeTrue(Files.exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli`, or set FASTBROWSE_TEST_BINARY");
+        assumeTrue(Files.exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli --features scripted`, or set FASTBROWSE_TEST_BINARY");
         return built;
     }
 
@@ -101,7 +101,7 @@ class FastbrowseTest {
         assertEquals(Status.COMPLETE, result.status());
         assertEquals("find the price", result.answer());
         JsonNode params = result.data().path("params");
-        assertEquals("https://shop.example/", params.path("start").asText());
+        assertEquals("https://shop.example/", params.path("start").asString());
         assertTrue(params.path("local").asBoolean());
         assertTrue(params.path("foreground").asBoolean());
         assertTrue(params.path("until").asBoolean());
@@ -176,7 +176,7 @@ class FastbrowseTest {
                 })
                 .build()).join();
         assertEquals(2, calls.get());
-        assertEquals("password@https://shop.example", result.data().get(0).asText());
+        assertEquals("password@https://shop.example", result.data().get(0).asString());
     }
 
     @Test

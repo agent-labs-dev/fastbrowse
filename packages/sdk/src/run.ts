@@ -1,5 +1,5 @@
 // What a caller passes to `run`, and the `run` request it becomes. Options are camelCase, and the wire keeps the
-// Python models' snake_case names.
+// protocol's snake_case names.
 
 import { type OutputSchema, wireSchema } from './output.ts';
 import type { Authorization, BrowserEvent, Limits, LocalChrome, RunParams, SecretRef, StepEvent } from './protocol.ts';
@@ -8,7 +8,7 @@ type Camel<Name extends string> = Name extends `${infer Head}_${infer Tail}`
   ? `${Head}${Capitalize<Camel<Tail>>}`
   : Name;
 
-/** A wire model with its field names in camelCase, so its fields follow the Python model without a second list. */
+/** A wire model with its field names in camelCase, so its fields follow the wire model without a second list. */
 export type CamelKeys<Model> = { [Name in keyof Model as Camel<Name & string>]: Model[Name] };
 
 /** Which browser a run drives. Given to `Fastbrowse.start`, these are the defaults of every run it makes. */
@@ -31,7 +31,6 @@ export interface BrowserOptions {
   /** The two-letter country a cloud browser browses from. */
   proxyCountry?: string;
   viewport?: [width: number, height: number];
-  cloudAllowResizing?: boolean;
 }
 
 export interface Attachment {
@@ -132,7 +131,6 @@ function browserFields(options: PerRun<BrowserOptions>): Sparse<RunParams> {
     foreground: options.foreground,
     proxy_country: options.proxyCountry,
     viewport: options.viewport,
-    cloud_allow_resizing: options.cloudAllowResizing,
   });
 }
 

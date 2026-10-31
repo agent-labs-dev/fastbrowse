@@ -1,5 +1,4 @@
-//! A fake client for `fastbrowse serve` on in-memory streams, and the stand-in runs the serve tests share: the Rust
-//! side of `tests/serve_client.py` and of the recorders in `tests/test_serve_*.py`.
+//! A fake client for `fastbrowse serve` on in-memory streams, and the stand-in runs the serve tests share.
 //!
 //! The client speaks to the server in lines of JSON, as the JavaScript SDK does, so a test asserts what a client on
 //! the other side of the pipe would see and never looks inside the server.
@@ -10,7 +9,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
+use fastbrowse_cli::runner::{Host, RunError, RunTask, Runner};
 use fastbrowse_cli::serve::{Server, SettingsSource, Transport};
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::BoxFuture;
@@ -183,16 +182,20 @@ pub fn serving(runner: Arc<dyn Runner>, settings: SettingsSource) -> FakeClient 
     }
 }
 
+/// The model keys and a stand-in Chrome, with no cloud key and nothing read from a checkout's `.env`.
+pub fn model_settings() -> Settings {
+    Settings {
+        openrouter_api_key: Some(Secret::new("or")),
+        ai_gateway_api_key: Some(Secret::new("gw")),
+        chrome: Some(CHROME.into()),
+        ..Settings::default()
+    }
+}
+
 /// Every key set and nothing read from a checkout's `.env` or the environment of whoever runs the tests.
 pub fn settings_with(change: impl Fn(&mut Settings) + Send + Sync + 'static) -> SettingsSource {
     Arc::new(move || {
-        let mut settings = Settings {
-            openrouter_api_key: Some(Secret::new("or")),
-            ai_gateway_api_key: Some(Secret::new("gw")),
-            browser_use_api_key: Some(Secret::new("bu")),
-            chrome: Some(CHROME.into()),
-            ..Settings::default()
-        };
+        let mut settings = Settings { browser_use_api_key: Some(Secret::new("bu")), ..model_settings() };
         change(&mut settings);
         Ok(settings)
     })
@@ -234,6 +237,7 @@ pub fn step(index: i64) -> StepResult {
         facts: Vec::new(),
         page_changed: None,
         duration_ms: 5,
+        fallback: None,
         choices: Vec::new(),
     }
 }
@@ -258,33 +262,40 @@ pub fn run_params(run_id: &str, fields: Value) -> Value {
     params
 }
 
+/// What a runner was called with: the run, and what hosts it.
+#[derive(Clone)]
+pub struct Call {
+    pub task: RunTask,
+    pub host: Host,
+}
+
 /// Stands where `run_task` does, and keeps what it was called with.
 #[derive(Clone, Default)]
 pub struct Recorder {
-    pub calls: Arc<Mutex<Vec<RunArgs>>>,
+    pub calls: Arc<Mutex<Vec<Call>>>,
     pub result: Option<RunResult>,
     pub events: Vec<Event>,
     pub hold: Option<Arc<Notify>>,
 }
 
 impl Recorder {
-    pub fn calls(&self) -> Vec<RunArgs> {
+    pub fn calls(&self) -> Vec<Call> {
         self.calls.lock().unwrap().clone()
     }
 
     pub fn runner(&self) -> Arc<dyn Runner> {
         let recorder = self.clone();
-        Arc::new(move |args: RunArgs| -> BoxFuture<'static, Result<RunResult, RunError>> {
+        Arc::new(move |task: RunTask, host: Host| -> BoxFuture<'static, Result<RunResult, RunError>> {
             let recorder = recorder.clone();
             Box::pin(async move {
-                recorder.calls.lock().unwrap().push(args.clone());
+                recorder.calls.lock().unwrap().push(Call { task, host: host.clone() });
                 for event in recorder.events.clone() {
-                    if let Some(on_event) = &args.on_event {
+                    if let Some(on_event) = &host.on_event {
                         on_event(event).await;
                     }
                 }
                 if let Some(hold) = &recorder.hold {
-                    args.cancel.guard(hold.notified()).await?;
+                    host.cancel.guard(hold.notified()).await?;
                 }
                 Ok(recorder.result.clone().unwrap_or_else(|| result(Status::Complete)))
             })
@@ -295,10 +306,12 @@ impl Recorder {
 /// A runner from an async closure.
 pub fn runner<F, Fut>(run: F) -> Arc<dyn Runner>
 where
-    F: Fn(RunArgs) -> Fut + Send + Sync + 'static,
+    F: Fn(Call) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<RunResult, RunError>> + Send + 'static,
 {
-    Arc::new(move |args: RunArgs| -> BoxFuture<'static, Result<RunResult, RunError>> { Box::pin(run(args)) })
+    Arc::new(move |task: RunTask, host: Host| -> BoxFuture<'static, Result<RunResult, RunError>> {
+        Box::pin(run(Call { task, host }))
+    })
 }
 
 /// The binary under test.

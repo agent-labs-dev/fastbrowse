@@ -7,7 +7,7 @@ the tests cover it.
 """
 
 from fastbrowse.models import Citation, RunResult
-from fastbrowse.run import connect_cdp, resolve_cdp_port, run_task
+from fastbrowse.run import connect_cdp, run_task
 from fastbrowse.telemetry import traced
 
-__all__ = ["Citation", "RunResult", "connect_cdp", "resolve_cdp_port", "run_task", "traced"]
+__all__ = ["Citation", "RunResult", "connect_cdp", "run_task", "traced"]

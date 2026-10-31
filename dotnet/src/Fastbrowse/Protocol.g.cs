@@ -112,6 +112,8 @@ public enum CostBasis
     Estimated,
     [JsonStringEnumMemberName("bounded")]
     Bounded,
+    [JsonStringEnumMemberName("unsettled")]
+    Unsettled,
     [JsonStringEnumMemberName("unknown")]
     Unknown,
 }
@@ -163,8 +165,8 @@ public sealed record CostLine
 }
 
 /// <summary>
-/// The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-/// reader's, because the reader asked for the rest of the list.
+/// Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
+/// next page of a list or DONE once a lookup is answered.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<Decider>))]
 public enum Decider
@@ -173,6 +175,8 @@ public enum Decider
     Jev,
     [JsonStringEnumMemberName("llm")]
     Llm,
+    [JsonStringEnumMemberName("code")]
+    Code,
 }
 
 public sealed record Evidence
@@ -264,8 +268,6 @@ public enum LLMPurpose
     FieldText,
     [JsonStringEnumMemberName("recover")]
     Recover,
-    [JsonStringEnumMemberName("verify")]
-    Verify,
     [JsonStringEnumMemberName("compose")]
     Compose,
     [JsonStringEnumMemberName("shortcut")]
@@ -417,7 +419,7 @@ public sealed record RunFrame
 }
 
 /// <summary>
-/// One run. Apart from <c>run_id</c>, each field is the <c>run_task</c> argument or the CLI flag of the same name.
+/// One run: the run's arguments, and what the server needs to talk to the client about it.
 ///
 /// The reply is the <c>RunResult</c>. No API key is among the fields: model and browser keys come from the
 /// environment the server inherited.
@@ -426,6 +428,15 @@ public sealed record RunParams
 {
     [JsonPropertyName("run_id")]
     public required string RunId { get; init; }
+
+    [JsonPropertyName("secrets")]
+    public IReadOnlyList<SecretRef>? Secrets { get; init; }
+
+    [JsonPropertyName("frames")]
+    public bool? Frames { get; init; }
+
+    [JsonPropertyName("until")]
+    public bool? Until { get; init; }
 
     [JsonPropertyName("task")]
     public required string Task { get; init; }
@@ -450,15 +461,6 @@ public sealed record RunParams
 
     [JsonPropertyName("output_schema")]
     public JsonElement? OutputSchema { get; init; }
-
-    [JsonPropertyName("secrets")]
-    public IReadOnlyList<SecretRef>? Secrets { get; init; }
-
-    [JsonPropertyName("frames")]
-    public bool? Frames { get; init; }
-
-    [JsonPropertyName("until")]
-    public bool? Until { get; init; }
 
     [JsonPropertyName("downloads")]
     public string? Downloads { get; init; }
@@ -499,8 +501,20 @@ public sealed record RunParams
     [JsonPropertyName("viewport")]
     public IReadOnlyList<long>? Viewport { get; init; }
 
-    [JsonPropertyName("cloud_allow_resizing")]
-    public bool? CloudAllowResizing { get; init; }
+    [JsonPropertyName("cloud_extensions")]
+    public IReadOnlyList<string>? CloudExtensions { get; init; }
+
+    [JsonPropertyName("cloud_timeout_minutes")]
+    public long? CloudTimeoutMinutes { get; init; }
+
+    [JsonPropertyName("allowed_origins")]
+    public IReadOnlyList<string>? AllowedOrigins { get; init; }
+
+    [JsonPropertyName("fetch")]
+    public bool? Fetch { get; init; }
+
+    [JsonPropertyName("fetch_first")]
+    public bool? FetchFirst { get; init; }
 }
 
 public sealed record RunResult
@@ -703,6 +717,27 @@ public sealed record StepFact
     public string? DeepLink { get; init; }
 }
 
+public sealed record StepFallback
+{
+    /// <summary>
+    /// The reason the run stopped following Jev, as recovery was told it.
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public required string Reason { get; init; }
+
+    /// <summary>
+    /// Jev's certainty on the step it gave up, on the weakest link of its choices.
+    /// </summary>
+    [JsonPropertyName("confidence")]
+    public required double Confidence { get; init; }
+
+    /// <summary>
+    /// The control Jev chose, by its label, when it chose one.
+    /// </summary>
+    [JsonPropertyName("target")]
+    public string? Target { get; init; }
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<StepOutcome>))]
 public enum StepOutcome
 {
@@ -759,6 +794,12 @@ public sealed record StepResult
 
     [JsonPropertyName("duration_ms")]
     public required long DurationMs { get; init; }
+
+    /// <summary>
+    /// The fallback that decided this step instead of Jev's pick, when <c>Config.step_choices</c> asked for it.
+    /// </summary>
+    [JsonPropertyName("fallback")]
+    public StepFallback? Fallback { get; init; }
 
     /// <summary>
     /// The controls Jev was offered for this step's decision, when <c>Config.step_choices</c> asked for them.

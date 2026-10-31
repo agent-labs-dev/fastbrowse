@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer
 
 
 class Frozen(BaseModel):
-    # A field's docstring is the model's only guidance for that field when the class is a response schema.
+    # A field's docstring is its description in `model_json_schema`, which embedders read.
     model_config = ConfigDict(frozen=True, extra="forbid", use_attribute_docstrings=True)
 
 
@@ -75,11 +75,12 @@ class Operation(StrEnum):
 
 
 class Decider(StrEnum):
-    """The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-    reader's, because the reader asked for the rest of the list."""
+    """Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
+    next page of a list or DONE once a lookup is answered."""
 
     JEV = "jev"
     LLM = "llm"
+    CODE = "code"
 
 
 class StepOutcome(StrEnum):
@@ -152,6 +153,16 @@ class StepChoice(Frozen):
     """Whether Jev chose this control: the target, and for a drag the destination too."""
 
 
+# Why a step acted on a recovery rather than on Jev's pick: the fallback that fired, and the pick it set aside.
+class StepFallback(Frozen):
+    reason: str
+    """The reason the run stopped following Jev, as recovery was told it."""
+    confidence: float = Field(ge=0, le=1)
+    """Jev's certainty on the step it gave up, on the weakest link of its choices."""
+    target: str | None = None
+    """The control Jev chose, by its label, when it chose one."""
+
+
 class ArtifactKind(StrEnum):
     DOWNLOAD = "download"
 
@@ -181,6 +192,8 @@ class CostBasis(StrEnum):
     BOUNDED = "bounded"
     """No charge was reported, and `dollars` is the most the call could have cost: its model's whole context
     window at the highest token price any of its routes lists. Never less than the charge."""
+    UNSETTLED = "unsettled"
+    """The provider's figure so far, read before it finished metering: the final charge can be higher."""
     UNKNOWN = "unknown"
     """No charge information; never counted as zero."""
 
@@ -190,7 +203,6 @@ class LLMPurpose(StrEnum):
     READ = "read"
     FIELD_TEXT = "field_text"
     RECOVER = "recover"
-    VERIFY = "verify"
     COMPOSE = "compose"
     SHORTCUT = "shortcut"
 
@@ -246,6 +258,8 @@ class StepResult(Frozen):
     page_changed: bool | None = None
     """Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."""
     duration_ms: int = Field(ge=0)
+    fallback: StepFallback | None = Field(default=None, exclude_if=lambda fallback: fallback is None)
+    """The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."""
     choices: tuple[StepChoice, ...] = Field(default=(), exclude_if=lambda choices: not choices)
     """The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them."""
 
@@ -303,6 +317,22 @@ class RunResult(Frozen):
     @property
     def succeeded(self) -> bool:
         return self.status is Status.COMPLETE
+
+
+class Build(Frozen):
+    """The build that produced a result."""
+
+    fastbrowse_version: str | None
+    git_sha: str | None
+    """The full commit, or None when no commit is known (the standalone binary or a released wheel)."""
+    git_dirty: bool | None
+    """Whether the tree had uncommitted changes; None outside a checkout."""
+
+
+class CliResult(RunResult):
+    """What `fastbrowse --json` prints: the run's result and the build that produced it."""
+
+    build: Build
 
 
 class LocalChrome(Frozen):

@@ -1,5 +1,4 @@
-//! Port of `src/fastbrowse/safety.py`: gates code owns. Irreversible actions need authorization, and secrets never
-//! leave their origins or reach logs.
+//! Authorization for irreversible actions, and secrets that never leave their origins or reach logs.
 //!
 //! Models only ever see secret names. Values are resolved here, at dispatch time, for the origin being acted on.
 //! Origins are read as Chrome reads them (WHATWG, ADR 0002); the cases where that differs from `urlsplit` are pinned
@@ -23,17 +22,16 @@ use crate::py::text;
 /// Whether a click commits is a judgment about the page, so Jev makes it rather than a word list. A list of committing
 /// labels is never complete ("Place your order", "Yes, I'm sure"), and a link commits as easily as a button: a
 /// one-click unsubscribe is an href, and a script handler runs whatever the element says.
-pub fn may_be_irreversible(operation: Operation, control: Option<&Control>) -> bool {
-    if control.is_none() {
-        return false;
-    }
+pub fn may_be_irreversible(operation: Operation) -> bool {
     match operation {
-        Operation::Click | Operation::Drag | Operation::Navigate => true,
+        Operation::Click | Operation::Drag => true,
         // Not only a form's Enter: a chat, comment or DM box sends on Enter through its own script, with no form for
         // the page to describe.
         Operation::Enter => true,
-        // A dialog's accept is asked about where the dialog is handled; the rest change nothing off the page.
-        Operation::Hover
+        // A dialog's accept and a caller's address are asked about where they are handled; the rest change nothing
+        // off the page.
+        Operation::Navigate
+        | Operation::Hover
         | Operation::Fill
         | Operation::Select
         | Operation::Escape
@@ -49,60 +47,9 @@ pub fn may_be_irreversible(operation: Operation, control: Option<&Control>) -> b
     }
 }
 
-// A playback control: its action is undone by the reverse action, so it commits nothing. The label must name playback
-// and nothing that turns "pause" into a commitment ("pause my subscription").
-const REVERSIBLE_TOGGLE: &[&str] = &["play", "pause", "resume", "unmute", "mute", "replay"];
-const COMMITTED_NOUN: &[&str] = &[
-    "subscription",
-    "membership",
-    "plan",
-    "billing",
-    "payment",
-    "invoice",
-    "order",
-    "shipment",
-    "delivery",
-    "account",
-    "profile",
-    "job",
-    "project",
-    "campaign",
-    "listing",
-    "ad",
-    "deploy",
-    "server",
-    "instance",
-    "customer",
-    "contract",
-    "policy",
-];
-
-/// Whether activating this control only flips playback, which the same control flips back.
-///
-/// Pausing a video, muting audio or resuming playback is reversible by whoever did it, with no effect outside the
-/// page, so it is not a commit to confirm. The label alone decides, and only when it also carries no noun that a pause
-/// would commit (a subscription, a shipment, an ad campaign).
-pub fn reversible_toggle(control: &Control) -> bool {
-    let label = text::strip(&control.label);
-    if text::find_word(label, REVERSIBLE_TOGGLE).is_none() || text::find_word(label, COMMITTED_NOUN).is_some() {
-        return false;
-    }
-    !control
-        .context
-        .as_deref()
-        .is_some_and(|context| !context.is_empty() && text::find_word(context, COMMITTED_NOUN).is_some())
-}
-
-pub fn irreversible_question(
-    task: &str,
-    operation: Operation,
-    control: &Control,
-    destination: Option<&Control>,
-) -> NoulQuestion {
-    let mut instructions = format!(
-        "{UNTRUSTED}\nThe agent is about to {operation} the element labelled {} while doing this task: {task}\n",
-        text::repr(&control.label)
-    );
+/// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
+/// submits and the address it links to.
+fn describe_control(instructions: &mut String, operation: Operation, control: &Control, destination: Option<&Control>) {
     if let Some(context) = control.context.as_deref().filter(|c| !c.is_empty()) {
         instructions.push_str(&format!("It sits under {} on the page.\n", text::repr(context)));
     }
@@ -123,6 +70,19 @@ pub fn irreversible_question(
     {
         instructions.push_str(&format!("It is a link to {href}\n"));
     }
+}
+
+pub fn irreversible_question(
+    task: &str,
+    operation: Operation,
+    control: &Control,
+    destination: Option<&Control>,
+) -> NoulQuestion {
+    let mut instructions = format!(
+        "{UNTRUSTED}\nThe agent is about to {operation} the element labelled {} while doing this task: {task}\n",
+        text::repr(&control.label)
+    );
+    describe_control(&mut instructions, operation, control, destination);
     instructions.push_str(
         "Would doing so commit something that cannot be undone, such as placing an order or spending money, sending a \
          message, submitting an application, changing or resetting an account password or credentials, or deleting or \
@@ -132,6 +92,50 @@ pub fn irreversible_question(
         instructions,
         Some("It commits an irreversible or externally visible change."),
         Some("It only navigates, filters, reveals or edits a draft that can still be changed."),
+    )
+}
+
+/// What the agent is about to do to a control, with what tells it apart from another with the same label.
+///
+/// A submission also says what the form's other fields hold, from `controls`: the form's own text leaves out typed
+/// values, and a form that reads as empty does not read as the message the task asked to send. A masked field is
+/// left out.
+pub fn control_action(operation: Operation, control: &Control, controls: &[Control]) -> String {
+    let mut action = format!("{operation} the element labelled {}.\n", text::repr(&control.label));
+    describe_control(&mut action, operation, control, None);
+    let submits = operation == Operation::Enter || (operation == Operation::Click && control.role == "button");
+    if submits && control.form_id.is_some() {
+        let held: Vec<String> = controls
+            .iter()
+            .filter(|c| c.id != control.id && !c.sensitive)
+            .filter(|c| (&c.frame_id, &c.form_id) == (&control.frame_id, &control.form_id))
+            .filter_map(|c| {
+                let value = c.value.as_deref().filter(|v| !v.is_empty())?;
+                Some(format!("{} holds {}", text::repr(&c.label), text::repr(value)))
+            })
+            .collect();
+        if !held.is_empty() {
+            action.push_str(&format!("In the form, {}.\n", held.join("; ")));
+        }
+    }
+    action
+}
+
+/// Whether the task asks for this commit, asked beside [`irreversible_question`] when the run is authorized.
+///
+/// `action` is what the agent is about to do, as [`control_action`] writes it for a control. A task that lists its
+/// steps in order ("place it with this postcode, and if it is rejected, with that one") asks for its first step too:
+/// asked only whether the task asked for this, Jev put that first order at 0.27, and with the steps named at 0.87 or
+/// more, while commits a task forbade or never asked for stayed at 0.24 or less.
+pub fn requested_question(task: &str, action: &str) -> NoulQuestion {
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\nThe task: {task}\nThe agent is about to {action}Does the task ask the agent to do this, as \
+             the task itself or as one of the steps it lists in order? A step the task asks for counts even when a \
+             later step redoes or corrects it."
+        ),
+        Some("The task asks for this action."),
+        Some("The task asks for something else."),
     )
 }
 
@@ -172,13 +176,58 @@ pub fn downloads_question(task: &str) -> NoulQuestion {
     )
 }
 
-const NEW_SECRET: &[&str] =
-    &["new", "confirm", "confirmation", "repeat", "reenter", "re-enter", "retype", "re-type", "choose", "create"];
-const CHANGE_VERBS: &[&str] = &["change", "reset", "update", "replace", "set"];
+/// Whether the page declares this a password field. `sensitive` is no evidence: it also marks a text field holding a
+/// secret the agent typed, and a sign-in form whose username took a stored secret read as two password fields.
+pub fn is_password(control: &Control) -> bool {
+    control.input_type.as_deref() == Some("password")
+}
 
-/// A form's heading must not turn its current-password field into a replacement field.
-pub fn sets_new_password(control: &Control) -> bool {
-    control.sensitive && text::find_word(&control.label, NEW_SECRET).is_some()
+fn autocompletes(control: &Control, token: &str) -> bool {
+    let tokens = control.autocomplete.as_deref().unwrap_or("").to_lowercase();
+    text::split(&tokens).any(|t| t == token)
+}
+
+/// The password fields of `control`'s form, in page order; None for a control outside any form.
+fn form_passwords<'a>(controls: &'a [Control], control: &Control) -> Option<Vec<&'a Control>> {
+    control.form_id.as_ref()?;
+    let same_form = |c: &&Control| (&c.frame_id, &c.form_id) == (&control.frame_id, &control.form_id);
+    Some(controls.iter().filter(same_form).filter(|c| is_password(c)).collect())
+}
+
+/// Whether a password field takes a replacement password, on the page's own structure rather than its wording.
+///
+/// Only a form holding more than one password field sets one: the current password and a new one, or a new one and
+/// its confirmation. There `autocomplete` says which is which when the page marks it, and otherwise the first takes
+/// the current password and the rest the new one. The only password field of a form takes the account's password
+/// whatever its `autocomplete` says: sign-in pages mark their one field `new-password` to keep browsers from filling
+/// it. None when the structure cannot tell: a field outside any form on a page with other password fields, which
+/// must not be given the stored current password on a guess.
+pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> {
+    let passwords = form_passwords(controls, field);
+    if passwords.as_ref().is_some_and(|passwords| passwords.len() < 2) {
+        return Some(false);
+    }
+    if autocompletes(field, "new-password") {
+        return Some(true);
+    }
+    if autocompletes(field, "current-password") {
+        return Some(false);
+    }
+    match passwords {
+        Some(passwords) => passwords.iter().position(|c| c.id == field.id).map(|at| at > 0),
+        None => (!controls.iter().any(|c| is_password(c) && c.id != field.id)).then_some(false),
+    }
+}
+
+/// Whether this step submits a form that changes an account's password: an Enter in, or a button of, a form holding
+/// more than one password field. A link or a field's focus never is.
+pub fn changes_credentials(controls: &[Control], target: &Control, operation: Operation) -> bool {
+    let submits = match operation {
+        Operation::Enter => true,
+        Operation::Click => target.role == "button" && target.href.as_deref().is_none_or(str::is_empty),
+        _ => false,
+    };
+    submits && form_passwords(controls, target).is_some_and(|passwords| passwords.len() > 1)
 }
 
 // Tokens a page uses to mark the fields of a sign-in form, whatever language its labels are in.
@@ -207,7 +256,7 @@ pub fn credential_field(control: &Control) -> Option<CredentialField> {
     if tokens.contains(&"one-time-code") {
         return Some(CredentialField::OneTimeCode);
     }
-    if control.sensitive || control.input_type.as_deref() == Some("password") || tokens.contains(&"current-password") {
+    if is_password(control) || tokens.contains(&"current-password") {
         return Some(CredentialField::Password);
     }
     if tokens.contains(&"username") {
@@ -231,36 +280,6 @@ pub fn wall_kind(fields: &[CredentialField]) -> WallKind {
     } else {
         WallKind::SignIn
     }
-}
-
-/// `\b(change|reset|update|replace|set)\b.*\bpassword\b`, ignoring case: the verb, then the word later on its line.
-fn names_password_change(label: &str) -> bool {
-    let mut at = 0;
-    while let Some((start, end)) = text::find_word(&label[at..], CHANGE_VERBS) {
-        let line = label[at + end..].split('\n').next().unwrap_or("");
-        if text::find_word(line, &["password"]).is_some() {
-            return true;
-        }
-        at += start + label[at + start..].chars().next().map_or(1, char::len_utf8);
-    }
-    false
-}
-
-/// Recognize password submissions without treating field focus or settings links as commits.
-pub fn changes_credentials(controls: &[Control], target: &Control, operation: Operation) -> bool {
-    if operation == Operation::Click
-        && (target.role != "button" || target.href.as_deref().is_some_and(|h| !h.is_empty()))
-    {
-        return false;
-    }
-    if target.form_id.is_some()
-        && controls
-            .iter()
-            .any(|c| sets_new_password(c) && (&c.frame_id, &c.form_id) == (&target.frame_id, &target.form_id))
-    {
-        return true;
-    }
-    names_password_change(&target.label)
 }
 
 /// An origin as its parts: scheme, host (IPv6 in brackets) and a port the scheme does not imply.
@@ -564,7 +583,7 @@ fn hosts(text: &str) -> Vec<(usize, usize, String)> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_safety.py, then the behavior WHATWG changes, pinned.
+    //! The behavior WHATWG changes, pinned.
     use super::*;
     use crate::testing::block_on;
 
@@ -580,19 +599,13 @@ mod tests {
     }
 
     #[test]
-    fn test_every_click_and_every_enter_is_asked_about() {
-        for target in [
-            button("Place your order"),
-            control("Yes, I'm sure", "link", Some("/unsubscribe?token=1"), None),
-            // A message box with no form sends on Enter through the page's own script.
-            control("Send message", "textbox", None, None),
-            control("Search", "button", None, Some("submit")),
-        ] {
-            assert!(may_be_irreversible(Operation::Click, Some(&target)));
-            assert!(may_be_irreversible(Operation::Enter, Some(&target)));
-            assert!(!may_be_irreversible(Operation::Fill, Some(&target)));
-        }
-        assert!(!may_be_irreversible(Operation::Click, None));
+    fn test_every_click_drag_and_enter_is_asked_about() {
+        assert!(may_be_irreversible(Operation::Click));
+        assert!(may_be_irreversible(Operation::Drag));
+        // A message box with no form sends on Enter through the page's own script.
+        assert!(may_be_irreversible(Operation::Enter));
+        assert!(!may_be_irreversible(Operation::Fill));
+        assert!(!may_be_irreversible(Operation::Navigate));
     }
 
     #[test]
@@ -785,21 +798,6 @@ mod tests {
     }
 
     #[test]
-    fn test_playback_controls_are_reversible() {
-        for label in ["Pause", "Play", "Resume", "Mute"] {
-            assert!(reversible_toggle(&button(label)), "{label}");
-        }
-    }
-
-    #[test]
-    fn test_a_pause_that_commits_something_is_not_reversible() {
-        for label in ["Pause my subscription", "Pause billing", "Play the demo with your order", "Delete account"] {
-            assert!(!reversible_toggle(&button(label)), "{label}");
-        }
-    }
-
-    /// tests/test_navigation.py::test_focusing_a_field_does_not_claim_to_submit_its_form
-    #[test]
     fn test_focusing_a_field_does_not_claim_to_submit_its_form() {
         let mut field = Control::new("b0", "textbox", "Name", [Operation::Click, Operation::Fill, Operation::Enter]);
         field.submit_semantics = Some("POST /delete-all".into());
@@ -824,26 +822,105 @@ mod tests {
     }
 
     #[test]
-    fn a_password_change_is_recognized_from_the_form_or_the_label() {
-        let submit = button("Save");
-        assert!(!changes_credentials(&[], &submit, Operation::Click));
-        assert!(changes_credentials(&[], &button("Reset your password"), Operation::Click));
-        assert!(!changes_credentials(&[], &button("Reset\npassword"), Operation::Click));
-        assert!(!changes_credentials(
-            &[],
-            &control("Change password", "link", Some("/settings"), None),
-            Operation::Click
-        ));
-        let mut form_submit = button("Save");
-        form_submit.form_id = Some("f".into());
-        let mut new_password = Control::new("p", "textbox", "New password", [Operation::Fill]);
-        new_password.sensitive = true;
-        new_password.form_id = Some("f".into());
-        assert!(changes_credentials(&[new_password.clone()], &form_submit, Operation::Click));
-        assert!(asks_for_credentials(&new_password));
+    fn test_the_requested_question_tells_two_submit_buttons_apart() {
+        let mut target = button("Submit");
+        target.context = Some("Delete account".into());
+        target.submit_semantics = Some("POST /account/delete".into());
+        target.form_id = Some("f".into());
+        let mut field = Control::new("m", "textbox", "Message", [Operation::Fill]);
+        field.form_id = Some("f".into());
+        field.value = Some("Please close my account".into());
+        let mut secret = password("p", Some("f"), None);
+        secret.value = Some("••••".into());
+        let action = control_action(Operation::Click, &target, &[target.clone(), field, secret]);
+        let question = requested_question("Update my newsletter preferences", &action);
+        assert!(question.instructions.contains("It sits under 'Delete account' on the page.\n"));
+        assert!(question.instructions.contains("The action submits this form: POST /account/delete\n"));
+        assert!(question.instructions.contains("In the form, 'Message' holds 'Please close my account'.\n"));
+    }
+
+    fn password(id: &str, form: Option<&str>, autocomplete: Option<&str>) -> Control {
+        let mut field = Control::new(id, "textbox", "Password", [Operation::Fill]);
+        field.sensitive = true;
+        field.input_type = Some("password".into());
+        field.form_id = form.map(str::to_string);
+        field.autocomplete = autocomplete.map(str::to_string);
+        field
+    }
+
+    #[test]
+    fn a_password_change_is_recognized_from_the_forms_structure_not_its_wording() {
+        let mut save = button("Save");
+        save.form_id = Some("f".into());
+        let (current, new) = (password("p0", Some("f"), None), password("p1", Some("f"), None));
+        assert!(changes_credentials(&[current.clone(), new.clone()], &save, Operation::Click));
+        assert!(changes_credentials(&[current.clone(), new.clone()], &current, Operation::Enter));
+        // A sign-in form has one password field, whatever its button says.
+        let mut reset = button("Reset your password");
+        reset.form_id = Some("f".into());
+        assert!(!changes_credentials(std::slice::from_ref(&current), &reset, Operation::Click));
+        // A sign-in page marks its one password field new-password to keep browsers from filling it.
+        assert!(!changes_credentials(&[password("p", Some("f"), Some("new-password"))], &save, Operation::Click));
+        // Another form's fields, a link and a field's focus are not this form's submission.
+        let mut other = save.clone();
+        other.form_id = Some("g".into());
+        assert!(!changes_credentials(&[current.clone(), new.clone()], &other, Operation::Click));
+        let mut link = control("Change password", "link", Some("/settings"), None);
+        link.form_id = Some("f".into());
+        assert!(!changes_credentials(&[current.clone(), new.clone()], &link, Operation::Click));
+        assert!(!changes_credentials(&[current.clone(), new.clone()], &current, Operation::Click));
+        assert!(asks_for_credentials(&new));
         let mut otp = Control::new("o", "textbox", "Code", [Operation::Fill]);
         otp.autocomplete = Some("One-Time-Code".into());
         assert!(asks_for_credentials(&otp));
+    }
+
+    #[test]
+    fn a_replacement_password_field_is_told_by_structure_and_an_unclear_one_is_not_guessed() {
+        let (current, new, again) =
+            (password("p0", Some("f"), None), password("p1", Some("f"), None), password("p2", Some("f"), None));
+        let form = [current.clone(), new.clone(), again.clone()];
+        assert_eq!(sets_new_password(&form, &current), Some(false));
+        assert_eq!(sets_new_password(&form, &new), Some(true));
+        assert_eq!(sets_new_password(&form, &again), Some(true));
+        let sign_in = password("p", Some("f"), None);
+        assert_eq!(sets_new_password(std::slice::from_ref(&sign_in), &sign_in), Some(false));
+        let marked = password("p", Some("f"), Some("new-password"));
+        assert_eq!(sets_new_password(std::slice::from_ref(&marked), &marked), Some(false));
+        let (first, second) = (password("n", Some("f"), Some("new-password")), password("c", Some("f"), None));
+        assert_eq!(sets_new_password(&[first.clone(), second.clone()], &first), Some(true));
+        let loose = [password("a", None, None), password("b", None, None)];
+        assert_eq!(sets_new_password(&loose, &loose[1]), None);
+        assert_eq!(sets_new_password(&loose[..1], &loose[0]), Some(false));
+        assert_eq!(sets_new_password(&loose, &password("c", None, Some("current-password"))), Some(false));
+    }
+
+    /// A username that took a stored secret is masked like a password, and is still not one.
+    #[test]
+    fn a_sign_in_form_whose_username_holds_a_secret_takes_the_current_password() {
+        let mut username = Control::new("u", "textbox", "Username", [Operation::Fill]);
+        (username.sensitive, username.input_type, username.form_id) = (true, Some("text".into()), Some("f".into()));
+        let password = password("p", Some("f"), None);
+        let mut login = button("Login");
+        login.form_id = Some("f".into());
+        let form = [username.clone(), password.clone(), login.clone()];
+        assert_eq!(sets_new_password(&form, &password), Some(false));
+        assert!(!changes_credentials(&form, &login, Operation::Click));
+        assert!(!changes_credentials(&form, &password, Operation::Enter));
+        assert_ne!(credential_field(&username), Some(CredentialField::Password));
+    }
+
+    /// A sign-in form whose one password field is marked new-password, as pages do to keep browsers from filling it.
+    #[test]
+    fn a_sign_in_form_marking_its_one_password_new_takes_the_current_password() {
+        let mut username = Control::new("u", "textbox", "Username", [Operation::Fill]);
+        (username.form_id, username.autocomplete) = (Some("f".into()), Some("off".into()));
+        let password = password("p", Some("f"), Some("new-password"));
+        let mut login = button("Login");
+        login.form_id = Some("f".into());
+        let form = [username, password.clone(), login.clone()];
+        assert_eq!(sets_new_password(&form, &password), Some(false));
+        assert!(!changes_credentials(&form, &login, Operation::Click));
     }
 
     #[test]

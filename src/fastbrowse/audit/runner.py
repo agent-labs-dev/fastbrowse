@@ -1,7 +1,7 @@
 """Run the audit suite's cases by tier and write one report plus a Markdown roll-up.
 
     uv run python -m fastbrowse.audit --tier 0
-    uv run python -m fastbrowse.audit --tier 1 2 --spend --max-dollars 0.05
+    uv run python -m fastbrowse.audit --tier 1 --tier 2 --spend --max-dollars 0.05
 
 Tier 0 spends nothing, so it is the default and is safe to run anywhere. Tiers 1 to 3 call paid models, so
 they are refused unless `--spend` is given.
@@ -13,6 +13,7 @@ output, plus any file or recording it produced.
 """
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -25,9 +26,15 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from fastbrowse import __file__ as _fastbrowse_file
 from fastbrowse.audit.cases import CASES, Assertion, AuditCase
-from fastbrowse.audit.live import fixture_server
+from fastbrowse.evals.judge import Claim, jev_from_environment, judge
+from fastbrowse.evals.local import FIXTURES, fixture_server
+
+# Audit-only pages, served ahead of the eval fixtures they sit beside.
+_AUDIT_FIXTURES = Path(__file__).with_name("fixtures")
 
 # Keys the refusal cases must not see, whether they come from the environment or from a `.env` the case
 # would otherwise inherit. A case that needs one sets it back explicitly.
@@ -46,11 +53,8 @@ _SCRUBBED = frozenset(
         "FASTBROWSE_HEADED",
         "FASTBROWSE_PROFILE",
         "FASTBROWSE_DECISION_SOURCE",
-        "FASTBROWSE_JEV_SOURCE",
         "FASTBROWSE_DECISION_BASE_URL",
-        "FASTBROWSE_JEV_BASE_URL",
         "FASTBROWSE_DECISION_MODEL",
-        "FASTBROWSE_JEV_MODEL",
         "FASTBROWSE_LLM_MODEL",
     }
 )
@@ -121,6 +125,25 @@ def _actual(source: str, pointer: str, ctx: Mapping[str, Any]) -> Any:
             return None
 
 
+def _holds(claim: str, ctx: Mapping[str, Any]) -> bool:
+    """Whether the run's answer and data state `claim`, judged by Jev rather than matched as text."""
+    output = ctx.get("json")
+    if not isinstance(output, Mapping):
+        return False
+
+    async def ask() -> str | None:
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            return await judge(
+                jev_from_environment(http),
+                task=ctx["task"],
+                answer=output.get("answer"),
+                data=output.get("data"),
+                claims=(Claim(claim),),
+            )
+
+    return asyncio.run(ask()) is None
+
+
 def _evaluate(assertion: Assertion, ctx: Mapping[str, Any]) -> dict[str, Any]:
     value = assertion.value
     actual = _actual(assertion.source, assertion.pointer, ctx)
@@ -137,39 +160,25 @@ def _evaluate(assertion: Assertion, ctx: Mapping[str, Any]) -> dict[str, Any]:
             ok = isinstance(actual, str) and str(value) not in actual
         case "present":
             ok = actual is not None and actual != "" and actual != [] and actual != {}
-        case "absent":
-            ok = actual is None
         case "is_true":
             ok = actual is True
-        case "is_false":
-            ok = actual is False
-        case "ge":
-            ok = isinstance(actual, (int, float)) and actual >= value  # type: ignore[operator]
-        case "le":
-            ok = isinstance(actual, (int, float)) and actual <= value  # type: ignore[operator]
         case "matches":
             import re
 
             ok = isinstance(actual, str) and re.search(str(value), actual) is not None
         case "list_eq":
             ok = actual == value
-        case "list_contains":
-            ok = isinstance(actual, list) and value in actual
-        case "list_excludes":
-            ok = isinstance(actual, list) and value not in actual
         case "count_eq":
             ok = isinstance(actual, (list, Mapping)) and len(actual) == value
         case "count_ge":
             ok = isinstance(actual, (list, Mapping)) and isinstance(value, int) and len(actual) >= value
-        case "one_of":
-            ok = isinstance(actual, str) and isinstance(value, list) and actual in value
         case "keys_present":
             keys = value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else ()
             ok = isinstance(actual, Mapping) and bool(keys) and all(key in actual for key in keys)
-        case "exists":
-            ok = actual is True
         case "nonempty":
             ok = actual is True
+        case "claim":
+            ok = _holds(str(value), ctx)
         case _:
             ok = False
     return {"name": assertion.name, "expected": value, "actual": actual, "ok": ok}
@@ -178,10 +187,10 @@ def _evaluate(assertion: Assertion, ctx: Mapping[str, Any]) -> dict[str, Any]:
 def _file_state(path: str) -> dict[str, bool]:
     target = Path(path)
     if not target.exists():
-        return {"exists": False, "nonempty": False}
+        return {"nonempty": False}
     if target.is_dir():
-        return {"exists": True, "nonempty": any(target.iterdir())}
-    return {"exists": True, "nonempty": target.stat().st_size > 0}
+        return {"nonempty": any(target.iterdir())}
+    return {"nonempty": target.stat().st_size > 0}
 
 
 def _substitute(argv: Sequence[str], mapping: Mapping[str, str]) -> list[str]:
@@ -201,15 +210,20 @@ def _environment(case: AuditCase) -> dict[str, str]:
     return env
 
 
-def _cost(payload: Any) -> float:
+def _cost(payload: Any) -> float | None:
+    """The run's dollars, or None when it reported none or any line of its cost is unknown: unknown is never zero."""
     if isinstance(payload, Mapping):
         if isinstance(payload.get("cost_usd"), (int, float)):
             return float(payload["cost_usd"])
         cost = payload.get("cost")
         if isinstance(cost, Mapping):
-            lines = cost.get("lines", [])
-            return round(sum(line["dollars"] for line in lines if isinstance(line, Mapping) and line.get("dollars")), 6)
-    return 0.0
+            dollars = [line.get("dollars") for line in cost.get("lines", [])]
+            return None if None in dollars else round(sum(dollars), 6)
+    return None
+
+
+def _dollars(cost: float | None) -> str:
+    return "unknown" if cost is None else f"${cost}"
 
 
 def _observed_status(exit_code: int | None, payload: Any) -> str:
@@ -217,7 +231,10 @@ def _observed_status(exit_code: int | None, payload: Any) -> str:
         return str(payload["status"])
     if exit_code == 0:
         return "ok"
-    return "refused"
+    if exit_code is None:
+        return "timed_out"
+    # A signal, or Rust's exit code for a panic: the program died rather than refused.
+    return "crashed" if exit_code < 0 or exit_code == 101 else "refused"
 
 
 def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool) -> dict[str, Any]:
@@ -245,15 +262,16 @@ def run_case(case: AuditCase, *, workdir: Path, max_dollars: float, spend: bool)
     started = time.monotonic()
     recorder: Mapping[str, Any] = {}
     if case.fixture:
-        with fixture_server() as (base_url, record_state):
+        with fixture_server(roots=(_AUDIT_FIXTURES, FIXTURES)) as (base_url, posts):
             mapping["base_url"] = base_url
             rows = _execute(case, mapping, cwd, budget)
-            recorder = record_state()
+            recorder = posts.snapshot()
     else:
         rows = _execute(case, mapping, cwd, budget)
     duration = round(time.monotonic() - started, 3)
 
     ctx: dict[str, Any] = {
+        "task": rows["argv"][1] if case.argv[0] == "{cli}" else case.purpose,
         "exit_code": rows["exit_code"],
         "stdout": rows["stdout"],
         "stderr": rows["stderr"],
@@ -386,7 +404,7 @@ def _markdown(rows: Sequence[Mapping[str, Any]]) -> str:
         verdict = "pass" if not failed else "FAIL: " + ", ".join(failed)
         lines.append(
             f"| {row['id']} | {row['tier']} | {row['status']} | {row['exit_code']} | {row['duration_s']}s | "
-            f"${row['cost_usd']} | {verdict} |"
+            f"{_dollars(row['cost_usd'])} | {verdict} |"
         )
     passed = sum(1 for row in rows if all(item["ok"] for item in row["assertions"]))
     lines += ["", f"{passed}/{len(rows)} cases passed."]
@@ -423,7 +441,8 @@ def main(argv: list[str]) -> int:
         rows.append(row)
         failed = [item["name"] for item in row["assertions"] if not item["ok"]]
         mark = "PASS" if not failed else "FAIL"
-        print(f"{mark} {case.id:6} tier {case.tier} {row['status']:20} {row['duration_s']:>6}s ${row['cost_usd']}")
+        cost = _dollars(row["cost_usd"])
+        print(f"{mark} {case.id:6} tier {case.tier} {row['status']:20} {row['duration_s']:>6}s {cost}")
         if failed:
             print(f"      failed: {', '.join(failed)}")
 

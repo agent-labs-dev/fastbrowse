@@ -2,14 +2,14 @@
 // Do not edit: change the types there, then run `npm run generate:sdk`.
 
 export type ArtifactKind = 'download';
-export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unknown';
+export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
-export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'verify' | 'compose' | 'shortcut';
+export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'compose' | 'shortcut';
 /**
- * The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
- * reader's, because the reader asked for the rest of the list.
+ * Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
+ * next page of a list or DONE once a lookup is answered.
  */
-export type Decider = 'jev' | 'llm';
+export type Decider = 'jev' | 'llm' | 'code';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
  */
@@ -291,6 +291,10 @@ export interface StepResult {
   page_changed: boolean | null;
   duration_ms: number;
   /**
+   * The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
+   */
+  fallback?: StepFallback | null;
+  /**
    * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
    */
   choices?: StepChoice[];
@@ -305,6 +309,20 @@ export interface StepFact {
   url: string | null;
   reader: FactReader;
   deep_link: string | null;
+}
+export interface StepFallback {
+  /**
+   * The reason the run stopped following Jev, as recovery was told it.
+   */
+  reason: string;
+  /**
+   * Jev's certainty on the step it gave up, on the weakest link of its choices.
+   */
+  confidence: number;
+  /**
+   * The control Jev chose, by its label, when it chose one.
+   */
+  target: string | null;
 }
 export interface StepChoice {
   id: string;
@@ -331,13 +349,16 @@ export interface RunFrame {
   frame: string;
 }
 /**
- * One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+ * One run: the run's arguments, and what the server needs to talk to the client about it.
  *
  * The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
  * environment the server inherited.
  */
 export interface RunParams {
   run_id: string;
+  secrets?: SecretRef[];
+  frames?: boolean;
+  until?: boolean;
   task: string;
   start?: string | null;
   context?: string | null;
@@ -350,9 +371,6 @@ export interface RunParams {
   output_schema?: {
     [k: string]: unknown;
   } | null;
-  secrets?: SecretRef[];
-  frames?: boolean;
-  until?: boolean;
   downloads?: string | null;
   record?: string | null;
   cursor?: boolean | null;
@@ -366,7 +384,11 @@ export interface RunParams {
   foreground?: boolean;
   proxy_country?: string | null;
   viewport?: [number, number] | null;
-  cloud_allow_resizing?: boolean;
+  cloud_extensions?: string[];
+  cloud_timeout_minutes?: number | null;
+  allowed_origins?: string[] | null;
+  fetch?: boolean;
+  fetch_first?: boolean;
 }
 export interface SecretRef {
   name: string;

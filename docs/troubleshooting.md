@@ -90,6 +90,11 @@ be fine, and the same run later may pass.
 - Before the first step, the start page never loaded, or Chrome reported a dropped, refused or empty
   connection. A name that does not resolve is not counted here, since it can be a mistyped address.
 - The site answered HTTP 408, 419, 429 or a 5xx status, and recovery found no way on.
+- Mid-run, the browser could not open an address the run chose, after its own retries:
+  `Could not complete the task after opening <url> failed in this browser session: <error>.`
+- Jev judged that the page reports the site failed, such as an error shown in place of search results, a
+  maintenance notice or a load that never finished, and reloading and recovery found no way past it:
+  `Could not complete the task after the page at <url> reported that the site failed to deliver what was asked.`
 - A browser command went unanswered. One that stays unanswered for 120 seconds ends the run, even if the
   browser still answers health checks, and the error says the page did not answer or the browser stopped
   answering.
@@ -98,7 +103,7 @@ be fine, and the same run later may pass.
 **Next step.** Read `error` for the provider or address, then run the task again later. Step and dollar limits
 do not bound elapsed time, so set `Limits(max_seconds=...)` in the embedding API, or `--max-seconds` on the
 MCP server, for a deadline. When looking into a stalled run, write its trace with `--trace FILE` or `FASTBROWSE_TRACE=FILE` and keep the last event
-with the result.
+with the result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
 
 ### An attached Chrome that waits for approval
 
@@ -162,7 +167,8 @@ field-writing generation.
 
 **Common causes.**
 
-- Recovery found no way forward and gave up. `error` holds its diagnosis.
+- Recovery found no way forward, and Jev, given its subgoal, found none before `max_recoveries` ran out.
+  `error` holds recovery's diagnosis.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
@@ -193,7 +199,8 @@ holds the answer, or a narrower task.
 ## needs_confirmation (exit 3)
 
 **What it means.** The run stopped before an action Jev judged irreversible, such as submit, pay, delete or
-send, because the run was not authorized to take it. Nothing was committed by that action.
+send, because the run was not authorized to take it, or was authorized but Jev judged the task did not ask
+for it. Nothing was committed by that action.
 
 **Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
 `<operation> '<control>' needs confirmation`, and the refusal appears as a failed step. An uncertain pick of
@@ -262,8 +269,8 @@ Configuration refusals also exit 1.
 
 **Common causes.**
 
-- A model or browser call failed in a way retries do not cover. `error` holds the failure, cut to 500
-  characters with any secret redacted.
+- A model or browser call failed in a way retries do not cover. `error` holds the whole failure, with any
+  secret redacted.
 - The browser could not be reached as configured, for example `no DevTools endpoint at
   http://127.0.0.1:<port>/json/version (<cause>)` from `--cdp-port`, or a pair of browser options that
   cannot go together, such as `cdp_url and cdp_port both name a browser to attach to; pass one`.

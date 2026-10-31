@@ -43,8 +43,6 @@ type BrowserOptions struct {
 	ProxyCountry string
 	// Viewport is the width and height of the page, in CSS pixels.
 	Viewport *[2]int
-	// CloudAllowResizing lets a cloud browser's window be resized.
-	CloudAllowResizing bool
 }
 
 // Attachment is a file a run may upload.
@@ -131,7 +129,6 @@ func runParams(runID, task string, browser BrowserOptions, options RunOptions) (
 		TargetMatch:        optional(browser.TargetMatch),
 		Foreground:         browser.Foreground,
 		ProxyCountry:       optional(browser.ProxyCountry),
-		CloudAllowResizing: browser.CloudAllowResizing,
 		// The wire carries whether a callback is held, and the callback stays here.
 		Frames: options.OnFrame != nil,
 		Until:  options.Until != nil,

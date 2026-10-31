@@ -3,8 +3,29 @@
 Full browser campaigns run through Parallax. Its exporter validates clean builds, scheduled slots, source
 identity, physical ledgers and private Langfuse read-back before producing the campaign's `benchmark-candidate.json`.
 The file contains sanitized per-run grades, completion, time, cost, LLM and Jev call counts and model
-throughput. Official rubric scores retain their source meaning. Internal hosted and Ultrafast comparisons use
-separate matched task groups.
+throughput. Official rubric scores retain their source meaning.
+
+Every attempt of every agent stops at 10 minutes, with its browser. That attempt is recorded as DNF (status `dnf`), a
+failure inside the score, not ungraded and not retried. Parallax records the limit in each run and manifest, and
+publication refuses a run under any other limit. The retry path for a blocked site or an interrupted run is separate;
+the limit applies to each attempt.
+
+## What may be published
+
+- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
+  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
+- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
+  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
+  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
+
+## The candidate contract
+
+Three programs share the candidate's schema: Parallax's `parallax browser publish-candidate` writes it,
+`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
+(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
+the changed writer through both readers.
+
+## Schemas
 
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
@@ -18,16 +39,26 @@ Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser agai
 browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
-`internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse, the hosted Browser
-Use agent both run, the navigation tasks included, read on each hosted agent's final page
-through its browser; figures approved at 46 or 47 tasks still read. It holds rows from whichever of `fastbrowse`,
-`browser-use` and `jev-ultrafast` ran, each with every repeat of every task it runs. Ultrafast returns
-no answer, so it runs only the tasks of the set graded without one. An arm that did not run has no rows and the site
-shows it as not measured. An arm that reports neither its model nor its spend carries `"dollars": null`
-and the site shows its pass rate and seconds with "cost not reported"; fastbrowse rows always carry a cost. The
-official suites publish the fastbrowse arm, with a vendor arm's rows only where Parallax marks them publishable, and
-accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
-defines it, the group records the repeat count, and a task's figure is the mean of its repeats' scores.
+
+`internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
+read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one Parallax invocation, on Browser Use Cloud browsers
+with the same settings. Each arm runs every repeat of every task it can attempt: `browser-use` skips the task that
+passes only by stopping before an unauthorized step, and `jev-ultrafast` and `browser-harness` also skip the login
+tasks, so they run 47. The catalog states each reason and the site shows those tasks as not run. Ultrafast returns no
+answer, so on an answer task the judge has only its final page. An arm that did not run has no rows and the site shows it as not measured. An arm
+that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
+"cost not reported"; fastbrowse rows always carry a cost.
+
+`browser-use` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
+`publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one
+run that measured them, and the site labels them as measured once on that date, not on this release. A dispatch with
+`refresh_competitors` runs both live on a full head-to-head and leaves `competitor-reference.json` in the candidate
+artifact; commit that file to `docs/results/` for later campaigns. Publication refuses the head-to-head, naming each
+stale task, when the reference is missing, is graded under another policy, or no longer matches the catalog.
+
+The official suites publish fastbrowse alone, beside the vendor's own published figure, and accept any
+positive repeat count: every task and repeat is one row with its upstream score kept as the upstream defines it, the
+group records the repeat count, and a task's figure is the mean of its repeats' scores.
 
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
@@ -60,13 +91,24 @@ uv run python -m fastbrowse.evals.site_groups benchmark-candidate.json run-facts
 A group file holds no figure. It names the candidate group, campaign, build and candidate SHA256, and the site
 computes every figure from the candidate's per-attempt rows. Its `systems` maps each site system with rows to its
 arm, `cost_not_reported` lists those of them whose rows carry no cost, and `not_measured` lists the site systems
-with no rows. The live suite card shows the head-to-head group
-(`internal-hosted`) when the campaign ran it, else `internal-fastbrowse`. A card the candidate has no group for
+with no rows. The live suite has two cards: `live-suite` shows the head-to-head group (`internal-hosted`) and
+`live-suite-fastbrowse` shows `internal-fastbrowse`. A `reference` block in a group file is a vendor figure on another
+task set: the site labels it and never compares it, and a new campaign keeps it. A card the candidate has no group for
 keeps its file only while that file carries no measured figures: the site reads one candidate's rows, so a card still
 measured by an earlier campaign stops the write, and that campaign's group must be measured again. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
 publish a campaign again, dispatch `publish-evals.yml` with the campaign run's id.
 
-An upload to Langfuse does not approve publication.
+Official results reach the same candidate through their public rows. A run directory holds decrypted BU Bench goals
+and upstream records, so it leaves `official-benchmarks.yml` only encrypted, and that job also writes the
+`official-rows-<suite>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after Parallax
+has held the run to every publication rule. Dispatch it first, then dispatch `benchmark-campaign.yml` on the same
+`fastbrowse_ref` and `parallax_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
+dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage adds each
+suite as a group; its run facts take each suite's date and judge from those rows.
+
+Both workflows send every result to Langfuse as a step that runs even when the run stopped: `parallax browser
+track-ledger` for each campaign group and `track-official` for each suite. The candidate is refused unless
+Langfuse holds them. An upload to Langfuse does not approve publication.
 
 ## Retiring a task or changing the protocol
 

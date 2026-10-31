@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/adapters/totp.py`: authenticator codes computed locally when a secret is typed.
+//! Authenticator codes computed locally when a secret is typed.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -176,6 +176,11 @@ fn option(options: &[(&str, String)], name: &str) -> Option<String> {
 /// The code `key` gives at unix time `when`.
 pub fn totp_at(key: &str, when: f64) -> Result<String, TotpError> {
     Ok(parse_key(key)?.at(when))
+}
+
+/// How many seconds each of `key`'s codes lasts.
+pub fn period_of(key: &str) -> Result<u64, TotpError> {
+    Ok(parse_key(key)?.period)
 }
 
 fn now() -> f64 {

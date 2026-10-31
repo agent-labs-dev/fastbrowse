@@ -1,6 +1,10 @@
 //! Replays whole agent loops recorded in `tests/golden/agent.json`: the same scripted site, every model request
-//! looked up by its bytes (so requests sent side by side may leave in any order), and the same result. The recordings
-//! are fixed: they came from the Python implementation the core replaced, and the core must still match them.
+//! looked up by its bytes (so requests sent side by side may leave in any order), and the same result.
+//!
+//! `FASTBROWSE_UPDATE_GOLDEN=1` re-records them after an intended behaviour change: recorded answers are kept, a new
+//! request is answered from the case's `jev` and `llm` scripts, and the diff of `agent.json` is the behaviour change.
+
+mod common;
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -110,13 +114,8 @@ impl Page for FakeSite {
 
     fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         let mut at = self.at.lock().unwrap();
-        let result = |outcome: StepOutcome, page_changed: bool| ActResult {
-            outcome,
-            page_changed,
-            detail: None,
-            form_unchanged: false,
-            moved: false,
-        };
+        let result =
+            |outcome: StepOutcome, page_changed: bool| ActResult { outcome, page_changed, detail: None, moved: false };
         if action.operation == Operation::Navigate
             && let Some(screen) = action.url.as_deref().and_then(|url| self.site["urls"][url].as_str())
         {
@@ -182,56 +181,190 @@ impl Page for FakeSite {
 }
 
 /// Recorded answers by the bytes of the request that got them; identical requests are answered in recorded order.
+///
+/// With `FASTBROWSE_UPDATE_GOLDEN=1` a request with no recorded answer keeps the answer recorded at its place in the
+/// case where that still fits the request, and is otherwise answered from the case's script. Every call made is kept so
+/// the case can be written back with its new calls, result and events.
 struct Replies {
     name: String,
+    kind: &'static str,
     answers: Mutex<HashMap<String, VecDeque<Value>>>,
+    ordered: Vec<Value>,
+    log: Option<Arc<Mutex<Vec<Value>>>>,
 }
 
 impl Replies {
-    fn new(case: &Value, kind: &str, key: impl Fn(&Value) -> String) -> Replies {
+    fn new(
+        case: &Value,
+        kind: &'static str,
+        log: Option<Arc<Mutex<Vec<Value>>>>,
+        key: impl Fn(&Value) -> String,
+    ) -> Replies {
         let mut answers: HashMap<String, VecDeque<Value>> = HashMap::new();
+        let mut ordered = Vec::new();
         for call in case["calls"].as_array().unwrap() {
             if let Some(request) = call.get(kind) {
                 answers.entry(key(request)).or_default().push_back(call["response"].clone());
+                ordered.push(call.clone());
             }
         }
-        Replies { name: case["name"].as_str().unwrap().to_string(), answers: Mutex::new(answers) }
+        Replies { name: case["name"].as_str().unwrap().to_string(), kind, answers: Mutex::new(answers), ordered, log }
     }
 
-    fn take(&self, key: &str) -> Value {
+    fn take(&self, key: &str, request: Value, script: impl FnOnce(&[Value]) -> Value) -> Value {
         let mut answers = self.answers.lock().unwrap();
-        if answers.get(key).is_none_or(|queue| queue.is_empty()) {
-            // Show where the nearest request Python made parts from this one.
-            let shared = |other: &str| key.bytes().zip(other.bytes()).take_while(|(a, b)| a == b).count();
-            let nearest = answers.keys().max_by_key(|other| shared(other)).cloned().unwrap_or_default();
-            let at = shared(&nearest);
-            let around =
-                |text: &str| text.get(at.saturating_sub(200)..(at + 300).min(text.len())).unwrap_or("").to_string();
-            panic!(
-                "{}: a request Python never made, parting at byte {at}:\nRust:   {}\nPython: {}",
-                self.name,
-                around(key),
-                around(&nearest)
-            );
-        }
-        let queue = answers.get_mut(key).unwrap();
-        queue.pop_front().unwrap()
+        let recorded = answers.get_mut(key).and_then(VecDeque::pop_front);
+        let Some(log) = &self.log else {
+            return recorded.unwrap_or_else(|| self.missing(key, &answers));
+        };
+        let mut log = log.lock().unwrap();
+        let response = recorded.unwrap_or_else(|| {
+            let made = log.iter().filter(|call| call.get(self.kind).is_some()).count();
+            let scripted = script(&log);
+            match self.ordered.get(made) {
+                Some(old) => in_place(self.kind, old, &request, scripted),
+                None => scripted,
+            }
+        });
+        log.push(serde_json::json!({self.kind: request, "response": response}));
+        response
+    }
+
+    fn missing(&self, key: &str, answers: &HashMap<String, VecDeque<Value>>) -> ! {
+        // Show where the nearest recorded request parts from this one.
+        let shared = |other: &str| key.bytes().zip(other.bytes()).take_while(|(a, b)| a == b).count();
+        let nearest = answers.keys().max_by_key(|other| shared(other)).cloned().unwrap_or_default();
+        let at = shared(&nearest);
+        let around =
+            |text: &str| text.get(at.saturating_sub(200)..(at + 300).min(text.len())).unwrap_or("").to_string();
+        panic!(
+            "{}: a request never recorded, parting at byte {at}:\nRust:     {}\nRecorded: {}",
+            self.name,
+            around(key),
+            around(&nearest)
+        );
     }
 
     fn finish(&self) {
+        if self.log.is_some() {
+            return;
+        }
         let answers = self.answers.lock().unwrap();
         let left: Vec<&String> = answers.iter().filter(|(_, queue)| !queue.is_empty()).map(|(key, _)| key).collect();
-        assert!(left.is_empty(), "{}: requests Python made and Rust did not:\n{left:#?}", self.name);
+        assert!(left.is_empty(), "{}: requests recorded and not made:\n{left:#?}", self.name);
     }
+}
+
+/// The answer recorded at a request's place in the case, where it still fits: an LLM answer for the same schema, or
+/// each Jev answer whose question is still asked with its recorded choice still offered. The script answers the rest.
+fn in_place(kind: &str, old: &Value, request: &Value, scripted: Value) -> Value {
+    if kind == "llm" {
+        return if old["llm"]["schema_name"] == request["schema_name"] { old["response"].clone() } else { scripted };
+    }
+    let mut response = scripted;
+    let Some(recorded) = old["response"]["evaluation"]["answers"].as_object() else { return response };
+    let Some(answers) = response["evaluation"]["answers"].as_object_mut() else { return response };
+    for (key, answer) in answers.iter_mut() {
+        let Some(kept) = recorded.get(key) else { continue };
+        let offered = answer["probabilities"]
+            .as_object()
+            .is_none_or(|p| kept["choice"].as_str().is_some_and(|c| p.contains_key(c)));
+        if kept["type"] == answer["type"] && offered {
+            *answer = kept.clone();
+        }
+    }
+    response
+}
+
+/// The `n`th entry of a scripted answer that is a list, the last repeated, or the answer itself.
+fn nth(script: &Value, n: usize) -> Option<&Value> {
+    match script.as_array() {
+        Some(list) => list.get(n.min(list.len().saturating_sub(1))),
+        None => (!script.is_null()).then_some(script),
+    }
+}
+
+/// Jev's answer from a case's `jev` script: `pick` names a choice per question key (a list is taken in turn), `pick`
+/// under `pick` any other choice, `nouls` a probability per noul (a list is taken in turn) and `noul` the rest, `confidence` the pick's. Asked
+/// again with a problem, Jev escalates; the wall questions default to no.
+fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value]) -> Value {
+    let asked_again = state.get("problem").is_some();
+    let confidence = if asked_again { 0.0 } else { script["confidence"].as_f64().unwrap_or(0.9) };
+    let answered = |key: &str| {
+        log.iter()
+            .filter(|call| {
+                call["jev"]["questions"].as_str().is_some_and(|q| q.contains(&format!("\"{key}\":")))
+                    && !call["jev"]["state"].as_str().unwrap_or_default().contains("\"problem\":")
+            })
+            .count()
+    };
+    let mut answers = serde_json::Map::new();
+    for (key, question) in questions.as_object().unwrap() {
+        if question["type"] == "noul" {
+            let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure") {
+                0.0
+            } else {
+                script["noul"].as_f64().unwrap_or(0.0)
+            };
+            let probability = nth(&script["nouls"][key], answered(key)).and_then(Value::as_f64).unwrap_or(default);
+            answers.insert(key.clone(), serde_json::json!({"type": "noul", "probability": probability}));
+            continue;
+        }
+        let options: Vec<&String> = question["criteria"].as_object().unwrap().keys().collect();
+        let picked = if key == "operation" && asked_again {
+            Some("escalate".to_string())
+        } else {
+            let general = (key != "operation"
+                && key != "read_assessment"
+                && !key.ends_with("_target")
+                && !key.ends_with("_group"))
+            .then(|| &script["pick"]["pick"]);
+            nth(&script["pick"][key], answered(key))
+                .or_else(|| general.and_then(|pick| nth(pick, 0)))
+                .and_then(Value::as_str)
+                .map(String::from)
+                .or_else(|| (key == "operation").then(|| "escalate".to_string()))
+        };
+        let choice = picked.filter(|p| options.contains(&p)).unwrap_or_else(|| options[0].clone());
+        let probabilities: serde_json::Map<String, Value> =
+            options.iter().map(|o| ((*o).clone(), Value::from(if **o == choice { 1.0 } else { 0.0 }))).collect();
+        answers.insert(
+            key.clone(),
+            serde_json::json!({"type": "choice", "choice": choice, "probabilities": probabilities, "confidence": confidence}),
+        );
+    }
+    serde_json::json!({"evaluation": {"model": "test", "answers": answers, "input_tokens": 0, "cost": {"component": "jev", "basis": "estimated", "dollars": 0.0, "purpose": null, "input_tokens": 0, "output_tokens": 0, "seconds": null}, "requests": 1}})
+}
+
+/// The LLM's answer from a case's `llm` script: the next of the schema's listed answers, the last repeated. A schema
+/// the script does not list repeats the last answer the case recorded for it. An answer that is `{"raise": ...}` fails.
+fn scripted_llm(case: &Value, purpose: &str, schema_name: &str, log: &[Value]) -> Value {
+    let made = log.iter().filter(|call| call["llm"]["schema_name"] == schema_name).count();
+    let cost = serde_json::json!({"component": "llm", "basis": "metered", "dollars": 0.001, "purpose": purpose, "input_tokens": 0, "output_tokens": 0, "seconds": null});
+    if let Some(data) = nth(&case["llm"][schema_name], made) {
+        if data.get("raise").is_some() {
+            return data.clone();
+        }
+        return serde_json::json!({"data": data, "cost": cost});
+    }
+    let calls = case["calls"].as_array().unwrap();
+    let recorded = calls.iter().rev().find(|call| call["llm"]["schema_name"] == schema_name);
+    recorded
+        .map(|call| call["response"].clone())
+        .unwrap_or_else(|| panic!("{}: no scripted {schema_name} answer", case["name"]))
 }
 
 fn jev_key(state: &str, questions: &str) -> String {
     format!("{state}\n{questions}")
 }
 
-struct ReplayJev(Replies);
+struct ReplayJev(Replies, Value);
 
 impl DecisionClient for ReplayJev {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
@@ -239,17 +372,21 @@ impl DecisionClient for ReplayJev {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let written: serde_json::Map<String, Value> =
             questions.iter().map(|(key, question)| (key.clone(), question.dump())).collect();
-        let key = jev_key(&write(state, Style::HTTPX), &write(&Value::Object(written), Style::HTTPX));
-        let response = self.0.take(&key);
+        let (state, questions) = (write(state, Style::HTTPX), write(&Value::Object(written.clone()), Style::HTTPX));
+        let key = jev_key(&state, &questions);
+        let request = serde_json::json!({"state": state, "questions": questions});
+        let response = self.0.take(&key, request, |log| {
+            scripted_jev(&self.1, &serde_json::from_str(&state).unwrap(), &Value::Object(written), log)
+        });
         ready(Ok(serde_json::from_value(response["evaluation"].clone()).expect("evaluation")))
     }
 }
 
-fn llm_key(purpose: &str, messages: &str, schema_name: &str, schema: &str, cap: i64) -> String {
-    format!("{purpose}\n{schema_name}\n{cap}\n{schema}\n{messages}")
+fn llm_key(purpose: &str, messages: &str, schema_name: &str, schema: &str) -> String {
+    format!("{purpose}\n{schema_name}\n{schema}\n{messages}")
 }
 
-struct ReplayLLM(Replies);
+struct ReplayLLM(Replies, Value);
 
 impl LLMClient for ReplayLLM {
     fn generate_value<'a>(
@@ -257,22 +394,22 @@ impl LLMClient for ReplayLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
-            let written = Value::Array(messages.iter().map(Dump::dump).collect());
-            let key = llm_key(
-                purpose.as_str(),
-                &write(&written, Style::HTTPX),
-                &schema.name(),
-                &dumps(&schema.json_schema()),
-                max_output_tokens,
-            );
-            let response = self.0.take(&key);
+            let written = write(&Value::Array(messages.iter().map(Dump::dump).collect()), Style::HTTPX);
+            let (schema_name, schema_text) = (schema.name(), dumps(&schema.json_schema()));
+            let key = llm_key(purpose.as_str(), &written, &schema_name, &schema_text);
+            let request = serde_json::json!({
+                "purpose": purpose.as_str(),
+                "messages": written,
+                "schema_name": schema_name,
+                "schema": schema_text,
+            });
+            let response = self.0.take(&key, request, |log| scripted_llm(&self.1, purpose.as_str(), &schema_name, log));
             if let Some(failure) = response["raise"].as_str() {
                 return Err(LLMError::Failed(failure.to_string()));
             }
@@ -299,27 +436,37 @@ fn normalized(mut outcome: Value) -> Value {
     outcome
 }
 
-async fn replay(case: Value) {
+/// Replays `case`, or with `log` records it: the case comes back with the calls made, the result and the events.
+async fn replay(mut case: Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> Value {
     let name = case["name"].as_str().unwrap().to_string();
-    let (result, events) = play(&case).await;
+    let (result, events) = play(&case, log.clone()).await;
+    let events = Value::Array(events);
+    if let Some(log) = log {
+        case["calls"] = Value::Array(log.lock().unwrap().clone());
+        case["outcome"] = normalized(result);
+        case["events"] = events;
+        return case;
+    }
     assert_eq!(normalized(result), normalized(case["outcome"].clone()), "{name}: result");
-    assert_eq!(Value::Array(events), case["events"], "{name}: step events");
+    assert_eq!(events, case["events"], "{name}: step events");
+    case
 }
 
 /// The result and step events of a run against the case's scripted site and recorded model replies.
-async fn play(case: &Value) -> (Value, Vec<Value>) {
-    let jev = Arc::new(ReplayJev(Replies::new(case, "jev", |r| {
+async fn play(case: &Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> (Value, Vec<Value>) {
+    let jev = Replies::new(case, "jev", log.clone(), |r| {
         jev_key(r["state"].as_str().unwrap(), r["questions"].as_str().unwrap())
-    })));
-    let llm = Arc::new(ReplayLLM(Replies::new(case, "llm", |r| {
+    });
+    let jev = Arc::new(ReplayJev(jev, case["jev"].clone()));
+    let llm = Replies::new(case, "llm", log.clone(), |r| {
         llm_key(
             r["purpose"].as_str().unwrap(),
             r["messages"].as_str().unwrap(),
             r["schema_name"].as_str().unwrap(),
             r["schema"].as_str().unwrap(),
-            r["max_output_tokens"].as_i64().unwrap(),
         )
-    })));
+    });
+    let llm = Arc::new(ReplayLLM(llm, case.clone()));
     let events: Arc<Mutex<Vec<Value>>> = Arc::default();
     let sink = events.clone();
     let on_event: EventHandler = Arc::new(move |event: Event| {
@@ -377,9 +524,58 @@ async fn play(case: &Value) -> (Value, Vec<Value>) {
 
 #[tokio::test(start_paused = true)]
 async fn whole_loops_match_python() {
+    let update = common::capture::updating();
+    let mut cases_out = Vec::new();
     for case in cases() {
-        replay(case).await;
+        cases_out.push(replay(case, update.then(Arc::default)).await);
     }
+    if update {
+        common::save("agent.json", &Value::Array(cases_out));
+    }
+}
+
+/// Transient site failures, each a scripted site run from its script alone and checked against what it must do: the
+/// status it ends with, the steps it must take in order, the address it ends on and the words its error must carry.
+#[tokio::test(start_paused = true)]
+async fn transient_site_failures_are_retried_and_never_answer() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/site_failures.json");
+    let cases: Vec<Value> = serde_json::from_str(&fs::read_to_string(path).expect("site_failures.json")).expect("JSON");
+    let mut failures = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().unwrap().to_string();
+        let expect = case["expect"].clone();
+        let ran = replay(case, Some(Arc::default())).await;
+        let outcome = &ran["outcome"];
+        let steps: Vec<String> = outcome["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| format!("{} {}", step["operation"].as_str().unwrap(), step["target"].as_str().unwrap_or("")))
+            .map(|step| step.trim().to_string())
+            .collect();
+        let ran = format!("{name}: {} after {steps:?}, error {}", outcome["status"], outcome["error"]);
+        if outcome["status"] != expect["status"] {
+            failures.push(format!("{ran}: expected {}", expect["status"]));
+        }
+        let mut taken = steps.iter();
+        for wanted in expect["steps"].as_array().into_iter().flatten() {
+            let wanted = wanted.as_str().unwrap();
+            if !taken.any(|step| step == wanted) {
+                failures.push(format!("{ran}: no {wanted:?} in order"));
+            }
+        }
+        if let Some(url) = expect["final_url"].as_str()
+            && outcome["final_url"] != url
+        {
+            failures.push(format!("{ran}: ended on {}, expected {url}", outcome["final_url"]));
+        }
+        if let Some(words) = expect["error"].as_str()
+            && !outcome["error"].as_str().unwrap_or_default().contains(words)
+        {
+            failures.push(format!("{ran}: error lacks {words:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 /// Asking for the choices adds them to the steps Jev decided and changes nothing else about the run: not the steps, the
@@ -387,7 +583,7 @@ async fn whole_loops_match_python() {
 #[tokio::test(start_paused = true)]
 async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
     let names = [
-        "the field writer types a search, Enter submits it, and the read answer completes with its citation",
+        "a select asks Jev which option, then a step limit ends the run",
         "a stored secret is typed at fill time and never shown to a model",
     ];
     let picked: Vec<Value> =
@@ -399,7 +595,7 @@ async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
             case["config"] = serde_json::json!({});
         }
         case["config"]["step_choices"] = true.into();
-        let (mut result, mut events) = play(&case).await;
+        let (mut result, mut events) = play(&case, None).await;
         let mut listed = 0;
         let steps = result["steps"].as_array_mut().unwrap().iter_mut();
         for step in steps.chain(events.iter_mut().map(|event| &mut event["step"])) {

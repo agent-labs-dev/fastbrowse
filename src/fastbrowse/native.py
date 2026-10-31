@@ -23,6 +23,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
+from fastbrowse import build
+from fastbrowse.config import Config
 from fastbrowse.jev import (
     JevClient,
     JevError,
@@ -77,7 +79,6 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _PLAIN = (
     "start",
     "context",
-    "browser_api_key",
     "cloud_profile",
     "cdp_url",
     "cdp_port",
@@ -85,27 +86,25 @@ _PLAIN = (
     "target_match",
     "foreground",
     "proxy_country",
-    "cloud_allow_resizing",
     "cloud_timeout_minutes",
     "cursor",
     "fetch",
     "fetch_first",
 )
-"""`run_task` arguments that are JSON already."""
+"""`run_task` arguments that are JSON already and belong to the run itself."""
 
 
 def _dumped(value: BaseModel | None) -> Any:
     return None if value is None else value.model_dump(mode="json")
 
 
-def options(arguments: dict[str, Any]) -> str:
-    """`run_task`'s data arguments, as the JSON `fastbrowse._native.run_task` reads."""
+def run_task_json(task: str, arguments: dict[str, Any]) -> str:
+    """The run as the `RunTask` JSON every entry point shares, which `fastbrowse._native.run_task` reads."""
     output_schema: type[BaseModel] | None = arguments["output_schema"]
-    secrets: SecretResolver | None = arguments["secrets"]
     origins, viewport, inputs = arguments["allowed_origins"], arguments["viewport"], arguments["inputs"]
-    settings: Mapping[str, str] | None = arguments["settings"]
     return json.dumps(
         {
+            "task": task,
             **{name: arguments[name] for name in _PLAIN},
             "allowed_origins": None if origins is None else list(origins),
             "viewport": None if viewport is None else list(viewport),
@@ -119,11 +118,8 @@ def options(arguments: dict[str, Any]) -> str:
             ],
             "limits": _dumped(arguments["limits"]),
             "authorization": _dumped(arguments["authorization"]),
-            "secrets": None if secrets is None else [ref.model_dump(mode="json") for ref in secrets.available()],
             "downloads": None if arguments["downloads"] is None else str(arguments["downloads"]),
             "record": None if arguments["record"] is None else str(arguments["record"]),
-            "config": _dumped(arguments["config"]),
-            "settings": None if settings is None else dict(settings),
         }
     )
 
@@ -297,15 +293,11 @@ def _messages(payload: str) -> list[Message]:
 
 
 def _llm(client: LLMClient) -> Callable[..., Awaitable[str]]:
-    async def generate(
-        purpose: str, messages: str, name: str, schema: str, max_output_tokens: int, context: Any
-    ) -> str:
+    async def generate(purpose: str, messages: str, name: str, schema: str, context: Any) -> str:
         ledger: Any = _Ledger(context) if context.ledger else None
         model = _response_model(name, json.loads(schema), context)
         try:
-            generation = await client.generate(
-                LLMPurpose(purpose), _messages(messages), model, max_output_tokens=max_output_tokens, ledger=ledger
-            )
+            generation = await client.generate(LLMPurpose(purpose), _messages(messages), model, ledger=ledger)
         except BudgetExceeded as exc:
             return _budget(exc)
         except LLMRetriesExhausted as exc:
@@ -333,10 +325,12 @@ type _Sent = tuple[str, int, list[tuple[str, str]], bytes] | tuple[str, str]
 
 
 def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
-    async def send(method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None) -> _Sent:
+    async def send(
+        method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None, silence: float
+    ) -> _Sent:
         try:
-            # The core times each request itself and cancels this call when it runs out.
-            request = client.build_request(method, url, headers=headers, content=body or None, timeout=None)
+            # The core's timeout bounds each silence, not the whole answer, as an httpx timeout does.
+            request = client.build_request(method, url, headers=headers, content=body or None, timeout=silence)
             # The core follows redirects itself, checking each against the run's allowed origins.
             response = await client.send(request, stream=True, follow_redirects=False)
             try:
@@ -401,11 +395,17 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
 
     # A `traced()` block collecting this run's events gets the core's too.
     events = collecting()
+    config: Config | None = arguments["config"]
+    settings: Mapping[str, str] | None = arguments["settings"]
+    refs = None if secrets is None else json.dumps([ref.model_dump(mode="json") for ref in secrets.available()])
     try:
         # Settings passed in are read as the run is made, so a refusal can come before the run starts.
         native = core.run_task(
-            task,
-            options(arguments),
+            run_task_json(task, arguments),
+            browser_api_key=arguments["browser_api_key"],
+            secrets=refs,
+            config=None if config is None else config.model_dump_json(),
+            settings=None if settings is None else json.dumps(dict(settings)),
             on_event=None if on_event is None else raised.wrap(event),
             on_frame=None if on_frame is None else raised.wrap(on_frame),
             until=None if until is None else raised.wrap(until),
@@ -572,4 +572,5 @@ def command(program: str) -> NoReturn:
     # Ctrl-C ends the command as it ends the binary; Python's own handler would wait for the core to return first.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     sys.stdout.flush()
-    sys.exit(core.cli_main(program, sys.argv[1:]))
+    commit = build.identity()
+    sys.exit(core.cli_main(program, sys.argv[1:], commit["git_sha"], commit["git_dirty"]))

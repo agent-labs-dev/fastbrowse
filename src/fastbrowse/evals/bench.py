@@ -39,7 +39,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -57,11 +57,11 @@ from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
 from fastbrowse.evals.mock_tasks import MockTask
-from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Latency, Proxy, openrouter_forward
+from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Exchange, Latency, Proxy, openrouter_forward
 from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
 from fastbrowse.evals.tasks import LocalTask
-from fastbrowse.models import RunResult, SecretRef
+from fastbrowse.models import CostBreakdown, RunResult
 from fastbrowse.protocol import PROTOCOL_VERSION
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -86,10 +86,9 @@ AGENT_ENV_DROPPED = ("OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_K
 PLACEHOLDER_KEY = "bench-placeholder-key"
 
 LLM = "google/gemini-3.8-flash"
-FIELD_TEXT_LLM = "google/gemini-3.5-flash-lite"
 REASONING = "low"
-"""The models and reasoning effort the cassettes were recorded with: the defaults a run keyed with
-OPENROUTER_API_KEY used then (README, Models). Pinned here, since a replay asking other models misses."""
+"""The model and reasoning effort the cassettes were recorded with, for every purpose. Pinned here, since a replay
+asking another model misses."""
 
 
 def default_agent() -> str:
@@ -116,8 +115,6 @@ def agent_environment(proxy: str) -> dict[str, str]:
         "FASTBROWSE_LLM_BASE_URL": proxy + LLM_MOUNT,
         "FASTBROWSE_LLM_API_KEY": PLACEHOLDER_KEY,
         "FASTBROWSE_LLM_MODEL": LLM,
-        "FASTBROWSE_LLM_MODEL_FIELD_TEXT": FIELD_TEXT_LLM,
-        "FASTBROWSE_LLM_MODEL_SHORTCUT": FIELD_TEXT_LLM,
         "FASTBROWSE_LLM_REASONING": REASONING,
     }
 
@@ -154,16 +151,6 @@ def _jev(http: httpx.AsyncClient, proxy: str) -> Jev:
     return Jev(http, api_key=PLACEHOLDER_KEY, base_url=proxy + JEV_MOUNT, model=OPENROUTER_MODEL)
 
 
-def _submitted(submissions: dict[str, list[dict[str, str]]]) -> dict[str, str]:
-    """The fields the last post to each path carried, flattened for the judge to read."""
-    return {
-        f"{path} {name}": value
-        for path, posts in submissions.items()
-        for post in posts[-1:]
-        for name, value in post.items()
-    }
-
-
 @contextmanager
 def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
     """The task's site on its own port, and the suite's grader bound to what that site records."""
@@ -180,7 +167,7 @@ def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
                             task=local.task,
                             answer=result.answer,
                             data=result.data,
-                            submitted=_submitted(recorder.snapshot()),
+                            submitted=recorder.snapshot(),
                             claims=local.claims,
                         )
                 return failure, {}
@@ -309,14 +296,13 @@ class Drive:
     result: dict[str, Any] | None
     error: dict[str, Any] | None
     events: int
-    secrets_resolved: int
 
 
 async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, str], seconds: float) -> Drive:
     """Initialize, run one task, answer the run's callbacks, and shut down."""
     startup = wall = None
     result = error = None
-    events = resolved = 0
+    events = 0
     init_id = await agent.call("initialize", {"protocol_version": PROTOCOL_VERSION})
     run_id: int | None = None
     try:
@@ -341,7 +327,6 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
                 elif method == "run/event":
                     events += 1
                 elif method == "secrets/resolve":
-                    resolved += 1
                     name = message["params"]["name"]
                     await agent.send({"jsonrpc": "2.0", "id": message["id"], "result": secrets.get(name)})
                 elif method == "run/until":
@@ -355,7 +340,7 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
             while (message := await agent.receive()) is not None and message.get("id") != shutdown_id:
                 pass
     agent.close_stdin()
-    return Drive(startup, wall, result, error, events, resolved)
+    return Drive(startup, wall, result, error, events)
 
 
 IN_PROCESS = "in-process"
@@ -390,7 +375,7 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
     from fastbrowse import run_task
 
     spec = task.task
-    events = resolved = 0
+    events = 0
 
     async def on_event(_: object) -> None:
         nonlocal events
@@ -398,18 +383,7 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
 
     secrets = None
     if isinstance(spec, MockTask) and spec.secrets:
-        held = TaskSecrets(spec.secrets, base_url)
-
-        class Counted:
-            def available(self) -> tuple[SecretRef, ...]:
-                return held.available()
-
-            async def resolve(self, name: str, origin: str) -> str | None:
-                nonlocal resolved
-                resolved += 1
-                return await held.resolve(name, origin)
-
-        secrets = Counted()
+        secrets = TaskSecrets(spec.secrets, base_url)
     started = time.perf_counter()
     result = error = None
     try:
@@ -429,7 +403,7 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
         result = answered.model_dump(mode="json")
     except Exception as exc:
         error = {"message": f"{type(exc).__name__}: {exc}"}
-    return Drive(None, time.perf_counter() - started, result, error, events, resolved)
+    return Drive(None, time.perf_counter() - started, result, error, events)
 
 
 def normalized(result: RunResult | None, error: dict[str, Any] | None, grade: dict[str, Any]) -> dict[str, Any]:
@@ -524,7 +498,8 @@ async def bench_task(
             "events": driven.events,
             "model_requests": proxy.requests,
         },
-        "cost_usd": None if result is None else round(result.cost.known_dollars, 6),
+        "cost_usd": None if result is None else run_dollars(result.cost),
+        "unknown_cost": result is not None and result.cost.has_unknown,
         "result": normalized(result, driven.error, grade_record)
         | {"misses": sorted(f"{m.purpose} {m.model}" for m in proxy.misses)},
         "misses": [m.to_json() for m in proxy.misses],
@@ -605,15 +580,14 @@ async def run_suite(args: argparse.Namespace) -> int:
                 meta={
                     "recorded_at": datetime.now(UTC).date().isoformat(),
                     "agent_fastbrowse": version("fastbrowse"),
-                    "models": {"llm": LLM, "llm_field_text": FIELD_TEXT_LLM, "jev": "openrouter"},
+                    "models": {"llm": LLM, "jev": "openrouter"},
                     "port": task.port,
                 },
             )
         elif path.exists():
             cassette = Cassette.load(path)
         else:
-            print(f"SKIP  {task.id}: no cassette at {path}", flush=True)
-            continue
+            raise SystemExit(f"{task.id}: no cassette at {path}; record it first")
         before = len(cassette.exchanges)
         # A fill pass serves what it has at once and sends each miss upstream, where it takes real time, so the
         # run can branch again after it. Each pass extends the instant path, until one sends nothing upstream.
@@ -627,10 +601,11 @@ async def run_suite(args: argparse.Namespace) -> int:
                 entry["fill_passes"] = done
                 if not proxy.forwarded:
                     break
-        cost = sum(exchange.cost or 0.0 for exchange in cassette.exchanges[before:])
+        cost, unpriced = priced(cassette.exchanges[before:])
         spent += cost
         if forward is not None:
-            entry["recorded_cost_usd"] = round(cost, 6)
+            entry["recorded_cost_usd"] = None if unpriced else round(cost, 6)
+            entry["unpriced_exchanges"] = unpriced
         run["tasks"].append(entry)
         _write(args.out, run)
         if entry["misses"]:
@@ -640,12 +615,25 @@ async def run_suite(args: argparse.Namespace) -> int:
         extra = f"{len(entry['misses'])} misses"
         if forward is not None:
             extra += f", {entry['forwarded']} forwarded, ${cost:.4f} (total ${spent:.4f})"
+            if unpriced:
+                extra += f", {unpriced} unpriced, so the budget undercounts"
         _print_row(entry, extra=extra)
     # The file is rewritten after every task, so a reader can tell a finished run from one still going.
     run["meta"]["finished"] = datetime.now(UTC).isoformat(timespec="seconds")
     _write(args.out, run)
     print(f"{mode}: {len(run['tasks'])} tasks, ${spent:.4f} spent; run written to {args.out}")
     return 0
+
+
+def run_dollars(cost: CostBreakdown) -> float | None:
+    """A run's dollars; a partial total is not its cost."""
+    return None if cost.has_unknown else round(cost.known_dollars, 6)
+
+
+def priced(exchanges: Sequence[Exchange]) -> tuple[float, int]:
+    """What the exchanges with a price cost, and how many have none."""
+    prices = [exchange.cost for exchange in exchanges]
+    return sum(price for price in prices if price is not None), prices.count(None)
 
 
 def _print_row(entry: dict[str, Any], extra: str = "") -> None:
@@ -763,7 +751,6 @@ def python_footprint() -> dict[str, Any]:
     return {
         "site_packages_bytes": sum(packages.values()),
         "packages": dict(sorted(packages.items(), key=lambda item: -item[1])),
-        "npm_darwin_arm64_unpacked_bytes": 52_900_000,
     }
 
 
@@ -860,7 +847,6 @@ def markdown(summary: dict[str, Any]) -> str:
     if footprint:
         lines += ["## Footprint", "", "| what | MiB |", "|---|---:|"]
         lines.append(f"| site-packages, fastbrowse and runtime deps | {_mib(footprint['site_packages_bytes'])} |")
-        lines.append(f"| npm package, darwin-arm64, unpacked | {_mib(footprint['npm_darwin_arm64_unpacked_bytes'])} |")
         for path, size in footprint.get("installed", {}).items():
             lines.append(f"| {path} | {_mib(size)} |")
         lines.append("")
@@ -886,7 +872,7 @@ def report(args: argparse.Namespace) -> int:
     if args.footprint:
         summary["footprint"] = python_footprint()
     if args.installed:
-        summary.setdefault("footprint", {"site_packages_bytes": None, "npm_darwin_arm64_unpacked_bytes": 52_900_000})
+        summary.setdefault("footprint", {"site_packages_bytes": None})
         summary["footprint"]["installed"] = {str(p): _directory_bytes(p) for p in args.installed}
     text = markdown(summary)
     if args.markdown:

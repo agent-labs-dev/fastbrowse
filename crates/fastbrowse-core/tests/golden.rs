@@ -5,7 +5,7 @@ use std::path::Path;
 
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{Evaluation, Question};
-use fastbrowse_core::effects::{effect, state_key, step_key};
+use fastbrowse_core::effects::{effect, state_key};
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::*;
 use fastbrowse_core::navigation::{navigation_urls, task_urls};
@@ -161,10 +161,8 @@ fn floats_and_strings_are_spelled_as_python_spells_them() {
 #[test]
 fn page_keys_and_dates_match_python() {
     let functions = golden("functions.json");
-    let (observation, capture) = fixtures();
+    let (observation, _) = fixtures();
     assert_eq!(state_key(&observation), text_of(&functions, "state_key"));
-    assert_eq!(step_key(&observation, &capture), text_of(&functions, "step_key"));
-    assert_eq!(capture.read_key(), text_of(&functions, "read_key"));
     let dates = [
         observation.captured_at,
         DateTime::new(2026, 1, 31, 0, 0, 0),

@@ -206,6 +206,10 @@ async fn test_session_setup_rolls_back() {
 async fn test_session_setup_rolls_back_when_cancelled() {
     for method in SETUP_METHODS {
         let fake = FakeChrome::start().await;
+        // Discovery goes out beside the tab's creation, so the setup owns no tab only while creation is held too.
+        if method == "Target.setDiscoverTargets" {
+            fake.block("Target.createTarget");
+        }
         fake.block(method);
         let session = fake.new_session(fake.connection(), SessionOptions::default());
         let opening = tokio::spawn({
@@ -213,6 +217,9 @@ async fn test_session_setup_rolls_back_when_cancelled() {
             async move { session.open().await }
         });
         fake.sent(method).await;
+        if method == "Target.setDiscoverTargets" {
+            fake.sent("Target.createTarget").await;
+        }
         opening.abort();
         assert!(opening.await.unwrap_err().is_cancelled());
         // The dropped `open` closes the session in the background, so nothing is left pending once it has stopped.

@@ -3,8 +3,8 @@
 fastbrowse splits a browser agent into three owners:
 
 - **Jev picks.** A batched request chooses an operation and its possible targets from indexed controls. It also judges whether unread evidence should be preserved before interaction, and checks sign-in and bot walls on fresh pages. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. On a page with more quotable spans than one choice can offer, the same kind of check narrows the passages before Jev picks a short fact. Large target sets use a second choice within the selected group. Code can follow a list's next-page link without an action-choice call.
-- **An LLM reads and writes.** Proposing a direct address for the task while the start page loads, planning checkable requirements from the task alone, reading page content for answers when Jev cannot pick a short fact from quoted spans, writing non-secret field text, recovering when Jev is unsure, verifying completion in the uncertain band, composing the final answer.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, budgets, and the definition of success: only `COMPLETE`, which requires every requirement evidenced.
+- **An LLM reads and writes.** Proposing a direct address for the task while the start page loads, planning checkable requirements from the task alone, reading page content for answers when Jev cannot pick a short fact from quoted spans, writing non-secret field text, recovering when Jev stays unsure, composing the final answer.
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, budgets, and the definition of success: only `COMPLETE`, which requires Jev to judge every requirement met.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
@@ -13,12 +13,16 @@ the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fa
 ## Authorization
 
 Jev judges every model-selected click, including links, navigation to a caller-supplied address, every Enter press and acceptance of
-confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. An authorized action whose
-confidence reaches `Thresholds.sensitive_act_from` proceeds without that classification.
+confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
+proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
+for it; otherwise the run stops at `needs_confirmation`. A pick under `Thresholds.recover_below` never
+reaches this gate, since it goes to recovery before it acts.
 
-A refusal is recorded as a failed step with a reason. An unauthorized action with sufficient confidence
-stops at `needs_confirmation`; an uncertain action goes to recovery. The classifier can be wrong, so this
-gate is not a guarantee that every externally visible change is detected.
+A submission of a form that holds more than one password field changes an account's credentials whatever
+the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
+`needs_confirmation`, and an authorized one proceeds only when Jev judges the task asked for it. A refusal
+is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
+that every externally visible change is detected.
 
 ## Navigation
 
@@ -26,24 +30,35 @@ The operation choice can open another literal HTTP(S) address from the caller's 
 closed choice, revalidated before dispatch, and uses the browser's origin grant and live access checks.
 Page instructions cannot add addresses to that choice. Recovery can select the same supplied addresses;
 addresses inferred by the startup shortcut retain their separate verification rules.
+When a site failure that can clear stands on the current page (an HTTP 408, 419, 429 or 5xx status, an address
+the browser could not open, or a page Jev judges to report that the site failed), the page's own address joins
+that choice, so Jev can reload it. Code states the failure and how many steps it has stood in the step state's
+`page_facts` and to the done check, where an answer drawn from it is not the task's; Jev picks the reload, a retry
+control, or another route. A run whose recovery runs out on such a failure ends `unavailable` with its address.
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
 ## Reading and citations
 
-The policy's read assessment distinguishes useful evidence from editable query previews and irrelevant
-content. Navigation notes write each source URL once and refer to it from later claims. Evidence is read
-before another interaction can remove it. Reads are deduplicated by document,
-capture hash and unresolved information requirements, so changed content can be read again. An interaction
-that redraws the page owes a read only when the page shows a block the run has not read from that document, or
-no longer shows a value the notes quote; otherwise the notes still describe it and no read is sent. A pending
-transaction and a control the reader named are always read. The reader is sent the tally, ranking and paging
-guidance only when the capture holds records, the plan counts them, or a pager is in play. A paraphrase
-of a collected quote does not restore the read budget; new source quotes and newly evidenced requirements
-do. Identical relevance questions share one score within a pass, while controls remain separate action
-targets. Top-page navigation links that fail freshness twice are excluded by document and destination, even
-when card labels change or intervening reads add facts. Same-page actions and framed controls keep their label
-and context identity. A new document permits another attempt; input freshness and authorization checks still apply.
+Jev's read assessment is the READ decision: when Jev judges the page evidence the notes do not yet preserve,
+the step reads it, even over a DONE, because the answer is written from the notes; only ESCALATE stands. Code
+does not force a read. It tells Jev, in the step state's `page_facts`, when a page was read and has not changed
+since, when it changed after it was last read, when a list page has not been read, when a field still holds a value the
+run typed and no action has sent, and when an action that may have committed a change has not had its page read,
+and the done check is told of the unsent value too. Jev is asked the read assessment on every page it can read
+except one read and unchanged, whose evidence the notes already hold, for evidence toward an unanswered
+requirement and for a value a remaining action needs, such as a code shown on another page. Scrolling does not
+change a page: a read takes in all of it. Navigation notes write each source URL once and refer to it from later
+claims. Every READ Jev picks goes to the reader, including a repeat of content already read; a read that adds no
+evidence counts toward the stall rule like any other step that moved nothing. The reader is sent
+the tally, ranking and paging guidance only when the capture holds records, the plan counts them, or a pager
+is in play. Identical relevance questions share one score within a pass, while controls remain separate action
+targets.
+
+Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
+so choosing the next page is an ordinary step. When a run that reads a whole list lands on a later page, Jev decides
+whether the page belongs to that list and whether the list goes on; the page's records join the notes when it does,
+and a page off the list gets an ordinary read.
 
 For a bounded set of short quoted spans, Jev chooses a scalar fact, requests synthesis, or judges the
 requirement absent from the page. Identical values from the same page and frame share one choice with all
@@ -59,16 +74,21 @@ Missing or ambiguous excerpts are rejected. Complete record citations remain unc
 
 When quotes from the same address are already in notes, the short-fact batch can also ask whether the full
 page adds relevant evidence. Literal diffs against matching source blocks help distinguish changed values
-from cosmetic changes. A negative answer with at least 80% probability skips the read without marking any
+from cosmetic changes. A negative answer with at least 90% probability skips the read without marking any
 requirement evidenced.
 Missing or uncertain answers use the normal readers. This check is omitted when the full comparison does
 not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.
 
 A filtered count or a comparison over a list that runs to further pages is read by the LLM on its first page,
-which cites the matching records. Each later page of the same shape is then put to Jev in one request, a yes or
-no for each block shaped like those records, and code counts the matches or keeps them as the comparison's
-records. A record Jev judges between 0.20 and 0.70 sends that page back to the LLM reader, and so does a page
-whose title or record shape differs. The last page is still read by the LLM, which closes the list.
+which cites the matching records, and for a comparison the delimiters around each record's label and value.
+The cited records name the list and say whether the count is grouped. When the reader says the list goes on, Jev
+is asked, with the task, whether the requirement needs every page of the list or only pages the task names; the
+reader does not decide this. From a yes at 0.70 or above, code pages the list itself and each later page of the
+same shape is put to Jev in one request, a yes or no for each record of the one run of blocks shaped like those
+records, matched against the requirement's own text. Code counts the matches, or ranks the kept records by the
+comparison's delimiters, and ends the list on the page with no next-page control. A record Jev judges between 0.20 and 0.70
+is sent to the LLM on its own, with only the records Jev was unsure of; a page whose title or record shape
+differs goes to the LLM reader.
 
 For a count, total or superlative, the reader cites every compared record on every page. Its conclusion
 lists those facts in `draws_on`, using evidence ids from collected notes or `claim:N` for earlier claims in
@@ -85,9 +105,10 @@ The claim check, numbered links and citation records all use those expanded ids.
 
 ## Prompt limits and progress
 
-`Config.observation` names the limits for viewport text, working notes and recent and earlier history.
-`Config.tokens` names the input budgets and reader/composer output limits. Working notes can omit facts
-with a count; verdict prompts retain all requirement evidence or stop at `observation_limit`. The notes
+`Config.observation` names the group size for group-then-element choices. `Config.tokens` names the input
+budgets and reader/composer output limits. A step request shows Jev the whole viewport, working notes and
+history; one that does not fit Jev's limit loses its oldest actions first and then has its long texts cut, each
+cut saying what it left out. Verdict prompts retain all requirement evidence or stop at `observation_limit`. The notes
 budget keeps a retained fact's basis with it; requirement evidence includes its transitive basis. The Jev
 completion check reduces page text first to make room for that evidence. Cut page text carries a marker
 when there is room for one; an excerpt too small to carry the marker is empty.
@@ -98,9 +119,19 @@ active work; the return also waits for owned requests and browser cleanup. Injec
 cancellation and finish their cleanup. Returning while a paid request still runs would lose its cost receipt.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
-field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a run
-whose page has not changed for `unchanged_actions` steps goes to recovery, and recovery resets the count.
-The same action taken a third time from the same page state does not count as a change.
+field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a step that
+changes nothing, a read that adds nothing, a refused DONE, or a return to a page state already seen with
+nothing read since is no progress, and `unchanged_actions` such steps in a row go to recovery. A page state
+not seen before or a read that adds evidence resets the count and renews the `max_recoveries` budget.
+Recovery asks Jev first: its state names what failed, and the stalled action is left out of its options,
+which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
+`recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover. Its
+subgoal reaches Jev with the next step on that page, asked with the same problem and with the stalled action
+still left out, so a refused DONE cannot undo it; the action recovery names is taken only when Jev is unsure
+again or escalates. When the LLM gives up, the run stops with its diagnosis as the status, and a sign-in it names
+ends `needs_login` only when Jev agrees the page is a wall. An HTTP error page goes to Jev like any other, with its status among the step's page facts, so Jev
+reloads it when the status can clear, goes back, picks another link or escalates; code only waits out a 403,
+429 or 503 once per document.
 
 ## Run events and images
 
@@ -223,6 +254,7 @@ replacement control must match the original semantics and receiving document; am
 refused. A target covered by a band fixed to the window (an anchored ad, a sticky footer) is scrolled clear of
 it, and one the band still covers is focused and pressed or typed into from the keyboard, so the band is never
 clicked. Any other cover, such as a dialog, an open menu or popover, or a full-window backdrop, is reported as
-`covered`. Focus and the receiving field are checked before typing. Settling waits for an interactive
+`covered`. When focus is in a suggesting field, it leaves that field first, which presses nothing, and the control
+is checked again, so a list the field left open does not hold up the next one. Focus and the receiving field are checked before typing. Settling waits for an interactive
 document and a quiet DOM. It does not guess at loading indicators by class name: a page still loading is read as
 it stands, and the reader and Jev judge from its text whether to look again.

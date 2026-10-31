@@ -69,7 +69,7 @@ jobs:
         with: {persist-credentials: false}
       # The smoke scripts are standard library only, so the interpreter uv installs is all they need; uv also runs
       # cargo-zigbuild for the Linux builds.
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use. The addon is built in
       # `release`: `release-small` aborts on a panic, which in an addon takes the host process with it.
@@ -80,7 +80,7 @@ jobs:
           else
             build=(cargo build --target "$TRIPLE")
           fi
-          "${build[@]}" --locked --profile release-small -p fastbrowse-cli
+          "${build[@]}" --locked --profile release-small -p fastbrowse-cli --features scripted
           "${build[@]}" --locked --release -p fastbrowse-node
       - name: Stage the build
         run: |
@@ -159,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       # rustup reads rust-toolchain.toml and installs the pinned toolchain on first use.
       # zig only for the Linux wheels: it is what links them to the older glibc, and it has no build for Windows.
@@ -171,7 +171,7 @@ jobs:
             zig=(--with ziglang==0.17.0)
             linux=(--zig --compatibility "$MANYLINUX")
           fi
-          uvx "${zig[@]}" maturin==1.15.0 build --release --locked --out wheels "${linux[@]}"
+          uvx "${zig[@]}" maturin==1.16.0 build --release --locked --out wheels "${linux[@]}"
       - name: Install the wheel alone
         run: |
           uv venv --no-project "$RUNNER_TEMP/wheel"

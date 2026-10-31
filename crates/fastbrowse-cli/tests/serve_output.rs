@@ -1,11 +1,12 @@
-//! tests/test_serve_output.py: `output_schema` in a `run`. A JSON Schema goes in, `run_task` gets a model, and what
+//! `output_schema` in a `run`. A JSON Schema goes in, `run_task` gets a model, and what
 //! that model produced comes back under the caller's names.
 
 mod common;
 
-use common::{Recorder, result, run_params, runner, serving, settings};
-use fastbrowse_cli::runner::{RunArgs, RunError};
+use common::{Call, Recorder, result, run_params, runner, serving, settings};
+use fastbrowse_cli::runner::RunError;
 use fastbrowse_core::models::{RunResult, Status};
+use fastbrowse_core::output_schema::output_model;
 use serde_json::{Value, json};
 
 fn order_schema() -> Value {
@@ -35,7 +36,7 @@ async fn test_a_run_without_an_output_schema_hands_run_task_none() {
     let recorder = Recorder::default();
     let mut client = serving(recorder.runner(), settings());
     client.result("run", Some(run_params("run-1", json!({})))).await;
-    assert!(recorder.calls()[0].output_schema.is_none());
+    assert!(recorder.calls()[0].task.output_schema.is_none());
 }
 
 #[tokio::test]
@@ -43,7 +44,8 @@ async fn test_a_nested_schema_reaches_run_task_as_a_model() {
     let recorder = Recorder::default();
     let mut client = serving(recorder.runner(), settings());
     client.result("run", Some(run_params("run-1", json!({"output_schema": order_schema()})))).await;
-    let model = recorder.calls()[0].output_schema.clone().unwrap();
+    let schema = recorder.calls()[0].task.output_schema.clone().unwrap();
+    let model = output_model(&Value::Object(schema)).unwrap();
     let order = json!({"order-id": "A-17", "class": "express", "lines": [{"sku": "kettle", "2-day": true}]});
     assert_eq!(model.validate(&order).unwrap(), order);
     assert!(
@@ -65,11 +67,11 @@ async fn test_the_result_carries_the_data_under_the_callers_property_names() {
     let order = json!({"order-id": "A-17", "class": "express", "lines": [{"sku": "kettle", "2-day": true}]});
     let found = order.clone();
     // Fills the model as a run does, and dumps it under the caller's names.
-    let filling = runner(move |args: RunArgs| {
+    let filling = runner(move |args: Call| {
         let found = found.clone();
         async move {
-            let model = args.output_schema.unwrap();
-            let data = model.validate(&found).map_err(|error| RunError::Failed(error.to_string()))?;
+            let model = output_model(&Value::Object(args.task.output_schema.unwrap())).unwrap();
+            let data = model.validate(&found).map_err(|error| RunError::Invalid(error.to_string()))?;
             Ok(RunResult { data, ..result(Status::Complete) })
         }
     });

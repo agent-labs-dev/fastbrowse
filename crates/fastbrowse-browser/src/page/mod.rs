@@ -1,10 +1,11 @@
 //! `CdpPage`: the `Page` seam on a `BrowserSession`. `browser/page.py`.
 //!
 //! Freshness (page_key plus a per-element guard), hit-test-before-input (covered detection), scroll-into-view for
-//! offscreen targets, password masking and the offscreen-nearest cap are ported from jev-ultrafast (MIT):
+//! offscreen targets and password masking are ported from jev-ultrafast (MIT):
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
 pub(crate) mod act;
+mod pointer;
 pub mod scripts;
 
 use std::collections::{HashMap, HashSet};
@@ -17,10 +18,10 @@ use data_encoding::{BASE64, HEXLOWER};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
+use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, Operation, SourceControl};
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult, cut_marker,
-    loads_more, pager_link,
+    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -32,7 +33,7 @@ use tokio::time::{Instant, sleep, timeout};
 
 use crate::cdp::secs;
 use crate::error::BrowserError;
-use crate::session::{BrowserSession, CAPTURE_JS, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
+use crate::session::{BrowserSession, CAPTURE_JS, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
 use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
@@ -127,16 +128,11 @@ struct SnapshotControl {
     sensitive: bool,
     #[serde(default)]
     offscreen: bool,
-    blocking: Option<bool>,
+    required: Option<bool>,
+    invalid: Option<bool>,
     next_page: Option<bool>,
     download: Option<bool>,
-    /// Past the observation caps: sent with only the fields that decide whether it is a pager.
-    #[serde(default)]
-    partial: bool,
 }
-
-/// The whole rows a snapshot kept in the page for its partial controls: (control, guard, retarget key).
-type SentRows = Option<Vec<(SnapshotControl, Option<String>, Option<String>)>>;
 
 pub(crate) trait FrameText: DeserializeOwned {
     const SHAPE: &'static str;
@@ -161,6 +157,9 @@ struct Snapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     viewport_text: String,
+    /// Characters of visible text outside the viewport.
+    #[serde(default)]
+    offscreen_text: i64,
     document_key: String,
     /// 1 when the viewport shows a picture, chart, drawing or video that no control carries; snapshot.js sends 0/1.
     #[serde(default)]
@@ -171,9 +170,6 @@ struct Snapshot {
     guards: HashMap<String, Option<String>>,
     /// Digest of the guard without the node ids at its ends, which a redraw changes.
     retarget_keys: HashMap<String, Option<String>>,
-    /// Names this snapshot to the page, which keeps the whole rows of its partial controls under it.
-    #[serde(default)]
-    token: Option<i64>,
 }
 
 impl FrameText for Snapshot {
@@ -213,8 +209,6 @@ struct CaptureSnapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     blocks: Vec<SnapshotBlock>,
-    #[serde(default)]
-    visible_h1: bool,
 }
 
 impl FrameText for CaptureSnapshot {
@@ -323,20 +317,6 @@ fn same_http_origin(previous_url: &str, current_url: &str) -> bool {
     }
 }
 
-/// Keep pagers and load-more controls within the cap so a truncated list can still be continued.
-fn capped(controls: Vec<Control>, limit: usize) -> Vec<Control> {
-    if controls.len() <= limit {
-        return controls;
-    }
-    let mut keep: HashSet<String> =
-        controls.iter().filter(|c| pager_link(c) || loads_more(c)).take(limit).map(|c| c.id.clone()).collect();
-    let room = limit.saturating_sub(keep.len());
-    let rest: Vec<String> =
-        controls.iter().filter(|c| !keep.contains(&c.id)).take(room).map(|c| c.id.clone()).collect();
-    keep.extend(rest);
-    controls.into_iter().filter(|c| keep.contains(&c.id)).collect()
-}
-
 /// The control a snapshot row names in `frame`, recorded in `control_state` for `act` to find again.
 fn add_control(
     control_state: &mut HashMap<String, Target>,
@@ -383,7 +363,8 @@ fn control_from_raw(
         expanded: c.expanded,
         sensitive: c.sensitive,
         offscreen: c.offscreen,
-        blocking: c.blocking,
+        required: c.required,
+        invalid: c.invalid,
         next_page: c.next_page,
         download: c.download,
     }
@@ -419,12 +400,6 @@ fn parse<T: DeserializeOwned>(raw: Value, shape: &str) -> Result<T, BrowserError
     // Our own page script produced this, so a mismatch is a bug in one side of the contract.
     serde_json::from_value(raw)
         .map_err(|e| BrowserError::Failed(format!("page script returned an unexpected {shape}: {e}")))
-}
-
-/// A configured count as a length. Core's `Config` refuses a negative one when it is read; one built in code is
-/// taken as zero.
-fn limit(count: i64) -> usize {
-    usize::try_from(count).unwrap_or(0)
 }
 
 /// A length or offset as core's models hold it, the `int` Python writes.
@@ -566,33 +541,16 @@ impl CdpPage {
                 }
                 history_entry = None;
             }
-            let mut controls: Vec<Control> = vec![];
+            let mut kept: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();
-            let mut partial: HashSet<String> = HashSet::new();
             for (frame_key, frame) in &frames {
                 for c in &frame.raw.controls {
                     let key = c.id.to_string();
                     let guard = frame.raw.guards.get(&key).cloned().flatten();
                     let retarget = frame.raw.retarget_keys.get(&key).cloned().flatten();
-                    let control = add_control(&mut control_state, frame_key, frame, c, guard, retarget);
-                    if c.partial {
-                        partial.insert(control.id.clone());
-                    }
-                    controls.push(control);
+                    kept.push(add_control(&mut control_state, frame_key, frame, c, guard, retarget));
                 }
             }
-
-            let limits = &self.config.observation;
-            let total = controls.len();
-            let (onscreen, offscreen): (Vec<Control>, Vec<Control>) = controls.into_iter().partition(|c| !c.offscreen);
-            let offscreen = capped(offscreen, limit(limits.max_offscreen_controls));
-            let mut omitted = total - onscreen.len() - offscreen.len();
-            let both = onscreen.len() + offscreen.len();
-            let kept = capped(onscreen.into_iter().chain(offscreen).collect(), limit(limits.max_controls));
-            omitted += both - kept.len();
-            let kept = self.whole_rows(&frames, kept, &partial, &mut control_state).await?;
-            let control_state: HashMap<String, Target> =
-                kept.iter().map(|c| (c.id.clone(), control_state[&c.id].clone())).collect();
             let mut labels: HashMap<String, Vec<String>> = HashMap::new();
             for c in &kept {
                 labels.entry(control_state[&c.id].1.clone()).or_default().push(c.label.clone());
@@ -615,32 +573,20 @@ impl CdpPage {
                 ));
             }
             for refused in self.session.pending_download_refusals() {
+                let why = match refused.reason {
+                    Refusal::TooLarge { size_bytes, limit_bytes } => format!(
+                        "The file is {} and this run keeps downloads up to {}",
+                        bytes_of(size_bytes),
+                        bytes_of(limit_bytes)
+                    ),
+                    Refusal::Failed => "The browser could not hand over or store the file".to_owned(),
+                };
                 notices.push_str(&format!(
-                    "\n\n[Download not kept: {} from {}] The file is {} and this run keeps downloads up to {}; \
-                     nothing was saved. Report the file as not downloaded.",
-                    refused.name,
-                    refused.url,
-                    bytes_of(refused.size_bytes),
-                    bytes_of(refused.limit_bytes)
+                    "\n\n[Download not kept: {} from {}] {why}; nothing was saved.",
+                    refused.name, refused.url,
                 ));
             }
-            let budget = limit(limits.viewport_text_chars);
-            if notices.is_empty() {
-                let length = text::len(&viewport_text);
-                if length > budget {
-                    viewport_text = text::prefix(&viewport_text, budget).to_owned() + &cut_marker(length - budget);
-                }
-            } else {
-                // The notice is the only evidence that a file was offered and not kept, and it is marked as shown
-                // here, so it is given its room before the page text is cut: appended after a full page it was
-                // truncated away and never reported again.
-                let reserved = budget.saturating_sub(text::len(&notices));
-                let length = text::len(&viewport_text);
-                if length > reserved {
-                    viewport_text = text::prefix(&viewport_text, reserved).to_owned() + &cut_marker(length - reserved);
-                }
-                viewport_text.push_str(&notices);
-            }
+            viewport_text.push_str(&notices);
             let response_status = match main {
                 Some(main) if main.raw.url == document.url && main.raw.document_key == document.document_key => {
                     // pydantic's bound on the field: a status outside it would make an observation core cannot read.
@@ -656,8 +602,8 @@ impl CdpPage {
                 response_status,
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
-                omitted_controls: int(omitted),
                 viewport_text,
+                offscreen_text: main.map(|m| m.raw.offscreen_text).unwrap_or_default(),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 tabs: self.session.tabs(),
@@ -718,8 +664,8 @@ impl CdpPage {
             response_status: None,
             document_key: String::new(),
             controls: vec![],
-            omitted_controls: 0,
             viewport_text: String::new(),
+            offscreen_text: 0,
             visual_content: false,
             tabs: self.session.tabs(),
             dialog: Some(dialog),
@@ -729,56 +675,8 @@ impl CdpPage {
         }
     }
 
-    /// `kept` with each partial control replaced by the whole row the page kept for it.
-    ///
-    /// A pager past the caps was sent with only what made it one; the page kept the rest of its row under the
-    /// snapshot's token, and is asked for it only once the control is kept.
-    async fn whole_rows(
-        &self,
-        frames: &[(String, FrameObservation<Snapshot>)],
-        kept: Vec<Control>,
-        partial: &HashSet<String>,
-        control_state: &mut HashMap<String, Target>,
-    ) -> Result<Vec<Control>, BrowserError> {
-        let mut wanted: Vec<(String, Vec<i64>)> = vec![];
-        for c in kept.iter().filter(|c| partial.contains(&c.id)) {
-            let (_, frame_key, id, _) = &control_state[&c.id];
-            match wanted.iter_mut().find(|(key, _)| key == frame_key) {
-                Some((_, ids)) => ids.push(*id),
-                None => wanted.push((frame_key.clone(), vec![*id])),
-            }
-        }
-        let mut whole: HashMap<String, Control> = HashMap::new();
-        for (frame_key, ids) in wanted {
-            let Some((_, frame)) = frames.iter().find(|(key, _)| *key == frame_key) else { continue };
-            let rows = self
-                .evaluate(
-                    &frame.session_id,
-                    &format!(
-                        "((r, token, ids) => r?.sent?.token === token && ids.every(id => r.sent.rows.has(id)) \
-                         ? ids.map(id => r.sent.rows.get(id)) : null)(window.__fastbrowse, {}, {})",
-                        py_json(&json!(frame.raw.token)),
-                        py_json(&json!(ids))
-                    ),
-                )
-                .await?;
-            let sent: SentRows = parse(rows, "list[tuple[_SnapshotControl, str | None, str | None]] | None")?;
-            let Some(sent) = sent else {
-                // Another snapshot or a new document replaced the rows this one kept.
-                return Err(BrowserError::ContextLost("the page changed before its pagers were read".into()));
-            };
-            for (c, guard, retarget) in &sent {
-                let control = add_control(control_state, &frame_key, frame, c, guard.clone(), retarget.clone());
-                whole.insert(control.id.clone(), control);
-            }
-        }
-        Ok(kept.into_iter().map(|c| whole.remove(&c.id).unwrap_or(c)).collect())
-    }
-
     async fn snapshot_all_frames(&self) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
-        let limits = &self.config.observation;
-        let caps = py_json(&json!({"onscreen": limits.max_controls, "offscreen": limits.max_offscreen_controls}));
-        let script = format!("{}('snapshot', {caps})", self.page_js);
+        let script = format!("{}('snapshot')", self.page_js);
         let result = self.read_frames::<Snapshot>(&script).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
@@ -904,11 +802,6 @@ impl CdpPage {
             Some(main) => main.raw.url.clone(),
             None => self.origin_once().await?,
         };
-        let has_h1 = frames.iter().any(|(_, f)| f.raw.visible_h1);
-        let unreadable = self.inaccessible_frames(
-            &frames.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect::<Vec<_>>(),
-        )?;
-        let mut absence_seen = false;
         for (_, frame) in &frames {
             let frame_key = frame.frame_id.clone().unwrap_or_else(|| MAIN.to_owned());
             match coverage.iter_mut().find(|(s, _)| *s == frame.session_id) {
@@ -916,15 +809,6 @@ impl CdpPage {
                 None => coverage.push((frame.session_id.clone(), frame.raw.inaccessible_frames)),
             }
             for block in &frame.raw.blocks {
-                // A cross-origin frame is captured separately; its h1 disproves document-wide absence too.
-                if block.kind == BlockKind::Observation
-                    && block.text == "Observed accessible DOM: Visible h1 headings: 0"
-                {
-                    if has_h1 || unreadable > 0 || absence_seen {
-                        continue;
-                    }
-                    absence_seen = true;
-                }
                 let start = offset;
                 text.push_str(&block.text);
                 offset += text::len(&block.text);
@@ -952,30 +836,47 @@ impl CdpPage {
             }
         }
         for (index, download) in self.session.download_texts().into_iter().enumerate() {
-            let start = offset;
-            text.push_str(&download.text);
-            offset += text::len(&download.text);
-            // CSV rows lose their column meanings when treated as unrelated prose excerpts.
+            // A CSV file is shown as a page table is: one block per row under its header row, so a reader cites,
+            // counts and totals its records one by one, as it does a table's.
             let table = download.mime == "text/csv"
                 || download.mime == "application/csv"
                 || download.name.to_lowercase().ends_with(".csv");
-            blocks.push(Block {
-                source_id: format!("download/{index}"),
-                source_url: Some(download.url.clone()),
-                complete_source: download.complete,
-                kind: if table { BlockKind::Table } else { BlockKind::Paragraph },
-                frame_id: None,
-                start: int(start),
-                end: int(offset),
-                heading_path: vec![format!("Downloaded file: {}", download.name)],
-                control_context: None,
-                href: None,
-                list_id: None,
-                list_count: None,
-                list_frameless: false,
-            });
-            text.push_str("\n\n");
-            offset += 2;
+            let rows = if table { csv_rows(&download.text) } else { Vec::new() };
+            let pieces: Vec<(String, String, bool)> = match rows.split_first() {
+                Some((header, data)) if !data.is_empty() => data
+                    .iter()
+                    .enumerate()
+                    .map(|(row, line)| (format!("download/{index}:{row}"), format!("{header}\n{line}"), false))
+                    .collect(),
+                _ => vec![(format!("download/{index}"), download.text.clone(), download.complete)],
+            };
+            let heading = if download.complete {
+                format!("Downloaded file: {}", download.name)
+            } else {
+                format!("Downloaded file: {}, of which the server sent only part", download.name)
+            };
+            for (source_id, piece, complete_source) in pieces {
+                let start = offset;
+                text.push_str(&piece);
+                offset += text::len(&piece);
+                blocks.push(Block {
+                    source_id,
+                    source_url: Some(download.url.clone()),
+                    complete_source,
+                    kind: if table { BlockKind::Table } else { BlockKind::Paragraph },
+                    frame_id: None,
+                    start: int(start),
+                    end: int(offset),
+                    heading_path: vec![heading.clone()],
+                    control_context: None,
+                    href: None,
+                    list_id: None,
+                    list_count: None,
+                    list_frameless: false,
+                });
+                text.push_str("\n\n");
+                offset += 2;
+            }
         }
         Ok(Capture {
             url,
@@ -1063,7 +964,8 @@ impl CdpPage {
         }
         let client = self.session.client()?;
         let session_id = self.session.active_session_id()?;
-        let capture = client.send("Page.captureScreenshot", json!({"format": "png"}), Some(&session_id));
+        let metrics = client.send("Page.getLayoutMetrics", json!({}), Some(&session_id)).await?;
+        let capture = client.send("Page.captureScreenshot", screenshot_params(&metrics), Some(&session_id));
         tokio::pin!(capture);
         let shot = match timeout(secs(SCREENSHOT_WAIT_SECONDS), &mut capture).await {
             Ok(shot) => shot?,
@@ -1343,8 +1245,9 @@ impl CdpPage {
                         return Ok(false);
                     }
                     Ok((quiet, _)) => unchanged = quiet,
-                    // Navigation destroys the promise with its execution context. Only this read is retried.
-                    Err(_) => {}
+                    // Navigation destroys the promise with its execution context, which is itself a change, so a
+                    // deadline reached here is not read as a page left as it was. Only this read is retried.
+                    Err(_) => unchanged = false,
                 },
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1454,6 +1357,25 @@ impl CdpPage {
 }
 
 /// Lift a browser failure to the variant the decision loop reads; the loop holds the page as `Arc<dyn Page>`.
+/// The capture of the viewport `metrics` describe, shrunk only when its device pixels pass Jev's side, which a capture
+/// does on a high density screen: Browser Use has started browsers at densities of 1.25 and 2, so 1120 wide can be 2240.
+fn screenshot_params(metrics: &Value) -> Value {
+    let size = |key: &str| {
+        let viewport = &metrics[key];
+        Some((viewport["clientWidth"].as_f64()?, viewport["clientHeight"].as_f64()?))
+    };
+    let side = f64::from(JEV_IMAGE_SIDE);
+    match (size("visualViewport"), size("cssVisualViewport")) {
+        (Some((pixels_wide, pixels_high)), Some((width, height))) if pixels_wide.max(pixels_high) > side => {
+            // One short of the side, because the capture rounds its size up.
+            let scale = (side - 1.0) / pixels_wide.max(pixels_high);
+            let (x, y) = (&metrics["cssVisualViewport"]["pageX"], &metrics["cssVisualViewport"]["pageY"]);
+            json!({"format": "png", "clip": {"x": x, "y": y, "width": width, "height": height, "scale": scale}})
+        }
+        _ => json!({"format": "png"}),
+    }
+}
+
 fn seam<T>(result: Result<T, BrowserError>) -> PageResult<T> {
     result.map_err(Into::into)
 }
@@ -1496,6 +1418,10 @@ impl Page for CdpPage {
         Box::pin(async move { seam(CdpPage::screenshot(self).await) })
     }
 
+    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+        Box::pin(async move { seam(CdpPage::click_viewport(self, x, y).await) })
+    }
+
     fn withhold_frames(&self, withheld: bool) {
         CdpPage::withhold_frames(self, withheld);
     }
@@ -1535,6 +1461,23 @@ fn net_error(error: &str) -> bool {
         .is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
 }
 
+/// A CSV text's records in order, blank lines left out. A newline inside a quoted field belongs to its record.
+fn csv_rows(text: &str) -> Vec<&str> {
+    let (mut rows, mut start, mut quoted) = (Vec::new(), 0, false);
+    for (at, character) in text.char_indices() {
+        match character {
+            '"' => quoted = !quoted,
+            '\n' if !quoted => {
+                rows.push(&text[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    rows.push(&text[start..]);
+    rows.into_iter().map(|row| row.strip_suffix('\r').unwrap_or(row)).filter(|row| !row.trim().is_empty()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1546,6 +1489,23 @@ mod tests {
         assert!(!same_http_origin("http://a.test/", "https://a.test/"));
         assert!(!same_http_origin("http://a.test:8080/", "http://a.test/"));
         assert!(same_http_origin("http://A.test/", "http://a.TEST/z"));
+    }
+
+    #[test]
+    fn a_capture_past_jevs_side_is_shrunk_to_fit_and_any_other_is_left_alone() {
+        let metrics = |pixels: (u32, u32)| {
+            json!({
+                "visualViewport": {"clientWidth": pixels.0, "clientHeight": pixels.1},
+                "cssVisualViewport": {"pageX": 0, "pageY": 40, "clientWidth": 1120, "clientHeight": 534},
+            })
+        };
+        assert_eq!(screenshot_params(&metrics((1400, 668))), json!({"format": "png"}));
+        assert_eq!(screenshot_params(&json!({})), json!({"format": "png"}));
+        let shrunk = screenshot_params(&metrics((2240, 1068)));
+        let scale = shrunk["clip"]["scale"].as_f64().unwrap();
+        assert!(2240.0 * scale <= f64::from(JEV_IMAGE_SIDE));
+        assert_eq!(shrunk["clip"]["width"], 1120.0);
+        assert_eq!(shrunk["clip"]["y"], 40);
     }
 
     #[test]

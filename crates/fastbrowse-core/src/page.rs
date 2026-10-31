@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/page.py`: the seam between the browser layer and the decision loop.
+//! The seam between the browser layer and the decision loop.
 //!
 //! The browser layer produces `Observation` (bounded, for Jev's action choice) and `Capture` (complete, for reading),
 //! and executes `Action`s. Nothing above this seam touches CDP.
@@ -6,13 +6,12 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
 
 use crate::BoxFuture;
 use crate::models::{Artifact, Attachment, MaybeUnavailable, Operation, SourceControl, StepOutcome};
 use crate::py::datetime::DateTime;
-use crate::py::json::{Style, dumped_len, write};
-use crate::py::{lax, sha256_hex, text};
+use crate::py::json::dumped_len;
+use crate::py::{lax, text};
 
 pub fn cut_marker(omitted_chars: usize) -> String {
     format!("\n[Viewport text cut: {omitted_chars} characters omitted; read the page for the rest]")
@@ -21,6 +20,11 @@ pub fn cut_marker(omitted_chars: usize) -> String {
 /// `text` within `max_chars`, ending with how much was cut so a model knows the page goes on. Lengths are Python's,
 /// in code points; with `json_encoded` they are of the text as `json.dumps` writes it, quotes excluded.
 pub fn cut_text(text: &str, max_chars: usize, json_encoded: bool) -> String {
+    cut_with(text, max_chars, json_encoded, cut_marker)
+}
+
+/// [`cut_text`] ending with `marker`, which is told how many characters were left out.
+pub fn cut_with(text: &str, max_chars: usize, json_encoded: bool, marker: impl Fn(usize) -> String) -> String {
     // A JSON state escapes quotes and newlines; its budget must count those extra characters.
     let size = |value: &str| if json_encoded { dumped_len(value) } else { text::len(value) };
     if size(text) <= max_chars {
@@ -28,7 +32,7 @@ pub fn cut_text(text: &str, max_chars: usize, json_encoded: bool) -> String {
     }
     let bounds: Vec<usize> = text.char_indices().map(|(at, _)| at).chain([text.len()]).collect();
     let total = bounds.len() - 1;
-    let cut = |keep: usize| format!("{}{}", &text[..bounds[keep]], cut_marker(total - keep));
+    let cut = |keep: usize| format!("{}{}", &text[..bounds[keep]], marker(total - keep));
     let fits = |keep: usize| size(&cut(keep)) <= max_chars;
     // The longest prefix that fits with its marker. Escaping makes one character cost up to six, so an excess
     // measured in encoded characters cannot be subtracted from a count of source characters.
@@ -97,9 +101,12 @@ pub struct Control {
     pub sensitive: bool,
     #[serde(default, deserialize_with = "lax::boolean")]
     pub offscreen: bool,
-    /// A field its form will not submit without: required and still empty, or marked invalid by the page.
+    /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
-    pub blocking: Option<bool>,
+    pub required: Option<bool>,
+    /// A field the page marks invalid (`aria-invalid`).
+    #[serde(default, deserialize_with = "lax::opt_boolean")]
+    pub invalid: Option<bool>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub next_page: Option<bool>,
@@ -133,71 +140,21 @@ impl Control {
             expanded: None,
             sensitive: false,
             offscreen: false,
-            blocking: None,
+            required: None,
+            invalid: None,
             next_page: None,
             download: None,
         }
     }
 }
 
-/// The chevrons pagers draw.
-const ARROWS: [char; 4] = ['\u{203a}', '\u{bb}', '\u{2192}', '>'];
-
-/// `_NEXT_PAGE.fullmatch` on a label with its space squashed:
-/// `(?:next(?: page)?|more results|older(?: posts)?)\s*[arrows]*|[arrows]{1,2}`, ignoring case.
-fn reads_next_page(label: &str) -> bool {
-    let arrows = label.chars().filter(|c| ARROWS.contains(c)).count();
-    if (1..=2).contains(&arrows) && arrows == label.chars().count() {
-        return true;
-    }
-    ["next page", "next", "more results", "older posts", "older"].iter().any(|word| {
-        text::starts_with_ignore_case(label, word)
-            .is_some_and(|at| label[at..].trim_start_matches(text::is_space).chars().all(|c| ARROWS.contains(&c)))
-    })
-}
-
-/// Whether a link is a pager's way to the next page of a list: marked `rel="next"`, or labelled like one.
-///
-/// "next", "Next" and an arrow, "Next page", a lone chevron. The page's own mark says so in any language and behind
-/// an icon, so the label is only the fallback.
-pub fn pages_forward(control: &Control) -> bool {
-    control.next_page == Some(true) || reads_next_page(&text::squash(&control.label))
-}
-
-/// `_LOAD_MORE.fullmatch`: `(?:show|view|load|see)(?: \d+)? more(?: [\w-]+){0,3}`, ignoring case.
-fn reads_load_more(label: &str) -> bool {
-    let words: Vec<&str> = label.split(' ').collect();
-    let Some((verb, rest)) = words.split_first() else { return false };
-    if !["show", "view", "load", "see"].iter().any(|v| text::starts_with_ignore_case(verb, v) == Some(verb.len())) {
-        return false;
-    }
-    let rest = match rest.first() {
-        Some(count) if !count.is_empty() && count.chars().all(char::is_numeric) => &rest[1..],
-        _ => rest,
-    };
-    let Some((more, tail)) = rest.split_first() else { return false };
-    text::starts_with_ignore_case(more, "more") == Some(more.len())
-        && tail.len() <= 3
-        && tail.iter().all(|w| !w.is_empty() && w.chars().all(|c| text::is_word(c) || c == '-'))
-}
-
-/// Whether a control is labelled as loading more of the list it ends: "View more flights", "Show 20 more".
-///
-/// It sits at the foot of the list like a pager does, past what the off-screen cap keeps, and may carry no mark but
-/// its words: Google Flights' button has only its label. "Learn more" and the like do not match.
-pub fn loads_more(control: &Control) -> bool {
-    control.operations.contains(&Operation::Click) && reads_load_more(&text::squash(&control.label))
-}
-
-/// Whether this control is one the loop could actually walk a list with: a link, to an address.
-///
-/// A carousel's arrow and a wizard's button read exactly like a pager, and a busy page draws many of them. Only a
-/// link to somewhere else is ever followed, so anything else by that name earns no special treatment.
+/// Whether the page marks this control as the link to the next page of a list (`rel="next"`), in any language and
+/// behind any icon. Its label is never read for it: Jev picks a pager the page does not mark.
 pub fn pager_link(control: &Control) -> bool {
     control.role == "link"
+        && control.next_page == Some(true)
         && control.operations.contains(&Operation::Click)
         && control.href.as_deref().is_some_and(|href| !href.is_empty())
-        && pages_forward(control)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -246,10 +203,11 @@ pub struct Observation {
     #[serde(default)]
     pub document_key: String,
     pub controls: Vec<Control>,
-    /// Controls present but not offered because of observation limits.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub omitted_controls: i64,
     pub viewport_text: String,
+    /// Characters of the page's visible text outside the viewport: text a read takes in that `viewport_text` leaves
+    /// out.
+    #[serde(default, deserialize_with = "lax::int_ge0")]
+    pub offscreen_text: i64,
     /// Whether the page's visible state is carried by pixels: a chart, picture, drawing or video with no control
     /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
     #[serde(default, deserialize_with = "lax::boolean")]
@@ -269,26 +227,37 @@ pub struct Observation {
 }
 
 impl Observation {
-    /// The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next Monday
-    /// strictly after today" as 2026-10-05 in three runs of three.
-    ///
-    /// The coming months are named too, each by its distance: told only the date in September, Jev took "the month
-    /// after next" as October in one run of four, and listed bare the last of three was taken for it in six of six.
+    /// The capture date with its weekday, then a calendar of this month and the twelve after it, a month to a line and
+    /// each weekday's dates together. A relative day is looked up in it rather than counted. It runs to this month next
+    /// year because a month or weekday named without a year means its next occurrence, which always falls in that span.
     pub fn today(&self) -> String {
-        let mut first = self.captured_at.first_of_month();
-        let mut months = Vec::new();
-        for _ in 0..2 {
-            first = first.add_days(32).first_of_month();
-            months.push(format!("{} {}", first.month_name(), first.year));
+        let today = self.captured_at;
+        let mut lines = vec![format!("{} ({})", today.date_string(), today.weekday_name())];
+        let mut month = today.first_of_month();
+        for _ in 0..=12 {
+            lines.push(month_calendar(month));
+            month = month.add_days(32).first_of_month();
         }
-        format!(
-            "{} ({}). In one month: {}; in two months: {}",
-            self.captured_at.date_string(),
-            self.captured_at.weekday_name(),
-            months[0],
-            months[1]
-        )
+        lines.join("\n")
     }
+}
+
+/// One month as a line, Monday first: `November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; ...`.
+fn month_calendar(first: DateTime) -> String {
+    let mut columns: Vec<(usize, String)> = (0..7)
+        .map(|offset| {
+            let start = first.add_days(offset);
+            let days: Vec<String> = (0..)
+                .map(|weeks| start.add_days(7 * weeks))
+                .take_while(|day| day.month == first.month)
+                .map(|day| day.day.to_string())
+                .collect();
+            (start.weekday(), format!("{} {}", &start.weekday_name()[..3], days.join(" ")))
+        })
+        .collect();
+    columns.sort();
+    let columns: Vec<String> = columns.into_iter().map(|(_, column)| column).collect();
+    format!("{} {}: {}", first.month_name(), first.year, columns.join("; "))
 }
 
 str_enum! {
@@ -361,18 +330,6 @@ impl Capture {
         };
         text::prefix(rest, (block.end - block.start).max(0) as usize)
     }
-
-    pub fn read_key(&self) -> String {
-        let contexts: Vec<Value> = self
-            .blocks
-            .iter()
-            .filter_map(|block| block.control_context.as_ref().map(|context| json!([block.source_id, context])))
-            .collect();
-        if contexts.is_empty() {
-            return self.sha256.clone();
-        }
-        sha256_hex(write(&json!([self.sha256, contexts]), Style::DUMPS.sorted()).as_bytes())
-    }
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -401,9 +358,6 @@ pub struct Action {
     pub files: Vec<Attachment>,
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub accept_dialog: Option<bool>,
-    /// Check whether this ordinary fill leaves the observed form safe to continue without another observation.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub form_fill: bool,
 }
 
 impl Action {
@@ -419,7 +373,6 @@ impl Action {
             secret_origin: None,
             files: Vec::new(),
             accept_dialog: None,
-            form_fill: false,
         }
     }
 }
@@ -463,9 +416,8 @@ pub enum BrowserError {
     /// resolve is not one of these; that can be a mistyped address.
     #[error("{0}")]
     SiteUnreachable(String),
-    /// Python's `fetch.NeedsBrowser`: a page with no browser behind it was asked to act, render or read what it
-    /// could not fetch. Nothing failed, so the run ends `blocked`, and no handler that recovers from a browser
-    /// failure may catch it: Python's is not a `BrowserError`, so its `except BrowserError` clauses let it pass.
+    /// A page with no browser behind it was asked to act, render or read what it could not fetch. Nothing failed, so
+    /// the run ends `blocked`, and no handler that recovers from a browser failure may catch it.
     #[error("{0}")]
     NeedsBrowser(String),
 }
@@ -490,8 +442,6 @@ pub struct ActResult {
     pub page_changed: bool,
     #[serde(default)]
     pub detail: Option<String>,
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub form_unchanged: bool,
     /// The action itself took the page elsewhere: its own input event began a navigation or changed the address, or
     /// it opened a tab. A page that moves on its own time is not.
     #[serde(default, deserialize_with = "lax::boolean")]
@@ -530,6 +480,12 @@ pub trait Page: Send + Sync {
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>>;
 
+    /// Click at `x` and `y`, fractions of the viewport's width and height as `screenshot` shows it, and report what
+    /// changed as `act` does. A page that draws no screenshot has no point to click.
+    fn click_viewport(&self, _x: f64, _y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("this page has no viewport to click".into())) })
+    }
+
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
 
@@ -548,8 +504,6 @@ pub trait Page: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    //! The parts of tests/test_page.py about the page types; the browser's own (`_capped`, `_same_http_origin`,
-    //! `_browser_error`) belong to the browser layer.
     use super::*;
 
     fn link(label: &str, next_page: Option<bool>, i: usize) -> Control {
@@ -560,54 +514,18 @@ mod tests {
     }
 
     #[test]
-    fn test_labels_that_turn_the_page() {
-        for label in [
-            "next",
-            "Next",
-            "Next page",
-            "Next \u{203a}",
-            "\u{203a}",
-            "\u{bb}",
-            "  next\n",
-            "Older posts",
-            "More results",
-        ] {
-            assert!(pages_forward(&link(label, None, 0)), "{label:?}");
-        }
-    }
-
-    #[test]
-    fn test_labels_that_do_not() {
-        for label in ["Nextel", "Book 3", "previous", "Next steps for the team", "Home"] {
-            assert!(!pages_forward(&link(label, None, 0)), "{label:?}");
-        }
-    }
-
-    #[test]
-    fn test_a_link_the_page_marks_rel_next_turns_the_page_whatever_it_says() {
-        assert!(pages_forward(&link("Suivant", Some(true), 0)));
-    }
-
-    #[test]
-    fn test_a_calendar_next_without_a_destination_is_not_a_pager() {
-        let mut control = link("Next", None, 0);
-        control.role = "button".into();
-        control.href = None;
-        assert!(!pager_link(&control));
-    }
-
-    #[test]
-    fn test_a_control_that_only_looks_like_a_pager_is_not_one() {
-        let mut button = link("next", None, 0);
+    fn test_only_a_link_the_page_marks_rel_next_is_a_pager() {
+        assert!(pager_link(&link("Suivant", Some(true), 0)));
+        assert!(!pager_link(&link("Next", None, 0)));
+        let mut button = link("next", Some(true), 0);
         button.role = "button".into();
         assert!(!pager_link(&button));
-        let mut nowhere = link("next", None, 0);
+        let mut nowhere = link("next", Some(true), 0);
         nowhere.href = None;
         assert!(!pager_link(&nowhere));
-        let mut inert = link("next", None, 0);
+        let mut inert = link("next", Some(true), 0);
         inert.operations.clear();
         assert!(!pager_link(&inert));
-        assert!(pager_link(&link("next", None, 0)));
     }
 
     #[test]
@@ -630,21 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn a_list_footer_that_loads_more_is_told_from_one_that_does_not() {
-        for (label, loads) in [
-            ("View more flights", true),
-            ("Show 20 more", true),
-            ("load more  results now please", true),
-            ("Load more of the latest results today", false),
-            ("Learn more", false),
-            ("See more of the best-sellers", true),
-            ("Show more", true),
-        ] {
-            assert_eq!(loads_more(&Control::new("b", "button", label, [Operation::Click])), loads, "{label}");
-        }
-    }
-
-    #[test]
     fn today_names_the_weekday_and_the_coming_months() {
         let observation = Observation {
             url: "https://example.test/".into(),
@@ -654,8 +557,8 @@ mod tests {
             response_status: None,
             document_key: String::new(),
             controls: vec![],
-            omitted_controls: 0,
             viewport_text: String::new(),
+            offscreen_text: 0,
             visual_content: false,
             tabs: vec![],
             dialog: None,
@@ -665,7 +568,20 @@ mod tests {
         };
         assert_eq!(
             observation.today(),
-            "2026-09-27 (Sunday). In one month: October 2026; in two months: November 2026"
+            "2026-09-27 (Sunday)\n\
+             September 2026: Mon 7 14 21 28; Tue 1 8 15 22 29; Wed 2 9 16 23 30; Thu 3 10 17 24; Fri 4 11 18 25; Sat 5 12 19 26; Sun 6 13 20 27\n\
+             October 2026: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25\n\
+             November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; Wed 4 11 18 25; Thu 5 12 19 26; Fri 6 13 20 27; Sat 7 14 21 28; Sun 1 8 15 22 29\n\
+             December 2026: Mon 7 14 21 28; Tue 1 8 15 22 29; Wed 2 9 16 23 30; Thu 3 10 17 24 31; Fri 4 11 18 25; Sat 5 12 19 26; Sun 6 13 20 27\n\
+             January 2027: Mon 4 11 18 25; Tue 5 12 19 26; Wed 6 13 20 27; Thu 7 14 21 28; Fri 1 8 15 22 29; Sat 2 9 16 23 30; Sun 3 10 17 24 31\n\
+             February 2027: Mon 1 8 15 22; Tue 2 9 16 23; Wed 3 10 17 24; Thu 4 11 18 25; Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28\n\
+             March 2027: Mon 1 8 15 22 29; Tue 2 9 16 23 30; Wed 3 10 17 24 31; Thu 4 11 18 25; Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28\n\
+             April 2027: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; Fri 2 9 16 23 30; Sat 3 10 17 24; Sun 4 11 18 25\n\
+             May 2027: Mon 3 10 17 24 31; Tue 4 11 18 25; Wed 5 12 19 26; Thu 6 13 20 27; Fri 7 14 21 28; Sat 1 8 15 22 29; Sun 2 9 16 23 30\n\
+             June 2027: Mon 7 14 21 28; Tue 1 8 15 22 29; Wed 2 9 16 23 30; Thu 3 10 17 24; Fri 4 11 18 25; Sat 5 12 19 26; Sun 6 13 20 27\n\
+             July 2027: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25\n\
+             August 2027: Mon 2 9 16 23 30; Tue 3 10 17 24 31; Wed 4 11 18 25; Thu 5 12 19 26; Fri 6 13 20 27; Sat 7 14 21 28; Sun 1 8 15 22 29\n\
+             September 2027: Mon 6 13 20 27; Tue 7 14 21 28; Wed 1 8 15 22 29; Thu 2 9 16 23 30; Fri 3 10 17 24; Sat 4 11 18 25; Sun 5 12 19 26"
         );
     }
 

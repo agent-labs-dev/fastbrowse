@@ -23,11 +23,8 @@ def no_ambient_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "AI_GATEWAY_API_KEY",
         "OPENROUTER_API_KEY",
         "FASTBROWSE_DECISION_SOURCE",
-        "FASTBROWSE_JEV_SOURCE",
         "FASTBROWSE_DECISION_BASE_URL",
-        "FASTBROWSE_JEV_BASE_URL",
         "FASTBROWSE_DECISION_MODEL",
-        "FASTBROWSE_JEV_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
 

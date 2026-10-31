@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/adapters/bitwarden.py`: login values from a Bitwarden vault item, read through the `bw` CLI
+//! Login values from a Bitwarden vault item, read through the `bw` CLI
 //! the user has unlocked.
 //!
 //! The item's own saved URIs decide where it may be used, under each URI's match detection. Secrets here are scoped
@@ -47,7 +47,7 @@ fn text(value: Option<&Value>) -> Option<&str> {
 
 /// The item's username, password and authenticator code, keyed by the secret names the agent sees.
 pub fn login_values(item_json: &str, origin: &str) -> Result<IndexMap<String, SecretValue>, BitwardenError> {
-    // pydantic's message would quote the input, which here holds the password.
+    // serde's message would quote the input, which here holds the password.
     let unreadable = || BitwardenError("bw returned something other than a vault item".into());
     let item: Value = serde_json::from_str(item_json).map_err(|_| unreadable())?;
     let name = text(item.get("name")).ok_or_else(unreadable)?;
@@ -86,13 +86,20 @@ pub fn login_values(item_json: &str, origin: &str) -> Result<IndexMap<String, Se
     Ok(values)
 }
 
+fn spawn_failure(error: &std::io::Error) -> BitwardenError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return BitwardenError("the Bitwarden CLI (bw) is not installed".into());
+    }
+    BitwardenError(format!("the Bitwarden CLI (bw) could not be started: {error}"))
+}
+
 /// Read `item` (a name or id) from the unlocked vault; `BW_SESSION` must be in the environment.
 pub fn login(item: &str, origin: &str) -> Result<IndexMap<String, SecretValue>, BitwardenError> {
     let done = Command::new("bw")
         .args(["get", "item", item, "--nointeraction"])
         .stdin(Stdio::null())
         .output()
-        .map_err(|_| BitwardenError("the Bitwarden CLI (bw) is not installed".into()))?;
+        .map_err(|error| spawn_failure(&error))?;
     if !done.status.success() {
         // bw reports a locked vault and a missing item on stderr; neither carries a secret. An expired CLI login
         // surfaces as "Not found" above a Node stack trace, which hides the one fix that works.
@@ -113,6 +120,15 @@ pub fn login(item: &str, origin: &str) -> Result<IndexMap<String, SecretValue>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_missing_program_reads_as_not_installed() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(spawn_failure(&missing).0.contains("not installed"));
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let denied = spawn_failure(&denied).0;
+        assert!(denied.contains("could not be started") && !denied.contains("not installed"), "{denied}");
+    }
 
     #[test]
     fn a_saved_uri_covers_an_origin_by_its_match_detection() {

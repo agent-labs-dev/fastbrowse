@@ -1,26 +1,64 @@
-//! The contract for a decision model, first ported from `src/fastbrowse/jev.py` for Jev (TypeSafe System One): typed
-//! questions in and calibrated answers out, each model's [`DecisionProfile`], and the client trait every provider's
-//! client implements.
+//! The contract for a decision model, Jev (TypeSafe System One) first: typed questions in and calibrated answers out,
+//! each model's [`DecisionProfile`], and the client trait every provider's client implements.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::BoxFuture;
-use crate::config::{Config, Thresholds};
+use crate::config::{Config, JSON_CHARS_PER_TOKEN, Thresholds};
 use crate::models::{CostLine, MaybeUnavailable};
 use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
 use crate::telemetry::BudgetExceeded;
 
-pub const JEV_MODEL: &str = "jev-1.13.0";
+pub const JEV_MODEL: &str = "jev-1.14.0";
 pub const MAX_CHOICE_OPTIONS: usize = 255;
 /// Input price; output is free.
 pub const JEV_DOLLARS_PER_INPUT_TOKEN: f64 = 0.042 / 1_000_000.0;
+/// Jev's context for a request and for each question with TypeSafe's long-context header, which OpenRouter and AIMLAPI
+/// also document as Jev's context on their routes.
+pub const JEV_LONG_CONTEXT_TOKENS: i64 = 262_144;
+
+/// Images a decision request carries, keyed by the reference its state writes in each one's place.
+pub type Images = IndexMap<String, Vec<u8>>;
+/// A request with no images.
+pub static NO_IMAGES: std::sync::LazyLock<Images> = std::sync::LazyLock::new(Images::new);
+
+/// The longest side of a Jev image, in pixels.
+pub const JEV_IMAGE_SIDE: u32 = 1568;
+
+/// Whether TypeSafe takes `png` as a Jev image: a PNG 280 to 1568 pixels a side and 78,400 to 2,458,624 in all, of at
+/// most 16 MiB. An image outside these is refused with the whole request, never resized.
+pub fn jev_takes_png(png: &[u8]) -> bool {
+    if png.len() < 24 || !png.starts_with(b"\x89PNG\r\n\x1a\n") || png.len() > 16 * 1024 * 1024 {
+        return false;
+    }
+    let side = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as u64;
+    let (width, height) = (side(16), side(20));
+    (280..=JEV_IMAGE_SIDE as u64).contains(&width)
+        && (280..=JEV_IMAGE_SIDE as u64).contains(&height)
+        && (78_400..=2_458_624).contains(&(width * height))
+}
+
+/// `state` with every value that is an image reference left out, for a route that takes no image.
+pub fn without_images(state: &Value, images: &Images) -> Value {
+    let reference = |value: &Value| value.as_str().is_some_and(|text| images.contains_key(text));
+    match state {
+        Value::Object(map) => Value::Object(
+            map.iter().filter(|(_, v)| !reference(v)).map(|(k, v)| (k.clone(), without_images(v, images))).collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.iter().filter(|v| !reference(v)).map(|v| without_images(v, images)).collect())
+        }
+        other => other.clone(),
+    }
+}
 
 literal_tag!(ChoiceTag = "choice");
 literal_tag!(NoulTag = "noul");
 literal_tag!(ScoreTag = "score");
+literal_tag!(BoxTag = "box");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,13 +118,24 @@ fn score_criteria<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Err
     }
 }
 
-/// `ChoiceQuestion | NoulQuestion | ScoreQuestion`, discriminated by `type`.
+/// Where something is in an image the state refers to. It takes no criteria and always answers with a box, so it is
+/// asked beside a NOUL on whether the thing is there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxQuestion {
+    #[serde(default, rename = "type")]
+    pub kind: BoxTag,
+    pub instructions: String,
+}
+
+/// `ChoiceQuestion | NoulQuestion | ScoreQuestion | BoxQuestion`, discriminated by `type`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Question {
     Choice(ChoiceQuestion),
     Noul(NoulQuestion),
     Score(ScoreQuestion),
+    Box(BoxQuestion),
 }
 
 /// Reads the `type` member first, as a pydantic discriminated union does, so an error names the right model.
@@ -95,15 +144,17 @@ fn by_type<'de, D: Deserializer<'de>, T>(
     choice: impl FnOnce(Value) -> Result<T, serde_json::Error>,
     noul: impl FnOnce(Value) -> Result<T, serde_json::Error>,
     score: impl FnOnce(Value) -> Result<T, serde_json::Error>,
+    boxed: impl FnOnce(Value) -> Result<T, serde_json::Error>,
 ) -> Result<T, D::Error> {
     let value = Value::deserialize(d)?;
     let parsed = match value.get("type").and_then(Value::as_str) {
         Some("choice") => choice(value),
         Some("noul") => noul(value),
         Some("score") => score(value),
+        Some("box") => boxed(value),
         Some(_) => {
             return Err(serde::de::Error::custom(
-                "Input tag does not match any of the expected tags: 'choice', 'noul', 'score'",
+                "Input tag does not match any of the expected tags: 'choice', 'noul', 'score', 'box'",
             ));
         }
         None => return Err(serde::de::Error::custom("Unable to extract tag using discriminator 'type'")),
@@ -118,6 +169,7 @@ impl<'de> Deserialize<'de> for Question {
             |v| serde_json::from_value(v).map(Question::Choice),
             |v| serde_json::from_value(v).map(Question::Noul),
             |v| serde_json::from_value(v).map(Question::Score),
+            |v| serde_json::from_value(v).map(Question::Box),
         )
     }
 }
@@ -137,6 +189,11 @@ impl From<ScoreQuestion> for Question {
         Question::Score(q)
     }
 }
+impl From<BoxQuestion> for Question {
+    fn from(q: BoxQuestion) -> Self {
+        Question::Box(q)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,6 +205,9 @@ pub struct ChoiceAnswer {
     #[serde(deserialize_with = "lax::float_unit")]
     pub confidence: f64,
 }
+
+/// Jev's own answer to a noul: yes above even odds. A question answered this way has no bar of ours to tune.
+pub const EVEN_ODDS: f64 = 0.5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -171,13 +231,43 @@ pub struct ScoreAnswer {
     pub confidence: f64,
 }
 
-/// `ChoiceAnswer | NoulAnswer | ScoreAnswer`, discriminated by `type`.
+/// The edges of a box, each a fraction of the image from its top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Edges {
+    pub top: f64,
+    pub bottom: f64,
+    pub left: f64,
+    pub right: f64,
+}
+
+impl Edges {
+    /// The centre, as fractions of the image's width and height.
+    pub fn centre(&self) -> (f64, f64) {
+        ((self.left + self.right) / 2.0, (self.top + self.bottom) / 2.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoxAnswer {
+    #[serde(default, rename = "type")]
+    pub kind: BoxTag,
+    #[serde(rename = "box")]
+    pub edges: Edges,
+    /// TypeSafe documents this as null when the model gives no confidence for the box.
+    #[serde(default, deserialize_with = "lax::opt_float_unit")]
+    pub confidence: Option<f64>,
+}
+
+/// `ChoiceAnswer | NoulAnswer | ScoreAnswer | BoxAnswer`, discriminated by `type`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Answer {
     Choice(ChoiceAnswer),
     Noul(NoulAnswer),
     Score(ScoreAnswer),
+    Box(BoxAnswer),
 }
 
 impl<'de> Deserialize<'de> for Answer {
@@ -187,6 +277,7 @@ impl<'de> Deserialize<'de> for Answer {
             |v| serde_json::from_value(v).map(Answer::Choice),
             |v| serde_json::from_value(v).map(Answer::Noul),
             |v| serde_json::from_value(v).map(Answer::Score),
+            |v| serde_json::from_value(v).map(Answer::Box),
         )
     }
 }
@@ -296,6 +387,9 @@ pub enum DecisionError {
     TransportFailed(String),
     #[error("{}", .0.message)]
     RetriesExhausted(Box<RetriesExhausted>),
+    /// The provider refused the key (HTTP 401 or 403), which no retry on that provider can change.
+    #[error("{0}")]
+    Rejected(String),
     /// A request would break a limit, so it was not sent. Python raises `BudgetExceeded` through `evaluate` itself.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),
@@ -327,17 +421,14 @@ pub struct DecisionProfile {
     pub max_request_bytes: Option<i64>,
     /// List price; `None` where none is published, so an unmetered call is an unknown cost.
     pub dollars_per_input_token: Option<f64>,
-    /// Whether the model may be sent image input.
+    /// Whether this route is sent image input: TypeSafe's own API and OpenRouter are, a backup is not.
     pub images: bool,
     /// Thresholds tuned on the evals against this model; `None` when it was never measured.
     pub thresholds: Option<Thresholds>,
 }
 
-/// Share of a provider's token limit a request is budgeted to, because tokens are estimated locally.
-const TOKEN_HEADROOM: f64 = 0.75;
-
 impl DecisionProfile {
-    /// Jev 1.13, whose limits and price TypeSafe documents and on which every default threshold was tuned.
+    /// Jev 1.13 and 1.14, at the limits and price TypeSafe documents for 1.13, which 1.14 keeps.
     pub fn jev() -> DecisionProfile {
         DecisionProfile {
             max_choice_options: MAX_CHOICE_OPTIONS,
@@ -347,7 +438,7 @@ impl DecisionProfile {
             max_total_tokens: 64_000,
             max_request_bytes: None,
             dollars_per_input_token: Some(JEV_DOLLARS_PER_INPUT_TOKEN),
-            images: true,
+            images: false,
             thresholds: Some(Thresholds::default()),
         }
     }
@@ -377,7 +468,7 @@ impl DecisionProfile {
             max_total_tokens: 256_000,
             max_request_bytes: Some(32 * 1024 * 1024),
             dollars_per_input_token: Some(dollars_per_million / 1_000_000.0),
-            images: true,
+            images: false,
             thresholds: None,
         }
     }
@@ -385,7 +476,7 @@ impl DecisionProfile {
     /// The profile of a model id as a provider names it.
     pub fn for_model(model: &str) -> DecisionProfile {
         let bare = model.rsplit('/').next().unwrap_or(model);
-        if bare == "jev" || bare.starts_with("jev-1.13") {
+        if bare == "jev" || bare.starts_with("jev-1.13") || bare.starts_with("jev-1.14") {
             return DecisionProfile::jev();
         }
         // Another Jev release keeps the family's limits and price, but nothing was tuned on it.
@@ -403,17 +494,17 @@ impl DecisionProfile {
                 ..DecisionProfile::unknown()
             },
             // OpenAI documents 400 questions a request, 2 to 10 levels, $0.10 per million input tokens and image input;
-            // Pydantic AI's profile caps a choice at 255 options. No token limit is stated, so the configured budget
-            // stands.
+            // Pydantic AI's profile caps a choice at 255 options. No token limit is stated, so a request keeps Jev's
+            // default budget.
             "gpt-6-luna" => DecisionProfile {
                 max_choice_options: 255,
                 max_score_levels: 10,
                 max_questions: Some(400),
-                max_largest_tokens: 1_000_000,
-                max_total_tokens: 1_000_000,
+                max_largest_tokens: 32_000,
+                max_total_tokens: 64_000,
                 max_request_bytes: None,
                 dollars_per_input_token: Some(0.10 / 1_000_000.0),
-                images: true,
+                images: false,
                 thresholds: None,
             },
             // Perplexity documents 128 questions a request, 255 options, 10 levels, inputs under 256K tokens, image input
@@ -423,10 +514,19 @@ impl DecisionProfile {
             }
             "pplx-decider-flash-v1.2" | "pplx-decider-flash-latest" => DecisionProfile::perplexity(0.01),
             // AIMLAPI lists a 32,768-token context and image input, and no other limit.
-            "liquid/d1" => DecisionProfile { max_total_tokens: 32_768, images: true, ..DecisionProfile::unknown() },
+            "liquid/d1" => DecisionProfile { max_total_tokens: 32_768, ..DecisionProfile::unknown() },
             // Pydantic AI's Ollama profile: 26 options, 26 levels, 64 questions and 64 KiB.
             "nimble" | "tev1" => DecisionProfile { max_score_levels: 26, ..DecisionProfile::unknown() },
             _ => DecisionProfile::unknown(),
+        }
+    }
+
+    /// This model at Jev's long context, for a route that serves it.
+    pub fn long_context(self) -> DecisionProfile {
+        DecisionProfile {
+            max_largest_tokens: JEV_LONG_CONTEXT_TOKENS,
+            max_total_tokens: JEV_LONG_CONTEXT_TOKENS,
+            ..self
         }
     }
 
@@ -440,23 +540,25 @@ impl DecisionProfile {
     pub fn fit(&self, config: Option<Config>) -> Config {
         let mut config = config
             .unwrap_or_else(|| Config { thresholds: self.thresholds.clone().unwrap_or_default(), ..Config::default() });
-        let options = self.max_choice_options.max(2) as i64;
+        let given = config.tokens.clone();
         let observation = &mut config.observation;
-        observation.max_choice_options = observation.max_choice_options.min(options);
-        observation.group_size = observation.group_size.min(observation.max_choice_options);
-        // A group choice offers at most `max_choice_options` groups of `group_size`, so a denser shortlist cannot be
-        // asked at all.
-        observation.max_offered_controls =
-            observation.max_offered_controls.min(observation.group_size * observation.max_choice_options);
-        let mut total = self.max_total_tokens as f64;
+        observation.group_size = observation.group_size.min(self.max_choice_options.max(2) as i64);
+        let mut total = self.max_total_tokens;
         if let Some(bytes) = self.max_request_bytes {
-            total = total.min(bytes as f64 / config.tokens.chars_per_token);
+            total = total.min((bytes as f64 / JSON_CHARS_PER_TOKEN) as i64);
         }
-        let largest = (self.max_largest_tokens as f64).min(total);
+        let largest = self.max_largest_tokens.min(total);
         let tokens = &mut config.tokens;
-        tokens.state_plus_largest_question =
-            tokens.state_plus_largest_question.min((largest * TOKEN_HEADROOM) as i64).max(1);
-        tokens.state_plus_all_questions = tokens.state_plus_all_questions.min((total * TOKEN_HEADROOM) as i64).max(1);
+        tokens.state_plus_largest_question = tokens.state_plus_largest_question.min(largest).max(1);
+        tokens.state_plus_all_questions = tokens.state_plus_all_questions.min(total).max(1);
+        // A budget is written against Jev's default context, so a route that documents more scales it to its own;
+        // an LLM prompt keeps the budget as given.
+        let scale = self.max_largest_tokens as f64 / DecisionProfile::jev().max_largest_tokens as f64;
+        tokens.decision_chars = (scale > 1.0).then(|| {
+            let fitted =
+                |budget: i64, limit: i64| ((budget as f64 * scale).min(limit as f64) * JSON_CHARS_PER_TOKEN) as i64;
+            (fitted(given.state_plus_largest_question, largest), fitted(given.state_plus_all_questions, total))
+        });
         config
     }
 
@@ -474,15 +576,26 @@ pub trait DecisionClient: Send + Sync {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>>;
 
-    /// The model this client asks. A client that does not say is taken to ask Jev.
-    fn profile(&self) -> DecisionProfile {
-        DecisionProfile::jev()
+    /// `evaluate` against a state that refers to `images` by their keys. A route that takes no image answers from the
+    /// rest of the state.
+    fn evaluate_images<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+        images: &'a Images,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move { self.evaluate(&without_images(state, images), questions).await })
     }
+
+    /// The model this client asks, whose limits fit every request sent to it.
+    fn profile(&self) -> DecisionProfile;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::TokenBudget;
+    use serde_json::json;
 
     #[test]
     fn jev_leaves_the_default_config_as_it_is() {
@@ -490,8 +603,48 @@ mod tests {
     }
 
     #[test]
+    fn long_context_fits_a_decision_request_to_it_and_leaves_the_llm_budget() {
+        let long = DecisionProfile::jev().long_context();
+        let fitted = long.fit(None);
+        assert_eq!(fitted.tokens.decision_chars, Some((393_216, 393_216)));
+        assert_eq!(fitted.tokens, TokenBudget { decision_chars: fitted.tokens.decision_chars, ..Default::default() });
+        // A caller's smaller budget stays as much smaller on the longer route.
+        let mut given = Config::default();
+        given.tokens.state_plus_largest_question = 2500;
+        assert_eq!(long.fit(Some(given)).tokens.decision_chars.unwrap().0, 30_720);
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(width.to_be_bytes());
+        png.extend(height.to_be_bytes());
+        png
+    }
+
+    #[test]
+    fn a_png_is_sent_only_within_typesafes_image_limits() {
+        assert!(jev_takes_png(&png(1280, 900)));
+        assert!(jev_takes_png(&png(280, 280)) && jev_takes_png(&png(1568, 1568)));
+        assert!(!jev_takes_png(&png(2560, 1800)), "a HiDPI viewport");
+        assert!(!jev_takes_png(&png(1280, 279)));
+        assert!(!jev_takes_png(b"\xff\xd8\xff\xe0 a JPEG is not asked about here"));
+    }
+
+    #[test]
+    fn a_route_without_images_is_asked_the_rest_of_the_state() {
+        let images = Images::from([("ref-1".to_string(), png(300, 300))]);
+        let state = json!({"page": {"text": "ref-1 is text here"}, "screenshot": "ref-1", "frames": ["ref-1", "kept"]});
+        assert_eq!(
+            without_images(&state, &images),
+            json!({"page": {"text": "ref-1 is text here"}, "frames": ["kept"]})
+        );
+    }
+
+    #[test]
     fn a_pinned_or_routed_jev_is_jev() {
-        for model in ["jev-1.13", "jev-1.13.0", "typesafe/jev-1.13", "typesafe-ai/jev"] {
+        for model in
+            ["jev-1.13", "jev-1.14", "jev-1.14.0", "typesafe/jev-1.14", "typesafe-ai/jev", "typesafe-ai/jev-1.14.0"]
+        {
             assert!(DecisionProfile::for_model(model).validated(), "{model}");
         }
         assert!(!DecisionProfile::for_model("nimble").validated());
@@ -500,20 +653,18 @@ mod tests {
         assert_eq!(DecisionProfile::for_model("openai/gpt-6-luna").max_questions, Some(400));
         let flash = DecisionProfile::for_model("perplexity/pplx-decider-flash-latest");
         assert_eq!((flash.max_questions, flash.dollars_per_input_token), (Some(128), Some(0.01 / 1_000_000.0)));
-        assert_eq!(DecisionProfile::for_model("gpt-6-luna").fit(None), Config::default());
-        let later = DecisionProfile::for_model("typesafe/jev-1.14");
+        assert_eq!(DecisionProfile::for_model("gpt-6-luna").fit(None), DecisionProfile::jev().fit(None));
+        let later = DecisionProfile::for_model("typesafe/jev-1.15");
         assert_eq!((later.validated(), later.max_choice_options), (false, MAX_CHOICE_OPTIONS));
     }
 
     #[test]
     fn a_small_model_bounds_the_choices_offered_and_the_request() {
         let config = DecisionProfile::unknown().fit(None);
-        assert_eq!(config.observation.max_choice_options, 26);
         assert_eq!(config.observation.group_size, 26);
-        assert_eq!(config.observation.max_offered_controls, 160);
-        // 64 KiB at three characters a token, budgeted to three quarters.
-        assert_eq!(config.tokens.state_plus_all_questions, 16_384);
-        assert_eq!(config.tokens.state_plus_largest_question, 16_384);
+        // 64 KiB of dense JSON, counted as the request is fitted.
+        assert_eq!(config.tokens.state_plus_all_questions, 43_690);
+        assert_eq!(config.tokens.state_plus_largest_question, 32_000);
     }
 
     #[test]
@@ -522,6 +673,6 @@ mod tests {
         given.thresholds.recover_below = 0.4;
         let fitted = DecisionProfile::unknown().fit(Some(given));
         assert_eq!(fitted.thresholds.recover_below, 0.4);
-        assert_eq!(fitted.observation.max_choice_options, 26);
+        assert_eq!(fitted.observation.group_size, 26);
     }
 }

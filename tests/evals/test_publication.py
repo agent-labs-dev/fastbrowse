@@ -11,9 +11,11 @@ from typing import Any
 
 import pytest
 
+from fastbrowse.evals import baseline as baseline_module
 from fastbrowse.evals import catalog as live
 from fastbrowse.evals import publication, versions
 from fastbrowse.evals.publication import REFUSE, REGRESS
+from fastbrowse.evals.status import TIMING_BASIS
 from fastbrowse.models import Limits
 
 TASK = "pypi-version"
@@ -35,7 +37,6 @@ def row(**overrides: Any) -> dict[str, Any]:
         "status": "complete",
         "normalized_status": "done",
         "passed": True,
-        "correct": True,
         "seconds": 10.0,
         "dollars": 0.01,
         "unknown_cost": False,
@@ -313,6 +314,17 @@ def test_a_selected_attempt_with_an_altered_cost_is_refused() -> None:
     assert any("dollars" in finding.detail for finding in report.blocking)
 
 
+def test_a_row_on_the_session_included_clock_is_refused() -> None:
+    report = publication.gate([row(timing_basis="session-included")], release=RELEASE, ledger=None, **TINY)
+    assert any("opening or closing the browser session" in finding.detail for finding in report.blocking)
+
+
+def test_a_selected_attempt_on_another_clock_is_refused() -> None:
+    source = row(timing_basis=TIMING_BASIS)
+    report = publication.gate([source], release=RELEASE, ledger=[selected(source) | {"timing_basis": None}], **TINY)
+    assert any("timing_basis" in finding.detail for finding in report.blocking)
+
+
 def test_an_attempt_with_a_negative_cost_is_refused() -> None:
     source = row()
     bad = selected(source) | {"dollars": -0.01}
@@ -326,7 +338,6 @@ def test_an_attempt_with_a_negative_cost_is_refused() -> None:
         (lambda r: r | {"unknown_cost": True}, "cost"),
         (lambda r: r | {"unknown_cost": False, "dollars": None}, "cost"),
         (lambda r: r | {"unmetered_requests": 1}, "cost"),
-        (lambda r: r | {"passed": True, "correct": False}, "grade"),
         (lambda r: r | {"task_version": (TASK_VERSION or 0) + 1}, "version"),
         (lambda r: r | {"suite_version": "stale000"}, "version"),
         (lambda r: r | {"run": r["run"] | {"git_dirty": True}}, "build"),
@@ -465,6 +476,13 @@ def test_material_call_and_cost_increases_block() -> None:
     assert {finding.check for finding in report.blocking} == {"efficiency", "cost"}
 
 
+def test_more_jev_calls_do_not_block() -> None:
+    baseline = [baseline_row(passed=True) | {"jev_calls": 10} for _ in range(3)]
+    candidate = [r | {"jev_calls": 40} for r in attempts(3)]
+    report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
+    assert not any(finding.check == "efficiency" for finding in report.blocking)
+
+
 @pytest.mark.parametrize(("base_calls", "candidate_calls"), [(10, 10), (10, 11)])
 def test_a_call_rise_under_the_relative_bound_or_floor_does_not_block(base_calls: int, candidate_calls: int) -> None:
     baseline = [baseline_row(passed=True) | {"llm_calls": base_calls} for _ in range(3)]
@@ -490,6 +508,38 @@ def test_an_unpriced_candidate_never_compares_a_cost() -> None:
     assert not any(finding.check == "cost" for finding in report.findings)
 
 
+def test_a_comparison_a_row_cannot_make_is_reported() -> None:
+    baseline = [baseline_row(passed=True) for _ in range(3)]
+    candidate = attempts(3, dollars=None, unknown_cost=True)
+    report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
+    notes = [finding.detail for finding in report.findings if finding.check == "efficiency"]
+    assert any("cost not compared" in note for note in notes)
+    assert not any(finding.check == "efficiency" for finding in report.blocking)
+
+
+def test_rows_from_two_builds_are_refused_without_a_named_release(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rows = [row(), row()]
+    rows[1] = rows[1] | {"run": rows[1]["run"] | {"fastbrowse_version": "0.0.1"}}
+    path = tmp_path / "rows.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert publication.main(["--rows", str(path), "--baseline", str(tmp_path)]) == 1
+    assert "one fastbrowse_version" in capsys.readouterr().out
+
+
+def test_a_published_row_keeps_what_a_release_is_compared_on() -> None:
+    source = attempts(1)[0] | {"llm_calls": 4, "tokens_per_second": 80.0}
+    assert {"llm_calls": 4, "tokens_per_second": 80.0}.items() <= versions.slim(source).items()
+    assert {"llm_calls", "tokens_per_second"} <= baseline_module.FIELDS
+
+
+def test_the_live_suites_are_the_catalog_suites() -> None:
+    from fastbrowse.evals.catalog import SUITES
+
+    assert set(publication._LIVE_SUITES) == set(SUITES)
+
+
 def test_the_cli_blocks_a_run_that_breaks_integrity(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = row()
     path = tmp_path / "rows.jsonl"
@@ -498,13 +548,19 @@ def test_the_cli_blocks_a_run_that_breaks_integrity(tmp_path: Path, capsys: pyte
     assert "BLOCKED" in capsys.readouterr().out
 
 
+def _write_published(results: Path, sources: list[dict[str, Any]], *, ledger: bool = True) -> None:
+    """`sources` as a results file, with their attempt ledger beside it unless `ledger` is off."""
+    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
+    if ledger:
+        publication.ledger_path(results).write_text(
+            "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
+        )
+
+
 def test_the_cli_passes_a_clean_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     sources = attempts(3)
     path = tmp_path / "rows.jsonl"
-    path.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    publication.ledger_path(path).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-    )
+    _write_published(path, sources)
     assert publication.main(["--rows", str(path), "--baseline", str(tmp_path), "--require-ledger"]) == 0
     assert "PASS" in capsys.readouterr().out
 
@@ -549,11 +605,7 @@ def _published_change(tmp_path: Path, *, ledger: bool) -> Path:
     subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True, capture_output=True)
     sources = suite_rows()
     results = repo / "docs" / "results" / f"{RELEASE}.jsonl"
-    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    if ledger:
-        publication.ledger_path(results).write_text(
-            "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-        )
+    _write_published(results, sources, ledger=ledger)
     _commit(repo, "publish")
     return repo
 
@@ -587,19 +639,13 @@ def test_a_partial_live_suite_fails_the_diff_check(tmp_path: Path) -> None:
     _init_repo(repo)
     base = _at_release(suite_rows(), "9.9.8")
     base_results = repo / "docs" / "results" / "9.9.8.jsonl"
-    base_results.write_text("".join(json.dumps(source) + "\n" for source in base), encoding="utf-8")
-    publication.ledger_path(base_results).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(base)), encoding="utf-8"
-    )
+    _write_published(base_results, base)
     (repo / "README.md").write_text("base\n", encoding="utf-8")
     _commit(repo, "publish the full baseline")
     subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True, capture_output=True)
     sources = attempts(3)
     results = repo / "docs" / "results" / f"{RELEASE}.jsonl"
-    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    publication.ledger_path(results).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-    )
+    _write_published(results, sources)
     _commit(repo, "publish a subset")
     findings = publication.validate_diff("main", root=repo)
     assert any(finding.check == "coverage" for finding in findings)
@@ -640,10 +686,7 @@ def _published_base(tmp_path: Path) -> Path:
     _init_repo(repo)
     sources = suite_rows()
     results = repo / "docs" / "results" / f"{RELEASE}.jsonl"
-    results.write_text("".join(json.dumps(source) + "\n" for source in sources), encoding="utf-8")
-    publication.ledger_path(results).write_text(
-        "".join(json.dumps(entry) + "\n" for entry in evidence(sources)), encoding="utf-8"
-    )
+    _write_published(results, sources)
     _commit(repo, "publish")
     subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True, capture_output=True)
     return repo
@@ -734,11 +777,6 @@ def test_a_renamed_result_file_fails_the_diff_check(tmp_path: Path) -> None:
     _commit(repo, "rename a baseline")
     findings = publication.validate_diff("main", root=repo)
     assert any("removed" in finding.detail for finding in findings)
-
-
-def test_an_uncapped_start_gate_run_clears_publication_gate() -> None:
-    sources = attempts(3)
-    assert publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY).blocking == ()
 
 
 def test_a_published_slim_row_still_proves_it_ran_uncapped() -> None:
@@ -852,3 +890,10 @@ def test_a_navigation_row_at_another_viewport_is_refused(arm: str) -> None:
     sources = [row(arm=arm, category="navigate", final_page=page, repeat=index) for index in range(3)]
     report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), **TINY)
     assert any(f.check == "protocol" and "viewport" in f.detail for f in report.blocking)
+
+
+def test_suite_ids_read_the_catalog_as_it_stands(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A catalog swapped in by a caller such as Parallax is the one a row is checked against."""
+    task = live.SUITES["core"][0]
+    monkeypatch.setattr(live, "SUITES", {"core": (task,)})
+    assert publication._suite_ids()["core"] == (task.id,)

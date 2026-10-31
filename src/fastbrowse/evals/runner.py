@@ -35,7 +35,7 @@ from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
 from fastbrowse.evals.mock_tasks import MockTask
-from fastbrowse.evals.status import normalize
+from fastbrowse.evals.status import TIMING_BASIS, normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import (
@@ -143,13 +143,16 @@ def _efficiency(cost: CostBreakdown) -> dict[str, object]:
     llm = [line for line in cost.lines if line.component is CostComponent.LLM]
     tokens_in = sum(line.input_tokens for line in llm)
     tokens_out = sum(line.output_tokens for line in llm)
-    call_seconds = sum(line.seconds or 0.0 for line in llm)
+    # A failed generation records its tokens with no seconds, so throughput is taken over the timed calls alone.
+    timed = [(line.input_tokens + line.output_tokens, line.seconds) for line in llm if line.seconds is not None]
+    timed_tokens = sum(tokens for tokens, _ in timed)
+    timed_seconds = sum(seconds for _, seconds in timed)
     return {
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "llm_calls": len(llm),
         "jev_calls": sum(1 for line in cost.lines if line.component is CostComponent.JEV),
-        "tokens_per_second": round((tokens_in + tokens_out) / call_seconds, 1) if call_seconds > 0 else None,
+        "tokens_per_second": round(timed_tokens / timed_seconds, 1) if timed_seconds > 0 else None,
     }
 
 
@@ -158,13 +161,14 @@ def _row(
 ) -> dict[str, object]:
     """The fields every suite's row carries, so one report can read both."""
     return {
-        "correct": failure is None,
         "normalized_status": normalize(result.status),
         "task": task_id,
         "passed": failure is None,
         "failure": failure,
         "status": result.status.value,
         "seconds": round(seconds, 1),
+        # The suite's Chrome starts once, before any task, so no task's seconds include opening or closing it.
+        "timing_basis": TIMING_BASIS,
         "transient_seconds": round(lost, 2),
         "dollars": None if result.cost.has_unknown else round(result.cost.known_dollars, 5),
         "unknown_cost": result.cost.has_unknown,
@@ -179,17 +183,9 @@ def _row(
     } | _efficiency(result.cost)
 
 
-def _submitted(submissions: dict[str, list[dict[str, str]]]) -> dict[str, str]:
-    """The fields the last post to each path carried, flattened for the judge to read."""
-    return {
-        f"{path} {name}": value
-        for path, posts in submissions.items()
-        for post in posts[-1:]
-        for name, value in post.items()
-    }
-
-
-async def _judge_claims(task: LocalTask | MockTask, result: RunResult, submitted: dict[str, str] | None) -> str | None:
+async def _judge_claims(
+    task: LocalTask | MockTask, result: RunResult, submitted: dict[str, list[dict[str, str]]] | None
+) -> str | None:
     """Why the run's output does not state every claim, or None when it states them all."""
     async with httpx.AsyncClient(timeout=60.0) as http:
         return await judge(
@@ -246,7 +242,7 @@ async def run_task(
     submitted = recorder.snapshot()
     failure = task.check(result, submitted)
     if failure is None and task.claims:
-        failure = await _judge_claims(task, result, _submitted(submitted))
+        failure = await _judge_claims(task, result, submitted)
     return {"arm": "fastbrowse", "category": "fixture", "suite": "local", "providers": route} | _row(
         result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=limits.max_steps
     )
@@ -266,6 +262,8 @@ async def run_mock_task(
             task, base_url + task.start, cdp_url, downloads, secrets, limits, task.attachments
         )
         failure = task.check(result, site)
+        if failure is None and isinstance(result, RunResult) and result.status is not task.expect:
+            failure = f"status {result.status.value}, expected {task.expect.value}"
         if failure is None and task.claims:
             failure = await _judge_claims(task, result, None)
         extra = {
@@ -304,8 +302,7 @@ def _tasks(only: list[str], suites: list[str]) -> tuple[list[tuple[str, LocalTas
 def parser() -> argparse.ArgumentParser:
     argument = argparse.ArgumentParser()
     argument.add_argument("--suite", nargs="+", choices=["local", "mock"], default=["local", "mock"])
-    # Repeated flags accumulate: `--only a --only b` used to keep only `b`, so a narrowed run silently ran fewer
-    # tasks than asked for.
+    # Repeated --only flags accumulate.
     argument.add_argument("--only", nargs="*", action="extend", default=[])
     argument.add_argument("--repeat", type=int, default=1)
     argument.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))

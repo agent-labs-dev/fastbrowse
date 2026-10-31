@@ -9,12 +9,13 @@ description = "fastbrowse's types: the models, the protocol, configuration, orig
 
 [dependencies]
 # WHATWG URL parsing, with UTS #46 host processing through its `idna` dependency: the parser Chrome uses.
-url = "2.5"
-percent-encoding = "2.3"
-indexmap = { version = "2", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+url = "2.5.8"
+percent-encoding = "2.3.2"
+indexmap = { version = "2.14.2", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
 # Insertion order: pydantic writes fields in declaration order, and a request body must match Python's byte for byte.
 # float_roundtrip: without it a float can parse one unit off, so a cost Python wrote reads back as another number.
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-sha2 = { version = "0.10", default-features = false }
-thiserror = "2"
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
+sha2 = { version = "0.11.1", default-features = false }
+thiserror = "2.0.21"
+serde_path_to_error = "0.1.20"

@@ -1,4 +1,4 @@
-//! tests/test_serve_cancel.py: cancelling a run over the serve protocol, as a client sees it.
+//! Cancelling a run over the serve protocol, as a client sees it.
 //!
 //! `run_task` is replaced by a stand-in that holds a browser open until it is stopped. What is asserted is the order of
 //! the messages the server wrote and whether that browser was closed by then.
@@ -10,8 +10,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CHROME, Recorder, binary, browser_event, result, run_params, runner, serving, settings};
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
+use common::{CHROME, Call, Recorder, binary, browser_event, result, run_params, runner, serving, settings};
+use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{RunResult, Status};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
@@ -43,23 +43,24 @@ impl Browsing {
 
     fn runner(&self) -> Arc<dyn Runner> {
         let browsing = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let browsing = browsing.clone();
             async move {
-                browsing.started.lock().unwrap().push(args.task.clone());
+                browsing.started.lock().unwrap().push(args.task.task.clone());
                 let mut finish = browsing.finish.subscribe();
                 let outcome = args
+                    .host
                     .cancel
                     .guard(async {
-                        (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+                        (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
                         let _ = finish.wait_for(|done| *done).await;
                     })
                     .await;
                 browsing.closing.notify_one();
                 let _ = browsing.let_close.subscribe().wait_for(|go| *go).await;
-                browsing.closed.lock().unwrap().push(args.task.clone());
+                browsing.closed.lock().unwrap().push(args.task.task.clone());
                 outcome?;
-                Ok(RunResult { answer: Some(args.task.clone()), ..result(Status::Complete) })
+                Ok(RunResult { answer: Some(args.task.task.clone()), ..result(Status::Complete) })
             }
         })
     }
@@ -305,12 +306,16 @@ fn test_the_command_exits_zero_with_its_browser_closed_on_shutdown_during_a_run(
 async fn test_cancelling_a_run_that_is_waiting_on_a_secret_ends_it_and_the_late_value_goes_nowhere() {
     let resolved: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
     let seen = resolved.clone();
-    let typist = runner(move |args: RunArgs| {
+    let typist = runner(move |args: Call| {
         let resolved = seen.clone();
         async move {
-            (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
-            let secrets = args.secrets.clone().unwrap();
-            let value = args.cancel.guard(secrets.resolve("SHOP_PASSWORD", "https://shop.example.com")).await?;
+            (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+            let secrets = args.host.secrets.clone().unwrap();
+            let value = args
+                .host
+                .cancel
+                .guard(fastbrowse_core::safety::resolve_secret(&*secrets, "SHOP_PASSWORD", "https://shop.example.com"))
+                .await?;
             resolved.lock().unwrap().push(value);
             Err::<RunResult, _>(RunError::Cancelled)
         }

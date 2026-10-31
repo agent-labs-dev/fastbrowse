@@ -3,9 +3,9 @@ mod misc_support;
 
 use std::collections::HashSet;
 
-use common::{harness, sites};
+use common::{eval_active, harness, sites};
 use fastbrowse_core::page::BlockKind;
-use misc_support::{eval_active, text_of};
+use misc_support::text_of;
 
 // -- test_comment_context.py: reply controls belong to their comment record, including when only one form is open --
 
@@ -90,7 +90,7 @@ async fn test_a_list_that_hosts_a_shadow_root_is_not_frameless() {
 // -- test_image_evidence.py: rendered image elements need DOM evidence even when they contain no text -----------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_a_figure_is_visual_content_but_an_icon_sized_drawing_is_not() {
+async fn test_a_drawing_in_the_viewport_is_visual_content() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(
@@ -102,14 +102,7 @@ async fn test_a_figure_is_visual_content_but_an_icon_sized_drawing_is_not() {
     )
     .await;
     assert!(h.observe().await.visual_content);
-    eval_active(
-        &h.session,
-        r#"
-        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
-          '<canvas width="16" height="16"></canvas>';
-        "#,
-    )
-    .await;
+    eval_active(&h.session, "document.querySelector('canvas').remove()").await;
     assert!(!h.observe().await.visual_content);
     h.close().await;
 }
@@ -175,7 +168,7 @@ async fn test_capture_does_not_copy_inline_image_payload() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_image_observations_are_bounded_and_ignore_decode_state() {
+async fn test_every_image_is_observed_and_decode_state_is_ignored() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(
@@ -187,7 +180,7 @@ async fn test_image_observations_are_bounded_and_ignore_decode_state() {
     )
     .await;
     let before = h.page.capture().await.expect("capture");
-    assert_eq!(before.text.matches("Image element DOM metadata").count(), 32);
+    assert_eq!(before.text.matches("Image element DOM metadata").count(), 300);
     assert!(before.text.contains("blob:[identifier omitted]"));
     eval_active(
         &h.session,
@@ -243,7 +236,7 @@ async fn test_capture_reports_icon_link_destination_with_its_row() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_icon_link_observations_are_bounded() {
+async fn test_every_icon_link_destination_is_observed_whole() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(
@@ -255,8 +248,7 @@ async fn test_icon_link_observations_are_bounded() {
     )
     .await;
     let capture = h.page.capture().await.expect("capture");
-    assert_eq!(capture.text.matches("Link element DOM metadata").count(), 32);
-    assert!(capture.text.contains("Additional link destinations omitted."));
-    assert!(capture.text.chars().count() < 100_000);
+    assert_eq!(capture.text.matches("Link element DOM metadata").count(), 100);
+    assert!(capture.text.contains(&format!("/f/99?k={}", "x".repeat(4000))));
     h.close().await;
 }

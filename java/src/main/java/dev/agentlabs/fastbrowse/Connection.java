@@ -1,8 +1,9 @@
 package dev.agentlabs.fastbrowse;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import dev.agentlabs.fastbrowse.protocol.Protocol;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -81,7 +82,7 @@ final class Connection {
         JsonNode message;
         try {
             message = json.readTree(line);
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             // The server keeps everything but messages off this stream, so a line that is not one means the binary is
             // not a fastbrowse server at all. Waiting on it would hang every request.
             String start = line.length() > 200 ? line.substring(0, 200) : line;
@@ -91,11 +92,11 @@ final class Connection {
         JsonNode method = message.get("method");
         JsonNode id = message.get("id");
         JsonNode params = message.path("params");
-        if (method != null && method.isTextual()) {
+        if (method != null && method.isString()) {
             if (id == null || id.isNull()) {
-                delivery.execute(() -> notifications.notify(method.asText(), params));
+                delivery.execute(() -> notifications.notify(method.asString(), params));
             } else {
-                delivery.execute(() -> answering.execute(() -> answer(id, method.asText(), params)));
+                delivery.execute(() -> answering.execute(() -> answer(id, method.asString(), params)));
             }
             return true;
         }
@@ -109,7 +110,7 @@ final class Connection {
         JsonNode error = message.get("error");
         // After the notifications before it, so a run's events have all been delivered when its reply is.
         if (error != null && !error.isNull()) {
-            RpcException refused = new RpcException(error.path("code").asInt(), error.path("message").asText());
+            RpcException refused = new RpcException(error.path("code").asInt(), error.path("message").asString());
             delivery.execute(() -> waiting.completeExceptionally(refused));
         } else {
             JsonNode result = message.path("result");

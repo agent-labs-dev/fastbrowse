@@ -1,4 +1,4 @@
-//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver (`browser/cursor.py`).
+//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver.
 //!
 //! Cua Driver's `move_cursor` moves a synthetic overlay and leaves the user's pointer, focus and the browser alone
 //! (only `scope=desktop` would move the real pointer, which is never sent here). It is purely visual: the click
@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant};
 
+use crate::page::truthy;
 use fastbrowse_core::BoxFuture;
 use futures_util::future::{FutureExt, Shared};
 use serde::{Deserialize, Serialize};
@@ -156,22 +157,6 @@ enum Failure {
     Random,
 }
 
-impl Failure {
-    fn kind(self) -> &'static str {
-        match self {
-            Self::Timeout => "Timeout",
-            Self::DriverExited => "DriverExited",
-            Self::DriverRejected => "DriverRejected",
-            Self::BadReply => "BadReply",
-            Self::ToolFailed => "ToolFailed",
-            Self::MissingTools => "MissingTools",
-            Self::NoWindowScope => "NoWindowScope",
-            Self::Io => "Io",
-            Self::Random => "Random",
-        }
-    }
-}
-
 fn log_warning(message: &str) {
     if std::env::var_os("FASTBROWSE_LOG").is_some() {
         let _ = writeln!(std::io::stderr(), "fastbrowse.browser.cursor: {message}");
@@ -182,18 +167,6 @@ fn log_warning(message: &str) {
 /// a consistent value.
 fn lock<T>(mutex: &StdMutex<T>) -> StdMutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Python truthiness for a JSON value, as `result.get("isError")` and `structuredContent or {}` test it.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
 }
 
 struct Io {
@@ -547,7 +520,7 @@ impl Inner {
     }
 
     async fn fail(&self, failure: Failure) {
-        log_warning(&format!("cursor feedback turned off for this run ({})", failure.kind()));
+        log_warning(&format!("cursor feedback turned off for this run ({failure:?})"));
         self.disabled.store(true, Ordering::SeqCst);
         self.driver.close().await;
     }
@@ -615,10 +588,11 @@ fn executable(path: &Path) -> bool {
 }
 
 fn session_name() -> Result<String, Failure> {
+    use data_encoding::HEXLOWER;
     use ring::rand::{SecureRandom, SystemRandom};
     let mut bytes = [0u8; 4];
     SystemRandom::new().fill(&mut bytes).map_err(|_| Failure::Random)?;
-    Ok(format!("fastbrowse-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+    Ok(format!("fastbrowse-{}", HEXLOWER.encode(&bytes)))
 }
 
 async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
@@ -651,7 +625,7 @@ async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
     if tools.contains_key("set_agent_cursor_motion") {
         let arguments = json!({"session": session, "idle_hide_ms": 0, "glide_duration_ms": GLIDE_MS});
         if let Err(failure) = driver.tool("set_agent_cursor_motion", arguments).await {
-            log_warning(&format!("the cursor may fade while the run is idle ({})", failure.kind()));
+            log_warning(&format!("the cursor may fade while the run is idle ({failure:?})"));
         }
     }
     Ok(())
@@ -677,7 +651,7 @@ pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
     match opened {
         Ok(session) => Some(CursorFeedback::new(guard.take(), session)),
         Err(failure) => {
-            log_warning(&format!("cursor feedback unavailable ({}); running without it", failure.kind()));
+            log_warning(&format!("cursor feedback unavailable ({failure:?}); running without it"));
             guard.take().close().await;
             None
         }

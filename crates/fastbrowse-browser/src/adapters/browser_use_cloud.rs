@@ -1,4 +1,4 @@
-//! A remote Chrome from Browser Use Cloud, with its metered browser and proxy cost (`adapters/browser_use_cloud.py`).
+//! A remote Chrome from Browser Use Cloud, with its metered browser and proxy cost.
 //!
 //! ```text
 //! let mut cloud = BrowserUseCloudBrowser::new(api_key, BrowserUseCloudOptions::default())?;
@@ -8,13 +8,13 @@
 //! cloud.cost(); // metered lines, available after stop
 //! ```
 //!
-//! Python creates on `__aenter__` and stops on `__aexit__`, shielding both from cancellation. Rust cannot run async
-//! work in a dropped future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
+//! Creating and stopping the browser both have to survive cancellation. Rust cannot run async work in a dropped
+//! future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
 //! behind for `stop` to wait on, and a browser still known when this value drops is stopped by a task spawned then.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{BrowserConnection, CostBasis, CostComponent, CostLine};
@@ -23,11 +23,13 @@ use tokio::task::JoinHandle;
 
 use crate::adapters::http::{self, Response};
 
-pub const API_V3: &str = "https://api.browser-use.com/api/v3";
 pub const API_V4: &str = "https://api.browser-use.com/api/v4";
 const API_ORIGIN: &str = "https://api.browser-use.com";
 /// https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
 pub const MAX_EXTENSIONS: usize = 3;
+/// The screen a browser starts on when the caller names none. Left to the service a browser may come up 1920 wide, past
+/// Jev's 1568 pixel side (`jev_takes_png`), and Jev would get no screenshot of any page.
+const DEFAULT_SCREEN: (u32, u32) = (1120, 780);
 /// A browser whose stop request failed bills until its own timeout, up to four hours, so a stop the service could
 /// not take (a 5xx, a 429, a dropped connection) is sent again rather than abandoned after one try.
 const STOP_ATTEMPTS: u32 = 4;
@@ -38,9 +40,8 @@ const STOP_RETRY_SECONDS: f64 = 1.0;
 /// every attempt inside that window and gave up. The browser bills through the wait either way, so ten minutes, two
 /// edge delays, is worth spending to stop it; past that the run ends and the browser runs on to its timeout, logged.
 const STOP_WAIT_SECONDS: f64 = 600.0;
-/// `clients/validation.py`'s `RETRYABLE_STATUS`: statuses that say nothing about the request, so a repeat can clear
-/// them. 520 to 524 are Cloudflare's edge failing to reach the provider behind it.
-pub const RETRYABLE_STATUS: [u16; 12] = [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529];
+// 520 to 524 are Cloudflare's edge failing to reach the provider behind it.
+pub use crate::cdp::RETRYABLE_STATUS;
 
 /// Monotonic seconds, as Python's `time.monotonic`.
 pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
@@ -91,9 +92,8 @@ pub struct BrowserUseCloudOptions {
     pub timeout_minutes: u32,
     pub profile: Option<String>,
     pub viewport: Option<(u32, u32)>,
-    pub allow_resizing: bool,
     pub extensions: Vec<String>,
-    /// The longest one request may take; run.py's httpx client allowed 60 seconds.
+    /// The longest one request may take.
     pub http_timeout: Duration,
 }
 
@@ -104,7 +104,6 @@ impl Default for BrowserUseCloudOptions {
             timeout_minutes: 15,
             profile: None,
             viewport: None,
-            allow_resizing: false,
             extensions: vec![],
             http_timeout: Duration::from_secs(60),
         }
@@ -132,8 +131,8 @@ struct View {
     id: String,
     cdp_url: Option<String>,
     live_url: Option<String>,
-    browser_cost: f64,
-    proxy_cost: f64,
+    browser_cost: Option<f64>,
+    proxy_cost: Option<f64>,
 }
 
 pub struct BrowserUseCloudBrowser {
@@ -148,7 +147,7 @@ pub struct BrowserUseCloudBrowser {
 impl BrowserUseCloudBrowser {
     /// Validate the options and build the create body; nothing is sent until `start`.
     pub fn new(api_key: &str, options: BrowserUseCloudOptions) -> Result<Self, BrowserUseCloudError> {
-        let clock: Clock = Arc::new(monotonic);
+        let clock: Clock = Arc::new(fastbrowse_core::telemetry::monotonic);
         let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
         Self::with_seams(api_key, options, API_ORIGIN, clock, sleep)
     }
@@ -162,19 +161,15 @@ impl BrowserUseCloudBrowser {
         clock: Clock,
         sleep: Sleep,
     ) -> Result<Self, BrowserUseCloudError> {
-        // Only the V4 create call takes extensions, so a run that asks for none stays on the V3 path it was built
-        // on.
-        let root = if options.extensions.is_empty() { API_V3 } else { API_V4 };
         let mut body: Vec<(&str, Value)> = vec![("timeout", json!(options.timeout_minutes))];
         if !options.extensions.is_empty() {
             body.push(("extensionIds", json!(extension_ids(&options.extensions)?)));
         }
-        if options.allow_resizing {
-            body.push(("allowResizing", json!(true)));
-        }
         if let Some(country) = &options.proxy_country {
             body.push(("proxyCountryCode", json!(country)));
         }
+        // The service's own CAPTCHA solver: its documented default, stated so a run never depends on that default.
+        body.push(("solveCaptchas", json!(true)));
         // A cloud profile is the remote counterpart of `LocalChrome.profile`: the browser starts with the cookies
         // the profile already holds, so a site signed into once stays signed in. Whoever runs the task never sees
         // those cookies, which is the point of naming a profile rather than typing a secret.
@@ -183,12 +178,11 @@ impl BrowserUseCloudBrowser {
         }
         // Headless defaults are small enough that a responsive site collapses its header into a toggle and the
         // control the run needs is not in the page at all, which is why local Chrome sets a size too.
-        if let Some((width, height)) = options.viewport {
-            body.push(("browserScreenWidth", json!(width)));
-            body.push(("browserScreenHeight", json!(height)));
-        }
+        let (width, height) = options.viewport.unwrap_or(DEFAULT_SCREEN);
+        body.push(("browserScreenWidth", json!(width)));
+        body.push(("browserScreenHeight", json!(height)));
         let api = Api {
-            root: root.replacen(API_ORIGIN, origin, 1),
+            root: API_V4.replacen(API_ORIGIN, origin, 1),
             api_key: api_key.to_owned(),
             http_timeout: options.http_timeout,
             timeout_minutes: options.timeout_minutes,
@@ -209,7 +203,9 @@ impl BrowserUseCloudBrowser {
         self.connection.as_ref().ok_or_else(|| BrowserUseCloudError::Error("the cloud browser is not running".into()))
     }
 
-    /// The browser and proxy lines the service metered, from its latest answer; empty before one.
+    /// The browser and proxy lines the service metered, from its latest answer; empty before one. The proxy line is
+    /// unsettled: the service meters a browser's proxy data about 30 seconds after it stops, and a run does not hold
+    /// its result for that. A later `GET /browsers/{id}` reads the settled figure.
     pub fn cost(&self) -> Vec<CostLine> {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).cost.clone()
     }
@@ -310,11 +306,6 @@ impl Drop for BrowserUseCloudBrowser {
     }
 }
 
-fn monotonic() -> f64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f64()
-}
-
 /// A JSON object with its keys in the order given, as Python's dict keeps them; serde_json's map sorts them.
 fn ordered_object(fields: &[(&str, Value)]) -> String {
     let members: Vec<String> = fields.iter().map(|(key, value)| format!("{}:{value}", json!(key))).collect();
@@ -397,9 +388,13 @@ fn lock(state: &Shared) -> std::sync::MutexGuard<'_, State> {
 }
 
 fn record_cost(state: &Shared, browser: &View) {
+    // A cost the service left out is unknown, not a metered zero.
+    let line = |component, basis, dollars: Option<f64>| {
+        CostLine::new(component, if dollars.is_some() { basis } else { CostBasis::Unknown }, dollars)
+    };
     lock(state).cost = vec![
-        CostLine::new(CostComponent::Browser, CostBasis::Metered, Some(browser.browser_cost)),
-        CostLine::new(CostComponent::Proxy, CostBasis::Metered, Some(browser.proxy_cost)),
+        line(CostComponent::Browser, CostBasis::Metered, browser.browser_cost),
+        line(CostComponent::Proxy, CostBasis::Unsettled, browser.proxy_cost),
     ];
 }
 
@@ -439,8 +434,8 @@ fn view(raw: &Value) -> Option<View> {
         Some(_) => None,
     };
     let dollars = |alias: &str, name: &str| match field(alias, name) {
-        None => Some(0.0),
-        Some(value) => decimal(value),
+        None => Some(None),
+        Some(value) => decimal(value).map(Some),
     };
     Some(View {
         id: object.get("id")?.as_str()?.to_owned(),
@@ -783,11 +778,16 @@ mod tests {
         assert!(cloud.connection().is_err());
         let requests = server.requests();
         let paths: Vec<_> = requests.iter().map(|r| format!("{} {}", r.method, r.path)).collect();
-        assert_eq!(paths, ["POST /api/v3/browsers", "GET /json/version", "PATCH /api/v3/browsers/created"]);
+        assert_eq!(paths, ["POST /api/v4/browsers", "GET /json/version", "PATCH /api/v4/browsers/created"]);
         let keyed = |r: &Recorded| r.headers.iter().any(|(n, v)| n == "X-Browser-Use-API-Key" && v == "key");
         assert!(keyed(&requests[0]) && !keyed(&requests[1]) && keyed(&requests[2]));
         assert_eq!(requests[2].body, br#"{"action":"stop"}"#);
         assert_eq!(dollars(&cloud), [Some(0.50), Some(0.10)]);
+        // The proxy reading at the stop is labelled as what it is, and is not an unknown a dollar cap would stop on.
+        assert_eq!(
+            cloud.cost().iter().map(|line| line.basis).collect::<Vec<_>>(),
+            [CostBasis::Metered, CostBasis::Unsettled]
+        );
     }
 
     #[tokio::test]
@@ -988,43 +988,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cloud_extensions_pick_the_api_version() {
-        for extensions in [vec![], vec![EXTENSION_A.to_owned(), EXTENSION_B.to_owned()]] {
-            let v4 = !extensions.is_empty();
-            let server = FakeServer::start(move |_, base| {
-                let cdp = if v4 { "wss://cdp.test/browser/created" } else { base };
-                reply(200, serde_json::json!({"id": "created", "cdpUrl": cdp, "webSocketDebuggerUrl": "ws://cdp.test"}))
-            })
-            .await;
-            let options = BrowserUseCloudOptions { extensions: extensions.clone(), ..Default::default() };
-            let mut cloud = cloud(&server, options, &Waits::default());
-            let connection = cloud.start().await.unwrap();
-            cloud.stop().await.unwrap();
-            assert_eq!(connection.cdp_url, if v4 { "wss://cdp.test/browser/created" } else { "ws://cdp.test" });
-            let requests = server.requests();
-            let version = if v4 { "/api/v4/" } else { "/api/v3/" };
-            assert!(requests.iter().filter(|r| r.method != "GET").all(|r| r.path.starts_with(version)));
-            let sent = requests[0].json();
-            assert_eq!(sent.get("extensionIds"), v4.then(|| serde_json::json!(extensions)).as_ref());
-            assert_eq!(methods(&server), if v4 { vec!["POST", "PATCH"] } else { vec!["POST", "GET", "PATCH"] });
-        }
+    async fn cloud_extensions_go_on_the_create_call() {
+        let server = FakeServer::start(move |_, _| {
+            reply(200, serde_json::json!({"id": "created", "cdpUrl": "wss://cdp.test/browser/created"}))
+        })
+        .await;
+        let extensions = vec![EXTENSION_A.to_owned(), EXTENSION_B.to_owned()];
+        let options = BrowserUseCloudOptions { extensions: extensions.clone(), ..Default::default() };
+        let mut cloud = cloud(&server, options, &Waits::default());
+        let connection = cloud.start().await.unwrap();
+        cloud.stop().await.unwrap();
+        assert_eq!(connection.cdp_url, "wss://cdp.test/browser/created");
+        assert_eq!(server.requests()[0].json().get("extensionIds"), Some(&serde_json::json!(extensions)));
+        assert_eq!(methods(&server), ["POST", "PATCH"]);
     }
 
     #[tokio::test]
     async fn the_create_body_keeps_pythons_key_order() {
         let cases = [
-            (BrowserUseCloudOptions::default(), r#"{"timeout":15,"proxyCountryCode":"us"}"#),
+            (
+                BrowserUseCloudOptions::default(),
+                concat!(
+                    r#"{"timeout":15,"proxyCountryCode":"us","solveCaptchas":true,"#,
+                    r#""browserScreenWidth":1120,"browserScreenHeight":780}"#,
+                ),
+            ),
             (
                 BrowserUseCloudOptions {
                     timeout_minutes: 240,
                     profile: Some("profile-42".into()),
                     ..Default::default()
                 },
-                r#"{"timeout":240,"proxyCountryCode":"us","profileId":"profile-42"}"#,
-            ),
-            (
-                BrowserUseCloudOptions { allow_resizing: true, ..Default::default() },
-                r#"{"timeout":15,"allowResizing":true,"proxyCountryCode":"us"}"#,
+                concat!(
+                    r#"{"timeout":240,"proxyCountryCode":"us","solveCaptchas":true,"profileId":"profile-42","#,
+                    r#""browserScreenWidth":1120,"browserScreenHeight":780}"#,
+                ),
             ),
             (
                 BrowserUseCloudOptions {
@@ -1035,7 +1033,7 @@ mod tests {
                 },
                 concat!(
                     r#"{"timeout":15,"extensionIds":["6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"],"#,
-                    r#""browserScreenWidth":1280,"browserScreenHeight":900}"#,
+                    r#""solveCaptchas":true,"browserScreenWidth":1280,"browserScreenHeight":900}"#,
                 ),
             ),
         ];
@@ -1132,9 +1130,12 @@ mod tests {
     #[test]
     fn costs_read_decimal_strings_and_numbers() {
         let read = |raw: Value| view(&raw).map(|v| (v.browser_cost, v.proxy_cost));
-        assert_eq!(read(serde_json::json!({"id": "x", "browserCost": "0.25", "proxyCost": 0.1})), Some((0.25, 0.1)));
-        assert_eq!(read(serde_json::json!({"id": "x"})), Some((0.0, 0.0)));
-        assert_eq!(read(serde_json::json!({"id": "x", "browser_cost": "1E-2"})), Some((0.01, 0.0)));
+        assert_eq!(
+            read(serde_json::json!({"id": "x", "browserCost": "0.25", "proxyCost": 0.1})),
+            Some((Some(0.25), Some(0.1)))
+        );
+        assert_eq!(read(serde_json::json!({"id": "x"})), Some((None, None)));
+        assert_eq!(read(serde_json::json!({"id": "x", "browser_cost": "1E-2"})), Some((Some(0.01), None)));
         assert_eq!(read(serde_json::json!({"id": "x", "browserCost": "NaN"})), None);
         assert_eq!(read(serde_json::json!({"id": "x", "browserCost": null})), None);
         assert_eq!(read(serde_json::json!({"id": 1})), None);

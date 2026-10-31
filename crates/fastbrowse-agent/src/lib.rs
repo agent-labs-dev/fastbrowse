@@ -1,7 +1,7 @@
-//! The decision logic of `src/fastbrowse`, ported module by module above fastbrowse-core: one module per Python file.
+//! The agent above fastbrowse-core: the run loop, Jev's per-step policy, the planner, reading, notes and verification.
 //!
-//! Every prompt, Jev request and structured-output schema built here is byte for byte the one Python builds for the
-//! same inputs, since a run is proven by replaying recorded model traffic keyed on a hash of the request body.
+//! Every prompt, Jev request and structured-output schema built here is a pure function of its inputs, since a run is
+//! replayed from recorded model traffic keyed on a hash of the request body.
 
 #[macro_use]
 mod macros;

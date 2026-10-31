@@ -107,8 +107,7 @@ proposing a direct address and typing field text.
 | Setting | Effect |
 |:--|:--|
 | `FASTBROWSE_LLM_MODEL` | the model for every purpose |
-| `FASTBROWSE_LLM_MODEL_<PURPOSE>` | the model for one purpose: `PLAN`, `READ`, `FIELD_TEXT`, `SHORTCUT`, `RECOVER`, `COMPOSE` or `VERIFY` |
-| `FASTBROWSE_LLM_REASONING`, `FASTBROWSE_LLM_REASONING_<PURPOSE>` | `none`, `low`, `medium` or `high`; `none` turns reasoning off for a model such as DeepSeek V4.1 Flash that otherwise reasons at every effort |
+| `FASTBROWSE_LLM_REASONING` | `none`, `low`, `medium` or `high`; `none` turns reasoning off for a model such as DeepSeek V4.1 Flash that otherwise reasons at every effort |
 | `FASTBROWSE_LLM_PROVIDER` | `openrouter`, `gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`, `azure`, `ollama`, `lmstudio`, `vllm` or `custom`; each reads its own key, such as `OPENAI_API_KEY`, and sends it to that provider alone |
 | `FASTBROWSE_LLM_BASE_URL`, `FASTBROWSE_LLM_API_KEY` | any OpenAI-compatible endpoint, such as a local vLLM at `http://127.0.0.1:8000/v1`; it needs `FASTBROWSE_LLM_MODEL`, and never receives the OpenRouter or gateway key |
 | `FASTBROWSE_LLM_STRICT=0`, `FASTBROWSE_LLM_EXTRA_BODY` | for that endpoint: send schemas in non-strict form, and add a JSON object to every request |
@@ -160,6 +159,10 @@ A cost a provider omits is looked up from its receipt, or bounded from OpenRoute
 cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A browser command
 unanswered for 120 seconds returns `unavailable`. Step and dollar limits do not bound elapsed time:
 `Limits(max_seconds=...)` does.
+
+A run's `proxy` cost line on a Browser Use Cloud browser has the basis `unsettled`: the service meters proxy data
+about 30 seconds after a browser stops, and a run returns without waiting, so the figure can read low. The
+`browser_id` in the run's browser event reads the settled figure from `GET /browsers/{id}` once that time has passed.
 
 ## Troubleshooting
 

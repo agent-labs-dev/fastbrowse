@@ -3,7 +3,7 @@
 package dev.agentlabs.fastbrowse.protocol;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /**
  * The params of {@code run/event}: one thing a run did, written before that run's reply.

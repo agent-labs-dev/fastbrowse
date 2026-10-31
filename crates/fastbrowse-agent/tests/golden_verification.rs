@@ -1,22 +1,18 @@
 //! Verification against every call the Python implementation's tests made, as `tests/golden/verification*.json` hold
-//! them.
+//! them. `FASTBROWSE_UPDATE_GOLDEN=1` re-records them (see `common::capture`).
 
 mod common;
-
-use std::sync::Mutex;
 
 use common::capture::*;
 use common::*;
 use fastbrowse_agent::memory::Notes;
 use fastbrowse_agent::planner::Plan;
 use fastbrowse_agent::policy::HistoryEntry;
-use fastbrowse_agent::retrieval::{Annotation, AnswerCorrection, ComposedAnswer, ScalarField};
+use fastbrowse_agent::retrieval::ComposedAnswer;
 use fastbrowse_agent::verification::{self, *};
-use fastbrowse_core::config::{Config, Thresholds, TokenBudget};
-use fastbrowse_core::llm::Message;
+use fastbrowse_core::config::{Thresholds, TokenBudget};
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::{Capture, Observation};
-use fastbrowse_core::py::base64;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use serde_json::{Map, Value, json};
@@ -32,39 +28,6 @@ fn opt<T: serde::de::DeserializeOwned>(args: &Value, key: &str) -> Option<T> {
     args.get(key).filter(|value| !value.is_null()).map(parse)
 }
 
-fn flag(args: &Value, key: &str, default: bool) -> bool {
-    args.get(key).and_then(Value::as_bool).unwrap_or(default)
-}
-
-fn field(field: &Value) -> ScalarField {
-    let annotation = match field["annotation"].as_str() {
-        Some("int") => Annotation::Int,
-        Some("float") => Annotation::Float,
-        Some("Decimal") => Annotation::Decimal,
-        Some("date") => Annotation::Date,
-        Some("bool") => Annotation::Bool,
-        Some("str") => Annotation::Str,
-        _ => Annotation::Other,
-    };
-    let bounds = field["metadata"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            let (key, bound) = item.as_object()?.iter().next()?;
-            bound.as_f64().map(|bound| (key.clone(), bound))
-        })
-        .collect();
-    ScalarField {
-        annotation,
-        title: field["title"].as_str().map(str::to_string),
-        description: field["description"].as_str().map(str::to_string),
-        required: field["required"].as_bool().unwrap_or(true),
-        default: field.get("default").cloned().unwrap_or(Value::Null),
-        bounds,
-    }
-}
-
 fn record_schema(value: &Value) -> Result<RecordSchema, String> {
     let schema = &value["$schema"];
     let model = output_model(&schema["json_schema"]).map_err(|error| format!("unsupported schema: {error}"))?;
@@ -72,18 +35,9 @@ fn record_schema(value: &Value) -> Result<RecordSchema, String> {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|item| (item["name"].as_str().unwrap_or_default().to_string(), field(item)))
+        .map(|item| (item["name"].as_str().unwrap_or_default().to_string(), scalar_field(item)))
         .collect();
     Ok(RecordSchema { fields, model })
-}
-
-fn screenshots(value: &Value) -> Vec<Vec<u8>> {
-    value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|item| base64::decode(item["$bytes"].as_str().unwrap_or_default()).expect("base64"))
-        .collect()
 }
 
 fn outcome<T: Dump>(result: fastbrowse_agent::error::Result<T>) -> Value {
@@ -94,54 +48,25 @@ fn outcome<T: Dump>(result: fastbrowse_agent::error::Result<T>) -> Value {
 }
 
 /// Runs one case and returns every way Rust differed from Python.
-fn replay(case: &Value) -> Result<(), String> {
+fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
     let args = &case["args"];
     let name = case["function"].as_str().unwrap_or_default();
     let ledger_param =
         args.as_object().and_then(|a| a.iter().find(|(_, v)| v.get("$ledger").is_some()).map(|(k, _)| k.clone()));
     let ledger: Option<Ledger> = ledger_param.as_ref().map(|key| ledger_arg(&args[key]));
     let ledgers: Vec<&Ledger> = ledger.iter().collect();
-    let jev = KeyedJev::new(case, ledgers.clone());
-    let llm = KeyedLLM::new(case, ledgers);
+    let log: Option<CallLog> = update.then(CallLog::default);
+    let jev = KeyedJev::new(case, ledgers.clone(), log.clone());
+    let llm = KeyedLLM::new(case, ledgers, log.clone());
     let trace = Trace::collecting();
-    let tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
+    let mut tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
+    // These cases were recorded with LLM prompts fitted to the decision budget's tokens: a model with that window.
+    tokens.llm_context_tokens = Some(tokens.state_plus_largest_question.min(tokens.state_plus_all_questions));
     let notes: Option<Notes> = args.get("notes").filter(|n| n.get("$notes").is_some()).map(notes_arg);
-    let missing: Mutex<Vec<String>> = Mutex::new(opt(args, "missing_outputs").unwrap_or_default());
-    let corrections: Mutex<Vec<AnswerCorrection>> = Mutex::new(opt(args, "corrections").unwrap_or_default());
-    let verified_fields: Mutex<Vec<ComposedAnswer>> = Mutex::new(opt(args, "verified_fields").unwrap_or_default());
-    let has = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
-    let check_options = || CheckOptions {
-        tokens: tokens.clone(),
-        ledger: ledger.as_ref(),
-        missing_outputs: has("missing_outputs").then_some(&missing),
-        corrections: has("corrections").then_some(&corrections),
-        verified_outputs: None,
-        independent_fields: flag(args, "independent_fields", true),
-        trace: trace.clone(),
-        transaction_evidence_ids: strings(args.get("transaction_evidence_ids").unwrap_or(&Value::Null)),
-        answer_checks: strings(args.get("answer_checks").unwrap_or(&Value::Null)),
-        verified_fields: has("verified_fields").then_some(&verified_fields),
-    };
     let notes_ref = || notes.as_ref().expect("a notes argument");
     let history: Vec<HistoryEntry> = opt(args, "history").unwrap_or_default();
     let visited = strings(args.get("visited").unwrap_or(&Value::Null));
-    let doubted = strings(args.get("doubted").unwrap_or(&Value::Null));
-    let invented = strings(args.get("invented").unwrap_or(&Value::Null));
-    let verify_options = || VerifyOptions {
-        doubted: &doubted,
-        invented: &invented,
-        visited: &visited,
-        config: opt::<Config>(args, "config").unwrap_or_default(),
-        ledger: ledger.as_ref(),
-    };
     let result: Value = match name {
-        "visual_only_state" => json!({"result": visual_only_state(&parse::<Observation>(&args["observation"]))}),
-        "verify_cache_key" => json!({"result": verify_cache_key(&parse::<Vec<Message>>(&args["messages"]))}),
-        "_grounding" => json!({"result": grounding(notes_ref(), &parse::<Plan>(&args["plan"]), &invented)}),
-        "_output_context" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            json!({"result": output_context(&composed, notes_ref()).map(|c| c.dump())})
-        }
         "page_state" => {
             let questions = strings(args.get("questions").unwrap_or(&Value::Null));
             let context: Option<Map<String, Value>> = opt(args, "context");
@@ -153,35 +78,20 @@ fn replay(case: &Value) -> Result<(), String> {
                 context.as_ref(),
             ))
         }
-        "verify_messages" => outcome(verify_messages(
-            args["task"].as_str().unwrap(),
-            &parse::<Plan>(&args["plan"]),
-            &parse::<Observation>(&args["observation"]),
-            &screenshots(&args["screenshots"]),
-            notes_ref(),
-            &history,
-            &verify_options(),
-        )),
-        "llm_verify" => {
-            let found = block_on(llm_verify(
-                &llm,
-                args["task"].as_str().unwrap(),
-                &parse::<Plan>(&args["plan"]),
-                &parse::<Observation>(&args["observation"]),
-                &screenshots(&args["screenshots"]),
-                notes_ref(),
-                &history,
-                &verify_options(),
-            ));
-            match found {
-                Ok(generation) => json!({"result": {"data": generation.data.dump(), "cost": generation.cost.dump()}}),
-                Err(error) => error_outcome(&error),
-            }
-        }
         "check_done" => {
             let draft: Option<ComposedAnswer> = opt(args, "draft");
-            let options =
-                DoneOptions { tokens: tokens.clone(), history: &history, visited: &visited, trace: trace.clone() };
+            let options = DoneOptions {
+                tokens: tokens.clone(),
+                history: &history,
+                visited: &visited,
+                changed_since_read: false,
+                unsent: None,
+                page_read: false,
+                site_failure: None,
+                continuing: Default::default(),
+                ledger: None,
+                trace: trace.clone(),
+            };
             outcome(block_on(check_done(
                 &jev,
                 args["task"].as_str().unwrap(),
@@ -190,22 +100,6 @@ fn replay(case: &Value) -> Result<(), String> {
                 notes_ref(),
                 &parse::<Thresholds>(&args["thresholds"]),
                 draft.as_ref(),
-                &options,
-            )))
-        }
-        "check_answer_outputs" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let options = check_options();
-            json!({"result": check_answer_outputs(&composed, notes_ref(), &strings(&args["checks"]), &options)})
-        }
-        "check_claims" => {
-            let composed: ComposedAnswer = parse(&args["composed"]);
-            let options = check_options();
-            outcome(block_on(check_claims(
-                &jev,
-                &composed,
-                notes_ref(),
-                &parse::<Thresholds>(&args["thresholds"]),
                 &options,
             )))
         }
@@ -224,6 +118,16 @@ fn replay(case: &Value) -> Result<(), String> {
         }
         other => return Err(format!("no replay for {other}")),
     };
+    if let Some(log) = log {
+        return Ok(Some(rerecorded(
+            case,
+            result,
+            notes.as_ref(),
+            ledger_param.as_deref().zip(ledger.as_ref()),
+            &trace,
+            log,
+        )));
+    }
     let mut problems = Vec::new();
     let mut expected_outcome = case["outcome"].clone();
     if let Some(schema) = expected_outcome.pointer_mut("/result/$schema").and_then(Value::as_object_mut) {
@@ -239,7 +143,7 @@ fn replay(case: &Value) -> Result<(), String> {
         let expected = &case["notes_after"]["notes"];
         let wanted = if expected.get("$same").is_some() { args["notes"]["$notes"].clone() } else { expected.clone() };
         let actual = notes_json(notes);
-        if actual != sorted(wanted.clone()) {
+        if actual != sorted_owners(wanted.clone()) {
             problems.push(format!("notes\n  rust:   {}\n  python: {}", clip(&actual), clip(&wanted)));
         }
     }
@@ -249,21 +153,8 @@ fn replay(case: &Value) -> Result<(), String> {
         // Calls sent side by side bill in whichever order they finish, so the lines are compared as a multiset.
         let actual = unordered_lines(ledger_json(ledger));
         let expected = unordered_lines(expected.clone());
-        if !expected.is_null() && !shares_ledger(case) && actual != expected {
+        if !expected.is_null() && actual != expected {
             problems.push(format!("ledger\n  rust:   {}\n  python: {}", clip(&actual), clip(&expected)));
-        }
-    }
-    let mutated = &case["mutated"];
-    let collected: [(&str, Value); 3] = [
-        ("missing_outputs", json!(missing.lock().unwrap().clone())),
-        ("corrections", corrections.lock().unwrap().dump()),
-        ("verified_fields", verified_fields.lock().unwrap().dump()),
-    ];
-    for (key, actual) in collected {
-        if let Some(expected) = mutated.get(key)
-            && actual != *expected
-        {
-            problems.push(format!("{key}\n  rust:   {}\n  python: {}", clip(&actual), clip(expected)));
         }
     }
     let mut written: Vec<String> = trace.events().iter().map(|e| e.to_string()).collect();
@@ -280,31 +171,7 @@ fn replay(case: &Value) -> Result<(), String> {
     if let Err(panic) = finished {
         problems.push(panic_text(&panic));
     }
-    if problems.is_empty() { Ok(()) } else { Err(problems.join("\n")) }
-}
-
-/// The agent bills the done check and the verifier into the same ledger while `check_claims` runs beside them, and a
-/// fake that waits lets those receipts land inside a recorded call's ledger effect. Python's ledger after such a call
-/// holds lines from work outside it, and overlapping effects count one receipt twice, so neither ledger is a fixed
-/// answer there; the requests and the outcome still are.
-fn shares_ledger(case: &Value) -> bool {
-    let name = case["name"].as_str().unwrap_or_default();
-    case["function"] == "check_claims"
-        && (name.starts_with("tests/test_agent.py::") || name.starts_with("tests/test_finish_overlap.py::"))
-}
-
-fn unordered_lines(mut ledger: Value) -> Value {
-    if let Some(Value::Array(lines)) = ledger.get_mut("lines") {
-        lines.sort_by_key(|line| line.to_string());
-    }
-    ledger
-}
-
-fn sorted(mut state: Value) -> Value {
-    if let Some(Value::Array(owners)) = state.get_mut("owners") {
-        owners.sort_by_key(|pair| pair[0].as_str().unwrap_or_default().to_string());
-    }
-    state
+    if problems.is_empty() { Ok(None) } else { Err(problems.join("\n")) }
 }
 
 fn clip(value: &Value) -> String {
@@ -313,14 +180,6 @@ fn clip(value: &Value) -> String {
         Some((at, _)) => format!("{}...", &text[..at]),
         None => text,
     }
-}
-
-fn panic_text(panic: &Box<dyn std::any::Any + Send>) -> String {
-    panic
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_else(|| "panic".into())
 }
 
 /// Cases Rust cannot reproduce, with why.
@@ -337,38 +196,5 @@ fn rust_skip(case: &Value) -> Option<String> {
 
 #[test]
 fn every_recorded_call_makes_the_same_requests_and_decisions() {
-    let mut cases = capture_cases("verification.json");
-    cases.extend(capture_cases("verification_large.json"));
-    let only = std::env::var("CASE").ok();
-    let mut failures = Vec::new();
-    let mut skipped = Vec::new();
-    let mut passed = 0;
-    for case in &cases {
-        let name = case["name"].as_str().unwrap_or("?");
-        if only.as_deref().is_some_and(|only| !name.contains(only)) {
-            continue;
-        }
-        if let Some(reason) = skip_reason(case).or_else(|| rust_skip(case)) {
-            skipped.push(format!("{name}: {reason}"));
-            continue;
-        }
-        let replayed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay(case)));
-        match replayed {
-            Ok(Ok(())) => passed += 1,
-            Ok(Err(problem)) => failures.push(format!("{name}\n{problem}")),
-            Err(panic) => failures.push(format!("{name}\npanicked: {}", panic_text(&panic))),
-        }
-    }
-    eprintln!("verification goldens: {passed} passed, {} failed, {} skipped", failures.len(), skipped.len());
-    for skip in &skipped {
-        eprintln!("skipped {skip}");
-    }
-    let shown: Vec<&String> = failures.iter().take(8).collect();
-    assert!(
-        failures.is_empty(),
-        "{} of {} cases differ; first:\n\n{}",
-        failures.len(),
-        cases.len(),
-        shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n\n")
-    );
+    replay_files("verification", &["verification.json", "verification_large.json"], rust_skip, replay);
 }

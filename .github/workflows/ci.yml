@@ -33,10 +33,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history so the publication check can read docs/results as they stand on the base branch.
         with: {fetch-depth: 0, persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "${{ matrix.python }}"
-      # The eval data loaders import yaml; without the extra, ty sees a different tree than we do.
+      # tests/test_ci.py imports yaml; without the extra, ty sees a different tree than we do.
       - run: uv sync --locked --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -73,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0, persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22"}
@@ -87,7 +87,7 @@ jobs:
       # The Jev review's base-only pull_request_target use needs human review of zizmor's warning.
       - name: Zizmor (advisory)
         continue-on-error: true
-        run: uvx zizmor==1.30.1 --offline .github/workflows
+        run: uvx zizmor==1.31.1 --offline .github/workflows
 
   sdk:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -95,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22"}
@@ -137,7 +137,7 @@ jobs:
           # built further down that shares their artifacts, are discarded on save unless asked for.
           cache-all-crates: true
           cache-workspace-crates: true
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22", package-manager-cache: false}
@@ -150,19 +150,20 @@ jobs:
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with: {tool: nextest@0.9.150}
       - run: cargo nextest run --workspace --locked --no-fail-fast
-      # nextest does not run doctests. No crate has one today; this keeps it that way rather than silently
-      # dropping the check.
+      # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc
       # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.
-      # The packaged crates are verified as registry crates at the workspace's unchanged version, and cargo never
-      # rebuilds or re-extracts a registry crate it already has, so the restored cache verified a change that adds a
-      # function to fastbrowse-core against main's fastbrowse-core and failed. Their builds and sources go first.
-      - run: rm -rf target/debug/.fingerprint/fastbrowse-* "${CARGO_HOME:-$HOME/.cargo}"/registry/src/-*/fastbrowse*
-      - run: cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
+      # cargo treats a crate it verifies against as an immutable registry crate: it reuses an unpacked copy in
+      # ~/.cargo/registry/src and a build in the target directory keyed on name and version alone. The cache above
+      # restores both from other sources, so the check gets a target directory of its own and no unpacked copies.
+      - run: rm -rf ~/.cargo/registry/src/*/fastbrowse*
+      - run: >-
+          cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
+          --target-dir "$RUNNER_TEMP/package"
       # The Go client against the binary just built, its scripted runs standing in for the agent. Its types are
       # written from protocol/schema.json and committed; a schema changed without them fails here.
-      - run: cargo build -p fastbrowse-cli --locked
+      - run: cargo build -p fastbrowse-cli --features scripted --locked
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version-file: go/go.mod, cache: false}
       - run: go -C go generate ./... && git diff --exit-code -- go

@@ -227,26 +227,21 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
     }
 }
 
-/// The page's first rendered text, quoted block by block, for a page the run stops on without reading.
-pub fn leading_quotes(capture: &Capture, max_chars: i64) -> Vec<Evidence> {
+/// The page's rendered text, quoted block by block, for a page the run stops on without reading.
+pub fn page_quotes(capture: &Capture) -> Vec<Evidence> {
     let page = Page::new(capture);
-    let mut quotes = Vec::new();
-    let mut left = max_chars;
-    for block in &capture.blocks {
+    capture
+        .blocks
+        .iter()
         // A typed observation is a description code wrote, not words the page showed, and a download the session
         // kept is an earlier file appended after the page, not the page itself.
-        if left <= 0
-            || block.kind == BlockKind::Observation
-            || block.source_url.is_some()
-            || text::strip(page.slice(block.start, block.end)).is_empty()
-        {
-            continue;
-        }
-        let end = block.end.min(block.start + left);
-        quotes.push(evidence(&page, block, block.start, end));
-        left -= end - block.start;
-    }
-    quotes
+        .filter(|block| {
+            block.kind != BlockKind::Observation
+                && block.source_url.is_none()
+                && !text::strip(page.slice(block.start, block.end)).is_empty()
+        })
+        .map(|block| evidence(&page, block, block.start, block.end))
+        .collect()
 }
 
 /// A run of source blocks a model names by its ends.
@@ -340,7 +335,8 @@ pub(crate) fn source_marker(block: &Block) -> String {
     )
 }
 
-/// `_read_message`.
+/// The user message asking `question` of one chunk: the collected evidence and capture first, the marked source blocks,
+/// then the question and the requirement ids.
 pub(crate) fn read_message(
     page: &Page<'_>,
     part: &Chunk,
@@ -378,7 +374,7 @@ pub(crate) fn read_message(
     Message::user(content)
 }
 
-/// `_read_message(capture, part, question, requirement_ids, evidence)`, for callers holding only the capture.
+/// [`read_message`], for callers holding only the capture.
 pub fn read_message_for(
     capture: &Capture,
     part: &Chunk,

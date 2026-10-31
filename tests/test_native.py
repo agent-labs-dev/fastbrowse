@@ -84,41 +84,51 @@ def _ends_mid_json(error: ValidationError) -> bool:
     )
 
 
-def test_arguments_become_the_options_the_core_reads() -> None:
-    secrets = Secrets({"password": "hunter2"}, "https://shop.example")
-    written = native.options(
+def test_arguments_become_the_run_task_the_core_reads() -> None:
+    written = native.run_task_json(
+        "Find the release",
         arguments(
             start="https://pypi.org/",
             chrome=LocalChrome(headed=True),
             output_schema=Release,
             inputs={"name": "httpx"},
             attachments=(Attachment(name="a.txt", mime_type="text/plain", content=b"hello"),),
-            secrets=secrets,
+            secrets=Secrets({"password": "hunter2"}, "https://shop.example"),
             until=_until,
             downloads=Path("/tmp/downloads"),
             allowed_origins=("https://pypi.org",),
             viewport=(1280, 800),
-            config=Config(max_pages=3),
+            config=Config(step_frames=False),
             fetch=False,
-        )
+        ),
     )
-    options = json.loads(written)
-    assert options["start"] == "https://pypi.org/"
-    assert options["chrome"] == {"binary": None, "headed": True, "profile": None}
-    assert options["output_schema"] == Release.model_json_schema()
-    assert base64.b64decode(options["attachments"][0]["content"]) == b"hello"
-    assert options["secrets"] == [{"name": "password", "origins": ["https://shop.example"]}]
-    assert (options["allowed_origins"], options["viewport"]) == (["https://pypi.org"], [1280, 800])
-    assert options["config"]["max_pages"] == 3
-    assert options["downloads"] == "/tmp/downloads"
-    assert "hunter2" not in written
+    task = json.loads(written)
+    assert (task["task"], task["start"]) == ("Find the release", "https://pypi.org/")
+    assert task["chrome"] == {"binary": None, "headed": True, "profile": None}
+    assert task["output_schema"] == Release.model_json_schema()
+    assert base64.b64decode(task["attachments"][0]["content"]) == b"hello"
+    assert (task["allowed_origins"], task["viewport"]) == (["https://pypi.org"], [1280, 800])
+    assert task["downloads"] == "/tmp/downloads"
+    assert "secrets" not in task and "config" not in task and "hunter2" not in written
 
 
 def test_every_run_task_argument_crosses() -> None:
-    """An argument added to `run_task` and left out of the options and the callbacks would be dropped silently."""
-    callbacks = {"on_event", "on_frame", "until", "check_access", "jev", "llm", "http"}
-    names = set(inspect.signature(run_task).parameters) - {"task"}
-    assert names - callbacks == set(json.loads(native.options(arguments())))
+    """An argument added to `run_task` and left out of the run and the host would be dropped silently."""
+    host = {
+        "browser_api_key",
+        "secrets",
+        "config",
+        "settings",
+        "on_event",
+        "on_frame",
+        "until",
+        "check_access",
+        "jev",
+        "llm",
+        "http",
+    }
+    names = set(inspect.signature(run_task).parameters)
+    assert names - host == set(json.loads(native.run_task_json("t", arguments())))
 
 
 @pytest.fixture
@@ -232,7 +242,7 @@ async def test_the_callers_own_clients_serve_the_rust_run() -> None:
             jev=counted.jev,
             llm=counted.llm,
             http=counted.http,
-            config=Config(max_pages=3),
+            config=Config(step_frames=False),
         )
     assert result.status is Status.COMPLETE, result.error
     assert counted.requests == ["https://pypi.example/httpx"]
@@ -551,7 +561,7 @@ async def test_a_run_names_the_providers_it_calls_in_its_trace(monkeypatch: pyte
     assert result.status is not Status.COMPLETE
     assert providers(events) == (
         "Jev openrouter (no backup: an outage past its retries ends the run); "
-        "LLM google/gemini-3.5-flash-lite, google/gemini-3.8-flash via OpenRouter"
+        "LLM google/gemini-3.8-flash via OpenRouter"
     )
     # A caller's own clients are theirs to describe.
     assert providers(own) is None

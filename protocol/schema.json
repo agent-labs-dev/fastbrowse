@@ -184,6 +184,7 @@
         "metered",
         "estimated",
         "bounded",
+        "unsettled",
         "unknown"
       ],
       "title": "CostBasis",
@@ -290,10 +291,11 @@
       "type": "object"
     },
     "Decider": {
-      "description": "The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\nreader's, because the reader asked for the rest of the list.",
+      "description": "Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the\nnext page of a list or DONE once a lookup is answered.",
       "enum": [
         "jev",
-        "llm"
+        "llm",
+        "code"
       ],
       "title": "Decider",
       "type": "string"
@@ -503,7 +505,6 @@
         "read",
         "field_text",
         "recover",
-        "verify",
         "compose",
         "shortcut"
       ],
@@ -858,12 +859,30 @@
     },
     "RunParams": {
       "additionalProperties": false,
-      "description": "One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
+      "description": "One run: the run's arguments, and what the server needs to talk to the client about it.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
       "properties": {
         "run_id": {
           "minLength": 1,
           "title": "Run Id",
           "type": "string"
+        },
+        "secrets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SecretRef"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "frames": {
+          "default": false,
+          "title": "Frames",
+          "type": "boolean"
+        },
+        "until": {
+          "default": false,
+          "title": "Until",
+          "type": "boolean"
         },
         "task": {
           "title": "Task",
@@ -951,24 +970,6 @@
           "default": null,
           "title": "Output Schema"
         },
-        "secrets": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/SecretRef"
-          },
-          "title": "Secrets",
-          "type": "array"
-        },
-        "frames": {
-          "default": false,
-          "title": "Frames",
-          "type": "boolean"
-        },
-        "until": {
-          "default": false,
-          "title": "Until",
-          "type": "boolean"
-        },
         "downloads": {
           "anyOf": [
             {
@@ -1050,6 +1051,8 @@
         "cdp_port": {
           "anyOf": [
             {
+              "maximum": 65535,
+              "minimum": 0,
               "type": "integer"
             },
             {
@@ -1100,9 +1103,13 @@
               "minItems": 2,
               "prefixItems": [
                 {
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 {
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "type": "integer"
                 }
               ],
@@ -1115,9 +1122,51 @@
           "default": null,
           "title": "Viewport"
         },
-        "cloud_allow_resizing": {
+        "cloud_extensions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Cloud Extensions",
+          "type": "array"
+        },
+        "cloud_timeout_minutes": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cloud Timeout Minutes"
+        },
+        "allowed_origins": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Origins"
+        },
+        "fetch": {
           "default": false,
-          "title": "Cloud Allow Resizing",
+          "title": "Fetch",
+          "type": "boolean"
+        },
+        "fetch_first": {
+          "default": false,
+          "title": "Fetch First",
           "type": "boolean"
         }
       },
@@ -1578,6 +1627,43 @@
       "title": "StepFact",
       "type": "object"
     },
+    "StepFallback": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "description": "The reason the run stopped following Jev, as recovery was told it.",
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "Jev's certainty on the step it gave up, on the weakest link of its choices.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The control Jev chose, by its label, when it chose one.",
+          "title": "Target"
+        }
+      },
+      "required": [
+        "reason",
+        "confidence",
+        "target"
+      ],
+      "title": "StepFallback",
+      "type": "object"
+    },
     "StepOutcome": {
       "enum": [
         "executed",
@@ -1674,6 +1760,18 @@
           "minimum": 0,
           "title": "Duration Ms",
           "type": "integer"
+        },
+        "fallback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepFallback"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."
         },
         "choices": {
           "default": [],

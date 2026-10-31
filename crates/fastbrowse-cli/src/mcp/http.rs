@@ -20,6 +20,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use super::is_loopback;
 use super::{HEALTH_PATH, McpServer, Outbox, Session};
 
 /// A response body: one buffer, or the events of a stream as they come.
@@ -90,19 +91,12 @@ fn session_id() -> String {
     fastbrowse_core::py::sha256_hex(seed.as_bytes())[..32].to_string()
 }
 
-/// One session's state beside the MCP session itself: the GET stream, when a client opened one.
-#[derive(Default)]
-struct Open {
-    session: Arc<Session>,
-    listening: Option<mpsc::UnboundedSender<Bytes>>,
-}
-
 pub struct Http {
     server: Arc<McpServer>,
     token: Option<String>,
     /// DNS rebinding protection, on when the server is bound to loopback.
     loopback_only: bool,
-    sessions: Mutex<HashMap<String, Open>>,
+    sessions: Mutex<HashMap<String, Arc<Session>>>,
 }
 
 /// Constant-time comparison, so the token cannot be recovered a byte at a time from response timings.
@@ -111,15 +105,11 @@ fn same(supplied: &[u8], expected: &[u8]) -> bool {
 }
 
 fn allowed_host(host: &str) -> bool {
-    ["127.0.0.1", "localhost", "[::1]"]
-        .iter()
-        .any(|base| host.strip_prefix(base).is_some_and(|rest| rest.starts_with(':')))
+    host.rsplit_once(':').is_some_and(|(name, _)| is_loopback(name))
 }
 
 fn allowed_origin(origin: &str) -> bool {
-    ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-        .iter()
-        .any(|base| origin.strip_prefix(base).is_some_and(|rest| rest.starts_with(':')))
+    origin.strip_prefix("http://").is_some_and(allowed_host)
 }
 
 fn event(message: &Value) -> Bytes {
@@ -140,11 +130,11 @@ fn events(receiver: mpsc::UnboundedReceiver<Bytes>, session: &str) -> Reply {
 impl Http {
     pub fn new(server: Arc<McpServer>, host: &str) -> Arc<Http> {
         let token = server.config.mcp_token.clone();
-        let loopback_only = matches!(host, "127.0.0.1" | "localhost" | "::1");
+        let loopback_only = is_loopback(host);
         Arc::new(Http { server, token, loopback_only, sessions: Mutex::default() })
     }
 
-    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Open>> {
+    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Session>>> {
         self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
@@ -183,10 +173,10 @@ impl Http {
             Some(_) => return server_error(StatusCode::NOT_FOUND, -32600, "Session not found", None),
             None => (session_id(), true),
         };
-        let session = if opening { Arc::new(Session::default()) } else { self.sessions()[&id].session.clone() };
+        let session = if opening { Arc::new(Session::default()) } else { self.sessions()[&id].clone() };
         let (response, established) = self.transport(method, headers, body, &id, &session, opening);
         if opening && established {
-            self.sessions().insert(id, Open { session, listening: None });
+            self.sessions().insert(id, session);
         }
         response
     }
@@ -252,7 +242,7 @@ impl Http {
                     let message = "Not Acceptable: Client must accept both application/json and text/event-stream";
                     return refused(server_error(StatusCode::NOT_ACCEPTABLE, -32600, message, Some(id)));
                 }
-                let message = match crate::pyjson::loads(body) {
+                let message: Value = match serde_json::from_slice(body) {
                     Ok(message) => message,
                     Err(error) => {
                         let message = format!("Parse error: {error}");
@@ -260,8 +250,8 @@ impl Http {
                     }
                 };
                 let Value::Object(object) = &message else {
-                    let message = format!("Validation error: {}", not_a_message(&message));
-                    return refused(server_error(StatusCode::BAD_REQUEST, -32602, &message, Some(id)));
+                    let message = "Validation error: a JSON-RPC message is one JSON object";
+                    return refused(server_error(StatusCode::BAD_REQUEST, -32602, message, Some(id)));
                 };
                 let is_request = object.contains_key("id") && object.contains_key("method");
                 let initializing = is_request && object.get("method").and_then(Value::as_str) == Some("initialize");
@@ -293,26 +283,6 @@ impl Http {
                 self.server.receive(session, &line, &outbox);
                 (events(receiver, id), initializing)
             }
-            Method::GET => {
-                if !sse_ok {
-                    let message = "Not Acceptable: Client must accept text/event-stream";
-                    return refused(server_error(StatusCode::NOT_ACCEPTABLE, -32600, message, Some(id)));
-                }
-                if let Some(response) = check_headers() {
-                    return refused(response);
-                }
-                let mut sessions = self.sessions();
-                let Some(open) = sessions.get_mut(id) else {
-                    return refused(server_error(StatusCode::NOT_FOUND, -32600, "Session not found", None));
-                };
-                if open.listening.as_ref().is_some_and(|sender| !sender.is_closed()) {
-                    let message = "Conflict: Only one SSE stream is allowed per session";
-                    return refused(server_error(StatusCode::CONFLICT, -32000, message, Some(id)));
-                }
-                let (sender, receiver) = mpsc::unbounded_channel();
-                open.listening = Some(sender);
-                (events(receiver, id), false)
-            }
             Method::DELETE => {
                 if let Some(response) = check_headers() {
                     return refused(response);
@@ -325,29 +295,6 @@ impl Http {
             _ => refused(server_error(StatusCode::METHOD_NOT_ALLOWED, -32600, "Method Not Allowed", Some(id))),
         }
     }
-}
-
-/// pydantic's account of a body that is no JSON-RPC message at all, such as a batch.
-fn not_a_message(value: &Value) -> String {
-    let shown = super::browse_arguments::py_repr(value);
-    let kind = match value {
-        Value::Array(_) => "list",
-        Value::String(_) => "str",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::Bool(_) => "bool",
-        Value::Null => "NoneType",
-        Value::Object(_) => "dict",
-    };
-    let lines: Vec<String> = ["JSONRPCRequest", "JSONRPCNotification", "JSONRPCResponse", "JSONRPCError"]
-        .iter()
-        .map(|model| {
-            format!(
-                "{model}\n  Input should be a valid dictionary or instance of {model} [type=model_type, input_value={shown}, input_type={kind}]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
-            )
-        })
-        .collect();
-    format!("4 validation errors for JSONRPCMessage\n{}", lines.join("\n"))
 }
 
 /// Serve until the process is stopped.

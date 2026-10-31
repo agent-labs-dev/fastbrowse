@@ -1,5 +1,5 @@
 //! A page read over HTTP has to produce the blocks a browser capture produces, or quotes break. `golden/fetch.json`
-//! holds the blocks the Python reader made of every fixture page, which the Rust one must still make.
+//! holds the blocks the reader makes of every fixture page.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -119,13 +119,17 @@ async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
 }
 
 #[tokio::test]
-async fn test_a_shell_or_a_wall_needs_the_browser_that_renders_it() {
+async fn test_a_shell_or_a_challenge_needs_the_browser_that_renders_it() {
     let shell = format!("<html><body><div id=root></div></body></html>{}", "<script>a=1</script>".repeat(200));
     let error = fetched(&html(&shell), "https://shop.example.com/app").await.unwrap_err();
     assert!(error.0.contains("scripts"), "{error}");
+    // A bot check answers with its status, as Cloudflare's 403 and 503 challenges do, so it is never read as the page.
     let wall = "<html><body><h1>Just a moment</h1><p>Checking your browser</p></body></html>";
-    let error = fetched(&html(wall), "https://shop.example.com/app").await.unwrap_err();
-    assert!(error.0.contains("bot check"), "{error}");
+    for status in [403, 503] {
+        let page = FetchedPage::new(client(wall, status, "text/html"), None, None);
+        let error = page.navigate("https://shop.example.com/app", None).await.unwrap_err();
+        assert!(error.needs_browser() && error.to_string().contains(&format!("HTTP {status}")), "{error}");
+    }
 }
 
 #[test]
@@ -169,7 +173,7 @@ async fn test_a_redirect_inside_the_grant_is_followed() {
 
 #[tokio::test]
 async fn test_a_fetched_page_reads_but_cannot_act() {
-    let page = FetchedPage::new(html(PAGE), None, 6000, None);
+    let page = FetchedPage::new(html(PAGE), None, None);
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
     let observation = page.observe().await.expect("observe");
     assert_eq!(observation.url, "https://shop.example.com/orders");
@@ -188,7 +192,7 @@ async fn test_a_fetched_page_reads_but_cannot_act() {
 
 #[tokio::test]
 async fn test_a_page_that_cannot_be_fetched_needs_the_browser_unless_it_was_a_guess() {
-    let page = FetchedPage::new(client("gone", 404, "text/html"), None, 6000, None);
+    let page = FetchedPage::new(client("gone", 404, "text/html"), None, None);
     let error = page.navigate("https://shop.example.com/missing", None).await.unwrap_err();
     assert!(error.needs_browser(), "{error}");
     // A guessed address falls back to the start page, as a browser failure does.
@@ -197,15 +201,13 @@ async fn test_a_page_that_cannot_be_fetched_needs_the_browser_unless_it_was_a_gu
 }
 
 #[test]
-fn test_a_class_a_rule_hides_is_not_read() {
-    let page = r#"<html><head><style>.gone { display: none } .kept { color: red }</style></head>
-    <body><p>Shown price: 10.00</p><p class="gone">Old price: 99.00</p><p class="kept">Note: read</p></body></html>"#;
+fn test_an_element_that_hides_itself_is_not_read() {
+    let page = r#"<html><body><p>Shown price: 10.00</p><p style="display: none">Old price: 99.00</p>
+    <div hidden><p>Template: 0.00</p></div><p class="gone">Note: read</p></body></html>"#;
     let (_title, found) = blocks(page, "https://shop.example.com/orders");
     let texts: Vec<&str> = found.iter().map(|b| b.text.as_str()).collect();
-    assert!(texts.contains(&"Shown price: 10.00"));
-    // A template or a stale value the page does not display is not evidence a reader can quote.
-    assert!(!texts.iter().any(|text| text.contains("99.00")));
-    assert!(texts.iter().any(|text| text.contains("Note: read")));
+    // What the element itself says is not rendered is not read; a stylesheet's cascade is the browser's to compute.
+    assert_eq!(texts, ["Shown price: 10.00", "Note: read"]);
 }
 
 #[tokio::test]
@@ -223,19 +225,24 @@ async fn test_a_body_past_the_size_bound_is_refused() {
 }
 
 #[tokio::test]
-async fn test_a_charset_is_decoded_as_python_decodes_it_or_refused() {
-    let bytes = |charset: &'static str| {
-        serving(move |_| {
-            Response::new(200, b"<p>caf\xe9 \x80\x81</p>".to_vec())
-                .with_header("content-type", &format!("text/html; charset={charset}"))
-        })
+async fn test_a_charset_is_decoded_by_the_encoding_standard() {
+    let served = |content_type: &'static str, body: &'static [u8]| {
+        serving(move |_| Response::new(200, body.to_vec()).with_header("content-type", content_type))
     };
-    let read = |http: Http| async move { fetched(&http, "https://a.example/").await.map(|capture| capture.text) };
-    assert_eq!(read(html("<p>caf\u{e9}</p>")).await.unwrap(), "caf\u{e9}\n\n");
-    assert_eq!(read(bytes("ISO-8859-1")).await.unwrap(), "caf\u{e9} \u{80}\u{81}\n\n");
-    assert_eq!(read(bytes("windows-1252")).await.unwrap(), "caf\u{e9} \u{20ac}\u{fffd}\n\n");
-    assert_eq!(read(bytes("us-ascii")).await.unwrap(), "caf\u{fffd} \u{fffd}\u{fffd}\n\n");
-    assert!(read(bytes("shift_jis")).await.unwrap_err().0.contains("character set"));
+    let read =
+        |http: Http| async move { fetched(&http, "https://a.example/").await.map(|capture| capture.text).unwrap() };
+    assert_eq!(read(html("<p>caf\u{e9}</p>")).await, "caf\u{e9}\n\n");
+    // The standard reads ISO-8859-1 and US-ASCII as windows-1252, as every browser does.
+    assert_eq!(read(served("text/html; charset=ISO-8859-1", b"<p>caf\xe9 \x80</p>")).await, "caf\u{e9} \u{20ac}\n\n");
+    assert_eq!(
+        read(served("text/html; charset=\"Shift_JIS\"", b"<p>\x93\xfa\x96\x7b</p>")).await,
+        "\u{65e5}\u{672c}\n\n"
+    );
+    // With no charset in the response, the document's own `<meta>` names it.
+    let meta = b"<meta charset=windows-1251><p>\xcf\xf0\xe8</p>";
+    assert_eq!(read(served("text/html", meta)).await, "\u{41f}\u{440}\u{438}\n\n");
+    // A label the standard does not know is ignored, and the body reads as UTF-8.
+    assert_eq!(read(served("text/html; charset=klingon", "<p>caf\u{e9}</p>".as_bytes())).await, "caf\u{e9}\n\n");
 }
 
 #[tokio::test]
@@ -289,7 +296,7 @@ async fn test_a_compressed_body_is_bounded_by_what_it_decodes_to() {
 #[tokio::test]
 async fn test_the_request_names_the_client() {
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request carrying no User-Agent
-    // and 200 to one that names it, and httpx sends its own default where this sends none.
+    // and 200 to one that names it.
     let http = serving(|request| {
         let agent = request.header("user-agent").unwrap_or_default();
         assert!(agent.starts_with("fastbrowse/"), "the request names the client, got {agent:?}");
@@ -306,7 +313,7 @@ async fn test_access_withdrawn_after_the_navigation_stops_the_read() {
         let open = gate.load(Ordering::SeqCst);
         Box::pin(async move { if open { Ok(()) } else { Err("withdrawn".into()) } })
     });
-    let page = FetchedPage::new(html(PAGE), None, 6000, Some(check));
+    let page = FetchedPage::new(html(PAGE), None, Some(check));
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
     page.observe().await.expect("observe");
     allowed.store(false, Ordering::SeqCst);
@@ -314,22 +321,16 @@ async fn test_access_withdrawn_after_the_navigation_stops_the_read() {
     assert!(page.capture().await.unwrap_err().to_string().contains("check_access refused"));
 }
 
-/// An href as WHATWG serializes it, which the Rust core follows where `urljoin` differs (docs/adr/0002): `<` in a
-/// query is percent-encoded, and `#` alone keeps its empty fragment, as Chrome resolves both. The empty fragment is
-/// dropped on both sides, since `urljoin` has already dropped it from Python's.
-fn whatwg(href: &str) -> String {
-    let href = url::Url::parse(href).map_or_else(|_| href.to_string(), String::from);
-    href.strip_suffix('#').map_or(href.clone(), str::to_string)
-}
-
-/// Every case in `golden/fetch.json`, or the file `FASTBROWSE_FETCH_GOLDEN` names, read as Python read it.
+/// Every case in `golden/fetch.json`, or the file `FASTBROWSE_FETCH_GOLDEN` names, read into the blocks it recorded.
+/// `FASTBROWSE_UPDATE_GOLDEN=1` records what the reader makes now, after an intended change.
 #[test]
-fn test_blocks_match_python_on_every_fixture_page() {
+fn test_blocks_match_the_recorded_blocks_of_every_fixture_page() {
     let path = std::env::var("FASTBROWSE_FETCH_GOLDEN")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/fetch.json").into());
-    let cases: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&path).expect("golden")).expect("json");
+    let mut cases: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&path).expect("golden")).expect("json");
+    let update = std::env::var("FASTBROWSE_UPDATE_GOLDEN").as_deref() == Ok("1");
     let mut differing = Vec::new();
-    for case in &cases {
+    for case in &mut cases {
         let (title, found) = blocks(case["html"].as_str().unwrap(), case["url"].as_str().unwrap());
         let got: Vec<Value> = found
             .iter()
@@ -338,24 +339,13 @@ fn test_blocks_match_python_on_every_fixture_page() {
                     "kind": serde_json::to_value(b.kind).unwrap(),
                     "text": b.text,
                     "heading_path": b.heading_path,
-                    "href": b.href.as_deref().map(whatwg),
+                    "href": b.href,
                 })
             })
             .collect();
-        let expected: Vec<Value> = case["blocks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|b| {
-                let mut b = b.clone();
-                if let Some(href) = b["href"].as_str() {
-                    b["href"] = Value::from(whatwg(href));
-                }
-                b
-            })
-            .collect();
-        if title != case["title"] || got != expected {
-            let first = got.iter().zip(&expected).position(|(a, b)| a != b).unwrap_or(got.len().min(expected.len()));
+        let expected = case["blocks"].as_array().unwrap();
+        if title != case["title"] || got != *expected {
+            let first = got.iter().zip(expected).position(|(a, b)| a != b).unwrap_or(got.len().min(expected.len()));
             differing.push(format!(
                 "{}: title {title:?} vs {}; block {first}: {:?} vs {:?} ({} vs {} blocks)",
                 case["name"],
@@ -365,7 +355,13 @@ fn test_blocks_match_python_on_every_fixture_page() {
                 got.len(),
                 expected.len()
             ));
+            case["title"] = Value::from(title);
+            case["blocks"] = Value::from(got);
         }
+    }
+    if update {
+        std::fs::write(&path, serde_json::to_string_pretty(&cases).unwrap() + "\n").unwrap();
+        return;
     }
     assert!(differing.is_empty(), "{} of {} differ:\n{}", differing.len(), cases.len(), differing.join("\n"));
 }

@@ -3,26 +3,14 @@
 
 mod common;
 
-use common::{Script, Step, answer_model};
+use common::{Script, Step, answer_model, body, config_error, settings};
 use fastbrowse_clients::anthropic::messages_schema;
-use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_clients::http::{Request, Response};
 use fastbrowse_core::llm::{Generation, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose};
 use serde_json::{Value, json};
 
 const ENV: [(&str, &str); 2] = [("FASTBROWSE_LLM_PROVIDER", "anthropic"), ("ANTHROPIC_API_KEY", "anthropic-secret")];
-
-fn settings(env: &[(&str, &str)]) -> Settings {
-    Settings::from_sources(env, None).unwrap()
-}
-
-fn config_error<T>(built: Result<T, ConfigurationError>) -> String {
-    match built {
-        Ok(_) => panic!("expected a configuration error"),
-        Err(error) => error.to_string(),
-    }
-}
 
 fn reply(content: Value, stop_reason: &str) -> Step {
     Step::Reply(Response::json(
@@ -49,12 +37,8 @@ async fn generate(
 ) -> (Vec<Request>, Result<Generation<Value>, LLMError>) {
     let script = Script::new(replies);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result = llm.generate_value(LLMPurpose::Read, messages, &answer_model(), 2000, None).await;
+    let result = llm.generate_value(LLMPurpose::Read, messages, &answer_model(), None).await;
     (script.requests(), result)
-}
-
-fn body(request: &Request) -> Value {
-    serde_json::from_slice(&request.body).unwrap()
 }
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";
@@ -72,7 +56,7 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
     assert_eq!(request.header("authorization"), None);
     let sent = body(request);
     assert_eq!(sent["model"], "claude-sonnet-5-5");
-    assert_eq!(sent["max_tokens"], 2000);
+    assert_eq!(sent["max_tokens"], 128_000, "the documented output maximum the API requires");
     assert_eq!(sent["system"], "Plan.");
     assert_eq!(
         sent["messages"],
@@ -84,10 +68,10 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
     let format = &sent["output_config"]["format"];
     assert_eq!(format["type"], "json_schema");
     assert_eq!(format["schema"]["additionalProperties"], false);
-    assert_eq!(sent["output_config"]["effort"], "low");
     for absent in ["response_format", "provider", "reasoning", "reasoning_effort", "max_completion_tokens"] {
         assert!(sent.get(absent).is_none(), "sent {absent}");
     }
+    assert!(sent["output_config"].get("effort").is_none(), "an unset effort leaves the model's own default");
 }
 
 #[tokio::test]
@@ -128,11 +112,15 @@ async fn test_cost_counts_cached_input_and_stays_unknown_without_a_price() {
 }
 
 #[tokio::test]
-async fn test_a_reply_cut_at_max_tokens_is_asked_again_with_more_room() {
-    let cut = reply(json!([{"type": "text", "text": "{\"ans"}]), "max_tokens");
-    let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut, answer(r#"{"answer":"ok"}"#)]).await;
+async fn test_a_reply_cut_at_max_tokens_is_asked_once_more_then_reported_as_cut_off() {
+    let cut = || reply(json!([{"type": "text", "text": "{\"ans"}]), "max_tokens");
+    let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut(), answer(r#"{"answer":"ok"}"#)]).await;
     assert_eq!(result.unwrap().data["answer"], "ok");
-    assert_eq!(body(&seen[1])["max_tokens"], 8000);
+    assert_eq!(seen.len(), 2);
+    let (seen, result) = generate(&ENV, &[Message::user("?")], vec![cut(), cut()]).await;
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("cut off before its JSON ended"), "{error}");
+    assert_eq!(seen.len(), 2);
 }
 
 #[tokio::test]
@@ -163,12 +151,6 @@ async fn test_the_reasoning_setting_becomes_the_effort() {
     let off = [ENV.as_slice(), &[("FASTBROWSE_LLM_REASONING", "none")]].concat();
     let error = config_error(settings(&off).llm(&Script::default().http()));
     assert!(error.contains("not none"), "{error}");
-    // One purpose's effort is that purpose's alone.
-    let read = [ENV.as_slice(), &[("FASTBROWSE_LLM_REASONING_READ", "medium")]].concat();
-    let (seen, _) = generate(&read, &[Message::user("?")], vec![answer(r#"{"answer":"ok"}"#)]).await;
-    assert_eq!(body(&seen[0])["output_config"]["effort"], "medium");
-    let verify_off = [ENV.as_slice(), &[("FASTBROWSE_LLM_REASONING_VERIFY", "none")]].concat();
-    assert!(config_error(settings(&verify_off).llm(&Script::default().http())).contains("not none"));
 }
 
 #[test]

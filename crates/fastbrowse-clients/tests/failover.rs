@@ -1,27 +1,21 @@
-//! tests/clients/test_failover.py: a run moves to its backup Jev provider only after the primary's retries run out.
+//! A run moves to its backup Jev provider only after the primary's retries run out.
 
 mod common;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::answering;
+use common::{answering, one};
 use fastbrowse_clients::environment::{DecisionSource, Settings};
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_clients::validation::{RETRY_DELAYS_SECONDS, RETRYABLE_STATUS};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{
-    Answer, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulAnswer, NoulQuestion, Question,
-};
+use fastbrowse_core::decision::{Answer, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulAnswer};
 use fastbrowse_core::models::CostBasis;
 use indexmap::IndexMap;
 use serde_json::json;
 
 const ATTEMPTS: usize = RETRY_DELAYS_SECONDS.len() + 1;
-
-fn questions() -> IndexMap<String, Question> {
-    IndexMap::from([("q".to_string(), NoulQuestion::new("Is it?", None, None).into())])
-}
 
 fn yes() -> IndexMap<String, Answer> {
     IndexMap::from([("q".to_string(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 1.0 }))])
@@ -59,13 +53,13 @@ fn settings(primary: Option<DecisionSource>, direct_key: bool) -> Settings {
         env.push(("TYPESAFE_API_KEY", "direct-key"));
     }
     if let Some(primary) = primary {
-        env.push(("FASTBROWSE_JEV_SOURCE", primary.as_str()));
+        env.push(("FASTBROWSE_DECISION_SOURCE", primary.as_str()));
     }
     Settings::from_sources(&env, None).unwrap()
 }
 
 fn backup_of(primary: DecisionSource) -> DecisionSource {
-    if primary == DecisionSource::Gateway { DecisionSource::TypeSafe } else { DecisionSource::Gateway }
+    if primary == DecisionSource::Gateway { DecisionSource::OpenRouter } else { DecisionSource::Gateway }
 }
 
 type Seen = Arc<Mutex<Vec<DecisionSource>>>;
@@ -106,9 +100,8 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
     ];
     for (setting, direct_key) in routes {
         for status in RETRYABLE_STATUS {
-            let fallback = if direct_key { DecisionSource::TypeSafe } else { DecisionSource::OpenRouter };
-            let primary = setting.unwrap_or(fallback);
-            let backup = if primary == DecisionSource::Gateway { fallback } else { DecisionSource::Gateway };
+            let primary = setting.unwrap_or(DecisionSource::OpenRouter);
+            let backup = backup_of(primary);
             let seen = Seen::default();
             let http = recording(&seen, move |provider, _, request| {
                 let expected = match provider {
@@ -122,8 +115,8 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
             });
             let configured = settings(setting, direct_key);
             let client = configured.decision(&http).unwrap();
-            let first = client.evaluate(&json!("page"), &questions()).await.unwrap();
-            let second = client.evaluate(&json!("page"), &questions()).await.unwrap();
+            let first = client.evaluate(&json!("page"), &one()).await.unwrap();
+            let second = client.evaluate(&json!("page"), &one()).await.unwrap();
             let mut expected = vec![primary; ATTEMPTS];
             expected.extend([backup, backup]);
             assert_eq!(*seen.lock().unwrap(), expected, "{setting:?} {direct_key} {status}");
@@ -131,7 +124,7 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
             assert_eq!(second.answers, yes());
             assert_eq!(first.cost.dollars, second.cost.dollars);
             // A new run starts on the primary again.
-            configured.decision(&http).unwrap().evaluate(&json!("page"), &questions()).await.unwrap();
+            configured.decision(&http).unwrap().evaluate(&json!("page"), &one()).await.unwrap();
             expected.extend(vec![primary; ATTEMPTS]);
             expected.push(backup);
             assert_eq!(*seen.lock().unwrap(), expected);
@@ -159,10 +152,10 @@ async fn test_simultaneous_failures_stay_on_backup() {
             })
         });
         let client = settings(Some(primary), true).decision(&http).unwrap();
-        let (asked, first_state, second_state) = (questions(), json!("first"), json!("second"));
+        let (asked, first_state, second_state) = (one(), json!("first"), json!("second"));
         let (first, second) =
             tokio::join!(client.evaluate(&first_state, &asked), client.evaluate(&second_state, &asked));
-        client.evaluate(&json!("third"), &questions()).await.unwrap();
+        client.evaluate(&json!("third"), &one()).await.unwrap();
         assert_eq!(first.unwrap().answers, yes());
         assert_eq!(second.unwrap().answers, yes());
         let seen = seen.lock().unwrap();
@@ -172,16 +165,23 @@ async fn test_simultaneous_failures_stay_on_backup() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_request_errors_and_malformed_responses_do_not_switch() {
+async fn test_only_a_refused_key_among_request_errors_switches() {
     for primary in DecisionSource::JEV {
         for status in [400, 401, 403, 404, 422, 200] {
             let seen = Seen::default();
             let http = recording(&seen, move |_, _, _| ready(Response::json(status, &json!({"error": "invalid"}))));
             let client = settings(Some(primary), true).decision(&http).unwrap();
             for _ in 0..2 {
-                assert!(client.evaluate(&json!("page"), &questions()).await.is_err());
+                assert!(client.evaluate(&json!("page"), &one()).await.is_err());
             }
-            assert_eq!(*seen.lock().unwrap(), vec![primary, primary], "{primary} {status}");
+            let seen = seen.lock().unwrap();
+            // A refused key is the one request error no repeat on that provider can clear, so it moves the run.
+            if matches!(status, 401 | 403) {
+                assert_eq!(seen[0], primary, "{primary} {status}");
+                assert!(seen[1..].iter().all(|p| *p != primary) && seen.len() == 3, "{primary} {status}: {seen:?}");
+            } else {
+                assert_eq!(*seen, vec![primary, primary], "{primary} {status}");
+            }
         }
     }
 }
@@ -200,9 +200,9 @@ async fn test_input_limits_and_transport_errors_do_not_switch() {
             })
         });
         let client = settings(Some(primary), true).decision(&http).unwrap();
-        let first = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
+        let first = client.evaluate(&json!("page"), &one()).await.unwrap_err();
         assert!(matches!(first, DecisionError::InputTooLarge(_)), "{first}");
-        let second = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
+        let second = client.evaluate(&json!("page"), &one()).await.unwrap_err();
         assert!(matches!(second, DecisionError::TransportFailed(_)), "{second}");
         assert!(second.to_string().contains("transport failed"));
         assert_eq!(*seen.lock().unwrap(), vec![primary; 1 + ATTEMPTS]);
@@ -217,8 +217,8 @@ async fn test_recovery_within_retry_budget_keeps_primary() {
             ready(if count < ATTEMPTS { Response::new(503, "") } else { answer(primary) })
         });
         let client = settings(Some(primary), true).decision(&http).unwrap();
-        client.evaluate(&json!("page"), &questions()).await.unwrap();
-        client.evaluate(&json!("page"), &questions()).await.unwrap();
+        client.evaluate(&json!("page"), &one()).await.unwrap();
+        client.evaluate(&json!("page"), &one()).await.unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![primary; ATTEMPTS + 1]);
     }
 }
@@ -238,8 +238,8 @@ async fn test_backup_exhaustion_does_not_switch_back() {
             })
         });
         let client = settings(Some(primary), true).decision(&http).unwrap();
-        let first = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
-        let second = client.evaluate(&json!("page"), &questions()).await.unwrap_err();
+        let first = client.evaluate(&json!("page"), &one()).await.unwrap_err();
+        let second = client.evaluate(&json!("page"), &one()).await.unwrap_err();
         let (DecisionError::RetriesExhausted(first), DecisionError::RetriesExhausted(second)) = (first, second) else {
             panic!("both calls exhaust their retries");
         };
@@ -284,7 +284,7 @@ async fn test_cancellation_cleans_up_and_keeps_the_selected_provider() {
                 })
             });
             let client = settings(Some(primary), true).decision(&http).unwrap();
-            let questions = questions();
+            let questions = one();
             let state = json!("page");
             tokio::select! {
                 _ = client.evaluate(&state, &questions) => panic!("the call should have been cancelled"),
@@ -316,8 +316,8 @@ async fn test_failover_accounts_for_each_providers_unanswered_requests() {
             })
         });
         let client = settings(Some(primary), true).decision(&http).unwrap();
-        let first = client.evaluate(&json!("page"), &questions()).await.unwrap();
-        let second = client.evaluate(&json!("page"), &questions()).await.unwrap();
+        let first = client.evaluate(&json!("page"), &one()).await.unwrap();
+        let second = client.evaluate(&json!("page"), &one()).await.unwrap();
         assert_eq!(first.cost.basis, CostBasis::Estimated);
         assert_eq!(first.input_tokens, 100);
         assert_eq!(first.cost.input_tokens, 300);

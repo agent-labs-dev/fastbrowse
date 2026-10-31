@@ -1,7 +1,8 @@
 # gitleaks' own rules, and one allowance. The core and agent goldens record what Python's helpers return, and some of
 # that is a sha256 digest under a name ending in `_key`, which the generic-api-key rule reads as a credential. Only
-# those names, holding only lowercase hex, in only the golden files, are let through. A golden is regenerated whenever
-# Python changes, so a fingerprint in .gitleaksignore, which names a line, would stop matching.
+# those names, holding only lowercase hex, in only the golden files, are let through. A golden is re-recorded with
+# FASTBROWSE_UPDATE_GOLDEN when what it pins changes, so a fingerprint in .gitleaksignore, which names a line, would
+# stop matching.
 
 [extend]
 useDefault = true

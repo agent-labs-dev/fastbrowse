@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/cli.py`: run one task from the terminal.
+//! Run one task from the terminal.
 //!
 //! ```text
 //! fastbrowse "What is the latest version of httpx?" --start https://pypi.org/
@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
@@ -18,13 +18,13 @@ use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretV
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
-use fastbrowse_core::telemetry::{TRACE_ENV, trace_to};
+use fastbrowse_core::telemetry::{TRACE_ENV, Trace, trace_to};
 use indexmap::IndexMap;
 
 use crate::argparse::{Exit, Opt, Parsed, Parser, py_float, py_int};
 use crate::bitwarden;
-use crate::options::{self, HandOver};
-use crate::runner::{RunArgs, RunError, Runner};
+use crate::options;
+use crate::runner::{Host, RunError, RunTask, Runner};
 use crate::serve::SettingsSource;
 
 pub fn exit_code(status: Status) -> i32 {
@@ -72,13 +72,43 @@ pub struct Context {
     pub settings: SettingsSource,
     pub environ: HashMap<String, String>,
     pub streams: Streams,
+    pub build: Build,
 }
 
-pub fn parser() -> Parser {
+/// Which commit is running, as `fastbrowse.build.identity()` works it out: the Python command passes it in, and the
+/// binary on its own knows only its version, so both are None there.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Build {
+    pub git_sha: Option<String>,
+    pub git_dirty: Option<bool>,
+}
+
+impl Build {
+    /// `fastbrowse 0.9.0 (e1d478b, dirty)` from a checkout, and `fastbrowse 0.9.0` from a release.
+    pub fn version_line(&self) -> String {
+        let mut line = format!("fastbrowse {}", env!("CARGO_PKG_VERSION"));
+        if let Some(sha) = &self.git_sha {
+            let short: String = sha.chars().take(7).collect();
+            let dirty = if self.git_dirty == Some(true) { ", dirty" } else { "" };
+            line.push_str(&format!(" ({short}{dirty})"));
+        }
+        line
+    }
+
+    fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::from_iter([
+            ("fastbrowse_version".into(), env!("CARGO_PKG_VERSION").into()),
+            ("git_sha".into(), self.git_sha.clone().into()),
+            ("git_dirty".into(), self.git_dirty.into()),
+        ])
+    }
+}
+
+pub fn parser(build: &Build) -> Parser {
     Parser {
         prog: "fastbrowse",
         help: include_str!("../generated/cli.txt"),
-        version: Some(format!("fastbrowse {}", env!("CARGO_PKG_VERSION"))),
+        version: Some(build.version_line()),
         options: vec![
             Opt::version(),
             Opt::value("--start"),
@@ -162,11 +192,11 @@ fn float_value(value: &str) -> Result<(), String> {
     py_float(value).map(drop).ok_or_else(|| format!("invalid float value: {}", fastbrowse_core::py::text::repr(value)))
 }
 
-pub fn parse(argv: &[String]) -> Result<Args, Exit> {
-    let parsed: Parsed = parser().parse(argv, |flag, value| match flag {
+pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
+    let parsed: Parsed = parser(build).parse(argv, |flag, value| match flag {
         "--cdp-port" | "--max-steps" => int_value(value),
         "--max-dollars" => float_value(value),
-        "--proxy-country" => options::country_code(value).map(drop),
+        "--proxy-country" => fastbrowse_run::country_code(value).map(drop),
         "--secret" => options::scoped_secret(value).map(drop),
         _ => Ok(()),
     })?;
@@ -186,7 +216,7 @@ pub fn parse(argv: &[String]) -> Result<Args, Exit> {
         attach: parsed.flag("--attach"),
         target_match: text("--target-match"),
         foreground: parsed.flag("--foreground"),
-        proxy_country: parsed.value("--proxy-country").and_then(|value| options::country_code(value).ok()),
+        proxy_country: parsed.value("--proxy-country").and_then(|value| fastbrowse_run::country_code(value).ok()),
         authorize: parsed.flag("--authorize"),
         secret: parsed.all("--secret").iter().filter_map(|value| options::scoped_secret(value).ok()).collect(),
         bitwarden: text("--bitwarden"),
@@ -293,116 +323,71 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
     })
 }
 
-/// `cli.run(args)`: the exit code of a run that got as far as starting, or the configuration error that stopped it.
+/// The exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
-    // Flags that contradict each other are named before anything about the machine, such as a missing ffmpeg.
-    if args.fetch && args.fetch_first {
+    let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch) {
         return Err(ConfigurationError(
-            "--fetch never starts a browser and --fetch-first may start one, so pass one of them".into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port or --fetch".into(),
         ));
     }
-    if args.fetch_first {
-        // A recording or an attached window has to exist from the first step, and the fetched attempt has neither.
-        for (flag, asked) in [
-            ("--record", args.record.is_some()),
-            ("--attach", args.attach),
-            ("--target-match", args.target_match.is_some()),
-        ] {
-            if asked {
-                return Err(ConfigurationError(format!(
-                    "--fetch-first may finish with no browser, so it cannot be combined with {flag}"
-                )));
-            }
-        }
-    }
-    options::recording(args.record.as_deref())?;
+    let cdp_port = args
+        .cdp_port
+        .map(|port| {
+            u16::try_from(port)
+                .map_err(|_| ConfigurationError(format!("--cdp-port expects a port from 1 to 65535, got {port}")))
+        })
+        .transpose()?;
     let limits = limits(args)?;
     // The operator's own flags are checked before the browser key: with the cloud browser the default, a missing key
     // would otherwise hide a secret that could never be typed anywhere.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let settings = (context.settings)()?;
-    if args.cloud && (args.headed || args.profile.is_some()) {
-        return Err(ConfigurationError("--cloud cannot be combined with --headed or --profile".into()));
-    }
-    if args.fetch {
-        // No browser is started, so the flags that shape one are refused rather than resolved: a cloud key demanded for
-        // a browserless run would be a key never used.
-        for (flag, asked) in [
-            ("--cloud", args.cloud),
-            ("--local", args.local),
-            ("--headed", args.headed),
-            ("--profile", args.profile.is_some()),
-            ("--cloud-profile", args.cloud_profile.is_some()),
-            ("--cdp-url", args.cdp_url.is_some()),
-            ("--cdp-port", args.cdp_port.is_some()),
-            ("--attach", args.attach),
-            ("--target-match", args.target_match.is_some()),
-            ("--foreground", args.foreground),
-            ("--proxy-country", args.proxy_country.is_some()),
-            ("--record", args.record.is_some()),
-            ("--cursor", args.cursor == Some(true)),
-            ("--downloads", args.downloads.is_some()),
-        ] {
-            if asked {
-                return Err(ConfigurationError(format!(
-                    "--fetch starts no browser, so it cannot be combined with {flag}"
-                )));
-            }
-        }
-    }
     let chrome = if args.cloud {
-        LocalChrome::default()
-    } else {
-        options::chrome(&settings, args.headed, args.profile.as_deref(), None)
-    };
-    let handed_over = options::handed_over(&HandOver {
-        cdp_url: args.cdp_url.as_deref(),
-        cdp_port: args.cdp_port,
-        attach: args.attach,
-        target_match: args.target_match.as_deref(),
-        local: args.local,
-        cloud_asked: args.cloud,
-        chrome: &chrome,
-        cloud_profile: args.cloud_profile.as_deref(),
-        proxy_country: args.proxy_country.as_deref(),
-    })?;
-    let browser_api_key = if args.fetch || handed_over {
         None
+    } else if args.fetch {
+        // Kept only to be refused: a browserless run has no window to show or profile to keep.
+        (args.headed || args.profile.is_some()).then(|| LocalChrome {
+            binary: None,
+            headed: args.headed,
+            profile: args.profile.clone(),
+        })
     } else {
-        let on_cloud =
-            options::cloud(args.local, &chrome, args.cloud_profile.as_deref(), args.proxy_country.as_deref())?;
-        options::browser_key(&settings, on_cloud)?
+        Some(options::chrome(&settings, args.headed, args.profile.as_deref(), None))
     };
-    let mut call = RunArgs::new(args.task.clone());
-    call.start = args.start.clone();
-    call.context = args.context.clone();
-    call.browser_api_key = browser_api_key;
-    call.chrome = (!args.fetch).then_some(chrome);
-    call.cloud_profile = args.cloud_profile.clone();
-    call.cdp_url = args.cdp_url.clone();
-    call.cdp_port = args.cdp_port;
-    call.attach = args.attach;
-    call.target_match = args.target_match.clone();
-    call.foreground = args.foreground;
-    call.proxy_country = Some(options::proxy_country(args.proxy_country.as_deref()));
-    call.secrets = secrets.map(|secrets| Arc::new(secrets) as _);
-    call.limits = Some(limits);
-    call.authorization = Some(Authorization { irreversible_actions: args.authorize });
-    call.downloads = args.downloads.clone();
-    call.on_event = Some(progress(context.streams.clone()));
-    call.record = args.record.clone();
-    call.cursor = args.cursor;
-    call.fetch = args.fetch;
-    call.fetch_first = args.fetch_first;
-    let mut result = match context.runner.run(call).await {
+    let task = RunTask {
+        task: args.task.clone(),
+        start: args.start.clone(),
+        context: args.context.clone(),
+        limits: Some(limits),
+        authorization: Some(Authorization { irreversible_actions: args.authorize }),
+        downloads: args.downloads.clone(),
+        record: args.record.clone(),
+        cursor: args.cursor,
+        local: args.local,
+        chrome,
+        cloud_profile: args.cloud_profile.clone(),
+        cdp_url: args.cdp_url.clone(),
+        cdp_port,
+        attach: args.attach,
+        target_match: args.target_match.clone(),
+        foreground: args.foreground,
+        proxy_country: args.proxy_country.clone(),
+        fetch: args.fetch,
+        fetch_first: args.fetch_first,
+        ..RunTask::default()
+    };
+    fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;
+    let host = Host {
+        browser_api_key: options::environment(&task, &settings)?,
+        secrets: secrets.map(|secrets| Arc::new(secrets) as _),
+        on_event: Some(progress(context.streams.clone())),
+        ..Host::default()
+    };
+    let mut result = match context.runner.run(task, host).await {
         Ok(result) => result,
-        Err(RunError::Configuration(message)) => return Err(ConfigurationError(message)),
         Err(RunError::Cancelled) => options::error_result("the run was cancelled"),
-        // An exception out of `run_task` reaches the terminal as a traceback, exit 1, nothing on stdout.
-        Err(RunError::Failed(message)) => {
-            context.streams.eprint(&format!("Traceback (most recent call last):\n{message}"));
-            return Ok(1);
-        }
+        Err(error) => return Err(ConfigurationError(error.to_string())),
     };
     if result.status == Status::NeedsLogin {
         result.error = Some(format!(
@@ -413,7 +398,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     }
     let streams = &context.streams;
     if args.json {
-        streams.print(&json::write(&result.dump(), Style::PYDANTIC.indented(2)));
+        streams.print(&json::write(&with_build(result.dump(), &context.build), Style::PYDANTIC.indented(2)));
     } else {
         // A local LLM endpoint reports no price, and printing only the priced calls would read as the whole bill.
         let mut spend = format!("${:.4}", result.cost.known_dollars());
@@ -446,10 +431,10 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     Ok(exit_code(result.status))
 }
 
-/// `cli.main()` after the `serve` check: parse, run, and report a configuration error on both streams when `--json`
+/// What follows the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
-    let args = match parse(argv) {
+    let args = match parse(argv, &context.build) {
         Ok(args) => args,
         Err(Exit::Print(text)) => {
             let mut out = context.streams.out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -469,13 +454,15 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
         context.streams.eprint(&format!("fastbrowse: cannot write the trace to {destination}: {error}"));
         return 1;
     }
+    Trace::disabled().event("build", || context.build.fields());
     match run(&args, context).await {
         Ok(code) => code,
         Err(error) => {
             if args.json {
-                context
-                    .streams
-                    .print(&json::write(&options::error_result(&error.0).dump(), Style::PYDANTIC.indented(2)));
+                context.streams.print(&json::write(
+                    &with_build(options::error_result(&error.0).dump(), &context.build),
+                    Style::PYDANTIC.indented(2),
+                ));
             }
             context.streams.eprint(&format!("fastbrowse: {}", error.0));
             1
@@ -483,7 +470,10 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     }
 }
 
-/// A path as `Path.resolve()` would leave it, for messages that name one.
-pub fn shown(path: &Path) -> String {
-    path.display().to_string()
+/// The result `--json` prints, with the build that produced it, so a result file names its commit.
+fn with_build(mut result: serde_json::Value, build: &Build) -> serde_json::Value {
+    if let serde_json::Value::Object(fields) = &mut result {
+        fields.insert("build".into(), build.fields().into());
+    }
+    result
 }

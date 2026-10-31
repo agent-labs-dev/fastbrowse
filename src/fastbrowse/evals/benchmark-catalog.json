@@ -18,11 +18,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "f082b3865ac6c497",
         "task_version": 7
@@ -35,11 +34,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "6f2e9d6fdc17c9ef",
         "task_version": 7
@@ -52,11 +50,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "22d226397996fdfe",
         "task_version": 7
@@ -69,11 +66,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "af2133290d01960d",
         "task_version": 7
@@ -86,11 +82,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "428a55863b39c9bf",
         "task_version": 7
@@ -103,11 +98,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "523371efdc8b624d",
         "task_version": 7
@@ -120,11 +114,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "f7600f020d792b84",
         "task_version": 7
@@ -138,7 +131,7 @@
           "fastbrowse-pool"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
+          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
           "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
         },
         "expect": "complete",
@@ -154,7 +147,7 @@
           "fastbrowse-pool"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
+          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
           "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
         },
         "expect": "complete",
@@ -170,7 +163,7 @@
           "fastbrowse-pool"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
+          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
           "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
         },
         "expect": "complete",
@@ -186,7 +179,7 @@
           "fastbrowse-pool"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
+          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
           "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
         },
         "expect": "complete",
@@ -202,7 +195,7 @@
           "fastbrowse-pool"
         ],
         "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED",
+          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
           "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
         },
         "expect": "complete",
@@ -233,11 +226,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "c7e94e8328f84822",
         "task_version": 7
@@ -348,11 +340,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "7346e375b230ed70",
         "task_version": 7
@@ -365,11 +356,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "cbcaaadaf64d8a3c",
         "task_version": 7
@@ -382,11 +372,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "34089d28cd723bca",
         "task_version": 7
@@ -399,11 +388,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "7cd731724fe362dd",
         "task_version": 8
@@ -416,11 +404,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "8bdeabb8809e521c",
         "task_version": 4
@@ -433,11 +420,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "0601b9cd9c2d307a",
         "task_version": 8
@@ -450,11 +436,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "7e78f195989e9563",
         "task_version": 7
@@ -467,11 +452,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "ac0970e11f50dfc5",
         "task_version": 7
@@ -484,11 +468,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "684ce012462d2eb1",
         "task_version": 8
@@ -501,11 +484,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "163d4fdbb56932e6",
         "task_version": 7
@@ -518,11 +500,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "6fb9021727b5cd63",
         "task_version": 8
@@ -535,11 +516,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "541e7f078f3cd8b0",
         "task_version": 7
@@ -552,11 +532,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "7018897e7b8edfc2",
         "task_version": 3
@@ -571,11 +550,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "915c2d8954051ca2",
         "task_version": 7
@@ -588,11 +566,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "ad2d7a24c3174568",
         "task_version": 7
@@ -605,11 +582,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "8bfbd4c04f7f3058",
         "task_version": 7
@@ -622,11 +598,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "9a0f2cf19cbb7ce4",
         "task_version": 7
@@ -639,11 +614,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "43dd0b1d19f6905f",
         "task_version": 7
@@ -656,11 +630,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "a722b9e069c3635c",
         "task_version": 3
@@ -673,11 +646,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "9e71d0ebbdb5b8a9",
         "task_version": 3
@@ -690,11 +662,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "3f72b4886300e4d3",
         "task_version": 3
@@ -707,11 +678,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "167a9ac22a4d2b5e",
         "task_version": 3
@@ -726,11 +696,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "3cb69f4cca7a0a8f",
         "task_version": 7
@@ -743,11 +712,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "8e95c92bf66332fc",
         "task_version": 8
@@ -760,11 +728,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "1fb42fae24121a93",
         "task_version": 9
@@ -777,11 +744,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "cd7a6d69941f0acd",
         "task_version": 8
@@ -794,11 +760,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "75e358991a228a84",
         "task_version": 10
@@ -811,11 +776,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "03de37005dd92ef9",
         "task_version": 8
@@ -828,11 +792,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "229527ffedbeb4ed",
         "task_version": 3
@@ -845,11 +808,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "fb98974ee75f2c0d",
         "task_version": 3
@@ -864,11 +826,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "f4f090b26286cfe4",
         "task_version": 8
@@ -881,11 +842,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "7b8df76175c2e6a3",
         "task_version": 3
@@ -898,11 +858,10 @@
           "browser-use",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "jev-ultrafast"
         ],
-        "excluded": {
-          "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "33a5efb78a02cf46",
         "task_version": 3

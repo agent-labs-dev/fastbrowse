@@ -1,4 +1,4 @@
-//! Chrome on this machine: headless with a throwaway profile by default (`adapters/local_chrome.py`).
+//! Chrome on this machine: headless with a throwaway profile by default.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -50,10 +50,6 @@ impl From<std::io::Error> for LocalChromeError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
     }
-}
-
-pub fn free_port() -> std::io::Result<u16> {
-    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
 }
 
 /// `override_` is `Settings.chrome`, a name or path that replaces discovery rather than joining it.
@@ -192,6 +188,40 @@ fn temp_dir() -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Throwaway profiles earlier processes left behind. `close` and `Drop` remove a run's own, but nothing runs when the
+/// process is killed, and each killed run left about 140MB: 262 of them filled a 16GB `/tmp`. A profile's name carries
+/// its owner's pid, so one whose owner has exited is removed.
+fn sweep_orphaned_profiles(dir: &Path) {
+    if !cfg!(unix) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let own = std::process::id().to_string();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("fastbrowse-chrome-"))
+            .and_then(|rest| rest.split('-').next())
+        else {
+            continue;
+        };
+        if pid == own || pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_or(true, |status| status.success());
+        if !alive {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Chrome's stderr log, as `tempfile.TemporaryFile`: unlinked at once where the system allows an open file to be,
 /// else removed on close. Returns the file and the path still to remove, if any.
 fn temp_log() -> std::io::Result<(File, Option<PathBuf>)> {
@@ -205,7 +235,7 @@ fn temp_log() -> std::io::Result<(File, Option<PathBuf>)> {
     Ok((file, left))
 }
 
-/// The command line, flags in Python's order.
+/// The command line, in the order its test pins.
 fn launch_args(options: &LocalChrome, profile: &Path) -> Vec<String> {
     let mut args = Vec::new();
     if !options.headed {
@@ -261,6 +291,7 @@ impl LocalChromeProcess {
         let profile = match &options.profile {
             Some(kept) => expand_user(kept),
             None => {
+                sweep_orphaned_profiles(&std::env::temp_dir());
                 let created = temp_dir()?;
                 self.temp_profile = Some(created.clone());
                 created
@@ -356,8 +387,7 @@ async fn terminate(child: &mut Child) {
 ///
 /// After a sign-in, its save and leaked-password bubbles take the browser's input: the page still renders and hit
 /// tests still pass, but no click reaches it, and the bubble is Chrome's own interface, outside the page the agent
-/// sees. saucedemo's shared password is a known leak, so every click after its sign-in did nothing. A kept profile
-/// keeps every other preference its owner set; these three are set on each launch.
+/// sees. A kept profile keeps every other preference its owner set; these three are set on each launch.
 fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
     let preferences = profile.join("Default").join("Preferences");
     let held: Option<Value> = match std::fs::read(&preferences) {
@@ -455,15 +485,31 @@ fn tail(log: &mut File) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_whose_process_has_exited_is_removed_and_a_live_ones_kept() {
+        let dir = std::env::temp_dir().join(format!("fastbrowse-sweep-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut exited = std::process::Command::new("true").spawn().unwrap();
+        exited.wait().unwrap();
+        let orphan = dir.join(format!("fastbrowse-chrome-{}-1-0", exited.id()));
+        let live = dir.join(format!("fastbrowse-chrome-{}-1-0", std::process::id()));
+        let other = dir.join("fastbrowse-chrome-test-1-0");
+        for path in [&orphan, &live, &other] {
+            std::fs::create_dir_all(path.join("Default")).unwrap();
+        }
+        sweep_orphaned_profiles(&dir);
+        assert!(!orphan.exists() && live.exists() && other.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use super::*;
 
     /// A directory of this test's own.
     ///
     /// `temp_dir()` itself is shared by every test in this module, several of which write a stand-in `chrome`
-    /// into it and then run it. Two tests running at once then trip over each other twice: a script is
-    /// truncated under a test that is already executing it, and a child forked by the other test inherits the
-    /// open-for-write descriptor, so this test's own `spawn` fails with `ETXTBSY` ("Text file busy"). One test
-    /// also deletes the directory when it finishes, taking the others' scripts with it.
+    /// into it and then run it. Two tests sharing it truncate a script under a test that is already executing it,
+    /// and one test deletes the directory when it finishes, taking the others' scripts with it.
     fn scratch() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = temp_dir().unwrap().join(format!(
@@ -475,12 +521,22 @@ mod tests {
         dir
     }
 
+    /// A stand-in executable, written by a child shell rather than by this process.
+    ///
+    /// A descriptor closes on `exec`, not on `fork`, so a child another test forks while this process holds the
+    /// script open for writing keeps that descriptor until it execs, and running the script then fails with
+    /// `ETXTBSY` ("Text file busy"). A directory of the test's own does not help, since the descriptor is the
+    /// process's. The shell's descriptor is gone once it exits, and no other test forks from it.
     #[cfg(unix)]
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", "printf %s \"$1\" > \"$2\" && chmod 755 \"$2\"", "sh"])
+            .arg(format!("#!/bin/sh\n{body}"))
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "writing {} failed: {status}", path.display());
         path
     }
 
@@ -668,18 +724,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(chrome.child.is_none());
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn free_ports_are_bindable() {
-        // Another test binding port 0 can take a released port before this one binds it again, so one taken port is
-        // a race between tests; three in a row is a broken `free_port`.
-        let bound = (0..3).any(|_| {
-            let port = free_port().unwrap();
-            assert!(port > 0);
-            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-        });
-        assert!(bound, "three free ports in a row could not be bound");
     }
 
     #[test]

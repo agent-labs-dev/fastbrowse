@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/output_schema.py`: a JSON Schema as the model `run_task` takes for `output_schema`.
+//! A JSON Schema as the model `run_task` takes for `output_schema`.
 //!
 //! `fastbrowse serve` gets its caller's output shape as JSON Schema draft 2020-12, since that is what a schema library
 //! in another language can emit. Only keywords the model can enforce are taken. Any other is refused by name, so a
@@ -13,6 +13,7 @@ use std::sync::Arc;
 use serde_json::{Map, Number, Value};
 
 use crate::llm::ResponseSchema;
+use crate::py::json::scalar_repr;
 use crate::py::text;
 use crate::schema::{self, Field as SchemaField, ModelTy, Ty};
 
@@ -612,19 +613,12 @@ impl OutputType {
 fn python_list(values: &[Value]) -> String {
     fn repr(value: &Value) -> String {
         match value {
-            Value::Null => "None".into(),
-            Value::Bool(true) => "True".into(),
-            Value::Bool(false) => "False".into(),
-            Value::Number(n) => match n.as_f64() {
-                Some(f) if n.is_f64() => crate::py::json::float_str(f),
-                _ => n.to_string(),
-            },
-            Value::String(s) => text::repr(s),
             Value::Array(items) => format!("[{}]", items.iter().map(repr).collect::<Vec<_>>().join(", ")),
             Value::Object(map) => format!(
                 "{{{}}}",
                 map.iter().map(|(k, v)| format!("{}: {}", text::repr(k), repr(v))).collect::<Vec<_>>().join(", ")
             ),
+            scalar => scalar_repr(scalar),
         }
     }
     repr(&Value::Array(values.to_vec()))
@@ -736,7 +730,6 @@ impl ResponseSchema for OutputModel {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_output_schema.py, apart from the extraction case, which belongs to verification.
     use super::*;
     use serde_json::json;
 

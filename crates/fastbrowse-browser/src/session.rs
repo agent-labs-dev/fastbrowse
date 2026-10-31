@@ -1,5 +1,5 @@
 //! One owned tab on a `BrowserConnection`: attach, OOPIF sessions, popup ownership, dialogs, downloads, live
-//! frames and origin scoping. `browser/session.py`'s `BrowserSession`.
+//! frames and origin scoping.
 //!
 //! State is kept by a handler on the connection's reader, so it is current whenever a call returns. The handler
 //! never blocks: work an event starts (preparing a frame's session, adopting a popup, releasing a paused request)
@@ -57,7 +57,7 @@ impl SnapshotScript {
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => (mode, limits) => snapshot(mode, {origins}, limits))({SNAPSHOT_JS}))"
+                 (snapshot => mode => snapshot(mode, {origins}))({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
@@ -107,8 +107,6 @@ pub const STATUS_WORLD: &str = "fastbrowse-status";
 // `Network` reports the requests a page makes itself, which is how a settle tells a page still answering an action
 // from one the action left as it was.
 const ENABLE_DOMAINS: [&str; 4] = ["Page", "Runtime", "DOM", "Network"];
-const DOWNLOAD_TEXT_BYTES: usize = 16_384;
-const DOWNLOAD_TEXT_TOTAL: usize = 65_536;
 /// Largest download a session keeps by default. Bodies arrive whole over the DevTools socket, so this bounds a
 /// run's memory as much as a file's size; `Config.max_download_bytes` is how a caller that knows the size of the
 /// file it asked for raises it.
@@ -191,16 +189,23 @@ pub struct DownloadText {
     pub complete: bool,
 }
 
-/// A file the site offered and the run did not keep, because its body is over the ceiling. Recorded rather than
-/// dropped: a download that silently never arrives looks exactly like a click that never started one, so a
-/// migration would report success while holding no archive.
+/// A file the site offered and the run did not keep. Recorded rather than dropped: a download that silently never
+/// arrives looks exactly like a click that never started one, so a migration would report success while holding no
+/// archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadRefused {
     pub name: String,
     pub url: String,
-    /// What the response stated its size to be, or what arrived when it stated nothing usable.
-    pub size_bytes: u64,
-    pub limit_bytes: u64,
+    pub reason: Refusal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The body is over the ceiling. `size_bytes` is what the response stated, or what arrived when it stated
+    /// nothing usable.
+    TooLarge { size_bytes: u64, limit_bytes: u64 },
+    /// The browser did not hand the body over, or it could not be stored.
+    Failed,
 }
 
 #[derive(Clone)]
@@ -218,7 +223,7 @@ pub(crate) struct Popup {
 
 #[derive(Default)]
 pub(crate) struct State {
-    /// Insertion ordered, as Python's dict: `tabs()` lists them in this order, and a closed active tab with neither
+    /// Insertion ordered: `tabs()` lists them in this order, and a closed active tab with neither
     /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
     /// Tab target ids, least recently active first: where a closed active tab with no opener hands over to.
@@ -259,7 +264,7 @@ pub(crate) struct State {
     /// A refused one has no identity: nothing was saved. A link that only downloads never changes the page, so the
     /// same click taken again looks productive every time; identity is what tells the second save from the first.
     pub(crate) download_keys: Vec<Option<(String, String)>>,
-    /// Downloads turned away by the ceiling, oldest first: evidence the file was offered, not kept.
+    /// Downloads not kept, oldest first: evidence the file was offered.
     pub(crate) download_refusals: Vec<DownloadRefused>,
     /// How many of them an observation has already reported, so each refusal is reported once.
     pub(crate) download_refusals_shown: usize,
@@ -365,8 +370,8 @@ impl BrowserSession {
 
     /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
     ///
-    /// A timeout is not a failure: the caller re-reads the page and decides. This replaces the fixed-interval poll a
-    /// settle used to run, so the wait costs nothing while the page reports nothing new. The generation counts every
+    /// A timeout is not a failure: the caller re-reads the page and decides. The wait costs nothing while the page
+    /// reports nothing new. The generation counts every
     /// tab's events: a wake for another tab only makes a waiter re-check the page, which is what it would do anyway.
     pub async fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> bool {
         let mut generation = self.0.lifecycle.subscribe();
@@ -379,7 +384,7 @@ impl BrowserSession {
         matches!(timeout(secs(seconds), generation.changed()).await, Ok(Ok(())))
     }
 
-    /// `__aenter__`: connect, then open the run's tab or attach to the window asked for.
+    /// Connect, then open the run's tab or attach to the window asked for.
     pub async fn open(&self) -> Result<(), BrowserError> {
         self.check_access().await?;
         self.0.state.lock().unwrap().closing = false;
@@ -392,7 +397,7 @@ impl BrowserSession {
         }));
         *self.0.client.lock().unwrap() = Some(client);
         // A caller that gives up while the tab is being set up (a run's time budget) drops this future; the tab it may
-        // already own and the socket are then closed in the background, as Python's `except BaseException` closes them.
+        // already own and the socket are then closed in the background.
         let mut guard = OpenGuard(Some(self.clone()));
         let opened = async {
             self.check_access().await?;
@@ -433,7 +438,7 @@ impl BrowserSession {
         Ok(())
     }
 
-    /// `_close`: stop background work, release paused requests, stop casts, close owned tabs, close the socket.
+    /// Stop background work, release paused requests, stop casts, close owned tabs, close the socket.
     pub async fn close(&self) -> Result<(), BrowserError> {
         let (background, delivery, paused) = {
             let mut state = self.0.state.lock().unwrap();
@@ -602,10 +607,6 @@ impl BrowserSession {
         self.0.state.lock().unwrap().artifacts.clone()
     }
 
-    pub fn downloads_captured(&self) -> u32 {
-        self.0.state.lock().unwrap().downloads_captured
-    }
-
     /// Downloads resolved since the session opened, kept or refused.
     ///
     /// A navigation that resolves straight to a file aborts with `net::ERR_ABORTED`, and the abort is that
@@ -618,8 +619,7 @@ impl BrowserSession {
 
     /// Whether every download settled since `since` saves a file an earlier action already saved.
     ///
-    /// `since` is a `downloads_settled` count. A page that offers the same export twice has not moved the run forward
-    /// the second time, so the click that saved it again must not be recorded as one that changed something.
+    /// `since` is a `downloads_settled` count.
     pub fn repeated_download(&self, since: u32) -> bool {
         let state = self.0.state.lock().unwrap();
         repeated(&state.download_keys, since as usize)
@@ -674,11 +674,6 @@ impl BrowserSession {
         let pending = state.download_texts[state.download_texts_shown.min(state.download_texts.len())..].to_vec();
         state.download_texts_shown = state.download_texts.len();
         pending
-    }
-
-    /// Every download the ceiling turned away, oldest first: kept as evidence, not consumed.
-    pub fn downloads_refused(&self) -> Vec<DownloadRefused> {
-        self.0.state.lock().unwrap().download_refusals.clone()
     }
 
     /// Refusals the run has not been told about yet, and now marked as told.
@@ -887,8 +882,6 @@ impl BrowserSession {
         Ok(target_id)
     }
 
-    /// A window that was already open loaded its document before the new-document scripts were registered, so
-    /// without this its freshness tracking and banner refusal would start only at its next navigation.
     /// Whether a window still holds the document Chrome gives a new about:blank. How a window was created does not
     /// say what is in it: a page can be written into after it opens, and such a window is not the run's.
     async fn still_blank(&self, target_id: &str) -> Result<bool, BrowserError> {
@@ -905,6 +898,8 @@ impl BrowserSession {
         Ok(read?["result"]["value"] == json!(true))
     }
 
+    /// A window that was already open loaded its document before the new-document scripts were registered, so
+    /// without this its freshness tracking and banner refusal would start only at its next navigation.
     async fn run_document_scripts(&self, session_id: &str) {
         let scripts = self.0.new_document_scripts.iter().map(|source| async move {
             let _ = self.send("Runtime.evaluate", json!({"expression": source}), Some(session_id)).await;
@@ -1169,7 +1164,7 @@ impl State {
         self.tabs.iter().any(|t| t.target_id == target_id)
     }
 
-    /// `self._tabs[id] = state`: a known tab keeps its place.
+    /// Add `tab`: a known tab keeps its place.
     fn insert_tab(&mut self, tab: TabState) {
         match self.tabs.iter_mut().find(|t| t.target_id == tab.target_id) {
             Some(existing) => *existing = tab,
@@ -1460,11 +1455,7 @@ impl Shared {
                 if !state.frame_scheduled {
                     state.frame_scheduled = true;
                     let shared = self.clone();
-                    if state.closing {
-                        state.frame_scheduled = false;
-                    } else {
-                        state.delivery = Some(tokio::spawn(async move { deliver_frames(&shared).await }));
-                    }
+                    state.delivery = Some(tokio::spawn(async move { deliver_frames(&shared).await }));
                 }
             }
         }
@@ -1555,7 +1546,7 @@ pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id
         );
         Ok::<(), BrowserError>(())
     };
-    // Settled however this ends, as Python's `finally` does: a session closing mid-adoption drops this future, and a
+    // Settled however this ends: a session closing mid-adoption drops this future, and a
     // `follow_popup` waiting on the popup must still learn it never joined.
     let _settle = AdoptionSettled { shared, target_id };
     let _ = adopt.await;
@@ -1659,8 +1650,13 @@ async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
         let complete = event["responseStatusCode"] == 200 && !headers.contains_key("content-range");
         let url = str_of(&event["request"]["url"]);
         let content_length = headers.get("content-length").and_then(|value| content_length(value));
-        let _ = capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete, content_length)
-            .await;
+        if capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete, content_length)
+            .await
+            .is_err()
+        {
+            warn("Download capture failed");
+            refuse_download(shared, download_filename(&disposition, &url), &url, Refusal::Failed);
+        }
     }
     // Never leave a request paused, even if capture above failed. The request or session may already be gone
     // (navigation, tab close), which is fine to swallow here.
@@ -1685,7 +1681,7 @@ async fn capture_download(
     if let Some(stated) = content_length
         && stated > shared.max_download_bytes as u64
     {
-        refuse_download(shared, name, url, stated);
+        refuse_download(shared, name, url, too_large(shared, stated));
         return Ok(());
     }
     let body =
@@ -1694,35 +1690,24 @@ async fn capture_download(
     let raw = if body["base64Encoded"] == true { BASE64.decode(text.as_bytes())? } else { text.as_bytes().to_vec() };
     if raw.len() > shared.max_download_bytes {
         // Bounded size: refuse to hold an oversized body in memory as an artifact, and say that it was refused.
-        refuse_download(shared, name, url, raw.len() as u64);
+        refuse_download(shared, name, url, too_large(shared, raw.len() as u64));
         return Ok(());
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
     let readable = readable_text(mime, &raw);
-    let size = raw.len();
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
     state.downloads_captured += 1;
     state.download_keys.push(Some((url.to_owned(), crate::page::sha256_bytes(&raw))));
     if let Some(text) = readable {
-        state.download_texts.push(DownloadText {
-            mime: kind,
-            name,
-            url: url.to_owned(),
-            text,
-            complete: complete && size <= DOWNLOAD_TEXT_BYTES,
-        });
-        while state.download_texts.iter().map(|d| d.text.chars().count()).sum::<usize>() > DOWNLOAD_TEXT_TOTAL {
-            state.download_texts.remove(0);
-            state.download_texts_shown = state.download_texts_shown.saturating_sub(1);
-        }
+        state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete });
     }
     Ok(())
 }
 
-/// `_together`: send independent commands at once and wait for all of them, failing with the first error as
+/// Send independent commands at once and wait for all of them, failing with the first error as
 /// sequential sends would, and dropping the rest when one fails so none outlives the session it was sent on.
 pub async fn together(commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>>) -> Result<(), BrowserError> {
     try_join_all(commands).await.map(drop)
@@ -1762,15 +1747,14 @@ fn download_filename(disposition: &str, url: &str) -> String {
     safe_filename(&name)
 }
 
-fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, size_bytes: u64) {
+fn too_large(shared: &Shared, size_bytes: u64) -> Refusal {
+    Refusal::TooLarge { size_bytes, limit_bytes: shared.max_download_bytes as u64 }
+}
+
+fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, reason: Refusal) {
     let mut state = shared.state.lock().unwrap();
     state.download_keys.push(None);
-    state.download_refusals.push(DownloadRefused {
-        name,
-        url: url.to_owned(),
-        size_bytes,
-        limit_bytes: shared.max_download_bytes as u64,
-    });
+    state.download_refusals.push(DownloadRefused { name, url: url.to_owned(), reason });
 }
 
 fn repeated(keys: &[Option<(String, String)>], since: usize) -> bool {
@@ -1832,10 +1816,10 @@ fn percent_decode(encoded: &str, charset: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&encoded[index + 1..index + 3], 16)
+            && let [high, low, ..] = bytes[index + 1..]
+            && let (Some(high), Some(low)) = (char::from(high).to_digit(16), char::from(low).to_digit(16))
         {
-            out.push(byte);
+            out.push((high * 16 + low) as u8);
             index += 3;
             continue;
         }
@@ -1903,20 +1887,14 @@ fn readable_text(mime: &str, raw: &[u8]) -> Option<String> {
     if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
         return None;
     }
-    let mut text = String::from_utf8_lossy(&raw[..raw.len().min(DOWNLOAD_TEXT_BYTES)]).into_owned();
-    if raw.len() > DOWNLOAD_TEXT_BYTES {
-        let omitted = raw.len() - DOWNLOAD_TEXT_BYTES;
-        text.push_str(&format!("\n[Download cut: {omitted} bytes omitted; full file in artifact]"));
-    }
-    Some(text)
+    Some(String::from_utf8_lossy(raw).into_owned())
 }
 
 pub fn str_of(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_owned()
 }
 
-/// `json.dumps` with Python's default separators (`", "` and `": "`) and `ensure_ascii`, so a script built here is
-/// the script Python builds, byte for byte.
+/// JSON as `json.dumps` writes it by default: `", "` and `": "` separators and `ensure_ascii`.
 pub fn py_json(value: &Value) -> String {
     let mut out = String::new();
     write_py_json(value, &mut out);
@@ -1977,7 +1955,7 @@ fn write_py_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// Python's `repr` of a str, for messages Python builds with `!r`.
+/// Python's `repr` of a str, the quoting these messages use.
 pub fn py_repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::new();
@@ -2014,6 +1992,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_a_percent_before_a_multibyte_character_is_kept() {
+        assert_eq!(percent_decode("100%\u{e9}t\u{e9}.pdf", "utf-8"), "100%\u{e9}t\u{e9}.pdf");
+        assert_eq!(percent_decode("a%20b%", "utf-8"), "a b%");
+    }
+
+    #[test]
     fn downloads_are_told_by_disposition_or_type() {
         assert!(is_download("text/plain", "attachment; filename=\"a.txt\""));
         assert!(is_download("text/csv; charset=utf-8", ""));
@@ -2022,9 +2006,8 @@ mod tests {
         assert_eq!(filename_from_disposition("inline"), None);
     }
 
-    /// Saving the file an earlier click already saved changes nothing, so the click that saved it again is idle.
     #[test]
-    fn a_repeat_download_is_not_an_effect() {
+    fn a_download_an_earlier_click_already_saved_is_told_apart() {
         let saved = Some(("https://example.test/a.csv".to_owned(), "d1".to_owned()));
         let keys = [saved.clone(), saved.clone()];
         assert!(repeated(&keys, 1));
@@ -2092,10 +2075,9 @@ mod tests {
     }
 
     #[test]
-    fn long_text_downloads_are_cut_with_a_note() {
-        let raw = vec![b'a'; DOWNLOAD_TEXT_BYTES + 5];
-        let text = readable_text("text/csv", &raw).unwrap();
-        assert!(text.ends_with("\n[Download cut: 5 bytes omitted; full file in artifact]"));
+    fn text_downloads_are_read_whole() {
+        let raw = vec![b'a'; 100_000];
+        assert_eq!(readable_text("text/csv", &raw).unwrap().len(), raw.len());
         assert_eq!(readable_text("application/zip", b"PK"), None);
     }
 

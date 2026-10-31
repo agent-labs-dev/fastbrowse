@@ -14,8 +14,11 @@ import subprocess
 import sys
 from typing import Any
 
+from pydantic import ValidationError
+
 from fastbrowse.audit.cases import CLI_FLAGS
 from fastbrowse.models import (
+    CliResult,
     CostBreakdown,
     Limits,
     LocalChrome,
@@ -78,9 +81,6 @@ def mcp_ceilings() -> dict[str, Any]:
     return out
 
 
-# --------------------------------------------------------------------------- tier 2 and 3 helpers
-
-
 def repeat_status() -> dict[str, Any]:
     """T2.7: the same task twice reaches the same status."""
     argv = [
@@ -98,10 +98,10 @@ def repeat_status() -> dict[str, Any]:
     for _ in range(2):
         run = _run(argv, timeout=280.0)
         try:
-            result = RunResult.model_validate_json(run.stdout)
+            result = CliResult.model_validate_json(run.stdout)
             statuses.append(result.status.value)
             cost += result.cost.known_dollars
-        except (json.JSONDecodeError, KeyError):
+        except ValidationError:
             statuses.append(None)
     return {
         "status": "ok",
@@ -114,8 +114,6 @@ def repeat_status() -> dict[str, Any]:
 
 def structured_output() -> dict[str, Any]:
     """T2.8: a structured-output run validates data against its schema."""
-    from pydantic import ValidationError
-
     from fastbrowse.evals.live_tasks import Release
     from fastbrowse.run import run_task
 

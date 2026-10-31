@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::sync::Arc;
-
 use common::*;
 use fastbrowse_agent::AgentError;
 use fastbrowse_agent::comparison::{NumericComparison, QuotedField, complete_comparison};
@@ -37,8 +35,6 @@ fn snapshot(notes: &Notes, requirement_ids: &[String]) -> Value {
                 json!({
                     "current": notes.current(key),
                     "derived": notes.derived(key),
-                    "refused": notes.refused(key),
-                    "held": notes.held(key),
                     "requirements": notes.fact_requirements(key),
                 }),
             )
@@ -54,7 +50,6 @@ fn snapshot(notes: &Notes, requirement_ids: &[String]) -> Value {
                     "evidenced": notes.evidenced(rid),
                     "read_for": notes.read_for(rid).iter().map(evidence_id).collect::<Vec<_>>(),
                     "supporting_evidence": notes.supporting_evidence(rid).iter().map(evidence_id).collect::<Vec<_>>(),
-                    "collection_pages": notes.collection_pages(rid).iter().map(Dump::dump).collect::<Vec<_>>(),
                     "comparison_records": notes.comparison_records(Some(rid)),
                     "has_untallied_records": notes.has_untallied_records(rid),
                 }),
@@ -70,18 +65,12 @@ fn snapshot(notes: &Notes, requirement_ids: &[String]) -> Value {
         "evidence": notes.evidence().keys().collect::<Vec<_>>(),
         "usable": notes.usable_evidence().keys().collect::<Vec<_>>(),
         "current": notes.current_evidence(None).keys().collect::<Vec<_>>(),
-        "refused_ids": notes.refused_ids(),
         "comparison_records": notes.comparison_records(None),
         "tallies": tallies.iter().map(Dump::dump).collect::<Vec<_>>(),
-        "standings": tallies.iter().map(|tally| notes.standing(tally).map(|s| s.dump())).collect::<Vec<_>>(),
         "expanded": notes.expand_evidence_ids(keys.iter().rev().map(String::as_str)),
         "rendered": notes.render_with_ids(1_000_000, &options).unwrap().text,
-        "navigation": notes.render_for_navigation(1_000_000, true).unwrap(),
+        "navigation": notes.render_for_navigation(),
     })
-}
-
-fn guessed(urls: Vec<String>, shas: Vec<String>) -> Arc<dyn Fn(&Evidence) -> bool + Send + Sync> {
-    Arc::new(move |evidence: &Evidence| urls.contains(&evidence.url) || shas.contains(&evidence.capture_sha256))
 }
 
 fn options(value: &Value) -> RenderOptions {
@@ -111,10 +100,6 @@ fn run(notes: &mut Notes, op: &Value) -> Value {
             notes.add_continuation(text("requirement_id"), text("record_id"));
             Value::Null
         }
-        "add_collection_page" => {
-            notes.add_collection_page(text("requirement_id"), text("url"), text("capture_sha256"));
-            Value::Null
-        }
         "supersede" => {
             notes.supersede(text("requirement_id"), text("url"), text("sha256"), text("text"));
             Value::Null
@@ -122,11 +107,6 @@ fn run(notes: &mut Notes, op: &Value) -> Value {
         "unevidence" => {
             let ids = strings(&op["requirement_ids"]);
             notes.unevidence(ids.iter().map(String::as_str));
-            Value::Null
-        }
-        "discredit" => {
-            let ids = strings(&op["requirement_ids"]);
-            notes.discredit(ids.iter().map(String::as_str), guessed(strings(&op["urls"]), strings(&op["shas"])));
             Value::Null
         }
         "retain_for" => {
@@ -144,19 +124,10 @@ fn run(notes: &mut Notes, op: &Value) -> Value {
             Ok(rendered) => json!({"text": rendered.text, "evidence_ids": rendered.evidence_ids}),
             Err(e) => error(e),
         },
-        "render_for_navigation" => {
-            match notes.render_for_navigation(op["max_chars"].as_i64().unwrap(), op["quotes"].as_bool().unwrap()) {
-                Ok(text) => json!(text),
-                Err(e) => error(e),
-            }
-        }
+        "render_for_navigation" => json!(notes.render_for_navigation()),
         "current_evidence" => {
             let capture = (!op["capture"].is_null()).then(|| parse::<Capture>(&op["capture"]));
             json!(notes.current_evidence(capture.as_ref()).keys().collect::<Vec<_>>())
-        }
-        "usable_citations" => {
-            let keys = strings(&op["keys"]);
-            json!(notes.usable_citations(keys.iter().map(String::as_str)).keys().collect::<Vec<_>>())
         }
         "captured_page" => json!(notes.captured_page(&parse::<Evidence>(&op["evidence"])).map(|page| page.dump())),
         "for_requirements" => {
@@ -169,19 +140,30 @@ fn run(notes: &mut Notes, op: &Value) -> Value {
     }
 }
 
+/// `FASTBROWSE_UPDATE_GOLDEN=1` records each call's result as it is now, after an intended behaviour change.
 #[test]
 fn notes_answer_as_python_answers() {
-    let golden = golden("memory.json");
-    let cases = golden["cases"].as_array().unwrap();
-    assert!(cases.len() > 40);
-    for case in cases {
-        let ops = case["ops"].as_array().unwrap();
+    let mut golden = golden("memory.json");
+    let update = capture::updating();
+    let cases = golden["cases"].as_array_mut().unwrap();
+    assert!(cases.len() > 30);
+    for case in cases.iter_mut() {
+        let name = case["name"].clone();
+        let ops = case["ops"].as_array_mut().unwrap();
         let facts: Vec<Fact> = parse(&ops[0]["facts"]);
         let mut notes = Notes::new(facts);
-        for (index, op) in ops.iter().enumerate().skip(1) {
+        for (index, op) in ops.iter_mut().enumerate().skip(1) {
             let result = run(&mut notes, op);
-            assert_eq!(result, op["result"], "{}: #{index} {}", case["name"], op["op"]);
+            if update {
+                op["result"] = result;
+            } else {
+                assert_eq!(result, op["result"], "{name}: #{index} {}", op["op"]);
+            }
         }
+    }
+    if update {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/memory.json");
+        std::fs::write(path, capture::ascii(&pretty(&golden)) + "\n").unwrap();
     }
 }
 

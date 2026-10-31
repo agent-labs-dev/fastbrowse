@@ -77,7 +77,6 @@ test('each option reaches the server under its wire name with its value intact',
       local: true,
       chrome: { binary: process.execPath, headed: true, profile: '/tmp/fastbrowse-profile' },
       viewport: [1280, 720],
-      cloudAllowResizing: true,
     });
     assert.deepEqual(onLocalChrome, {
       task: 'Add the kettle to the cart',
@@ -91,7 +90,6 @@ test('each option reaches the server under its wire name with its value intact',
       local: true,
       chrome: { binary: process.execPath, headed: true, profile: '/tmp/fastbrowse-profile' },
       viewport: [1280, 720],
-      cloud_allow_resizing: true,
     });
 
     const attached = await sent(fb, { ...ownBrowser, attach: true, targetMatch: 'Checkout' });

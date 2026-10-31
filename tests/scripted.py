@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from pydantic import BaseModel, JsonValue
 
 from fastbrowse.jev import Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer, NoulQuestion, Question
-from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, Message
+from fastbrowse.llm import Generation, Message
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Frozen, LLMPurpose, Operation
 from fastbrowse.telemetry import Ledger
 
@@ -66,7 +66,7 @@ class ScriptedJev:
                         confidence=1.0,
                     )
                 case NoulQuestion():
-                    answers[key] = NoulAnswer(probability=float(key == "complete"))
+                    answers[key] = NoulAnswer(probability=0.0)
                 case _:
                     raise AssertionError(f"the scripted Jev has no answer for {key!r}")
         return Evaluation(
@@ -95,7 +95,7 @@ class ScriptedJev:
 
 
 class ScriptedLLM:
-    """A plan that requires nothing, no shortcut, and a verifier that agrees: the answer by what is asked.
+    """A plan that requires nothing and no shortcut: the answer by what is asked.
 
     Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
     """
@@ -103,7 +103,6 @@ class ScriptedLLM:
     _REPLIES: Mapping[LLMPurpose, JsonValue] = {
         LLMPurpose.PLAN: {"requirements": [], "answer_expected": False},
         LLMPurpose.SHORTCUT: {"url": None},
-        LLMPurpose.VERIFY: {"complete": True, "missing": []},
     }
 
     async def generate[T: BaseModel](
@@ -112,7 +111,6 @@ class ScriptedLLM:
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         if ledger is not None:

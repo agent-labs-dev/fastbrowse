@@ -4,9 +4,9 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use common::{Recorder, browser_event, result, run_params, runner, settings, step_event};
+use common::{Call, Recorder, browser_event, result, run_params, runner, settings, step_event};
 use fastbrowse_cli::embed::{Embedded, Host, HostCall, HostResolve};
-use fastbrowse_cli::runner::{Cancel, RunArgs};
+use fastbrowse_cli::runner::Cancel;
 use fastbrowse_core::models::Status;
 use fastbrowse_core::protocol::ErrorCode;
 use serde_json::{Value, json};
@@ -35,7 +35,7 @@ async fn params_serve_refuses_are_refused_with_its_code_and_message() {
     let embedded = Embedded::with_runner(Recorder::default().runner(), settings());
     let refused = embedded.run(&params(json!({"tsak": 1})), Host::default(), Cancel::default()).await.unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidParams);
-    assert_eq!(refused.message, "run: tsak: Extra inputs are not permitted");
+    assert!(refused.message.starts_with("run: tsak: unknown field `tsak`"), "{}", refused.message);
 
     let refused = embedded.run(&params(json!({"until": true})), Host::default(), Cancel::default()).await.unwrap_err();
     assert_eq!(refused.message, "run: until is set and no until callback was given");
@@ -75,13 +75,13 @@ async fn events_reach_the_host_as_json_in_order_and_one_it_fails_ends_the_run() 
 
 #[tokio::test]
 async fn a_secret_is_asked_only_where_its_ref_reaches_and_a_failure_hides_what_the_host_said() {
-    let typist = runner(|args: RunArgs| async move {
-        let secrets = args.secrets.clone().expect("a resolver");
-        let elsewhere = secrets.resolve("password", "https://evil.example").await;
-        let here = secrets.resolve("password", "https://shop.example").await;
+    let typist = runner(|args: Call| async move {
+        let secrets = args.host.secrets.clone().expect("a resolver");
+        let elsewhere = fastbrowse_core::safety::resolve_secret(&*secrets, "password", "https://evil.example").await;
+        let here = fastbrowse_core::safety::resolve_secret(&*secrets, "password", "https://shop.example").await;
         let mut answered = result(Status::Complete);
         answered.data = json!([elsewhere, here]);
-        if args.cancel.is_tripped() {
+        if args.host.cancel.is_tripped() {
             return Err(fastbrowse_cli::runner::RunError::Cancelled);
         }
         Ok(answered)

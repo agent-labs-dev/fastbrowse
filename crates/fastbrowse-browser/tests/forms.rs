@@ -1,5 +1,3 @@
-//! tests/browser/test_forms.py, test_form_evidence.py, test_deceptive_form.py and test_hidden_upload.py.
-//!
 //! A parametrized Python test is one Rust test that runs each case on a fresh session, in pytest's order.
 
 mod common;
@@ -7,20 +5,13 @@ mod dispatch_support;
 
 use std::time::Duration;
 
-use common::{Harness, harness, harness_on, sites};
-use dispatch_support::{action, eval_active, eval_value, fill, find, observe_until};
+use common::{Harness, find, harness, harness_on, observe_until, sites};
+use dispatch_support::{action, eval_active, fill};
 use fastbrowse_browser::session::SessionOptions;
-use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use serde_json::json;
-
-fn form_fill(target: &fastbrowse_core::page::Control, text: &str) -> Action {
-    Action { form_fill: true, ..fill(target, text) }
-}
-
-// test_forms.py: a batch continues only while the original form retains exactly the requested edits.
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_labels_preserve_field_semantics() {
@@ -48,87 +39,15 @@ async fn form(h: &Harness, script: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_two_fills_use_one_observation() {
-    let Some(h) = harness().await else { return };
-    form(&h, "").await;
-    let before = h.observe().await;
-    let (name, email) = (find(&before, "Name"), find(&before, "Email"));
-    assert!(name.form_id == email.form_id && name.form_id.is_some());
-    for (target, text) in [(name, "Ada"), (email, "ada@example.com")] {
-        let result = h.page.act(&form_fill(target, text), &before).await.expect("act");
-        assert_eq!(result.outcome, StepOutcome::Executed);
-        assert!(result.form_unchanged);
-    }
-    let after = h.observe().await;
-    assert_eq!(find(&after, "Name").value.as_deref(), Some("Ada"));
-    assert_eq!(find(&after, "Email").value.as_deref(), Some("ada@example.com"));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_dependent_change_stops_batch() {
-    for change in [
-        "document.querySelector('form').insertAdjacentHTML('beforeend', '<input aria-label=Extra>')",
-        "document.getElementById('email').disabled = true",
-        "document.getElementById('email').value = 'dependency'",
-        "document.getElementById('email').setAttribute('aria-invalid', 'true')",
-        "document.getElementById('name').value = ''",
-        "document.getElementById('email').outerHTML = '<input id=email aria-label=Email>'",
-        "document.querySelector('form').action = '/delete'",
-        "location.hash = 'changed'",
-    ] {
-        let Some(h) = harness().await else { return };
-        form(&h, &format!("document.getElementById('name').oninput = () => {{ {change}; }}")).await;
-        let before = h.observe().await;
-        let result = h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
-        assert!(!result.form_unchanged, "{change}");
-        h.close().await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_change_between_fills_stops_before_typing() {
-    let Some(h) = harness().await else { return };
-    form(&h, "").await;
-    let before = h.observe().await;
-    let result = h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
-    assert!(result.form_unchanged);
-    eval_active(&h.page, "document.querySelector('form').insertAdjacentHTML('beforeend', '<input aria-label=Extra>')")
-        .await;
-    let result = h.page.act(&form_fill(find(&before, "Email"), "ada@example.com"), &before).await.expect("act");
-    assert_eq!(result.outcome, StepOutcome::Stale);
-    assert_eq!(find(&h.observe().await, "Email").value.as_deref(), Some(""));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_dialog_stops_form_fill() {
+async fn test_a_dialog_a_fill_opens_does_not_hang_it() {
     let Some(h) = harness().await else { return };
     form(&h, "document.getElementById('name').oninput = () => alert('Pause')").await;
     let before = h.observe().await;
-    let result =
-        tokio::time::timeout(Duration::from_secs(5), h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before))
-            .await
-            .expect("fill returns")
-            .expect("act");
-    assert!(!result.form_unchanged);
+    tokio::time::timeout(Duration::from_secs(5), h.page.act(&fill(find(&before, "Name"), "Ada"), &before))
+        .await
+        .expect("fill returns")
+        .expect("act");
     assert!(h.session.pending_dialog().is_some());
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_navigation_during_input_stops_batch() {
-    let Some(h) = harness().await else { return };
-    form(&h, "document.getElementById('name').oninput = () => { location.href = '/safety.html'; }").await;
-    let before = h.observe().await;
-    let result =
-        tokio::time::timeout(Duration::from_secs(5), h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before))
-            .await
-            .expect("fill returns")
-            .expect("act");
-    assert!(!result.form_unchanged);
-    let target = (h.session.active_session_id().expect("active session"), "main".to_owned(), 1, None);
-    assert!(!testing::dispatch::form_unchanged(&h.page, target, "Ada").await);
     h.close().await;
 }
 
@@ -145,10 +64,22 @@ async fn test_input_can_announce_suggestions_after_typing() {
     )
     .await;
     let before = h.observe().await;
-    let result = h.page.act(&form_fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
+    let result = h.page.act(&fill(find(&before, "Name"), "Ada"), &before).await.expect("act");
     assert_eq!(result.outcome, StepOutcome::Executed);
-    assert!(!result.form_unchanged);
     find(&h.observe().await, "Suggested person");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_button_carries_the_form_it_submits() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<form><label>Name<input></label><button>Send</button></form><button>Elsewhere</button>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let before = h.observe().await;
+    assert!(find(&before, "Send").form_id.is_some());
+    assert_eq!(find(&before, "Send").form_id, find(&before, "Name").form_id);
+    assert_eq!(find(&before, "Elsewhere").form_id, None);
     h.close().await;
 }
 
@@ -184,17 +115,7 @@ async fn test_capture_preserves_empty_fields_disabled_actions_and_layout() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_capture_evidences_absent_visible_headings() {
-    let Some(h) = harness().await else { return };
-    h.goto("").await;
-    eval_active(&h.page, "document.body.innerHTML = '<h1 hidden>Hidden</h1><p>Welcome</p>'").await;
-    let capture = h.page.capture().await.expect("capture");
-    assert!(capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_heading_absence_does_not_ignore_shadow_roots() {
+async fn test_capture_reads_shadow_roots() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -205,70 +126,33 @@ async fn test_heading_absence_does_not_ignore_shadow_roots() {
     .await;
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.text.contains("Visible title"), "{}", capture.text);
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
     h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_empty_shadow_scope_does_not_contradict_document_heading() {
-    let Some(h) = harness().await else { return };
-    h.goto("").await;
-    eval_active(
-        &h.page,
-        "document.body.innerHTML = '<h1>Visible title</h1><div id=host></div>'; \
-         document.querySelector('#host').attachShadow({mode:'open'}).innerHTML = '<p>Other content</p>'",
-    )
-    .await;
-    let capture = h.page.capture().await.expect("capture");
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_heading_absence_includes_cross_origin_frame_documents() {
+async fn test_capture_reads_cross_origin_frame_documents() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     observe_until(&h.page, "Frame button").await;
-    eval_active(&h.page, "document.querySelectorAll('h1').forEach(e => e.remove())").await;
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.text.contains("Inside the frame"), "{}", capture.text);
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
     h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_inaccessible_frames_prevent_document_wide_absence_claims() {
+async fn test_capture_counts_frames_it_may_not_read() {
     // test_safety.py's `scoped`: the run may control the main site only, so its cross-origin frame is withheld.
     let Some(chrome) = common::chrome() else { return };
     let connection = BrowserConnection { allowed_origins: Some(vec![sites().main.clone()]), ..chrome.clone() };
     let h = harness_on(connection, Config::default(), SessionOptions::default()).await.expect("harness");
     h.goto("").await;
-    let session_id = h.session.active_session_id().expect("active session");
-    eval_value(&h.session, &session_id, "document.querySelectorAll('h1').forEach(e => e.remove())").await;
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.inaccessible_frames > 0);
-    assert!(!capture.text.contains("Visible h1 headings: 0"), "{}", capture.text);
     h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_empty_frame_documents_emit_one_absence_observation() {
-    let Some(h) = harness().await else { return };
-    h.goto("").await;
-    observe_until(&h.page, "Frame button").await;
-    let mut frame_sessions = vec![h.session.active_session_id().expect("active session")];
-    frame_sessions.extend(h.session.frame_sessions().into_iter().map(|(_, session)| session));
-    for frame_session in &frame_sessions {
-        eval_value(&h.session, frame_session, "document.querySelectorAll('h1').forEach(e => e.remove())").await;
-    }
-    let capture = h.page.capture().await.expect("capture");
-    assert_eq!(capture.inaccessible_frames, 0);
-    assert_eq!(capture.text.matches("Visible h1 headings: 0").count(), 1, "{}", capture.text);
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_control_observations_are_bounded() {
+async fn test_every_empty_or_disabled_control_is_observed() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(
@@ -288,7 +172,7 @@ async fn test_control_observations_are_bounded() {
             text.contains("[empty]") || text.contains(": disabled")
         })
         .count();
-    assert_eq!(observations, 64);
+    assert_eq!(observations, 600);
     h.close().await;
 }
 

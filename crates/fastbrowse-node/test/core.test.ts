@@ -85,7 +85,8 @@ const ok = (value: unknown) => async () => JSON.stringify({ ok: value });
 
 test('runTask refuses what serve refuses, with its code and message', async () => {
   const reply = JSON.parse(await core.runTask(params({ tsak: 1 })));
-  assert.deepEqual(reply, { error: { code: -32602, message: 'run: tsak: Extra inputs are not permitted' } });
+  assert.equal(reply.error.code, -32602);
+  assert.match(reply.error.message, /^run: tsak: unknown field `tsak`/);
   assert.equal(core.protocolVersion(), 1);
 });
 

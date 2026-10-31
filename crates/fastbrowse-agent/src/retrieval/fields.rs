@@ -18,7 +18,8 @@ use serde_json::{Map, Value, json};
 
 use super::chunks::{Cite, chunk_page, cited, evidence, marks, read_message};
 use super::notes_room;
-use super::text::{Page, SpanKind, cells, found, lines_of, names, spans, table_header_from_text};
+use super::reading::reader_chunk_chars;
+use super::text::{Page, SpanKind, cells, currency, found, lines_of, names, spans, table_header_from_text};
 use crate::comparison::digit;
 use crate::error::{AgentError, Result};
 use crate::memory::Notes;
@@ -184,10 +185,7 @@ struct Digits {
 }
 
 fn digits(raw: &str) -> Option<Digits> {
-    let kept: String = raw
-        .chars()
-        .filter(|c| !matches!(c, '$' | '\u{a3}' | '\u{20ac}' | '\u{a5}' | ',') && !text::is_space(*c))
-        .collect();
+    let kept: String = raw.chars().filter(|c| !currency(*c) && *c != ',' && !text::is_space(*c)).collect();
     let mut rest = kept.as_str();
     let mut negative = false;
     if let Some(after) = rest.strip_prefix('-') {
@@ -491,7 +489,7 @@ pub fn field_question(
 const FIELD_GROUP_SIZE: usize = 30;
 
 /// Candidates split for a group choice, at most `max_options` minus its none option.
-pub fn field_candidate_groups(candidates: &[Candidate], max_options: usize) -> Vec<Vec<Candidate>> {
+fn field_candidate_groups(candidates: &[Candidate], max_options: usize) -> Vec<Vec<Candidate>> {
     let mut size = FIELD_GROUP_SIZE.min(max_options - 1);
     if candidates.len().div_ceil(size) >= max_options {
         size = candidates.len().div_ceil(max_options - 1);
@@ -501,7 +499,7 @@ pub fn field_candidate_groups(candidates: &[Candidate], max_options: usize) -> V
 
 /// The first of two choices when the candidate pool exceeds one Jev question. Every candidate is described in exactly
 /// one group, and the inner question still offers none, so widening the pool drops no value.
-pub fn field_group_question(
+fn field_group_question(
     field: &ScalarField,
     groups: &[Vec<Candidate>],
     name: Option<&str>,
@@ -638,27 +636,26 @@ pub async fn propose_text_fields(
     task: &str,
     capture: &Capture,
     fields: &IndexMap<String, ScalarField>,
-    max_chars: i64,
+    max_chars: Option<i64>,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<(Proposed, Vec<CostLine>)> {
-    let wanted = wanted(fields);
     let page = Page::new(capture);
+    let system = format!(
+        "# Field extraction\nFor each requested field shown on this page, give only that field's value exactly as the page writes it, and the source_id of the block it is in. Omit a field the page does not show; never infer it.\n\n# Trust\n{UNTRUSTED}"
+    );
+    let question = format!("{task}\n\n# Fields\n{}", wanted(fields));
+    let chunk_chars = max_chars
+        .unwrap_or_else(|| reader_chunk_chars(&page, tokens, &system, &question, &[], "", &TextProposals::ty()));
     let mut found_fields: Proposed = IndexMap::new();
     let mut costs = Vec::new();
-    for part in chunk_page(&page, max_chars, 1) {
+    for part in chunk_page(&page, chunk_chars, 1) {
         let missing: Vec<&String> = fields.keys().filter(|name| !found_fields.contains_key(*name)).collect();
         if missing.is_empty() {
             break;
         }
-        let messages = [
-            Message::system(format!(
-                "# Field extraction\nFor each requested field shown on this page, give only that field's value exactly as the page writes it, and the source_id of the block it is in. Omit a field the page does not show; never infer it.\n\n# Trust\n{UNTRUSTED}"
-            )),
-            read_message(&page, &part, &format!("{task}\n\n# Fields\n{wanted}"), &[], ""),
-        ];
-        let result =
-            generate::<TextProposals>(llm, LLMPurpose::Read, &messages, tokens.read_output_tokens, ledger).await?;
+        let messages = [Message::system(system.clone()), read_message(&page, &part, &question, &[], "")];
+        let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, ledger).await?;
         if let Some(ledger) = ledger {
             ledger.record([result.cost.clone()])?;
         }
@@ -704,7 +701,7 @@ pub async fn propose_text_fields_from_notes(
     let room = notes_room(tokens, &messages, &TextProposals::ty());
     let rendered = notes.render(room, true, false)?;
     messages[1].content.push_str(&rendered);
-    let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, tokens.read_output_tokens, ledger).await?;
+    let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, ledger).await?;
     if let Some(ledger) = ledger {
         ledger.record([result.cost.clone()])?;
     }

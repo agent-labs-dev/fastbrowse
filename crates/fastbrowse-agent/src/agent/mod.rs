@@ -1,14 +1,11 @@
-//! Port of `src/fastbrowse/agent.py`, the run loop: Jev chooses each action, the LLM plans, reads, writes and
-//! recovers, and code owns every gate.
+//! The run loop: Jev chooses each action and decides when a page is read and when the run is done; the LLM plans,
+//! reads, writes and recovers.
 //!
 //! Only `Status::Complete` is success. Anything the loop cannot prove (an answer whose claims fail their checks, a
 //! DONE the verifier rejects at the end of the budget) is reported as what it is rather than rounded up.
 //!
-//! The module docstring of `agent.py` holds the invariants for guessed addresses, readings and holds; `Lineage`,
-//! `note_lineage` and `Notes::discredit` hold the detail. Every prompt and Jev request built here is byte for byte the
-//! one Python builds for the same inputs, since a run is proven by replaying recorded model traffic keyed on a hash of
-//! the request body. Python runs some calls side by side; here they run side by side too, and only their send order
-//! can differ.
+//! Every prompt and Jev request built here is a pure function of its inputs, since a run is replayed from recorded model
+//! traffic keyed on a hash of the request body. Some calls run side by side, and only their send order can differ.
 
 mod acting;
 mod driving;
@@ -16,12 +13,13 @@ mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
-mod sign_in;
+mod seeing;
 pub(crate) mod state;
 
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -35,22 +33,21 @@ use fastbrowse_core::models::{
     Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact, StepOutcome, UntilCheck, Wall,
     WallKind,
 };
-use fastbrowse_core::page::{BrowserError, Observation, Page};
+use fastbrowse_core::page::{BrowserError, Observation, Page, pager_link};
 use fastbrowse_core::py::json::dumps;
-use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-use helpers::{history, partition_proof, recovery_memory};
-pub use helpers::{next_page_control, next_page_notice, read_question};
-use state::{Flow, RunState, Spawned};
+pub use helpers::read_question;
+use helpers::{partition_proof, recovery_memory};
+use state::{Flow, RunState, Spawned, Step};
 
 use crate::error::AgentError;
-use crate::memory::{Fact, Notes};
+use crate::memory::{Fact, Notes, unique};
 use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
-use crate::policy::StepContext;
+use crate::policy::{RequirementState, StepContext};
 use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
 use crate::shortcut::{Shortcut, propose_shortcut};
 use crate::verification::RecordSchema;
@@ -65,15 +62,10 @@ const ENDING_FRAME_SECONDS: f64 = 6.0;
 const SHORTCUT_WAIT_SECONDS: f64 = 2.0;
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
-/// Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page takes
-/// many scrolls, each of which shows something new.
-const REPEATS_BEFORE_CYCLE: i64 = 2;
-/// How much of a wall's text a blocked result quotes: enough for its message, not a whole page.
-const WALL_QUOTE_CHARS: i64 = 600;
 /// The choice a field's text is written for when no input or secret is the answer.
 const GENERATE: &str = "generate";
 
-/// What one run is asked to do, beyond its task: Python's keyword arguments to `Agent.run`.
+/// What one run is asked to do, beyond its task.
 #[derive(Default)]
 pub struct RunOptions {
     pub start: Option<String>,
@@ -153,19 +145,20 @@ impl HeadStart {
         HeadStop { planning: self.planning.clone(), proposing: self.proposing.clone() }
     }
 
-    /// Wait for every startup call to finish.
-    async fn gather(&self) {
-        self.stopper().gather().await;
+    /// Join the startup calls already sent and cancel the rest.
+    async fn settle(&self) {
+        self.stopper().settle().await;
     }
 
-    /// Cancel what is still being written, so nothing bills a run that has already ended.
+    /// Cancel what is still being written. A request already sent is still billed, and is charged as unknown.
     pub async fn discard(&self) {
         self.stopper().discard().await;
     }
 
-    /// What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here.
+    /// What a run that never began spent: a shortcut bills itself, and the plan is billed here. A call already sent
+    /// is joined rather than cancelled, since it is billed whether or not its receipt is read.
     pub async fn abandon(&self) -> Vec<CostLine> {
-        self.discard().await;
+        self.settle().await;
         if !self.plan_billed
             && let Some(planned) = self.planning.succeeded()
         {
@@ -197,6 +190,17 @@ impl HeadStop {
         if let Some(proposing) = &self.proposing {
             proposing.wait().await;
         }
+    }
+
+    /// Cancel the startup calls not yet begun, which have sent nothing, and wait for the rest. OpenRouter finishes and
+    /// bills a non-streamed generation after its connection closes, so cancelling one already sent saves nothing and
+    /// loses its receipt, which a dollar cap then reads as a charge it cannot bound.
+    async fn settle(&self) {
+        self.planning.cancel_unstarted();
+        if let Some(proposing) = &self.proposing {
+            proposing.cancel_unstarted();
+        }
+        self.gather().await;
     }
 }
 
@@ -359,6 +363,7 @@ impl Agent {
             };
             let mut loop_returned = false;
             let mut needs_browser = false;
+            let timed_out = outcome.is_none();
             let mut result = match outcome {
                 Some(Ok(result)) => {
                     loop_returned = true;
@@ -382,25 +387,27 @@ impl Agent {
                     )
                 }
             };
-            // Cancelling a paid startup call loses its receipt, so a finished run joins it before reporting cost.
-            if loop_returned {
-                let joined = match deadline {
-                    Some(deadline) => tokio::time::timeout_at(deadline.into(), head.gather()).await.is_ok(),
+            // A startup call already sent is billed whether or not its receipt is read, so a run that finished or
+            // stopped joins it before reporting cost. A run stopped at its first step used to cancel the plan in
+            // flight, and the unknown charge left behind replaced its own status with a spend limit that could not
+            // be enforced.
+            let joined = !timed_out
+                && match deadline {
+                    Some(deadline) => tokio::time::timeout_at(deadline.into(), head.settle()).await.is_ok(),
                     None => {
-                        head.gather().await;
+                        head.settle().await;
                         true
                     }
                 };
-                if !joined {
-                    head.discard().await;
+            if !joined {
+                head.discard().await;
+                if loop_returned {
                     let limit = ledger.limits.max_seconds.unwrap_or_default();
                     result.status = Status::BudgetExceeded;
                     result.error = Some(time_limit(limit));
                     result.budget = Some(BudgetStop { resource: BudgetResource::Seconds, limit });
                     loop_returned = false;
                 }
-            } else {
-                head.discard().await;
             }
             if slot.as_ref().is_none_or(|state| state.ready_plan.is_none())
                 && !head.plan_billed
@@ -411,16 +418,20 @@ impl Agent {
             }
             (result, loop_returned, needs_browser)
         });
-        let (mut result, mut loop_returned, needs_browser) = scoped.await;
+        let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
         if needs_browser {
-            // Python's `NeedsBrowser` leaves `Agent.run` as an exception once the head start is settled, and `run_task`
-            // reports it with what the ledger spent and nothing else: no budget check and no ending frame.
+            // Once the head start is settled, a run that needs a browser reports what the ledger spent and nothing
+            // else: no budget check and no ending frame.
             result.cost = ledger.breakdown();
             return Ok(result);
         }
-        // Startup calls can settle during teardown, after the loop has made its last budget check.
+        // Startup calls can settle during teardown, after the loop has made its last budget check. A run that already
+        // failed keeps its error: a refused Jev key cancelled the plan in flight, and its unpriced line reported the
+        // run as over a spend limit instead of naming the key.
         if let Err(error) = ledger.check_spend(0.0) {
-            if result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds) {
+            if result.status != Status::Error
+                && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
+            {
                 result.status = Status::BudgetExceeded;
                 result.error = Some(error.to_string());
                 result.budget = Some(error.budget);
@@ -460,11 +471,10 @@ impl Agent {
             None => (Vec::new(), Default::default()),
             Some(opening) => self.open(task, opening, &ledger, head.proposing.clone()).await?,
         };
-        let mut fell_back = false;
         if let (None, Some(opening)) = (start, &opening) {
             // The caller gave a goal and no page, so this address was worked out from the task too.
             invented.insert(opening.clone());
-            fell_back = self.front_page_if_blank(opening).await?;
+            self.front_page_if_blank(opening).await?;
         }
         let mut state = RunState::new(
             task.to_string(),
@@ -482,10 +492,6 @@ impl Agent {
             state.start_landing_url = Some(self.page.address().await?);
         }
         state.history.extend(opened);
-        // The run begins on the guess only if the guess is still the page open: a guessed path that opened nothing was
-        // left for the site's front page, and a form there led back to the same path with every read of it held
-        // guessed.
-        state.guessing = !invented.is_empty() && !fell_back;
         state.invented = invented;
         if let Some(opening) = &opening {
             // A shortcut leaves the start page before the loop observes anything.
@@ -556,7 +562,7 @@ impl Agent {
     }
 
     fn failed(&self, message: String, unavailable: bool, state: Option<&RunState>, ledger: &Ledger) -> RunResult {
-        let message = text::prefix(&self.redact(&message), 500).to_string();
+        let message = self.redact(&message);
         let status = if unavailable { Status::Unavailable } else { Status::Error };
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
         self.partial_result(&notes, state, ledger, status, Some(message), None)
@@ -607,10 +613,9 @@ impl Agent {
 
     /// Write the answer a stopping run can still support, instead of handing back its notes.
     ///
-    /// A task that stopped without verifying its finish used to arrive as every quote it read, in page order, with
-    /// the value the task asked for somewhere among them: a table lookup ended with its rows dumped and no sentence
-    /// naming the country. The evidence was there; nobody had been asked to answer from it. One composer call over
-    /// the collected notes asks that, and it is spent only on a run that is already stopping.
+    /// A task that stopped without verifying its finish holds the evidence but no sentence answering from it. One
+    /// composer call over the collected notes writes that answer, and it is spent only on a run that is already
+    /// stopping.
     async fn commit(&self, state: &mut RunState) -> Option<ComposedAnswer> {
         if !state.plan().page_answer_expected() || state.notes.evidence().is_empty() {
             return None;
@@ -624,8 +629,9 @@ impl Agent {
             tokens: self.config.tokens.clone(),
             ledger: Some(&ledger),
             transaction_evidence_ids: transactions,
-            preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
+            preserve_collections: !state.finish_partitions.is_empty(),
             background: state.context.clone(),
+            trace: self.trace.clone(),
             ..ComposeOptions::new()
         };
         let generated = compose(&*self.llm, &state.task, &plan, &state.notes, &options).await.ok()?;
@@ -646,7 +652,7 @@ impl Agent {
             return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
         }
         let mut partial = match committed {
-            None => partial_answer(notes, self.config.observation.working_notes_chars),
+            None => partial_answer(notes),
             Some(mut committed) => {
                 let notice = "Answer (unverified). The run stopped before its completion check confirmed this; these \
                               are the values its evidence supports, written as an answer rather than a dump of what \
@@ -684,12 +690,7 @@ impl Agent {
                 }
             }
             if !verified.is_empty() {
-                let mut claims = Vec::new();
-                for claim in verified.iter().flat_map(|answer| answer.claims.iter()) {
-                    if !claims.contains(claim) {
-                        claims.push(claim.clone());
-                    }
-                }
+                let claims = unique(verified.iter().flat_map(|answer| answer.claims.iter().cloned()));
                 partial = assemble_answer(&claims, notes, &[], 0);
                 let mut notice = String::from("Partial answer.");
                 let missing =
@@ -893,10 +894,12 @@ impl Agent {
     fn context(
         &self,
         state: &RunState,
+        observation: &Observation,
         secrets: Vec<String>,
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
+        let page_facts = Self::page_facts(state, observation);
         let mut unread = None;
         if let Some(plan) = &state.ready_plan {
             let mut wanted: Vec<String> = state
@@ -914,12 +917,18 @@ impl Agent {
         Ok(StepContext {
             task: state.task.clone(),
             subgoal: state.hint.clone(),
-            requirements: state
-                .ready_plan
-                .as_ref()
-                .map_or_else(Vec::new, |plan| plan.requirements.iter().map(|r| r.text.clone()).collect()),
-            notes: state.notes.render_for_navigation(self.config.observation.working_notes_chars, false)?,
-            history: history(&state.history, &self.config.observation),
+            requirements: state.ready_plan.as_ref().map_or_else(Vec::new, |plan| {
+                plan.requirements
+                    .iter()
+                    .map(|r| RequirementState {
+                        id: r.id.clone(),
+                        text: r.text.clone(),
+                        answered_in_notes: state.notes.evidenced(&r.id),
+                    })
+                    .collect()
+            }),
+            notes: state.notes.render_for_navigation(),
+            history: state.history.clone(),
             check_login,
             check_bot,
             has_attachments: !state.attachments.is_empty(),
@@ -929,7 +938,86 @@ impl Agent {
             start_landing_url: state.start_landing_url.clone(),
             recovery_memory: recovery_memory(state, self.config.stall.max_recoveries, |value| self.redact(value)),
             background: state.context.clone(),
+            omitted_actions: 0,
+            problem: None,
+            withheld: Vec::new(),
+            no_value_fields: state
+                .missing
+                .iter()
+                .map(|(label, _)| label.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            page_facts,
+            page_read: Self::page_read(state, observation),
+            reload: state.reload_target(&observation.url),
+            open_list: state.list_url.clone().filter(|_| !state.continuing.is_empty()),
+            screenshot: None,
         })
+    }
+
+    /// This page was read and no action has changed it since.
+    fn page_read(state: &RunState, observation: &Observation) -> bool {
+        !observation.document_key.is_empty() && state.read_documents.get(&observation.document_key) == Some(&false)
+    }
+
+    /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
+    fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
+        let mut facts = Vec::new();
+        if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
+            facts.push(format!(
+                "This page answered HTTP {status}: the address did not load successfully in this browser session."
+            ));
+        }
+        if Self::page_read(state, observation) {
+            facts
+                .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
+        }
+        let document = &observation.document_key;
+        let read = state.read_documents.get(document).copied();
+        if !document.is_empty() && read == Some(true) {
+            facts.push(
+                "This page changed after it was last read, so the notes taken from it predate the change.".into(),
+            );
+        }
+        if !document.is_empty()
+            && read.is_none()
+            && (!state.continuing.is_empty() || observation.controls.iter().any(pager_link))
+            && state.ready_plan.as_ref().is_some_and(|plan| helpers::unread(plan, &state.notes))
+        {
+            facts.push("This list page has not been read: turning to another page leaves its records unread.".into());
+        }
+        let scrolled = state
+            .steps
+            .iter()
+            .rev()
+            .take_while(|step| step.operation != Operation::Read)
+            .filter(|step| step.operation == Operation::Scroll && step.page_changed == Some(true))
+            .count();
+        if scrolled > 0 && state.ready_plan.as_ref().is_some_and(|plan| helpers::unread(plan, &state.notes)) {
+            facts.push(format!(
+                "The notes hold nothing from the {scrolled} scrolls since the last read: only a read keeps what they showed."
+            ));
+        }
+        facts.extend(helpers::unsent_fact(&state.history, observation));
+        if !state.continuing.is_empty() {
+            facts.push("The list being read goes on: the notes hold only the pages read so far.".into());
+        }
+        if helpers::unread_transaction(state) {
+            facts.push("An action that may have committed a change has not had the page it led to read.".into());
+        }
+        if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.transient()) {
+            let stood = state.steps.len().saturating_sub(failure.since);
+            let mut fact = format!(
+                "The site failed: {} It has stood for {stood} steps. A failure is not the task's answer, and neither is an empty result shown beside it.",
+                failure.message()
+            );
+            if failure.url == observation.url {
+                fact += " This page's own address is offered to navigate to, which reloads it; a retry control the page offers, or another route, may also get past the failure.";
+            }
+            facts.push(fact);
+        }
+        facts
     }
 
     /// Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop.
@@ -945,25 +1033,41 @@ impl Agent {
 
     /// Stuck becomes needs_login when a sign-in is what the run stopped at: a caller told "stuck" narrows the task
     /// rather than signing in.
-    fn walled(&self, state: &RunState, observation: &Observation, status: Status, said: bool) -> Status {
+    async fn walled(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        status: Status,
+        said: bool,
+    ) -> Step<Status> {
         if status != Status::Stuck {
-            return status;
+            return Ok(status);
         }
-        // A model's word alone is not the page's: absent controls do not establish missing authentication, so a run
-        // that stopped saying it was signed out ends needs_login only when the page itself shows a sign-in to act on,
-        // or the run is standing on a wall it actually observed. A page offering neither is stuck, not signed out.
-        let walled = (said && sign_in::shows_sign_in(observation))
-            || state
-                .passed_wall
-                .as_deref()
-                .is_some_and(|wall| fastbrowse_core::navigation::same_address(wall, &observation.url));
         // A held secret makes the sign-in work the run can do, so a run holding one did not stop for want of it.
         let origin = origin_of(&observation.url);
-        if walled && !(!origin.is_empty() && !self.secret_names(&origin).is_empty()) {
-            Status::NeedsLogin
-        } else {
-            status
+        if !origin.is_empty() && !self.secret_names(&origin).is_empty() {
+            return Ok(status);
         }
+        // A model's word alone is not the page's: a run that stopped saying it was signed out ends needs_login only
+        // when Jev, shown the page, agrees a sign-in blocks the task.
+        let walled = said && self.sees_wall(state, observation).await?;
+        Ok(if walled { Status::NeedsLogin } else { status })
+    }
+
+    /// Whether Jev, asked about this page as at any step, judges it a sign-in wall that blocks the task.
+    async fn sees_wall(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let context = self.context(state, observation, Vec::new(), true, false)?;
+        let decision = crate::policy::decide(
+            &*self.jev,
+            observation,
+            &context,
+            &self.config,
+            Some(&state.ledger),
+            Some(&state.relevance_cache),
+            &self.trace,
+        )
+        .await?;
+        Ok(decision.login_required.is_some_and(|p| p > self.config.thresholds.login_required_above))
     }
 }
 

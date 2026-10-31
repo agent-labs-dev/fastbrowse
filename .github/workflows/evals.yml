@@ -12,7 +12,7 @@ on:
     inputs:
       repeat:
         # At least 3: fewer is a diagnostic, not the run a published comparison rests on, so the job refuses it
-        # before spending. The pass target is fixed at 100% for the same reason and cannot be lowered.
+        # before spending. Every task must pass every run, for the same reason.
         description: Runs per task (at least 3)
         default: "3"
       budget:
@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       - run: uv sync --locked --all-extras
       - name: Require the full comparison protocol
@@ -53,18 +53,16 @@ jobs:
         # A missing provider fails before the first task, with its setting named and no empty score report.
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
         run: uv run python scripts/eval_stability.py --check-providers
       - name: Run the fixture eval suites
         id: fixtures
-        # The runner exits non-zero on any failed attempt. The stability check below is the verdict at a fixed
-        # 100% target, and it requires every task of both suites at the full repeat count, so a runner that died
-        # part way cannot pass on the rows it left.
+        # The runner exits non-zero on any failed attempt. The stability check below is the verdict: every task
+        # of both suites must pass every run at the full repeat count, so a runner that died part way cannot pass
+        # on the rows it left.
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
         run: |
           budget_args=()
@@ -79,7 +77,6 @@ jobs:
         if: always() && steps.fixtures.outcome != 'skipped'
         run: |
           uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl \
-            --target 1.0 \
             --suite local mock \
             --repeat "$EVAL_REPEAT"
       - name: Check the publication gate

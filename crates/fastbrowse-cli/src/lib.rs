@@ -1,8 +1,8 @@
-//! The `fastbrowse` binary's entry points, ported from `src/fastbrowse`: the CLI (`cli.py`), `fastbrowse serve --stdio`
-//! (`serve.py`), the MCP server (`mcp_server.py`, run as `fastbrowse-mcp`) and the rules they share (`options.py`).
+//! The `fastbrowse` binary's entry points: the CLI, `fastbrowse serve --stdio`, the MCP server (run as `fastbrowse-mcp`)
+//! and the rules they share.
 //!
 //! Each ends in a call to `run_task`, which [`runner::Runner`] stands for. The modules are a library so the tests drive
-//! them in process, as Python's tests drive the server over in-memory streams.
+//! them in process, over in-memory streams.
 
 pub mod argparse;
 pub mod bitwarden;
@@ -11,15 +11,13 @@ pub mod embed;
 pub mod entry;
 pub mod mcp;
 pub mod options;
-pub mod pyjson;
 pub mod runner;
 #[cfg(feature = "scripted")]
 pub mod scripted;
 pub mod serve;
 pub mod totp;
-pub mod validate;
 
-/// `logging` as the entry points configure it: warnings and worse on stderr, named by whose they are.
+/// Logging as the entry points configure it: warnings and worse on stderr, named by whose they are.
 pub mod log {
     static PREFIX: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
@@ -43,7 +41,7 @@ pub mod log {
         fn flush(&self) {}
     }
 
-    /// `logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format="{prefix}: %(levelname)s %(message)s")`.
+    /// Send warnings and worse to stderr, each line as `{prefix}: LEVEL message`.
     pub fn init(prefix: &'static str) {
         let _ = PREFIX.set(prefix);
         if ::log::set_logger(&Stderr).is_ok() {

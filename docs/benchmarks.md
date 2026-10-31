@@ -12,9 +12,9 @@ Benchmarking compares exactly three things, and nothing else is a headline:
 
 | | Comparison | Arms | Publication group | Status |
 |:--|:--|:--|:--|:--|
-| C1 | agent against agent | `fastbrowse` against `browser-use`, the hosted Browser Use agent | `internal-hosted` | recorded below |
+| C1 | agent against agent | `fastbrowse` and `jev-ultrafast` live, `browser-use` and `browser-harness` from the competitor reference | `internal-hosted` | recorded below |
 | C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | earlier campaign record below; not on the published page |
-| C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 6 tasks both run | `internal-ultrafast` | not yet measured |
+| C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 47 tasks both run | `internal-ultrafast` | not yet measured |
 
 The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web) are diagnostics, described in
 [measuring fastbrowse](evals.md); none of them is one of the three comparisons.
@@ -100,7 +100,7 @@ routing is. Source: the campaign rows and Browser Use's published cloud pricing,
 ## C3: fastbrowse on its own browser pool against Browser Use Ultrafast (`jev-ultrafast`)
 
 Not yet measured. The `internal-ultrafast` group compares the two products whole, each on its own backend:
-fastbrowse on its browser pool against `jev-ultrafast`, on the 6 core tasks both run, three repeats each.
+fastbrowse on its browser pool against `jev-ultrafast`, on the 47 tasks both run, three repeats each.
 From publication schema 5 the gate holds every new candidate to that pairing.
 
 The earlier record is not a C3 figure: the 0.5.14 core suite ran fastbrowse on a Browser Use Cloud browser, not on

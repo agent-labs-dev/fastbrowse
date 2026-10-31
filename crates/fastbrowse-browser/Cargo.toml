@@ -18,20 +18,20 @@ recording = []
 
 [dependencies]
 # Hashes, HMAC and the TLS provider, already linked by rustls.
-ring = "0.17"
+ring = "0.17.14"
 # Base64 and base32, already linked by tungstenite.
-data-encoding = "2.11"
+data-encoding = "2.11.1"
 fastbrowse-core = { workspace = true }
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-httparse = "1.10"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-serde = { version = "1", features = ["derive"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+httparse = "1.10.1"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1.0.229", features = ["derive"] }
 # Objects keep insertion order, as Python dicts do: a reply parsed and written back keeps its keys where they were.
-serde_json = { version = "1", features = ["preserve_order"] }
-tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "process", "io-util", "fs"] }
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-webpki-roots = "1"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "process", "io-util", "fs"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+webpki-roots = "1.0.11"
 
 [dev-dependencies]
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros"] }

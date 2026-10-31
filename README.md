@@ -45,22 +45,12 @@ slower: 18.9s a task to 15.3s. These figures are the published campaign, release
 
 ## Try it
 
-You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, Chrome or Chromium, and an
-[OpenRouter](https://openrouter.ai/) key:
+You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, an
+[OpenRouter](https://openrouter.ai/) key and a [Browser Use](https://browser-use.com/) key:
 
 ```sh
-export OPENROUTER_API_KEY=...
-uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/ --local
-```
-
-That one key serves both models: the LLM that plans, reads and writes, and Jev, the model that picks each action.
-`--local` runs the Chrome on your machine; `FASTBROWSE_CHROME` names the binary if it is not found.
-
-For regular use, add two keys and drop `--local`:
-
-```sh
-export TYPESAFE_API_KEY=...     # Jev direct from Typesafe, the recommended route
-export BROWSER_USE_API_KEY=...  # a Browser Use Cloud browser
+export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM that plans, reads and writes
+export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
@@ -85,8 +75,8 @@ uv run fastbrowse "What is the title of the top story right now?" --start https:
 ```
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
-prints the full result: every step, the quotes behind the answer, and cost by component. The exit code is the
-status, and only `complete` exits 0.
+prints the full result: every step, the quotes behind the answer, cost by component, and the build that ran it. The
+exit code is the status, and only `complete` exits 0.
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -119,7 +109,7 @@ Benchmarking makes three comparisons:
   fastbrowse passed 99.3% at 17.0s and $0.0268 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 6 tasks: not yet measured.
+- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 47 tasks: not yet measured.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.7.1 (agent commit `7b8b0e8f`,
 data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).
@@ -175,14 +165,13 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-**Choosing the browser.** With no browser argument, `run_task` runs local Chrome. `browser_api_key=` starts a
-cloud browser, and `cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into
-it. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
+**Choosing the browser.** With no browser argument, `run_task` starts a Browser Use Cloud browser with
+`BROWSER_USE_API_KEY`, or the key in `browser_api_key=`. `chrome=LocalChrome()` runs local Chrome instead, and
+`cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into a cloud browser. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
 
-**Your own script on the page.** `connect_cdp()` hands you the attached page without the agent, and
-`resolve_cdp_port(port)` returns the `ws://` URL behind a DevTools port:
+**Your own script on the page.** `connect_cdp()` hands you the attached page without the agent:
 
 ```python
 from fastbrowse import connect_cdp
@@ -222,8 +211,8 @@ scrolls to the quote; it may not resolve on a page that changes or needs a sessi
 
 No frame or screenshot is sent while a resolved secret may show on the page.
 
-`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; see
-[Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
+`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; a `jev` client is asked at
+Jev's limits and thresholds. See [Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
 
 **Choosing the model backend without the environment.** New in 0.9.1.
 `run_task(settings={...})` takes the same names as the
@@ -250,7 +239,6 @@ as the CLI does.
 
 ```sh
 npm install fastbrowse zod
-export TYPESAFE_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
 
@@ -353,7 +341,7 @@ Desktop, Cursor or any MCP client. It returns the answer with numbered citation 
 for, the quotes behind them, the status and what to do next, and reports progress every step.
 
 ```sh
-claude mcp add fastbrowse -e TYPESAFE_API_KEY=... -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
+claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
   -- uvx --from fastbrowse fastbrowse-mcp --max-dollars 0.25
 ```
 
@@ -365,7 +353,7 @@ For a client configured by JSON, such as Claude Desktop:
     "fastbrowse": {
       "command": "uvx",
       "args": ["--from", "fastbrowse", "fastbrowse-mcp"],
-      "env": { "TYPESAFE_API_KEY": "...", "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
+      "env": { "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
     }
   }
 }

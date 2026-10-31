@@ -48,8 +48,6 @@ OPENROUTER_PROVIDER_ROUTING = {"require_parameters": True, "sort": "latency"}
 MISS_STATUS = 404
 """Not a status the clients retry, so a miss ends the call at once instead of costing a backoff."""
 
-MAX_DIFF_LINES = 200
-
 
 class Latency(StrEnum):
     ZERO = "zero"
@@ -60,20 +58,19 @@ class Latency(StrEnum):
 
 _WEEKDAY = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
 _MONTH = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+_COLUMN = r"[A-Z][a-z]{2}(?: \d{1,2})+"
+_MONTH_LINE = rf"{_MONTH} \d{{4}}: {_COLUMN}(?:; {_COLUMN}){{6}}"
+_NEWLINE = r"(?:\n|\\+n)"
+"""A line break as it reads in a plain string or inside JSON a prompt carries as text."""
 
 CANONICAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # Fixture sites are served on fixed ports, but a port is never what tells two questions apart.
     (re.compile(r"(?<=//127\.0\.0\.1:)\d{1,5}|(?<=//localhost:)\d{1,5}|(?<=//\[::1\]:)\d{1,5}"), "<port>"),
     (re.compile(r"(?<=\b127\.0\.0\.1:)\d{1,5}|(?<=\blocalhost:)\d{1,5}"), "<port>"),
-    # `Observation.today`: the capture date, its weekday and the two months after it.
-    (
-        re.compile(
-            rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)\. In one month: {_MONTH} \d{{4}}; in two months: {_MONTH} \d{{4}}"
-        ),
-        "<today>",
-    ),
-    # `page.next_days`: the week after the capture date.
-    (re.compile(rf"\b{_WEEKDAY} \d{{4}}-\d{{2}}-\d{{2}}\b"), "<next day>"),
+    # `Observation.today`: the capture date, its weekday and the calendar under it.
+    (re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)(?:{_NEWLINE}{_MONTH_LINE})+"), "<today>"),
+    # A screenshot sent to Jev as an asset is named by its pixels' digest, which differs from run to run.
+    (re.compile(r"\bscreenshot-[0-9a-f]{64}\b"), "screenshot-<image>"),
     # A capture time, should one reach a prompt.
     (re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b"), "<timestamp>"),
 )
@@ -127,6 +124,9 @@ def canonical_value(value: Any) -> Any:
     if isinstance(value, list):
         return [canonical_value(item) for item in value]
     if isinstance(value, dict):
+        if value.get("type") == "image" and "data_base64" in value:
+            # A screenshot asset's pixels, for the reason a data URL's are keyed as one image.
+            value = {**value, "data_base64": "<image>"}
         return {canonical_text(str(key)): canonical_value(item) for key, item in value.items()}
     raise TypeError(f"not a JSON value: {type(value).__name__}")
 
@@ -187,7 +187,7 @@ def describe_request(path: str, body: Any) -> tuple[str, str | None]:
     names = sorted(questions) if isinstance(questions, dict) else []
     if isinstance(questions, list):
         names = sorted(str(q.get("id") or q.get("name") or "?") for q in questions if isinstance(q, dict))
-    return f"jev:{','.join(names)[:120]}", model
+    return f"jev:{','.join(names)}", model
 
 
 def _pretty(body: Any) -> list[str]:
@@ -198,14 +198,11 @@ def _pretty(body: Any) -> list[str]:
         return keyed.splitlines()
 
 
-def miss_diff(body: Any, nearest: Any | None, *, limit: int = MAX_DIFF_LINES) -> str:
-    """A unified diff from the nearest recorded body to the one that missed, cut at `limit` lines."""
+def miss_diff(body: Any, nearest: Any | None) -> str:
+    """A unified diff from the nearest recorded body to the one that missed."""
     if nearest is None:
         return "(nothing recorded on this path)"
-    lines = list(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
-    if len(lines) > limit:
-        lines = [*lines[:limit], f"... {len(lines) - limit} more lines"]
-    return "\n".join(lines)
+    return "\n".join(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
 
 
 def nearest_body(body: Any, candidates: Iterable[Any]) -> Any | None:
@@ -313,10 +310,6 @@ class Cassette:
         head.pop("cassette")
         return cls(task=task, exchanges=exchanges, meta=head)
 
-    @property
-    def cost(self) -> float:
-        return sum(exchange.cost or 0.0 for exchange in self.exchanges)
-
 
 def response_cost(body: str) -> float | None:
     """The dollars OpenRouter reported for a response, for Jev and the LLM alike."""
@@ -373,7 +366,6 @@ class Proxy:
         forward: Forward | None = None,
         replay: bool = True,
         latency: Latency = Latency.ZERO,
-        on_miss: Callable[[Miss], None] | None = None,
     ) -> None:
         if forward is None and not replay:
             raise ValueError("a proxy that neither replays nor forwards has nothing to answer with")
@@ -381,7 +373,6 @@ class Proxy:
         self._forward = forward
         self._replay = replay
         self._latency = latency
-        self._on_miss = on_miss
         self._lock = threading.Lock()
         self._served: dict[str, int] = {}
         self._by_key: dict[str, list[Exchange]] = {}
@@ -416,8 +407,6 @@ class Proxy:
             miss = Miss(path=path, purpose=purpose, model=model, key=key, diff=miss_diff(body, nearest))
             with self._lock:
                 self.misses.append(miss)
-            if self._on_miss is not None:
-                self._on_miss(miss)
         if self._forward is None:
             message = f"replay miss: no recorded response for {purpose} ({model}) on {path}"
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0

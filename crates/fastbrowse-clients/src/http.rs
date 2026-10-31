@@ -10,13 +10,13 @@ use std::time::Duration;
 use bytes::Bytes;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::py::json::{Style, write};
-use fastbrowse_core::telemetry::Trace;
+use fastbrowse_core::telemetry::{Trace, monotonic};
 use http_body_util::{BodyExt, Full};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -43,6 +43,10 @@ pub struct Request {
     /// Stop reading the body once it passes this many bytes, as a streamed `httpx` read can: the response then holds
     /// one byte more than the bound, so a caller sees it was passed without the rest landing in memory.
     pub max_bytes: Option<usize>,
+    /// The longest wait for the response head, and then for each body chunk, as an httpx timeout bounds each read. A
+    /// body that keeps arriving is read to its end, however long a model takes to write it: a provider that is still
+    /// working sends keep-alive bytes, so silence this long is a stall.
+    pub timeout: Duration,
 }
 
 impl Request {
@@ -102,7 +106,7 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 /// a failure reports: its text can quote the request, credential included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
-    /// `httpx.TimeoutException` or the attempt deadline: a repeat can clear it.
+    /// `httpx.TimeoutException`, or [`Request::timeout`] passed in silence: a repeat can clear it.
     Timeout(&'static str),
     /// `httpx.NetworkError`, `RemoteProtocolError`, `ProxyError` or `DecodingError`: a repeat can clear it.
     Transient(&'static str),
@@ -132,16 +136,54 @@ where
     }
 }
 
+/// The `http` event for one POST: every model request and reply in full, so a trace shows what a model was asked and
+/// what it said. Headers carry the API keys and are left out. A POST whose future is dropped in flight is written as
+/// `cancelled` rather than missing.
+struct HttpEvent<'a> {
+    trace: &'a Trace,
+    url: &'a str,
+    body: &'a Value,
+    began: f64,
+    written: bool,
+}
+
+impl HttpEvent<'_> {
+    fn write(&mut self, outcome: impl FnOnce(&mut Map<String, Value>)) {
+        self.written = true;
+        self.trace.event("http", || {
+            let mut fields = Map::new();
+            fields.insert("url".into(), self.url.into());
+            fields.insert("request".into(), self.body.clone());
+            fields.insert("began".into(), self.began.into());
+            fields.insert("ended".into(), monotonic().into());
+            outcome(&mut fields);
+            fields
+        });
+    }
+}
+
+impl Drop for HttpEvent<'_> {
+    fn drop(&mut self) {
+        if !self.written {
+            self.write(|fields| {
+                fields.insert("error".into(), "cancelled".into());
+            });
+        }
+    }
+}
+
 /// What a run's clients share: one connection pool, one trace.
 #[derive(Clone)]
 pub struct Http {
     transport: Arc<dyn Transport>,
     pub trace: Trace,
+    /// The header a provider takes its key in, when that is none of the usual three.
+    credential_header: Option<&'static str>,
 }
 
 impl Http {
     pub fn new(transport: Arc<dyn Transport>) -> Http {
-        Http { transport, trace: Trace::disabled() }
+        Http { transport, trace: Trace::disabled(), credential_header: None }
     }
 
     /// hyper over rustls with the Mozilla roots.
@@ -154,8 +196,13 @@ impl Http {
         self
     }
 
-    /// `http.post(url, json=body, headers=headers, timeout=seconds)`, bounded by an elapsed deadline as well: HTTP
-    /// read timeouts reset on each chunk, so a trickling body would otherwise hold an attempt forever.
+    pub(crate) fn with_credential_header(mut self, header: Option<&'static str>) -> Http {
+        self.credential_header = header;
+        self
+    }
+
+    /// `http.post(url, json=body, headers=headers, timeout=seconds)`: `seconds` bounds each silence, see
+    /// [`Request::timeout`].
     pub async fn post_json(
         &self,
         url: &str,
@@ -172,8 +219,23 @@ impl Http {
             headers: all,
             body: write(body, Style::HTTPX).into(),
             max_bytes: None,
+            timeout: Duration::from_secs_f64(seconds),
         };
-        self.send(request, seconds).await
+        let mut event = HttpEvent { trace: &self.trace, url, body, began: monotonic(), written: false };
+        let result = self.send(request).await;
+        event.write(|fields| match &result {
+            Ok(response) => {
+                fields.insert("status".into(), response.status.into());
+                let text = response.text();
+                let text =
+                    if response.credential.is_empty() { text } else { text.replace(&response.credential, "[api key]") };
+                fields.insert("response".into(), serde_json::from_str(&text).unwrap_or(Value::String(text)));
+            }
+            Err(error) => {
+                fields.insert("error".into(), error.name().into());
+            }
+        });
+        result
     }
 
     pub async fn get(&self, url: &str, headers: &[(String, String)], seconds: f64) -> Result<Response, TransportError> {
@@ -194,27 +256,25 @@ impl Http {
             headers: headers.to_vec(),
             body: Vec::new(),
             max_bytes,
+            timeout: Duration::from_secs_f64(seconds),
         };
-        self.send(request, seconds).await
+        self.send(request).await
     }
 
-    async fn send(&self, request: Request, seconds: f64) -> Result<Response, TransportError> {
-        // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too.
+    async fn send(&self, request: Request) -> Result<Response, TransportError> {
+        // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too,
+        // as is one that echoes the header a custom endpoint was configured with.
         let credential = request
             .header("authorization")
             .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
             .or_else(|| request.header("x-api-key"))
             .or_else(|| request.header("api-key"))
+            .or_else(|| self.credential_header.and_then(|name| request.header(name)))
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
-        match tokio::time::timeout(Duration::from_secs_f64(seconds), self.transport.send(request)).await {
-            Ok(Ok(mut response)) => {
-                response.credential = credential;
-                Ok(response)
-            }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(TransportError::Timeout("TimeoutError")),
-        }
+        let mut response = self.transport.send(request).await?;
+        response.credential = credential;
+        Ok(response)
     }
 }
 
@@ -251,20 +311,22 @@ impl Transport for HyperTransport {
                 Method::Get => hyper::Method::GET,
                 Method::Post => hyper::Method::POST,
             };
-            let request_max = request.max_bytes;
+            let (request_max, silence) = (request.max_bytes, request.timeout);
+            let stalled = |_| TransportError::Timeout("TimeoutError");
             let mut builder = hyper::Request::builder().method(method).uri(uri);
             for (name, value) in &request.headers {
                 builder = builder.header(name.as_str(), value.as_str());
             }
             let outgoing =
                 builder.body(Full::new(Bytes::from(request.body))).map_err(|_| TransportError::Fatal("InvalidURL"))?;
-            let response = client.request(outgoing).await.map_err(|error| {
-                if error.is_connect() {
-                    TransportError::Transient("ConnectError")
-                } else {
-                    TransportError::Transient("RemoteProtocolError")
-                }
-            })?;
+            let response =
+                tokio::time::timeout(silence, client.request(outgoing)).await.map_err(stalled)?.map_err(|error| {
+                    if error.is_connect() {
+                        TransportError::Transient("ConnectError")
+                    } else {
+                        TransportError::Transient("RemoteProtocolError")
+                    }
+                })?;
             let status = response.status().as_u16();
             let headers = response
                 .headers()
@@ -275,7 +337,7 @@ impl Transport for HyperTransport {
                 .collect();
             let mut incoming = response.into_body();
             let mut body = Vec::new();
-            while let Some(frame) = incoming.frame().await {
+            while let Some(frame) = tokio::time::timeout(silence, incoming.frame()).await.map_err(stalled)? {
                 let frame = frame.map_err(|_| TransportError::Transient("ReadError"))?;
                 if let Some(chunk) = frame.data_ref() {
                     body.extend_from_slice(chunk);

@@ -2,7 +2,7 @@
 
 A browser agent that picks instead of generating. Every page is indexed into the controls it actually has, and a
 choice model picks one of them. An LLM plans, reads and writes prose. Code owns authorization gates, secret
-resolution, cost limits, and whether a run may call itself finished.
+resolution and cost limits, and reports an answer it cannot verify as unverified.
 
 Add the client and the binary for each platform you run on (`natives-darwin-arm64`, `natives-darwin-x64`,
 `natives-linux-arm64`, `natives-linux-x64`, `natives-win32-x64`). Java 17 or newer.
@@ -60,5 +60,6 @@ browser has closed. One client runs one task at a time: a second `run` while one
 
 `RunOptions` carries the rest: `outputSchema` for structured data, read back from `result.data()`; `secrets`, whose
 values stay in your process and are asked for as they are typed; `until`, a check on the address a run ends on; and
-`onEvent` and `onFrame` to follow a run as it goes. The
+`onEvent` and `onFrame` to follow a run as it goes. `outputSchema` and `result.data()` are Jackson 3 `JsonNode`s,
+from `tools.jackson.databind`. The
 [project README](https://github.com/agent-labs-dev/fastbrowse) covers the statuses, citations and costs.

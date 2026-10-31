@@ -1,4 +1,4 @@
-//! tests/clients/test_validation.py: retries and the accounting of what they cost, seen through the Jev clients
+//! Retries and the accounting of what they cost, seen through the Jev clients
 //! since the request loop itself is crate-private.
 
 mod common;
@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::{Script, answering, reply, text};
-use fastbrowse_clients::http::{Http, Request, Response, TransportError};
-use fastbrowse_clients::system_one::SystemOneClient;
+use common::{Script, answering, direct, keys, noul, one, reply, text};
+use fastbrowse_clients::http::{Response, TransportError};
+use fastbrowse_clients::system_one::{SystemOneClient, TYPESAFE_URL};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
-use fastbrowse_core::decision::{DecisionClient, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulQuestion, Question};
+use fastbrowse_core::decision::{DecisionClient, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, Question};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, MaybeUnavailable};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::telemetry::Trace;
@@ -20,29 +20,12 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
-fn noul(instructions: &str) -> Question {
-    NoulQuestion::new(instructions, None, None).into()
-}
-
-fn one() -> IndexMap<String, Question> {
-    IndexMap::from([("q".to_string(), noul("Is it?"))])
-}
-
 fn pair() -> IndexMap<String, Question> {
     IndexMap::from([("a".to_string(), noul("Is it?")), ("b".to_string(), noul("Is it?"))])
 }
 
-fn keys(request: &Request) -> Vec<String> {
-    let body: Value = serde_json::from_slice(&request.body).unwrap();
-    body["questions"].as_object().unwrap().keys().cloned().collect()
-}
-
 fn answered() -> Response {
     Response::json(200, &json!({"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100}}))
-}
-
-fn direct(http: Http) -> SystemOneClient {
-    SystemOneClient::direct("key", http)
 }
 
 fn events(trace: &Trace, kind: &str) -> Vec<Value> {
@@ -169,7 +152,7 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
     let mut steps = vec![common::Step::Fail(TransportError::Timeout("ReadTimeout"))];
     steps.extend((0..5).map(|_| text(503, &format!("secret-key{}", "x".repeat(1000)))));
     let script = Script::new(steps);
-    let client = SystemOneClient::direct("secret-key", script.http());
+    let client = SystemOneClient::new("secret-key", script.http(), TYPESAFE_URL, JEV_MODEL).typesafe();
     let error = client.evaluate(&json!("page"), &one()).await.unwrap_err();
     let DecisionError::RetriesExhausted(exhausted) = &error else { panic!("exhausted") };
     assert_eq!(exhausted.unaccounted_requests, 1);
@@ -182,8 +165,11 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
 async fn test_a_request_that_can_never_be_sent_is_not_an_outage() {
     // Retrying it would fail the same way every time, and an eval would re-run the task forever.
     let script = Script::new([common::Step::Fail(TransportError::Fatal("UnsupportedProtocol"))]);
-    let error =
-        SystemOneClient::direct("secret-key", script.http()).evaluate(&json!("page"), &one()).await.unwrap_err();
+    let error = SystemOneClient::new("secret-key", script.http(), TYPESAFE_URL, JEV_MODEL)
+        .typesafe()
+        .evaluate(&json!("page"), &one())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("could not be sent"), "{error}");
     assert_eq!(script.requests().len(), 1);
     assert!(!error.is_unavailable());

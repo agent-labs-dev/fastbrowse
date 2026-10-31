@@ -10,11 +10,10 @@ with evidence and a status. Give it the user's goal and necessary values rather 
 
 ## Choose an entry point
 
-Prefer local browsing when a coding agent invokes this skill. Honor an explicit user browser choice first.
-Otherwise use CLI `--local`: a separate headless Chrome with no window, which takes no focus and asks the user
-for nothing. Drive another browser only through a DevTools endpoint the user names; read
-[references/browser-access.md](references/browser-access.md) first. Use cloud only when the user requests it or
-local browsing is unavailable; explain the fallback.
+Honor an explicit user browser choice first. Otherwise use the default Browser Use Cloud browser, which holds a
+residential proxy and passes bot checks. Use CLI `--local`, a separate headless Chrome with no window, when the task
+needs the caller's localhost or `BROWSER_USE_API_KEY` is not set, and explain why. Drive another browser only
+through a DevTools endpoint the user names; read [references/browser-access.md](references/browser-access.md) first.
 
 Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
 schema and pass `task` and `start` when known. Pass resource limits when the user supplies them or an
@@ -28,7 +27,7 @@ Otherwise use the CLI. Check `fastbrowse --help` if installed; otherwise check `
 ```sh
 uvx --from fastbrowse fastbrowse \
   'Find the Blue Kettle and report its price. Do not purchase anything.' \
-  --start https://example.com/shop --local --json
+  --start https://example.com/shop --json
 ```
 
 The URL above is illustrative. Use the actual address from the task. Quote task text as one shell argument;
@@ -36,17 +35,14 @@ for generated commands, use an argument array rather than interpolating user tex
 Allow time for the browser run and wait for the process to finish. Progress goes to stderr and the JSON result
 goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an unfinished run's evidence.
 
-fastbrowse recommends `TYPESAFE_API_KEY` for Jev (direct TypeSafe) and uses `OPENROUTER_API_KEY` for the
-LLM, or `AI_GATEWAY_API_KEY` for the LLM when OpenRouter is absent. OpenRouter also serves Jev text when it
-is the only Jev key, but it is not recommended and never receives Jev image input; `AI_GATEWAY_API_KEY` also
-serves Jev only as a last resort rather than the recommended route. Local browsing needs Chrome;
-cloud browsing also needs `BROWSER_USE_API_KEY`. Pass `--local` or the existing browser's `--cdp-url` explicitly,
-since the CLI itself defaults to cloud. A cloud browser cannot reach the caller's localhost. Check for
+fastbrowse recommends one `OPENROUTER_API_KEY` for Jev and the LLM. `AI_GATEWAY_API_KEY` serves the LLM when
+OpenRouter is absent, and Jev as a last resort; `TYPESAFE_API_KEY` is the direct Jev route. Cloud browsing needs
+`BROWSER_USE_API_KEY`; local browsing needs Chrome. A cloud browser cannot reach the caller's localhost. Check for
 configured keys without printing their values; if missing, ask the user to configure them outside the conversation.
 
 `max_dollars` limits model spend only. Cloud browser and proxy charges are added after the browser stops and
-can exceed that limit. For a strict total-spend ceiling, use a permitted local or existing browser when
-available; otherwise explain that fastbrowse cannot enforce that ceiling for cloud runs and establish an
+can exceed that limit. For a strict total-spend ceiling, use `--local` or an existing browser when permitted;
+otherwise explain that fastbrowse cannot enforce that ceiling for cloud runs and establish an
 acceptable budget before starting one. Count earlier run costs against the user's total budget across retries.
 
 ## Set the task boundary
@@ -80,12 +76,13 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `needs_confirmation` | Report the pending action and obtain any missing authorization. |
 | `needs_login` | Read `wall.kind`. For `one_time_code`, fetch the code the site sent (email or text) if you can and pass it as a secret scoped to `wall.origin`; otherwise, and for `password` or `sign_in`, ask the user to sign in or configure an origin-scoped secret. |
 | `needs_input` | Ask for the missing value or file described in the result. |
-| `blocked` | Report the bot check (`wall.kind` is `bot_check`); let the user resolve it in a browser they control. |
+| `blocked` | Report the bot check (`wall.kind` is `bot_check`); let the user resolve it in a browser they control. Headless `--local` Chrome meets bot checks more often than the user's own browser. |
 | `unverified` | Report what could not be verified and preserve partial evidence. |
 | `budget_exceeded` | Report the exhausted resource; respect the user's total budget across retries. |
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |
 | `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. A `stuck` answer that starts `Answer (unverified)` is cited but unconfirmed; present it as partial. |
 
-Retry only after a concrete change, such as corrected input, a completed sign-in, or a resolved provider outage.
+Retry only after a concrete change, such as corrected input, a completed sign-in, a resolved provider outage, or a
+site's transient error (a 5xx, a 429, a maintenance page) clearing.
 Before repeating a write, inspect whether it already happened to avoid sending or purchasing twice.
 CLI usage errors may have no JSON result. Check the error and `--help` rather than inventing a status or answer.

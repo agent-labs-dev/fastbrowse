@@ -1,6 +1,6 @@
 package dev.agentlabs.fastbrowse;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import dev.agentlabs.fastbrowse.protocol.Authorization;
 import dev.agentlabs.fastbrowse.protocol.Limits;
 import dev.agentlabs.fastbrowse.protocol.SecretRef;

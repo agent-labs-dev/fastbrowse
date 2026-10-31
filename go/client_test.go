@@ -21,7 +21,7 @@ func serverBinary(t *testing.T) string {
 	}
 	built, _ := filepath.Abs(filepath.Join("..", "target", "debug", executable()))
 	if _, err := os.Stat(built); err != nil {
-		t.Skip("no fastbrowse binary: run `cargo build -p fastbrowse-cli`, or set FASTBROWSE_TEST_BINARY")
+		t.Skip("no fastbrowse binary: run `cargo build -p fastbrowse-cli --features scripted`, or set FASTBROWSE_TEST_BINARY")
 	}
 	return built
 }
@@ -133,6 +133,21 @@ func TestAnEventCallbackThatFailsEndsTheRunWithStatusError(t *testing.T) {
 	result := run(t, client, "t", RunOptions{OnEvent: func(Event) error { calls++; return errors.New("full disk") }})
 	if result.Status != StatusError || *result.Error != "run/event: full disk" || calls != 1 {
 		t.Fatalf("got %s %v after %d calls", result.Status, result.Error, calls)
+	}
+}
+
+func TestANotificationThatCannotBeDecodedEndsItsRun(t *testing.T) {
+	for _, notification := range []struct{ method, params string }{
+		{string(ServerMethodRunEvent), `{"run_id":"r","event":7}`},
+		{string(ServerMethodRunFrame), `{"run_id":"r","frame":"not base64!"}`},
+	} {
+		cancelled := false
+		run := &served{cancel: func() { cancelled = true }}
+		client := &Client{runs: map[string]*served{"r": run}}
+		client.notify(notification.method, json.RawMessage(notification.params))
+		if !cancelled || run.failure == "" {
+			t.Fatalf("%s: cancelled %v, failure %q", notification.method, cancelled, run.failure)
+		}
 	}
 }
 

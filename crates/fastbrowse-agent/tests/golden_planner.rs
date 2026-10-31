@@ -35,8 +35,7 @@ fn plans_ask_what_python_asks() {
             "partition_plan" => {
                 let ledger = Ledger::new(Limits::default());
                 let plan: Plan = parse(&case["plan"]);
-                let independent = case["independent_fields"].as_bool().unwrap();
-                let outcome = match block_on(partition_plan(&llm, task, &plan, &ledger, independent)) {
+                let outcome = match block_on(partition_plan(&llm, task, &plan, &ledger)) {
                     Ok(partition) => json!({
                         "plans": partition.plans.iter().map(Dump::dump).collect::<Vec<_>>(),
                         "targets": partition.targets.iter().map(|(k, t)| (k.clone(), t.dump())).collect::<serde_json::Map<_, _>>(),

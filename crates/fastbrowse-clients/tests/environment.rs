@@ -1,4 +1,4 @@
-//! tests/clients/test_environment.py: settings choose the Jev and LLM routes, and a custom endpoint gets only its own
+//! Settings choose the Jev and LLM routes, and a custom endpoint gets only its own
 //! key. Python builds `Settings(**values)`; these tests give the environment variables those values come from, which
 //! also covers what pydantic-settings does for Python: names without regard to case, and `.env` under the environment.
 
@@ -6,22 +6,13 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use common::{Script, answer_model, answering};
-use fastbrowse_clients::environment::{ConfigurationError, DecisionSource, LLMProvider, Settings, default_model};
+use common::{Script, answer_model, answering, body, config_error, one, settings};
+use fastbrowse_clients::environment::{DEFAULT_LLM, DecisionSource, LLMProvider, Settings};
 use fastbrowse_clients::http::{Http, Request, Response};
-use fastbrowse_core::decision::{DecisionError, NoulQuestion, Question};
+use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::{Generation, Message};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, LLMPurpose};
-use indexmap::IndexMap;
 use serde_json::{Value, json};
-
-fn settings(env: &[(&str, &str)]) -> Settings {
-    Settings::from_sources(env, None).unwrap()
-}
-
-fn question() -> IndexMap<String, Question> {
-    IndexMap::from([("q".to_string(), NoulQuestion::new("Is it?", None, None).into())])
-}
 
 /// Every request's URL, each answered with `status`.
 fn urls(status: u16) -> (Http, Arc<Mutex<Vec<String>>>) {
@@ -34,24 +25,17 @@ fn urls(status: u16) -> (Http, Arc<Mutex<Vec<String>>>) {
     (http, seen)
 }
 
-fn config_error<T>(built: Result<T, ConfigurationError>) -> String {
-    match built {
-        Ok(_) => panic!("expected a configuration error"),
-        Err(error) => error.to_string(),
-    }
-}
-
 #[tokio::test(start_paused = true)]
 async fn test_jev_requests_go_to_the_chosen_source() {
     let cases: [(&[(&str, &str)], &str); 8] = [
         (&[("OPENROUTER_API_KEY", "o")], "https://openrouter.ai/api/v1/systemone"),
         (
             &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("AI_GATEWAY_API_KEY", "g")],
-            "https://api.typesafe.ai/v1/systemone",
+            "https://openrouter.ai/api/v1/systemone",
         ),
         (
-            &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_DECISION_SOURCE", "openrouter")],
-            "https://openrouter.ai/api/v1/systemone",
+            &[("OPENROUTER_API_KEY", "o"), ("TYPESAFE_API_KEY", "t"), ("FASTBROWSE_DECISION_SOURCE", "typesafe")],
+            "https://api.typesafe.ai/v1/systemone",
         ),
         (&[("TYPESAFE_API_KEY", "t"), ("AI_GATEWAY_API_KEY", "g")], "https://api.typesafe.ai/v1/systemone"),
         (
@@ -74,7 +58,7 @@ async fn test_jev_requests_go_to_the_chosen_source() {
     for (env, expected) in cases {
         let (http, seen) = urls(400);
         let jev = settings(env).decision(&http).unwrap();
-        assert!(jev.evaluate(&json!("page"), &question()).await.is_err());
+        assert!(jev.evaluate(&json!("page"), &one()).await.is_err());
         assert_eq!(*seen.lock().unwrap(), [expected], "{env:?}");
     }
 }
@@ -108,9 +92,9 @@ async fn test_failover_requires_both_keys_and_default_routing() {
                 env.push(("FASTBROWSE_DECISION_BASE_URL", "https://proxy.test"));
             }
             let default_pin = match source {
-                DecisionSource::OpenRouter => "jev-1.13",
-                DecisionSource::TypeSafe => "jev-1.13.0",
-                DecisionSource::Gateway => "typesafe-ai/jev",
+                DecisionSource::OpenRouter => "jev-1.14",
+                DecisionSource::TypeSafe => "jev-1.14.0",
+                DecisionSource::Gateway => "typesafe-ai/jev-1.14.0",
                 _ => unreachable!(),
             };
             match restriction {
@@ -119,8 +103,7 @@ async fn test_failover_requires_both_keys_and_default_routing() {
                 _ => {}
             }
             let (http, seen) = urls(503);
-            let error =
-                settings(&env).decision(&http).unwrap().evaluate(&json!("page"), &question()).await.unwrap_err();
+            let error = settings(&env).decision(&http).unwrap().evaluate(&json!("page"), &one()).await.unwrap_err();
             assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{source} {restriction}: {error}");
             let host = match (restriction, source) {
                 ("proxy", _) => "proxy.test",
@@ -148,7 +131,7 @@ async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
             &[("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")],
             "https://api.aimlapi.com/v1/decisions",
             Some("Bearer m"),
-            "typesafe/jev-1.13",
+            "typesafe/jev-1.14",
         ),
         (
             &[
@@ -210,7 +193,7 @@ async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
         let env: Vec<(&str, &str)> = env.iter().copied().chain(JEV_KEYS).collect();
         let script = Script::new((0..6).map(|_| common::text(503, "")));
         let jev = settings(&env).decision(&script.http()).unwrap();
-        let error = jev.evaluate(&json!("page"), &question()).await.unwrap_err();
+        let error = jev.evaluate(&json!("page"), &one()).await.unwrap_err();
         assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{env:?}: {error}");
         let requests = script.requests();
         assert!(requests.iter().all(|request| request.url == url), "{env:?}");
@@ -222,14 +205,46 @@ async fn test_another_decision_host_gets_its_own_key_its_model_and_no_backup() {
     }
 }
 
+/// TypeSafe grants long context to a request carrying its header; OpenRouter and AIMLAPI document it as Jev's context
+/// on their routes, and the gateway lists 32,000, so its requests keep Jev's default limits.
+#[tokio::test]
+async fn test_jev_is_fitted_to_the_context_its_route_documents() {
+    // Settings, then the tokens a request may carry and whether it asks for long context.
+    type Case<'a> = (&'a [(&'a str, &'a str)], i64, bool);
+    let cases: [Case; 5] = [
+        (&[("TYPESAFE_API_KEY", "t")], 262_144, true),
+        (&[("OPENROUTER_API_KEY", "o")], 262_144, false),
+        (&[("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")], 262_144, false),
+        (
+            &[
+                ("FASTBROWSE_DECISION_SOURCE", "aimlapi"),
+                ("AIMLAPI_API_KEY", "m"),
+                ("FASTBROWSE_DECISION_MODEL", "liquid/d1"),
+            ],
+            32_000,
+            false,
+        ),
+        (&[("AI_GATEWAY_API_KEY", "g")], 32_000, false),
+    ];
+    for (env, context, header) in cases {
+        let answered = json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}});
+        let script = Script::new([common::reply(200, answered)]);
+        let jev = settings(env).decision(&script.http()).unwrap();
+        assert_eq!(jev.profile().max_largest_tokens, context, "{env:?}");
+        let _ = jev.evaluate(&json!("page"), &one()).await;
+        let sent = script.requests()[0].header("typesafe-danger-zone-long-context").map(str::to_string);
+        assert_eq!(sent.as_deref(), header.then_some("true"), "{env:?}");
+    }
+}
+
 #[tokio::test]
 async fn test_a_resellers_unmetered_call_is_an_unknown_cost_not_the_models_list_price() {
     let answered = json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 100}});
     let script = Script::new([common::reply(200, answered)]);
     let env = [("FASTBROWSE_DECISION_SOURCE", "aimlapi"), ("AIMLAPI_API_KEY", "m")];
     let jev = settings(&env).decision(&script.http()).unwrap();
-    assert!(jev.profile().validated(), "the same Jev 1.13 the thresholds were tuned on");
-    let evaluation = jev.evaluate(&json!("page"), &question()).await.unwrap();
+    assert!(jev.profile().validated(), "a Jev release the thresholds apply to");
+    let evaluation = jev.evaluate(&json!("page"), &one()).await.unwrap();
     assert_eq!((evaluation.cost.basis, evaluation.cost.dollars), (CostBasis::Unknown, None));
 }
 
@@ -261,8 +276,8 @@ fn test_the_decision_key_is_not_printed_with_the_settings() {
 #[tokio::test(start_paused = true)]
 async fn test_source_model_defaults_and_explicit_pins() {
     for (source, pin, expected) in [
-        ("openrouter", None, "jev-1.13"),
-        ("typesafe", None, "jev-1.13.0"),
+        ("openrouter", None, "jev-1.14"),
+        ("typesafe", None, "jev-1.14.0"),
         ("openrouter", Some("jev-1.13.0"), "jev-1.13.0"),
         ("typesafe", Some("jev-latest"), "jev-latest"),
     ] {
@@ -272,7 +287,7 @@ async fn test_source_model_defaults_and_explicit_pins() {
         if let Some(pin) = pin {
             env.push(("FASTBROWSE_DECISION_MODEL", pin));
         }
-        assert!(settings(&env).decision(&script.http()).unwrap().evaluate(&json!("page"), &question()).await.is_err());
+        assert!(settings(&env).decision(&script.http()).unwrap().evaluate(&json!("page"), &one()).await.is_err());
         assert_eq!(script.bodies()[0]["model"], expected);
     }
 }
@@ -289,13 +304,8 @@ fn completion(cost: Option<f64>) -> Response {
 async fn llm_requests(env: &[(&str, &str)], cost: Option<f64>) -> (Vec<Request>, Generation<Value>) {
     let script = Script::new([common::Step::Reply(completion(cost))]);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result =
-        llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), 2000, None).await.unwrap();
+    let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await.unwrap();
     (script.requests(), result)
-}
-
-fn body(request: &Request) -> Value {
-    serde_json::from_slice(&request.body).unwrap()
 }
 
 #[tokio::test]
@@ -313,16 +323,24 @@ async fn test_llm_uses_the_gateway_without_an_openrouter_key() {
     assert_eq!(seen[0].url, "https://ai-gateway.vercel.sh/v1/chat/completions");
     // The credential goes only to the host it belongs to.
     assert_eq!(seen[0].header("authorization"), Some("Bearer g"));
-    assert_eq!(body(&seen[0])["model"], default_model(LLMPurpose::Read));
+    assert_eq!(body(&seen[0])["model"], fastbrowse_clients::environment::DEFAULT_LLM);
     assert_eq!(body(&seen[0])["provider"], json!({"sort": "ttft"}));
     assert_eq!(result.cost.basis, CostBasis::Metered);
 }
 
 #[tokio::test]
-async fn test_gateway_usage_without_a_cost_stays_unknown() {
-    // The gateway reports `usage.cost`; a response without it must not read as free.
-    let (_, result) = llm_requests(&[("AI_GATEWAY_API_KEY", "g")], None).await;
-    assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Unknown, None));
+async fn test_gateway_usage_without_a_cost_is_bounded() {
+    // The gateway reports `usage.cost`; a response without it must not read as free, so it is bounded from the
+    // model's listed endpoints.
+    let endpoints = json!({"data": {"endpoints": [{"context_length": 1000, "pricing": {"prompt": "0.000001"}}]}});
+    let script =
+        Script::new([common::Step::Reply(completion(None)), common::Step::Reply(Response::json(200, &endpoints))]);
+    let llm = settings(&[("AI_GATEWAY_API_KEY", "g")]).llm(&script.http()).unwrap();
+    let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await.unwrap();
+    let model = DEFAULT_LLM;
+    assert_eq!(script.requests()[1].url, format!("https://ai-gateway.vercel.sh/v1/models/{model}/endpoints"));
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!((result.cost.dollars.unwrap() - 1000.0 * 0.000001 * 1.05).abs() < 1e-12);
 }
 
 #[test]
@@ -409,24 +427,6 @@ fn test_the_local_key_is_not_printed_with_the_settings() {
 fn test_a_base_url_without_a_model_names_the_setting() {
     let loaded = settings(&[("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1")]);
     assert!(config_error(loaded.llm(&Script::default().http())).contains("FASTBROWSE_LLM_MODEL"));
-}
-
-const PINS: [&str; 7] = [
-    "FASTBROWSE_LLM_MODEL_PLAN",
-    "FASTBROWSE_LLM_MODEL_READ",
-    "FASTBROWSE_LLM_MODEL_FIELD_TEXT",
-    "FASTBROWSE_LLM_MODEL_RECOVER",
-    "FASTBROWSE_LLM_MODEL_COMPOSE",
-    "FASTBROWSE_LLM_MODEL_VERIFY",
-    "FASTBROWSE_LLM_MODEL_SHORTCUT",
-];
-
-#[tokio::test]
-async fn test_every_purpose_pinned_is_enough_without_one_model() {
-    let mut env: Vec<(&str, &str)> = PINS.iter().map(|pin| (*pin, "qwen")).collect();
-    env.push(("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1"));
-    let (seen, _) = llm_requests(&env, None).await;
-    assert_eq!(body(&seen[0])["model"], "qwen");
 }
 
 #[tokio::test]
@@ -530,26 +530,19 @@ async fn test_a_local_endpoint_gets_the_reasoning_effort_that_was_asked_for() {
 }
 
 #[tokio::test]
-async fn test_openrouter_still_gets_the_default_reasoning_effort() {
+async fn test_openrouter_gives_gemini_low_reasoning_deepseek_none_and_other_models_their_own() {
     let (seen, _) = llm_requests(&[("OPENROUTER_API_KEY", "o")], Some(0.0001)).await;
+    assert_eq!(body(&seen[0])["model"], "google/gemini-3.8-flash");
     assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "low"}));
-}
-
-#[tokio::test]
-async fn test_one_purposes_reasoning_effort_overrides_the_others_only_for_it() {
-    // The requests are for the reader.
-    for (env, effort) in [
-        (&[("FASTBROWSE_LLM_REASONING_READ", "none")][..], json!({"effort": "none"})),
-        (&[("FASTBROWSE_LLM_REASONING", "high"), ("FASTBROWSE_LLM_REASONING_READ", "none")], json!({"effort": "none"})),
-        (&[("FASTBROWSE_LLM_REASONING_VERIFY", "none")], json!({"effort": "low"})),
-    ] {
-        let env: Vec<(&str, &str)> = [("OPENROUTER_API_KEY", "o")].into_iter().chain(env.iter().copied()).collect();
-        let (seen, _) = llm_requests(&env, Some(0.0001)).await;
-        assert_eq!(body(&seen[0])["reasoning"], effort, "{env:?}");
-    }
-    let (seen, _) = llm_requests(&local(&[("FASTBROWSE_LLM_REASONING_READ", "none")]), None).await;
+    let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_MODEL", "deepseek/deepseek-v4.1-flash-1017")];
+    let (seen, _) = llm_requests(&env, Some(0.0001)).await;
     assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "none"}));
-    assert!(Settings::from_sources(&[("FASTBROWSE_LLM_REASONING_VERIFY", "off")], None).is_err());
+    let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_MODEL", "qwen/qwen3.5-plus")];
+    let (seen, _) = llm_requests(&env, Some(0.0001)).await;
+    assert!(body(&seen[0]).get("reasoning").is_none());
+    let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_REASONING", "high")];
+    let (seen, _) = llm_requests(&env, Some(0.0001)).await;
+    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "high"}));
 }
 
 #[tokio::test]
@@ -566,23 +559,6 @@ fn test_a_blank_model_on_a_local_endpoint_is_unset() {
             settings(&[("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1"), ("FASTBROWSE_LLM_MODEL", blank)]);
         assert!(config_error(loaded.llm(&Script::default().http())).contains("FASTBROWSE_LLM_MODEL"));
     }
-}
-
-#[tokio::test]
-async fn test_a_blank_purpose_pin_falls_back_to_the_global_model_not_a_default() {
-    for blank in ["", "   "] {
-        let pins: Vec<(&str, &str)> = PINS.iter().map(|pin| (*pin, blank)).collect();
-        let (seen, _) = llm_requests(&local(&pins), None).await;
-        assert_eq!(body(&seen[0])["model"], "qwen");
-    }
-}
-
-#[test]
-fn test_blank_pins_without_a_global_model_are_unset() {
-    let mut env: Vec<(&str, &str)> =
-        PINS.iter().map(|pin| (*pin, if *pin == "FASTBROWSE_LLM_MODEL_READ" { " " } else { "qwen" })).collect();
-    env.extend([("FASTBROWSE_LLM_BASE_URL", "http://127.0.0.1:8000/v1"), ("FASTBROWSE_LLM_MODEL", "")]);
-    assert!(config_error(settings(&env).llm(&Script::default().http())).contains("FASTBROWSE_LLM_MODEL"));
 }
 
 // What pydantic-settings does for Python before any of the above runs.
@@ -605,20 +581,6 @@ FASTBROWSE_LLM_EXTRA_BODY={\"top_k\": 20}
     // A `#` with no space before it is part of the value.
     assert_eq!(loaded.decision_model.as_deref(), Some("jev#1"));
     assert_eq!(loaded.llm_extra_body.as_deref(), Some("{\"top_k\": 20}"));
-}
-
-#[test]
-fn a_decision_setting_is_still_read_under_its_former_jev_name() {
-    let former = settings(&[
-        ("FASTBROWSE_JEV_SOURCE", "gateway"),
-        ("FASTBROWSE_JEV_BASE_URL", "http://proxy:8080"),
-        ("FASTBROWSE_JEV_MODEL", "nimble"),
-    ]);
-    assert_eq!(former.decision_source, Some(DecisionSource::Gateway));
-    assert_eq!(former.decision_base_url.as_deref(), Some("http://proxy:8080"));
-    assert_eq!(former.decision_model.as_deref(), Some("nimble"));
-    let both = settings(&[("FASTBROWSE_JEV_MODEL", "old"), ("FASTBROWSE_DECISION_MODEL", "new")]);
-    assert_eq!(both.decision_model.as_deref(), Some("new"));
 }
 
 #[test]
@@ -645,7 +607,7 @@ fn the_example_dotenv_reads_as_python_dotenv_reads_it() {
     // `#` go with the `=` (checked against dotenv_values), so an example copied and never filled sends it as a key.
     assert_eq!(
         loaded.openrouter_api_key.as_ref().map(|key| key.expose()),
-        Some("# the LLM, and a supported Jev text route, https://openrouter.ai/keys")
+        Some("# Jev and the LLM, https://openrouter.ai/keys")
     );
     assert_eq!(loaded.llm_source(), LLMProvider::OpenRouter);
     assert!(loaded.ai_gateway_api_key.is_none());

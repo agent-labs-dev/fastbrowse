@@ -68,6 +68,7 @@ const (
 	CostBasisMetered   CostBasis = "metered"
 	CostBasisEstimated CostBasis = "estimated"
 	CostBasisBounded   CostBasis = "bounded"
+	CostBasisUnsettled CostBasis = "unsettled"
 	CostBasisUnknown   CostBasis = "unknown"
 )
 
@@ -95,13 +96,14 @@ type CostLine struct {
 	Seconds *float64 `json:"seconds"`
 }
 
-// The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-// reader's, because the reader asked for the rest of the list.
+// Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
+// next page of a list or DONE once a lookup is answered.
 type Decider string
 
 const (
-	DeciderJev Decider = "jev"
-	DeciderLLM Decider = "llm"
+	DeciderJev  Decider = "jev"
+	DeciderLLM  Decider = "llm"
+	DeciderCode Decider = "code"
 )
 
 type Error struct {
@@ -175,7 +177,6 @@ const (
 	LLMPurposeRead      LLMPurpose = "read"
 	LLMPurposeFieldText LLMPurpose = "field_text"
 	LLMPurposeRecover   LLMPurpose = "recover"
-	LLMPurposeVerify    LLMPurpose = "verify"
 	LLMPurposeCompose   LLMPurpose = "compose"
 	LLMPurposeShortcut  LLMPurpose = "shortcut"
 )
@@ -281,37 +282,41 @@ type RunFrame struct {
 	Frame string `json:"frame"`
 }
 
-// One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+// One run: the run's arguments, and what the server needs to talk to the client about it.
 //
 // The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
 // environment the server inherited.
 type RunParams struct {
-	RunID              string            `json:"run_id"`
-	Task               string            `json:"task"`
-	Start              *string           `json:"start,omitempty"`
-	Context            *string           `json:"context,omitempty"`
-	Inputs             map[string]string `json:"inputs,omitempty"`
-	Attachments        []RunAttachment   `json:"attachments,omitempty"`
-	Limits             *Limits           `json:"limits,omitempty"`
-	Authorization      *Authorization    `json:"authorization,omitempty"`
-	OutputSchema       json.RawMessage   `json:"output_schema,omitempty"`
-	Secrets            []SecretRef       `json:"secrets,omitempty"`
-	Frames             bool              `json:"frames,omitempty"`
-	Until              bool              `json:"until,omitempty"`
-	Downloads          *string           `json:"downloads,omitempty"`
-	Record             *string           `json:"record,omitempty"`
-	Cursor             *bool             `json:"cursor,omitempty"`
-	Local              bool              `json:"local,omitempty"`
-	Chrome             *LocalChrome      `json:"chrome,omitempty"`
-	CloudProfile       *string           `json:"cloud_profile,omitempty"`
-	CDPURL             *string           `json:"cdp_url,omitempty"`
-	CDPPort            *int64            `json:"cdp_port,omitempty"`
-	Attach             bool              `json:"attach,omitempty"`
-	TargetMatch        *string           `json:"target_match,omitempty"`
-	Foreground         bool              `json:"foreground,omitempty"`
-	ProxyCountry       *string           `json:"proxy_country,omitempty"`
-	Viewport           *[2]int64         `json:"viewport,omitempty"`
-	CloudAllowResizing bool              `json:"cloud_allow_resizing,omitempty"`
+	RunID               string            `json:"run_id"`
+	Secrets             []SecretRef       `json:"secrets,omitempty"`
+	Frames              bool              `json:"frames,omitempty"`
+	Until               bool              `json:"until,omitempty"`
+	Task                string            `json:"task"`
+	Start               *string           `json:"start,omitempty"`
+	Context             *string           `json:"context,omitempty"`
+	Inputs              map[string]string `json:"inputs,omitempty"`
+	Attachments         []RunAttachment   `json:"attachments,omitempty"`
+	Limits              *Limits           `json:"limits,omitempty"`
+	Authorization       *Authorization    `json:"authorization,omitempty"`
+	OutputSchema        json.RawMessage   `json:"output_schema,omitempty"`
+	Downloads           *string           `json:"downloads,omitempty"`
+	Record              *string           `json:"record,omitempty"`
+	Cursor              *bool             `json:"cursor,omitempty"`
+	Local               bool              `json:"local,omitempty"`
+	Chrome              *LocalChrome      `json:"chrome,omitempty"`
+	CloudProfile        *string           `json:"cloud_profile,omitempty"`
+	CDPURL              *string           `json:"cdp_url,omitempty"`
+	CDPPort             *int64            `json:"cdp_port,omitempty"`
+	Attach              bool              `json:"attach,omitempty"`
+	TargetMatch         *string           `json:"target_match,omitempty"`
+	Foreground          bool              `json:"foreground,omitempty"`
+	ProxyCountry        *string           `json:"proxy_country,omitempty"`
+	Viewport            *[2]int64         `json:"viewport,omitempty"`
+	CloudExtensions     []string          `json:"cloud_extensions,omitempty"`
+	CloudTimeoutMinutes *int64            `json:"cloud_timeout_minutes,omitempty"`
+	AllowedOrigins      []string          `json:"allowed_origins,omitempty"`
+	Fetch               bool              `json:"fetch,omitempty"`
+	FetchFirst          bool              `json:"fetch_first,omitempty"`
 }
 
 type RunResult struct {
@@ -426,6 +431,15 @@ type StepFact struct {
 	DeepLink *string    `json:"deep_link"`
 }
 
+type StepFallback struct {
+	// The reason the run stopped following Jev, as recovery was told it.
+	Reason string `json:"reason"`
+	// Jev's certainty on the step it gave up, on the weakest link of its choices.
+	Confidence float64 `json:"confidence"`
+	// The control Jev chose, by its label, when it chose one.
+	Target *string `json:"target"`
+}
+
 type StepOutcome string
 
 const (
@@ -450,6 +464,8 @@ type StepResult struct {
 	// Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
+	// The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
+	Fallback *StepFallback `json:"fallback,omitempty"`
 	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
 	Choices []StepChoice `json:"choices,omitempty"`
 }

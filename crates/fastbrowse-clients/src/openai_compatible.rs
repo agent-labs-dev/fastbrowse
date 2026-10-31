@@ -1,4 +1,4 @@
-//! Port of `clients/openai_compatible.py`: structured chat completions with one schema repair and complete usage
+//! Structured chat completions with one schema repair and complete usage
 //! accounting.
 
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::llm::{Generation, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose, combined_basis};
 use fastbrowse_core::py::{self, base64, text};
-use fastbrowse_core::schema::strict_schema;
+use fastbrowse_core::schema::{flat_optional_objects, nest_flat_objects, strict_schema};
 use fastbrowse_core::telemetry::Ledger;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -21,9 +21,6 @@ use crate::validation::{
     json_object, object_value, post_with_retry, retryable, token_count, with_discarded,
 };
 
-/// How much larger the output cap is on the one retry after a response ran into it.
-const TRUNCATION_RETRY_FACTOR: i64 = 4;
-
 /// OpenRouter routing: an endpoint that ignores response_format would treat the schema as a hint, so none is routed
 /// to. OpenRouter's default routing sent gemini-3.8-flash reads to Vertex at a 2.4s median where AI Studio answered the
 /// same read in 1.3s; sorting by latency keeps fallbacks and follows the faster endpoint.
@@ -31,16 +28,27 @@ pub fn openrouter_provider_routing() -> Value {
     json!({"require_parameters": true, "sort": "latency"})
 }
 
+/// DeepSeek is served by many OpenRouter providers, and most of them null every optional object (see
+/// [`flat_optional_objects`]). At its default temperature it also broke one plan in four on Together: a lone
+/// requirement list, or `"true"` repeated to the output cap; at 0 all 20 replays of the same request planned every
+/// requirement. Other models keep their schema as written and their default temperature, which Gemini 3 is
+/// documented to need.
+fn deepseek(model: &str) -> bool {
+    model.starts_with("deepseek/")
+}
+
 /// The Vercel AI Gateway documents `ttft` for the lowest time to first token where OpenRouter calls that sort
-/// `latency`, and takes no `require_parameters`: the gateway matches the schema itself.
+/// `latency`. It has no `require_parameters`: a provider that cannot hold a reply to `response_format` still serves
+/// the request, and the reply may not match the schema. DeepSeek V4.1 Flash failed schema validation in five of six
+/// live runs through the gateway even with `only` set to providers that list structured outputs.
 pub fn gateway_provider_routing() -> Value {
     json!({"sort": "ttft"})
 }
 
-/// Request fields fastbrowse sets itself. An extra body that named one would replace the schema, the messages or the
-/// output cap the truncation retry grows, so the run would fail far from the setting that caused it.
-pub const RESERVED_BODY_KEYS: [&str; 6] =
-    ["max_tokens", "messages", "model", "provider", "reasoning", "response_format"];
+/// Request fields fastbrowse sets itself, and the output caps it never sends. An extra body that named one would replace
+/// the schema or the messages, or cut a reply short, so the run would fail far from the setting that caused it.
+pub const RESERVED_BODY_KEYS: [&str; 7] =
+    ["max_completion_tokens", "max_tokens", "messages", "model", "provider", "reasoning", "response_format"];
 
 /// The reserved keys `extra` names, sorted.
 pub fn reserved_clashes(extra: &Map<String, Value>) -> Vec<&'static str> {
@@ -108,37 +116,13 @@ fn truncated(payload: &Map<String, Value>) -> Result<bool, String> {
         .is_some_and(|choice| choice.get("finish_reason").and_then(Value::as_str) == Some("length")))
 }
 
-/// Output tokens of JSON that ended mid-value short of the cap, or None where the cap may have cut it.
+/// A response the model or provider cut off, named as truncation so it is never read as a bad answer.
 ///
-/// Some providers report a response that hit the cap as an ordinary stop, so JSON ending mid-value is read as
-/// truncation unless usage shows the model stopped short: then the provider dropped the tail, and more room would not
-/// help.
-fn short_of_cap(payload: &Map<String, Value>, cap: i64) -> Option<i64> {
-    let empty = Value::Object(Map::new());
-    let usage = object_value(Some(payload.get("usage").unwrap_or(&empty))).ok()?;
-    let written = token_count(usage.get("completion_tokens")).ok()?;
-    (0 < written && written < cap).then_some(written)
-}
-
-/// Make room for a response that ran into the output cap, or report it as truncated when it did so again.
-///
-/// Repairing the JSON would send the same prompt under the same cap and be cut off again, so the one retry is spent on
-/// more room instead, and a second truncation is reported as what it is.
-fn grow_cap(
-    body: &mut Map<String, Value>,
-    field: &str,
-    attempt: usize,
-    cap: i64,
-    purpose: LLMPurpose,
-) -> Result<(), LLMError> {
-    if attempt == 1 {
-        return Err(LLMError::Failed(format!(
-            "LLM response truncated at the {} token output cap ({purpose})",
-            body[field]
-        )));
-    }
-    body.insert(field.into(), (cap * TRUNCATION_RETRY_FACTOR).into());
-    Ok(())
+/// fastbrowse sends no output cap, so this is the model's own output maximum or a provider that dropped the tail. A
+/// cut-off reply is asked once more: the runaways measured were a provider's decoder writing whitespace inside the JSON
+/// or one paragraph of reasoning repeated until the maximum, and the same request asked again answered.
+fn truncation(purpose: LLMPurpose) -> LLMError {
+    LLMError::Failed(format!("LLM response was cut off before its JSON ended ({purpose})"))
 }
 
 /// Never fails: usage we cannot read is an unknown cost, which a dollar cap treats as unaffordable.
@@ -179,7 +163,8 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
 }
 
 /// OpenRouter's fee on a request sent with the caller's own provider key, as a share of the listed price, billed beside
-/// the provider's own charge. A bound without it would fall short of that pair.
+/// the provider's own charge. A bound without it would fall short of that pair. The gateway's bound carries it too,
+/// which only raises it.
 const BYOK_FEE: f64 = 0.05;
 
 /// OpenRouter price keys charged once per request; `image` is charged per input image and every other key per token. A
@@ -197,6 +182,10 @@ struct Ceiling {
 
 /// Routing can send a request to any endpoint, so the largest of each is taken. None when a price cannot be read or is
 /// negative, as OpenRouter lists a price set per request: no ceiling holds for those.
+///
+/// OpenRouter and the Vercel AI Gateway serve the same endpoints payload. The gateway also lists dearer token prices
+/// per `service_tiers` entry, per `inference_regions` zone and a `peak_pricing.multiplier` for busy hours; the bound
+/// takes the dearest of them.
 fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
     let endpoints = match object_value(payload.get("data"))?.get("endpoints").and_then(Value::as_array) {
         Some(endpoints) if !endpoints.is_empty() => endpoints,
@@ -206,22 +195,31 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
     for entry in endpoints {
         let endpoint = object_value(Some(entry))?;
         found.context = found.context.max(token_count(endpoint.get("context_length"))?);
-        let (mut request, mut image) = (0.0, 0.0);
+        let (mut token, mut request, mut image, mut peak) = (0.0_f64, 0.0, 0.0, 1.0_f64);
         for (key, value) in object_value(endpoint.get("pricing"))? {
-            if key == "discount" {
-                continue; // a discount lowers the charge, and leaving it out keeps the bound above it
-            }
-            let price = dollars(Some(value))?;
-            if PER_REQUEST_PRICES.contains(&key.as_str()) {
-                request += price;
-            } else if key == "image" {
-                image = price;
-            } else {
-                found.per_token = found.per_token.max(price);
+            match key.as_str() {
+                "discount" => {} // a discount lowers the charge, and leaving it out keeps the bound above it
+                "service_tiers" => {
+                    for tier in object_value(Some(value))?.values() {
+                        for price in object_value(Some(tier))?.values() {
+                            token = token.max(dollars(Some(price))?);
+                        }
+                    }
+                }
+                "peak_pricing" => peak = peak.max(dollars(object_value(Some(value))?.get("multiplier"))?),
+                key if PER_REQUEST_PRICES.contains(&key) => request += dollars(Some(value))?,
+                "image" => image = dollars(Some(value))?,
+                _ => token = token.max(dollars(Some(value))?),
             }
         }
-        found.per_request = found.per_request.max(request);
-        found.per_image = found.per_image.max(image);
+        for region in endpoint.get("inference_regions").and_then(Value::as_array).into_iter().flatten() {
+            for price in object_value(object_value(Some(region))?.get("pricing"))?.values() {
+                token = token.max(dollars(Some(price))?);
+            }
+        }
+        found.per_token = found.per_token.max(token * peak);
+        found.per_request = found.per_request.max(request * peak);
+        found.per_image = found.per_image.max(image * peak);
     }
     Ok((found.context != 0).then_some(found))
 }
@@ -245,8 +243,7 @@ fn bound(cost: CostLine, ceiling: Ceiling, body: &Map<String, Value>) -> CostLin
 
 /// How much hidden reasoning a model may spend before it answers, in OpenRouter's normalized terms.
 ///
-/// `None` turns reasoning off. A model that reasons at every effort and does not scale it to `max_tokens`, such as
-/// DeepSeek V4.1 Flash, spends a verdict's whole 400-token cap thinking and answers nothing, so it needs this.
+/// `None` turns reasoning off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReasoningEffort {
     None,
@@ -327,14 +324,12 @@ pub struct OpenAICompatibleLLM {
     auth_header: Option<&'static str>,
     strict: bool,
     output_format: OutputFormat,
-    output_cap_field: &'static str,
     reasoning_field: ReasoningField,
     extra_body: Map<String, Value>,
     http: Http,
     base_url: String,
     models: HashMap<LLMPurpose, String>,
     reasoning_effort: Option<ReasoningEffort>,
-    purpose_reasoning: HashMap<LLMPurpose, ReasoningEffort>,
     provider_routing: Option<Value>,
     ceilings: Mutex<HashMap<String, Ceiling>>,
 }
@@ -343,14 +338,10 @@ pub struct OpenAICompatibleLLM {
 #[derive(Debug, Clone)]
 pub struct LLMOptions {
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Efforts for single purposes, over `reasoning_effort`.
-    pub purpose_reasoning: HashMap<LLMPurpose, ReasoningEffort>,
     pub reasoning_field: ReasoningField,
     pub provider_routing: Option<Value>,
     pub strict: bool,
     pub output_format: OutputFormat,
-    /// `max_tokens`, or `max_completion_tokens` where an API has deprecated the other for its reasoning models.
-    pub output_cap_field: &'static str,
     /// The header that carries the key in place of `Authorization: Bearer`, such as Azure's `api-key`.
     pub auth_header: Option<&'static str>,
     pub extra_body: Map<String, Value>,
@@ -360,12 +351,10 @@ impl Default for LLMOptions {
     fn default() -> Self {
         LLMOptions {
             reasoning_effort: None,
-            purpose_reasoning: HashMap::new(),
             reasoning_field: ReasoningField::OpenRouter,
             provider_routing: Some(openrouter_provider_routing()),
             strict: true,
             output_format: OutputFormat::JsonSchema,
-            output_cap_field: "max_tokens",
             auth_header: None,
             extra_body: Map::new(),
         }
@@ -439,10 +428,9 @@ impl OpenAICompatibleLLM {
         options: LLMOptions,
     ) -> Result<OpenAICompatibleLLM, String> {
         let mut clashes = reserved_clashes(&options.extra_body);
-        for key in [options.output_cap_field, options.reasoning_field.key()] {
-            if options.extra_body.contains_key(key) && !clashes.contains(&key) {
-                clashes.push(key);
-            }
+        let key = options.reasoning_field.key();
+        if options.extra_body.contains_key(key) && !clashes.contains(&key) {
+            clashes.push(key);
         }
         if !clashes.is_empty() {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
@@ -467,14 +455,12 @@ impl OpenAICompatibleLLM {
             auth_header: options.auth_header,
             strict: options.strict,
             output_format: options.output_format,
-            output_cap_field: options.output_cap_field,
             reasoning_field: options.reasoning_field,
             extra_body,
-            http,
+            http: http.with_credential_header(options.auth_header),
             base_url: base_url.trim_end_matches('/').to_string(),
             models,
             reasoning_effort: options.reasoning_effort,
-            purpose_reasoning: options.purpose_reasoning,
             provider_routing: options.provider_routing,
             ceilings: Mutex::new(HashMap::new()),
         })
@@ -547,6 +533,10 @@ impl OpenAICompatibleLLM {
                 describe(&response)
             )));
         }
+        if matches!(response.status, 401 | 403) {
+            let host = self.host().unwrap_or_else(|| self.base_url.clone());
+            return Err(LLMError::Rejected(format!("LLM {} ({host} rejected the API key)", describe(&response))));
+        }
         if !response.is_success() {
             return Err(LLMError::Failed(format!("LLM {}", describe(&response))));
         }
@@ -598,16 +588,25 @@ impl OpenAICompatibleLLM {
     ///
     /// A request that timed out, or a response without usage whose receipt never came, stopped every run with a dollar
     /// cap although it had spent a fraction of a cent. No call can bill more tokens than its context window holds,
-    /// prompt and output together, so that window at the highest price is a true ceiling where the output cap would
-    /// not be: some routes do not count reasoning against it.
+    /// prompt and output together, so that window at the highest price is a true ceiling. OpenRouter and the Vercel AI Gateway both list each
+    /// model's endpoints with their windows and prices.
     async fn bounded(&self, cost: CostLine, body: &Map<String, Value>) -> CostLine {
         let Some(model) = body.get("model").and_then(Value::as_str) else { return cost };
-        if self.host().as_deref() != Some("openrouter.ai") {
-            return cost;
+        match self.listed_ceiling(model).await {
+            Some(ceiling) => bound(cost, ceiling, body),
+            None => cost,
         }
-        let mut found = self.cached_ceiling(model);
-        let tries = if found.is_some() { 0 } else { 3 };
-        for attempt in 0..tries {
+    }
+
+    /// The window and prices OpenRouter or the Vercel AI Gateway list for `model`, read once and kept.
+    async fn listed_ceiling(&self, model: &str) -> Option<Ceiling> {
+        if !matches!(self.host().as_deref(), Some("openrouter.ai" | "ai-gateway.vercel.sh")) {
+            return None;
+        }
+        if let Some(found) = self.cached_ceiling(model) {
+            return Some(found);
+        }
+        for attempt in 0..3 {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -616,22 +615,18 @@ impl OpenAICompatibleLLM {
             if !response.is_success() {
                 continue;
             }
-            match json_object(&response).and_then(|payload| ceiling(&payload)) {
+            return match json_object(&response).and_then(|payload| ceiling(&payload)) {
                 Ok(Some(read)) => {
                     self.ceilings
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .insert(model.to_string(), read);
-                    found = Some(read);
-                    break;
+                    Some(read)
                 }
-                Ok(None) | Err(_) => return cost,
-            }
+                Ok(None) | Err(_) => None,
+            };
         }
-        match found {
-            Some(ceiling) => bound(cost, ceiling, body),
-            None => cost,
-        }
+        None
     }
 
     async fn generate(
@@ -639,7 +634,6 @@ impl OpenAICompatibleLLM {
         purpose: LLMPurpose,
         messages: &[Message],
         schema: &dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&Ledger>,
     ) -> Result<Generation<Value>, LLMError> {
         let Some(model) = self.models.get(&purpose) else {
@@ -654,16 +648,10 @@ impl OpenAICompatibleLLM {
             schema.json_schema()
         };
         if self.wire == Wire::AnthropicMessages {
-            let body = anthropic::body(
-                &self.extra_body,
-                model,
-                messages,
-                &json_schema,
-                max_output_tokens,
-                self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort),
-            )?;
-            return self.billed(body, purpose, schema, max_output_tokens, ledger, model).await;
+            let body = anthropic::body(&self.extra_body, model, messages, &json_schema, self.reasoning_effort)?;
+            return self.billed(body, purpose, schema, ledger, model).await;
         }
+        let json_schema = if deepseek(model) { flat_optional_objects(&json_schema) } else { json_schema };
         let response_format = match self.output_format {
             OutputFormat::JsonSchema => json!({
                 "type": "json_schema",
@@ -676,16 +664,18 @@ impl OpenAICompatibleLLM {
         };
         let mut body = self.extra_body.clone();
         body.insert("model".into(), model.clone().into());
-        body.insert(self.output_cap_field.into(), max_output_tokens.into());
         body.insert("messages".into(), wire_messages.into());
         body.insert("response_format".into(), response_format);
         if let Some(routing) = &self.provider_routing {
             body.insert("provider".into(), routing.clone());
         }
-        if let Some(effort) = self.purpose_reasoning.get(&purpose).copied().or(self.reasoning_effort) {
+        if deepseek(model) {
+            body.entry("temperature").or_insert(0.0.into());
+        }
+        if let Some(effort) = self.reasoning_effort {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));
         }
-        self.billed(body, purpose, schema, max_output_tokens, ledger, model).await
+        self.billed(body, purpose, schema, ledger, model).await
     }
 
     /// Run a generation's turns over a built request body, recording what it was billed however it ends.
@@ -694,7 +684,6 @@ impl OpenAICompatibleLLM {
         mut body: Map<String, Value>,
         purpose: LLMPurpose,
         schema: &dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&Ledger>,
         model: &str,
     ) -> Result<Generation<Value>, LLMError> {
@@ -708,7 +697,7 @@ impl OpenAICompatibleLLM {
             in_flight: None,
             armed: true,
         };
-        let outcome = self.turns(&mut body, purpose, schema, max_output_tokens, ledger, &mut billing).await;
+        let outcome = self.turns(&mut body, purpose, schema, ledger, &mut billing).await;
         billing.armed = false;
         match outcome {
             Ok(data) => Ok(Generation { data: data.0, cost: data.1 }),
@@ -727,15 +716,11 @@ impl OpenAICompatibleLLM {
         body: &mut Map<String, Value>,
         purpose: LLMPurpose,
         schema: &dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&Ledger>,
         billing: &mut Billing<'_>,
     ) -> Result<(Value, CostLine), LLMError> {
         let started = Instant::now();
-        let mut short_retried = false;
-        for turn in 0..3 {
-            // A reply the provider cut short is asked for again without spending the one retry the rest share.
-            let attempt = turn - usize::from(short_retried);
+        for attempt in 0..2 {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
@@ -760,8 +745,10 @@ impl OpenAICompatibleLLM {
             let settled = with_discarded(self.settled_cost(&payload, purpose, body).await, &usage);
             *billing.costs.last_mut().expect("pushed above") = settled;
             if truncated(&payload).map_err(LLMError::Failed)? {
-                grow_cap(body, self.output_cap_field, attempt, max_output_tokens, purpose)?;
-                continue;
+                if attempt == 0 {
+                    continue;
+                }
+                return Err(truncation(purpose));
             }
             let content = match content(&payload) {
                 Ok(content) if self.output_format == OutputFormat::JsonObject => unfenced(&content).to_string(),
@@ -780,7 +767,20 @@ impl OpenAICompatibleLLM {
                     errors_json(vec![json_invalid(&content, &error)]),
                     error.classify() == serde_json::error::Category::Eof,
                 ),
-                Ok(_) => match schema.validate_json(&content) {
+                Ok(value) => match schema.validate_json(&if deepseek(&billing.model) {
+                    let (nested, dropped) = nest_flat_objects(&schema.json_schema(), value);
+                    if !dropped.is_empty() {
+                        self.http.trace.event("half_objects_dropped", || {
+                            Map::from_iter([
+                                ("purpose".into(), purpose.as_str().into()),
+                                ("paths".into(), json!(dropped)),
+                            ])
+                        });
+                    }
+                    nested.to_string()
+                } else {
+                    content.clone()
+                }) {
                     Ok(data) => {
                         let cost = CostLine {
                             seconds: Some(started.elapsed().as_secs_f64()),
@@ -795,23 +795,14 @@ impl OpenAICompatibleLLM {
             // it read, so it is scrubbed too.
             let detail = self.scrubbed(&detail);
             if ends_mid_json {
-                let cap = body[self.output_cap_field].as_i64().unwrap_or(max_output_tokens);
-                match short_of_cap(&payload, cap) {
-                    None => grow_cap(body, self.output_cap_field, attempt, max_output_tokens, purpose)?,
-                    Some(written) if short_retried => {
-                        return Err(LLMError::RetriesExhausted(format!(
-                            "LLM response ended mid-JSON at {written} of {cap} output tokens twice"
-                        )));
-                    }
-                    Some(_) => short_retried = true,
+                // fastbrowse sets no output cap, so a reply ending mid-JSON was cut off by the model or provider.
+                if attempt == 0 {
+                    continue;
                 }
-                continue;
+                return Err(truncation(purpose));
             }
             if attempt == 1 {
-                return Err(LLMError::Failed(format!(
-                    "LLM schema validation failed after one retry: {}",
-                    text::prefix(&detail, 1000)
-                )));
+                return Err(LLMError::Failed(format!("LLM schema validation failed after one retry: {detail}")));
             }
             if let Some(Value::Array(messages)) = body.get_mut("messages") {
                 messages.push(json!({"role": "assistant", "content": content}));
@@ -883,17 +874,20 @@ impl fastbrowse_core::llm::LLMClient for OpenAICompatibleLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
             let mut fields = Map::new();
             fields.insert("schema".into(), schema.name().into());
             let call = format!("llm:{purpose}");
-            self.http
-                .trace
-                .call_span(&call, fields, self.generate(purpose, messages, schema, max_output_tokens, ledger))
-                .await
+            self.http.trace.call_span(&call, fields, self.generate(purpose, messages, schema, ledger)).await
+        })
+    }
+
+    fn context_tokens(&self, purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+        Box::pin(async move {
+            let model = self.models.get(&purpose)?;
+            self.listed_ceiling(model).await.map(|ceiling| ceiling.context)
         })
     }
 }

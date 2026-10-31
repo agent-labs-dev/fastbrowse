@@ -7,7 +7,19 @@ name: Official benchmarks
 # spends money and is never triggered by a push or a pull request.
 #
 # Each task runs `repeat` times (at least 1; a release runs 3). A task's figure is the mean of its repeats' upstream
-# scores, and the group records its repeat count. Nothing here publishes to the site yet.
+# scores, and the group records its repeat count.
+# A slot the site kept from any outcome on every retry is listed as blocked: outside the score, neither a pass nor a
+# failure, and it does not fail the run.
+#
+# Every run goes to the private Langfuse project, finished or not. A finished run also leaves `official-rows-*`, its
+# public rows (`parallax browser official-rows`): opaque task ids, scores, seconds, dollars and protocol facts, and
+# nothing else. Pass this run's id to benchmark-campaign.yml as `official_runs`, with the same `fastbrowse_ref` and
+# `parallax_sha`, to publish them: the site reads one candidate, so every group in it must come from one build.
+# `campaign_id` does that itself: when every suite has passed, this workflow dispatches the campaign with this
+# run's id, which is how a release publishes every group from one candidate. A failed run dispatches nothing.
+#
+# `smoke` finds bugs before a release: one repeat of 10 sampled tasks per suite, traces sent to Langfuse marked as
+# smoke, and no public rows or campaign dispatch, so it can never publish.
 #
 # No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
 # approved `budget` only decides whether the next task may start (`start-gate-v1`).
@@ -20,7 +32,8 @@ name: Official benchmarks
 #   secrets: PARALLAX_DEPLOY_KEY (a read-only deploy key on agent-labs-dev/parallax)
 #            OPENROUTER_API_KEY (the agent's LLM and Jev)
 #            PARALLAX_JUDGE_API_KEY (the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
-#            BROWSER_USE_API_KEY (only with `browser: cloud`)
+#            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the run's record in the fastbrowse-evals project)
+#            BROWSER_USE_API_KEY (every task runs on a Browser Use Cloud browser)
 #            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
 #   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
 #   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
@@ -39,17 +52,15 @@ name: Official benchmarks
 # plus, for a model with a long-context price tier, all three of
 #   "context_threshold_tokens", "context_input_usd_per_mtok", "context_output_usd_per_mtok".
 # The ceilings bound the judge meter's reservations, not the agent: set them to the provider's documented limits.
-# Both suites are judged by anthropic/claude-opus-5.5 through OpenRouter (https://openrouter.ai/api/v1), at the
-# reasoning effort each variable records, so PARALLAX_JUDGE_API_KEY is an OpenRouter key. Neither is the upstream's
-# own judge model (BU Bench's default, and Online-Mind2Web's published WebJudge backbone o4-mini), so these results
-# are not directly comparable with the figures upstream publishes for its judges.
+# The two variables name the judge model, and published figures use one judge model for every suite
+# (docs/agents/publish-evals.md). Upstream labels results by their judge model, so figures judged by another model
+# than the upstream's are not directly comparable with the upstream's own.
 #
-# This runs the fastbrowse arm, the one the official groups publish. Parallax can also measure the hosted Browser Use
-# browsers' own agent on these suites (`parallax browser official --arm`) for comparison; their rows are published
-# only where Parallax marks them publishable. Ultrafast returns no answer, so it is not run on them.
+# This runs fastbrowse alone. The site shows Browser Use's own published figures on these suites, labelled with their
+# judge, so its agent is not run again here. Ultrafast returns no answer, so it is not run on them.
 #
 # `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
-# reserve (1 dollar), browser reserve (1, or 0 on local Chrome) and the judge variable's `budget_usd` while in flight.
+# reserve (1 dollar), browser reserve (1) and the judge variable's `budget_usd` while in flight.
 # With the judge variables' 20 (BU Bench) and 60 (Online-Mind2Web) dollars, 8 workers on cloud browsers hold at
 # most 8 x 62 = 496 dollars on Online-Mind2Web. The 600 dollar default keeps all 8 workers running until 104
 # dollars is spent, and a suite stops early only if its actual spend passes 538 dollars (BU Bench: 578).
@@ -71,12 +82,6 @@ on:
         type: choice
         options: [all, bu-bench, online-mind2web]
         default: all
-      browser:
-        description: Headless local Chrome on the runner, or Browser Use Cloud browsers
-        required: true
-        type: choice
-        options: [local, cloud]
-        default: local
       repeat:
         description: Runs per task (at least 1)
         required: true
@@ -89,6 +94,16 @@ on:
         description: Task workers per suite, sharing one start-gate ledger
         required: true
         default: "8"
+      smoke:
+        description: One repeat of 10 sampled tasks per suite to find bugs from traces. Never publishable
+        required: true
+        type: boolean
+        default: false
+      campaign_id:
+        description: When set, dispatch the benchmark campaign of this name with these rows once every job has passed
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -99,10 +114,9 @@ concurrency:
 
 env:
   UV_PYTHON: "3.13"
-  REPEAT: ${{ inputs.repeat }}
+  REPEAT: ${{ inputs.smoke && '1' || inputs.repeat }}
   BUDGET: ${{ inputs.budget }}
   WORKERS: ${{ inputs.concurrency }}
-  BROWSER: ${{ inputs.browser }}
   # The upstream pins. BU Bench's task file ships inside its repository, encrypted, so its digest is the file at
   # the pinned commit. Online-Mind2Web's tasks are the gated Hugging Face file fastbrowse pins
   # (src/fastbrowse/evals/sources.py). That file is not in LFS, so Hugging Face lists only its Git blob; the
@@ -160,6 +174,8 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
@@ -168,12 +184,14 @@ jobs:
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
           need PARALLAX_DEPLOY_KEY "$PARALLAX_DEPLOY_KEY"
-          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
+          need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
+          need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
-          if test "$BROWSER" = cloud; then need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"; fi
+          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           # Online-Mind2Web is gated: HF_TOKEN's account must also have accepted the dataset's access conditions.
           if test "$SUITE_SET" != bu-bench; then need HF_TOKEN "$HF_TOKEN"; fi
           if test -n "$missing"; then
@@ -260,7 +278,7 @@ jobs:
           path: fastbrowse
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
       - name: Check out the pinned parallax
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -281,7 +299,8 @@ jobs:
           # A git+file install records the commit in direct_url.json, so the run names the measured build
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
-          uv run --no-sync python -c "import fastbrowse, parallax"
+          # Publication imports the measured build's public contract: a mismatch stops here, before any paid run.
+          uv run --no-sync python -c "import fastbrowse, parallax.browser_use.publication"
       - name: Check out the pinned upstream
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -343,39 +362,63 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
-          # Ignored with a local browser: the runner then drives the local Chrome alone.
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           JUDGE: ${{ matrix.judge }}
           DIGEST: ${{ env[format('{0}_DATASET_SHA256', matrix.prefix)] }}
           COMMIT: ${{ env[format('{0}_UPSTREAM_COMMIT', matrix.prefix)] }}
+          DATASET: ${{ matrix.suite == 'bu-bench' && format('{0}/upstream/BU_Bench_V2.enc', github.workspace) || format('{0}/Online_Mind2Web.json', runner.temp) }}
         run: |
           cd parallax
           mapfile -t judge < <(jq -r '.[]' <<< "$JUDGE")
-          browser=()
-          if test "$BROWSER" = local; then
-            chrome="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
-            test -n "$chrome" || { echo "::error::browser local needs Chrome on the runner, and none was found"; exit 1; }
-            browser=(--local-browser "$chrome" --browser-reserve-dollars 0)
-          fi
-          if test "$SUITE" = bu-bench; then
-            dataset="$GITHUB_WORKSPACE/upstream/BU_Bench_V2.enc"
-          else
-            dataset="$RUNNER_TEMP/Online_Mind2Web.json"
-          fi
           mkdir -p "$(dirname "$OUT")"
           uv run --no-sync parallax browser official "$SUITE" \
             --upstream-root "$GITHUB_WORKSPACE/upstream" \
             --upstream-commit "$COMMIT" \
             --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
-            --dataset "$dataset" \
+            --dataset "$DATASET" \
             --dataset-sha256 "$DIGEST" \
             "${judge[@]}" \
-            "${browser[@]}" \
             --repeat "$REPEAT" \
+            ${{ inputs.smoke && '--sample 10' || '' }} \
             --concurrency "$WORKERS" \
             --budget "$BUDGET" \
             --out "$OUT" \
             --execute
+      - name: Send the run to Langfuse
+        # A stopped run is tracked too: its experiment lists what ran, and the secrets stay out of its traces.
+        if: always()
+        env:
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+        run: |
+          test -f "$OUT/manifest.json" || { echo "::warning::no run to track"; exit 0; }
+          cd parallax
+          uv run --no-sync parallax browser track-official "$OUT" --push ${{ inputs.smoke && '--smoke' || '' }}
+      - name: Write the public rows
+        if: ${{ !inputs.smoke }}
+        # Refuses a run publication would refuse, here where the plaintext is, so the run still uploads below.
+        env:
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+          DATASET: ${{ matrix.suite == 'bu-bench' && format('{0}/upstream/BU_Bench_V2.enc', github.workspace) || format('{0}/Online_Mind2Web.json', runner.temp) }}
+        run: |
+          cd parallax
+          uv run --no-sync parallax browser official-rows "$SUITE" "$OUT" \
+            --dataset "$DATASET" \
+            --upstream-root "$GITHUB_WORKSPACE/upstream" \
+            --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
+            --out "$RUNNER_TEMP/$SUITE.rows.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.smoke }}
+        with:
+          name: official-rows-${{ matrix.suite }}
+          path: ${{ runner.temp }}/${{ matrix.suite }}.rows.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Encrypt the run directory
         if: always()
         env:
@@ -390,3 +433,22 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.suite }}.tar.gz.age
           if-no-files-found: warn
           retention-days: 30
+
+  campaign:
+    name: Dispatch the campaign with these rows
+    needs: official
+    if: ${{ inputs.campaign_id != '' && !inputs.smoke }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {actions: write}
+    steps:
+      - name: Dispatch the benchmark campaign
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id }}
+          FASTBROWSE_REF: ${{ inputs.fastbrowse_ref }}
+          PARALLAX_SHA: ${{ inputs.parallax_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          gh workflow run benchmark-campaign.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f campaign_id="$CAMPAIGN_ID" -f fastbrowse_ref="$FASTBROWSE_REF" -f parallax_sha="$PARALLAX_SHA" \
+            -f groups=all -f official_runs="$RUN_ID"

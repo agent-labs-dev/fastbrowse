@@ -1,4 +1,4 @@
-//! Port of `clients/validation.py`: shared wire encoding and strict validation for both Jev transports, and the retry
+//! Shared wire encoding and strict validation for every decision client, and the retry
 //! and accounting every model request goes through.
 //!
 //! Python cancels a call by raising `CancelledError` into it and lets each frame settle its receipts on the way out.
@@ -13,7 +13,8 @@ use std::time::Duration;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, DecisionError, Evaluation, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
+    Answer, BoxAnswer, ChoiceAnswer, DecisionError, Edges, Evaluation, NoulAnswer, Question, RetriesExhausted,
+    ScoreAnswer,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 use fastbrowse_core::py::json::{dumps, float_str};
@@ -54,6 +55,10 @@ pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> 
                 body.insert("instructions".into(), q.instructions.clone().into());
                 body.insert("type".into(), "score".into());
                 body.insert("criteria".into(), q.criteria.clone().into());
+            }
+            Question::Box(q) => {
+                body.insert("instructions".into(), q.instructions.clone().into());
+                body.insert("type".into(), "box".into());
             }
         }
         result.insert(key.clone(), Value::Object(body));
@@ -193,12 +198,14 @@ pub fn retryable(response: &Response) -> bool {
 }
 
 const MAX_BACKOFF_SECONDS: f64 = 10.0;
-/// Jev answers in about a second, so an attempt this old is stuck upstream, and a retry beats waiting on it.
+/// Jev answers in about a second, so a Jev provider silent this long is stuck upstream, and a retry beats waiting on it.
 pub const JEV_ATTEMPT_SECONDS: f64 = 15.0;
 /// A Jev call slower than this is the provider's outage: 45 measured gateway calls from 10 to 600 controls (670 to 25k
 /// input tokens) took 0.40 to 0.48s median and 0.93s at worst. Retries and backoff count toward it.
 pub const JEV_SLOW_SECONDS: f64 = 2.0;
-/// Leaves room for long reads and verification while bounding upstream stalls; flash-lite plans take about 0.8s.
+/// How long an LLM provider may stay silent before the attempt is retried. It bounds a stall, not an answer: OpenRouter
+/// sends its response head at once and a keep-alive byte every few seconds while the model writes, so a long read or
+/// verification answer is read to its end however long it takes.
 pub const LLM_ATTEMPT_SECONDS: f64 = 30.0;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -417,7 +424,7 @@ async fn send(
             let failure = describe(&response);
             (Some(response), failure)
         }
-        Err(TransportError::Timeout(name)) => (None, format!("no response within {attempt_seconds:.0}s ({name})")),
+        Err(TransportError::Timeout(name)) => (None, format!("silent for {attempt_seconds:.0}s ({name})")),
         // The type names the failure; its text can quote the request, credential included.
         Err(TransportError::Transient(name)) => (None, format!("no response ({name})")),
         Err(TransportError::Fatal(name)) => {
@@ -576,6 +583,12 @@ pub(crate) async fn post(
     if response.status == 413 || (response.status == 400 && too_large) {
         return Err(DecisionError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
     }
+    if matches!(response.status, 401 | 403) {
+        let host = url::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_string)).unwrap_or_default();
+        return Err(
+            DecisionError::Rejected(format!("Jev {} ({host} rejected the API key)", describe(&response))).into()
+        );
+    }
     if !response.is_success() {
         return Err(response_error(&response, "Jev request failed").into());
     }
@@ -650,9 +663,6 @@ fn probabilities(value: Option<&Value>, keys: &[String]) -> Result<IndexMap<Stri
     Ok(result)
 }
 
-/// The wire's two-decimal probability step.
-const ROUNDING_UNIT: f64 = 0.01;
-
 pub fn parse_answers(
     value: Option<&Value>,
     questions: &IndexMap<String, Question>,
@@ -671,6 +681,7 @@ pub fn parse_answers(
             Question::Noul(_) if gateway => "boolean",
             Question::Noul(_) => "noul",
             Question::Score(_) => "score",
+            Question::Box(_) => "box",
         };
         if answer.get("type").and_then(Value::as_str) != Some(expected_type) {
             return Err(format!("incorrect answer type for {key}"));
@@ -684,12 +695,6 @@ pub fn parse_answers(
                     Some(choice) if probs.contains_key(choice) => choice.to_string(),
                     _ => return Err(format!("choice outside criteria for {key}")),
                 };
-                // Probabilities are rounded to sum to one, which can move an option by one unit and put a near-tie a
-                // hundredth the wrong way round: a live run failed on escalate 0.40 chosen over read 0.41.
-                let top = probs.values().copied().fold(f64::NEG_INFINITY, f64::max);
-                if probs[&choice] < top - ROUNDING_UNIT - 1e-6 {
-                    return Err(format!("chosen option is not maximal for {key}"));
-                }
                 let confidence = probability(confidence_value)?;
                 Answer::Choice(ChoiceAnswer { kind: Default::default(), choice, probabilities: probs, confidence })
             }
@@ -708,6 +713,20 @@ pub fn parse_answers(
                 }
                 let confidence = probability(confidence_value)?;
                 Answer::Score(ScoreAnswer { kind: Default::default(), score, probabilities: probs, confidence })
+            }
+            Question::Box(_) => {
+                let edges = object_value(answer.get("box"))?;
+                let edge = |name: &str| probability(edges.get(name));
+                let edges =
+                    Edges { top: edge("top")?, bottom: edge("bottom")?, left: edge("left")?, right: edge("right")? };
+                if edges.top > edges.bottom || edges.left > edges.right {
+                    return Err(format!("box edges cross for {key}"));
+                }
+                let confidence = match confidence_value {
+                    None | Some(Value::Null) => None,
+                    value => Some(probability(value)?),
+                };
+                Answer::Box(BoxAnswer { kind: Default::default(), edges, confidence })
             }
         };
         answers.insert(key.clone(), parsed);
@@ -893,12 +912,11 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
 pub(crate) type Ask<'a> =
     dyn Fn(IndexMap<String, Question>, usize, bool) -> BoxFuture<'a, Result<Evaluation, AskError>> + Sync + 'a;
 
-/// Records a split's paid singles into the enclosing scope when the split is dropped, as Python's `except
-/// BaseException` does on cancellation.
-struct PaidOnDrop {
-    paid: Paid,
-    parent: Option<JevSpend>,
-    armed: bool,
+/// Records what the providers were paid into the enclosing scope when the call is dropped.
+pub(crate) struct PaidOnDrop {
+    pub(crate) paid: Paid,
+    pub(crate) parent: Option<JevSpend>,
+    pub(crate) armed: bool,
 }
 
 impl Drop for PaidOnDrop {

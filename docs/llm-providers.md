@@ -21,10 +21,10 @@ from, how the schema is asked for and where a reasoning effort goes. The table i
 
 | `FASTBROWSE_LLM_PROVIDER` | Address | Key | Schema | Reasoning effort | Default model |
 |:--|:--|:--|:--|:--|:--|
-| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`, `low` unless set | `google/gemini-3.8-flash` |
-| `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`, `low` unless set | `google/gemini-3.8-flash` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `google/gemini-3.8-flash` |
+| `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `google/gemini-3.8-flash` |
 | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
-| `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, `low` unless set | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
 | `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | strict `json_schema` | `reasoning_effort` | `openai/gpt-oss-120b` |
 | `together` | `https://api.together.ai/v1` | `TOGETHER_API_KEY` | `json_schema`, not strict | not taken | none |
@@ -47,19 +47,26 @@ Rules that hold across the table:
   https.
 - **A model is named, or the run does not start.** Without a default, the run stops before its first request and
   asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on the first plan instead.
-  `FASTBROWSE_LLM_MODEL_<PURPOSE>` pins one purpose as it does on OpenRouter.
-- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` or `FASTBROWSE_LLM_REASONING_<PURPOSE>` is
-  set**, except on OpenRouter, the gateway and Anthropic, which default to `low`. A purpose's own effort goes in the
-  same field as the global one, for that purpose alone. A provider whose OpenAI-compatible API takes no effort stops the run with a
+- **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` is set**, except on OpenRouter and the
+  gateway, where Gemini 3.8 Flash defaults to `low` and DeepSeek to `none`. Anthropic refuses `none`, since Claude
+  takes `low`, `medium` or `high`. A provider whose OpenAI-compatible API takes no effort stops the run with a
   configuration error, rather than drop a setting you asked for.
 - **`FASTBROWSE_LLM_STRICT` overrides the preset's strictness, and `FASTBROWSE_LLM_EXTRA_BODY` applies to every
-  preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, including
-  `max_completion_tokens` and `reasoning_effort` where the preset sends them.
+  preset but OpenRouter and the gateway.** The extra body may not set a field fastbrowse sends itself, such as
+  `reasoning_effort` where the preset sends it, or an output cap: `max_tokens` and `max_completion_tokens` are never
+  sent, so no reply is cut short of the model's own maximum.
 - **Where the schema is in the prompt, it is not enforced.** fastbrowse validates every reply against the schema
   and asks once for a correction, as it does everywhere, so a reply that drifts costs a second call.
-- **Cost comes from what the provider reports.** OpenRouter and the gateway report dollars. The others report
-  tokens, so their calls are recorded with tokens and an unknown cost, never zero, and `--max-dollars` stops the
+- **The gateway does not hold every provider to the schema.** It has no counterpart to OpenRouter's
+  `require_parameters`, so a provider that ignores `response_format` still answers. The reply is validated and
+  repaired once, as everywhere.
+- **Cost comes from what the provider reports.** OpenRouter and the gateway report dollars. A call of theirs that
+  reports none is charged its model's context window at the dearest listed price, a true upper bound. The others
+  report tokens, so their calls are recorded with tokens and an unknown cost, never zero, and `--max-dollars` stops the
   run after the first such call.
+- **A prompt is fitted to the context window the provider lists.** OpenRouter and the gateway list each model's
+  window, and a page the reader cannot take whole is read in even chunks that fit it. The other providers list none,
+  so a page and its notes go whole, and a prompt past the model's window is the provider's to refuse.
 
 ## Claude through the Messages API
 
@@ -73,9 +80,11 @@ the same retries, schema repair, truncation retry and ledger as every other LLM 
   and the rest of [the list](https://platform.claude.com/docs/en/build-with-claude/structured-outputs). They are
   left out of the schema sent, and the reply is still validated against the full schema, so a value outside a
   dropped bound is repaired as any other schema miss is.
-- Claude 5 models think by default, and thinking counts against the output cap, so the effort is always sent: `low`
+- The Messages API requires `max_tokens`, so every request sends 128,000, the documented output maximum of the
+  current Claude models.
+- Claude 5 models think by default, and thinking counts against that maximum, so the effort is always sent: `low`
   unless `FASTBROWSE_LLM_REASONING` says otherwise. `none` is refused, since not every Claude model can have its
-  thinking turned off. A reply cut at the cap is asked for again with four times the room, as on every route.
+  thinking turned off.
 - A refusal (`stop_reason: refusal`) is asked once more and then reported as an LLM failure.
 - The response reports tokens, cached input included, but no dollars, so the cost is unknown as on the other direct
   providers.

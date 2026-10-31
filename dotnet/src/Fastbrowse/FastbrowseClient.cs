@@ -309,7 +309,6 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Foreground = browser.Foreground ? true : null,
         ProxyCountry = browser.ProxyCountry,
         Viewport = browser.Viewport is var (width, height) ? new List<long> { width, height } : null,
-        CloudAllowResizing = browser.CloudAllowResizing ? true : null,
     };
 
     /// <summary>The result of a run that a throwing callback ended, in the shape the server gives one.</summary>

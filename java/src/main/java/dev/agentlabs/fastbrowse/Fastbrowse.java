@@ -1,9 +1,10 @@
 package dev.agentlabs.fastbrowse;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.agentlabs.fastbrowse.protocol.BrowserEvent;
 import dev.agentlabs.fastbrowse.protocol.CostBreakdown;
@@ -50,7 +51,7 @@ import java.util.concurrent.TimeoutException;
 public final class Fastbrowse implements AutoCloseable {
     private static final ObjectMapper JSON = JsonMapper.builder()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-            .defaultPropertyInclusion(JsonInclude.Value.construct(JsonInclude.Include.NON_NULL, JsonInclude.Include.NON_NULL))
+            .changeDefaultPropertyInclusion(inclusion -> JsonInclude.Value.construct(JsonInclude.Include.NON_NULL, JsonInclude.Include.NON_NULL))
             .build();
 
     private final Process process;
@@ -218,7 +219,7 @@ public final class Fastbrowse implements AutoCloseable {
             } else {
                 try {
                     result.complete(JSON.treeToValue(value, RunResult.class));
-                } catch (IOException e) {
+                } catch (JacksonException e) {
                     result.completeExceptionally(new FastbrowseException("the result could not be read", e));
                 }
             }
@@ -255,7 +256,7 @@ public final class Fastbrowse implements AutoCloseable {
     }
 
     private void notify(String method, JsonNode params) {
-        Served run = runs.get(params.path("run_id").asText());
+        Served run = runs.get(params.path("run_id").asString());
         if (run == null || run.failure != null) {
             return;
         }
@@ -263,7 +264,7 @@ public final class Fastbrowse implements AutoCloseable {
             if (method.equals(Protocol.SERVER_METHOD_RUN_EVENT) && run.options.onEvent() != null) {
                 run.options.onEvent().accept(event(params.path("event")));
             } else if (method.equals(Protocol.SERVER_METHOD_RUN_FRAME) && run.options.onFrame() != null) {
-                run.options.onFrame().accept(Base64.getDecoder().decode(params.path("frame").asText()));
+                run.options.onFrame().accept(Base64.getDecoder().decode(params.path("frame").asString()));
             }
         } catch (Exception e) {
             run.failure = method + ": " + e.getMessage();
@@ -298,8 +299,8 @@ public final class Fastbrowse implements AutoCloseable {
         throw new RpcException(Protocol.ERROR_METHOD_NOT_FOUND, "unknown method '" + method + "'");
     }
 
-    private static Event event(JsonNode event) throws IOException {
-        return switch (event.path("type").asText()) {
+    private static Event event(JsonNode event) {
+        return switch (event.path("type").asString()) {
             case "browser" -> new Event(JSON.treeToValue(event, BrowserEvent.class), null);
             case "step" -> new Event(null, JSON.treeToValue(event, StepEvent.class));
             default -> throw new FastbrowseException("an event of unknown type " + event.path("type"));
@@ -339,7 +340,6 @@ public final class Fastbrowse implements AutoCloseable {
                 .foreground(browser.foreground() ? true : null)
                 .proxyCountry(browser.proxyCountry())
                 .viewport(viewport)
-                .cloudAllowResizing(browser.cloudAllowResizing() ? true : null)
                 .build();
     }
 

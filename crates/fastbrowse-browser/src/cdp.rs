@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -129,16 +129,6 @@ struct Inner {
 #[derive(Clone)]
 pub struct Cdp(Arc<Inner>);
 
-/// A handler holds this, not a `Cdp`, so the connection does not own a reference to itself.
-#[derive(Clone)]
-pub struct WeakCdp(Weak<Inner>);
-
-impl WeakCdp {
-    pub fn upgrade(&self) -> Option<Cdp> {
-        self.0.upgrade().map(Cdp)
-    }
-}
-
 /// `_unreachable`: a connection the browser's endpoint dropped or refused for now, as a cloud browser still starting
 /// does. A malformed reply, such as a proxy's bare 401, and a TLS failure both need the configuration changed.
 fn unreachable(error: &WsError) -> bool {
@@ -183,7 +173,9 @@ impl Cdp {
         let mut config = WebSocketConfig::default();
         config.max_message_size = Some(MAX_MESSAGE_BYTES);
         config.max_frame_size = Some(MAX_MESSAGE_BYTES);
-        let connecting = tokio_tungstenite::connect_async_with_config(url, Some(config), false);
+        // Nagle's algorithm holds a command written while an earlier one is unacknowledged, so the second and third
+        // of a burst sent together waited a whole round trip more: 210ms, not 105, to a cloud browser.
+        let connecting = tokio_tungstenite::connect_async_with_config(url, Some(config), true);
         let ws = match timeout(secs(OPEN_SECONDS), connecting).await {
             Ok(Ok((ws, _))) => ws,
             Ok(Err(error)) if unreachable(&error) => {
@@ -268,10 +260,6 @@ impl Cdp {
             }
         });
         Ok(Self(inner))
-    }
-
-    pub fn downgrade(&self) -> WeakCdp {
-        WeakCdp(Arc::downgrade(&self.0))
     }
 
     /// One command with no deadline of its own: the reply, or why there is none.
@@ -405,10 +393,6 @@ impl Cdp {
     /// Calls still waiting for a reply.
     pub fn pending(&self) -> usize {
         self.0.state.lock().unwrap().pending.len()
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.0.state.lock().unwrap().closed.is_some()
     }
 
     /// `_BrowserClient.stop`: close the socket; every call still pending fails, and so does every later one.

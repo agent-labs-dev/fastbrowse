@@ -42,8 +42,10 @@ class Control(Frozen):
     expanded: bool | None = None
     sensitive: bool = False
     offscreen: bool = False
-    blocking: bool | None = None
-    """A field its form will not submit without: required and still empty, or marked invalid by the page."""
+    required: bool | None = None
+    """A field the page marks required (`required` or `aria-required`)."""
+    invalid: bool | None = None
+    """A field the page marks invalid (`aria-invalid`)."""
     next_page: bool | None = None
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None
@@ -82,9 +84,10 @@ class Observation(Frozen):
     document_key: str = ""
     """Document identity, independent of field edits and scrolling, for access-wall checks."""
     controls: tuple[Control, ...]
-    omitted_controls: int = Field(ge=0)
-    """Controls present but not offered because of observation limits."""
     viewport_text: str
+    offscreen_text: int = Field(default=0, ge=0)
+    """Characters of the page's visible text outside the viewport: text a read takes in that `viewport_text`
+    leaves out."""
     visual_content: bool = False
     """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier
     needs the screenshot even on a text-rich page whose state is the picture itself."""
@@ -101,18 +104,28 @@ class Observation(Frozen):
 
     @property
     def today(self) -> str:
-        """The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next
-        Monday strictly after today" as 2026-10-05 in three runs of three.
+        """The capture date with its weekday, then a calendar of this month and the twelve after it, a month to a line
+        and each weekday's dates together. A relative day is looked up in it rather than counted. It runs to this month
+        next year because a month or weekday named without a year means its next occurrence, which always falls in
+        that span."""
+        today = self.captured_at
+        lines = [f"{today:%Y-%m-%d (%A)}"]
+        month = today.replace(day=1)
+        for _ in range(13):
+            lines.append(_month_calendar(month))
+            month = (month + timedelta(days=32)).replace(day=1)
+        return "\n".join(lines)
 
-        The coming months are named too: told only the date in September, Jev took "the month after next" as
-        October, clicking a calendar's Next once, in one run of four. Each is named by its distance: listed bare
-        as "the next three months", the last of them was taken for it in six runs of six."""
-        first = self.captured_at.replace(day=1)
-        months = []
-        for _ in range(2):
-            first = (first + timedelta(days=32)).replace(day=1)
-            months.append(f"{first:%B %Y}")
-        return f"{self.captured_at:%Y-%m-%d (%A)}. In one month: {months[0]}; in two months: {months[1]}"
+
+def _month_calendar(first: datetime) -> str:
+    """One month as a line, Monday first: `November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; ...`."""
+    days = [first + timedelta(days=offset) for offset in range(31)]
+    in_month = [day for day in days if day.month == first.month]
+    columns = (
+        f"{name} {' '.join(str(day.day) for day in in_month if day.weekday() == weekday)}"
+        for weekday, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+    )
+    return f"{first:%B %Y}: {'; '.join(columns)}"
 
 
 class BlockKind(StrEnum):
@@ -172,8 +185,6 @@ class Action(Frozen):
     """Origin authorized by the resolver; the receiving document must still match at insertion."""
     files: tuple[Attachment, ...] = ()
     accept_dialog: bool | None = None
-    form_fill: bool = False
-    """Check whether this ordinary fill leaves the observed form safe to continue without another observation."""
 
 
 class BrowserError(RuntimeError):
@@ -233,7 +244,6 @@ class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool
     detail: str | None = None
-    form_unchanged: bool = False
     moved: bool = False
     """The action itself took the page elsewhere: its own input event began a navigation or changed the address,
     or it opened a tab. A page that moves on its own time, even to a new document just after the action, is not."""

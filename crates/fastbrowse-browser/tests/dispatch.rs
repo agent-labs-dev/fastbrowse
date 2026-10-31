@@ -1,5 +1,4 @@
-//! tests/browser/test_dispatch.py: pointer handlers can invalidate a target before its press or replace an editor
-//! before typing.
+//! Pointer handlers can invalidate a target before its press or replace an editor before typing.
 //!
 //! A parametrized Python test is one Rust test that runs each case on a fresh session, in pytest's order.
 
@@ -8,8 +7,8 @@ mod dispatch_support;
 
 use std::time::Duration;
 
-use common::{harness, harness_with, sites};
-use dispatch_support::{PROXY_ERROR, action, eval_active, eval_value, failing_proxy, fill, find, observe_until};
+use common::{eval_value, find, harness, harness_with, js, observe_until, sites};
+use dispatch_support::{PROXY_ERROR, action, eval_active, failing_proxy, fill};
 use fastbrowse_browser::page::scripts::UNCOVER_JS;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing;
@@ -17,11 +16,6 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use serde_json::{Value, json};
-
-/// A string as a JS literal, where Python's tests interpolate `repr()` or `json.dumps()`.
-fn js(text: &str) -> String {
-    serde_json::to_string(text).unwrap()
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_click_uses_an_exposed_point_but_never_passes_through_a_cover() {
@@ -169,6 +163,67 @@ async fn test_transparent_input_hit_must_be_the_input_or_its_own_label() {
         assert_eq!(result.outcome, expected, "associated={associated}");
         assert_eq!(result.page_changed, associated, "associated={associated}");
         assert_eq!(eval_active(&h.page, "input.checked").await, json!(associated), "associated={associated}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_element_the_page_makes_pressable_is_offered_and_pressed() {
+    let Some(h) = harness().await else { return };
+    h.goto("/todos.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<a id=more style=cursor:pointer>More</a><div onclick=\"this.title=1\">Handler</div>\
+         <div style=cursor:pointer><span>Nested</span></div><a name=top>Named anchor</a>\
+         <div style=cursor:pointer>Wrapper <a href=#inner>Inner link</a></div>'; window.pressed = 0; \
+         document.getElementById('more').addEventListener('click', () => window.pressed++);",
+    )
+    .await;
+    let obs = h.observe().await;
+    let labels: Vec<(&str, &str)> = obs.controls.iter().map(|c| (c.label.as_str(), c.role.as_str())).collect();
+    assert_eq!(
+        labels,
+        [("More", "button"), ("Handler", "button"), ("Nested", "button"), ("Inner link", "link")],
+        "the cursor counts where it starts, and a control inside takes the click",
+    );
+    let more = obs.controls.iter().find(|c| c.label == "More").expect("More");
+    let result = h.page.act(&action(Operation::Click, more), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h.page, "window.pressed").await, json!(1));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_suggestion_list_is_left_behind_but_a_cover_that_stays_is_refused() {
+    let list = "<div id=list style=\\'display:none;position:absolute;left:0;top:40px;width:400px;height:200px;background:#eee\\'>Suggestions</div>";
+    for (stays, picks) in [(false, false), (true, false), (false, true)] {
+        let case = format!("stays={stays} picks={picks}");
+        let Some(h) = harness().await else { return };
+        h.goto("/todos.html").await;
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = '<form><input aria-label=From aria-autocomplete=list \
+                 style=\\'position:absolute;left:0;top:0\\'><input aria-label=To \
+                 style=\\'position:absolute;left:0;top:80px\\'></form>{list}'; \
+                 const [from, to] = document.querySelectorAll('input'), list = document.getElementById('list'); \
+                 from.onfocus = () => list.style.display = 'block'; \
+                 from.onblur = () => {{ if (!{stays}) list.style.display = 'none'; }}; \
+                 if ({picks}) {{ list.innerHTML = '<button style=\\'pointer-events:none\\'>Pick</button>'; }}"
+            ),
+        )
+        .await;
+        let obs = h.observe().await;
+        let from = find(&obs, "From").clone();
+        assert_eq!(h.page.act(&fill(&from, "10001"), &obs).await.expect("from").outcome, StepOutcome::Executed);
+        let obs = h.observe().await;
+        let name = if picks { "Pick" } else { "To" };
+        let next = find(&obs, name).clone();
+        let act = if picks { action(Operation::Click, &next) } else { fill(&next, "96162") };
+        let outcome = h.page.act(&act, &obs).await.expect("next").outcome;
+        let left = eval_active(&h.page, "document.activeElement.ariaLabel !== 'From'").await;
+        assert_eq!(outcome, if stays || picks { StepOutcome::Covered } else { StepOutcome::Executed }, "{case}");
+        assert_eq!(left, json!(!picks), "{case}");
         h.close().await;
     }
 }
@@ -714,9 +769,7 @@ async fn test_covered_target_reports_visible_overlay_controls() {
                 let Some(chrome) = common::chrome() else { return };
                 let proxy = failing_proxy(chrome.cdp_url.clone(), |command| {
                     command["method"] == "Runtime.evaluate"
-                        && command["params"]["expression"]
-                            .as_str()
-                            .is_some_and(|e| e.contains("let cover = hit?.closest"))
+                        && command["params"]["expression"].as_str().is_some_and(|e| e.contains("let cover = null"))
                 })
                 .await;
                 let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
@@ -1185,8 +1238,7 @@ async fn test_nothing_is_sent_through_an_obstruction_that_focusing_the_control_o
 async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_own_controls() {
     // A full-window ad frame (an interstitial) covered a login form. Its close button lives in its own,
     // cross-origin document, so the report named no controls, and recovery closed another ad while this one stayed.
-    // Nothing is pressed through a cover the size of the window; the frame's close control is named so it can be
-    // closed, and its links are not, so recovery is never offered the ad itself.
+    // Nothing is pressed through a cover the size of the window; the frame's controls are named so it can be closed.
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(&h.page, &anchored_form(false, "div")).await;
@@ -1202,7 +1254,7 @@ async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_o
     assert_eq!(result.outcome, StepOutcome::Covered);
     let detail = result.detail.unwrap_or_default();
     assert!(
-        detail.contains("Advertisement") && detail.contains("Close ad") && !detail.contains("spring offer"),
+        detail.contains("Advertisement") && detail.contains("Close ad") && detail.contains("spring offer"),
         "{detail}"
     );
     assert_eq!(eval_active(&h.page, "[window.pressed, window.submitted]").await, json!([null, null]));

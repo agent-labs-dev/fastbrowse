@@ -1,4 +1,4 @@
-//! tests/test_mcp_server.py: the MCP server's gates and the shape of what it returns, driven through MCP messages
+//! The MCP server's gates and the shape of what it returns, driven through MCP messages
 //! with `run_task` replaced by a recorder, so no browser and no model keys.
 
 mod common;
@@ -8,15 +8,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CHROME, START, browser_event, result, runner, step, step_event};
+use common::{Call, START, browser_event, result, runner, step, step_event};
 use fastbrowse_cli::mcp::{
-    self, DeclaredSecret, McpServer, Outbox, ServerConfig, Session, bounded, configure, is_loopback, output_model,
-    parse,
+    self, DeclaredSecret, McpServer, Outbox, ServerConfig, Session, bounded, configure, is_loopback, parse,
 };
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
-use fastbrowse_clients::environment::{DecisionSource, Secret, Settings};
+use fastbrowse_cli::runner::{RunError, Runner};
+use fastbrowse_clients::environment::{DecisionSource, Settings};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status};
-use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, mpsc};
@@ -52,7 +50,7 @@ fn answered(status: Status) -> RunResult {
 #[derive(Clone)]
 struct Recorder {
     result: RunResult,
-    calls: Arc<Mutex<Vec<RunArgs>>>,
+    calls: Arc<Mutex<Vec<Call>>>,
 }
 
 impl Recorder {
@@ -62,11 +60,11 @@ impl Recorder {
 
     fn runner(&self) -> Arc<dyn Runner> {
         let recorder = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let recorder = recorder.clone();
             async move {
                 recorder.calls.lock().unwrap().push(args.clone());
-                let on_event = args.on_event.clone().unwrap();
+                let on_event = args.host.on_event.clone().unwrap();
                 on_event(browser_event(Some("https://live.example.com/session"), None)).await;
                 for index in 0..recorder.result.steps.len() {
                     on_event(step_event(index as i64, None)).await;
@@ -76,7 +74,7 @@ impl Recorder {
         })
     }
 
-    fn last(&self) -> RunArgs {
+    fn last(&self) -> Call {
         self.calls.lock().unwrap().last().cloned().expect("a run was started")
     }
 
@@ -211,7 +209,7 @@ async fn test_authorize_is_refused_unless_the_operator_allowed_it() {
     assert!(!recorder.called());
     let config = ServerConfig { allow_authorize: true, ..ServerConfig::default() };
     call(config, &recorder, json!({"task": "Buy it", "start": START, "authorize": true})).await;
-    assert!(recorder.last().authorization.unwrap().irreversible_actions);
+    assert!(recorder.last().task.authorization.unwrap().irreversible_actions);
 }
 
 #[tokio::test]
@@ -229,7 +227,7 @@ async fn test_a_call_cannot_raise_the_servers_limits() {
     let config = ServerConfig { ceilings, ..ServerConfig::default() };
     let arguments = json!({"task": "t", "start": START, "max_steps": 500, "max_dollars": 9.0, "max_seconds": 10});
     call(config, &recorder, arguments).await;
-    let limits = recorder.last().limits.unwrap();
+    let limits = recorder.last().task.limits.unwrap();
     assert_eq!((limits.max_steps, limits.max_dollars, limits.max_seconds), (Some(20), Some(0.5), Some(10.0)));
 }
 
@@ -247,12 +245,12 @@ async fn test_secrets_reach_a_run_only_on_their_own_origin() {
     let config = ServerConfig { secrets: vec![secret], ..ServerConfig::default() };
     let recorder = Recorder::new(answered(Status::Complete));
     call(config.clone(), &recorder, json!({"task": "Sign in", "start": START})).await;
-    let resolver = recorder.last().secrets.unwrap();
+    let resolver = recorder.last().host.secrets.unwrap();
     assert_eq!(resolver.available().iter().map(|r| r.name.clone()).collect::<Vec<_>>(), ["password"]);
     assert_eq!(resolver.resolve("password", "https://shop.example.com").await.as_deref(), Some("hunter2"));
     assert_eq!(resolver.resolve("password", "https://evil.example.com").await, None);
     call(config, &recorder, json!({"task": "Sign in", "start": "https://other.example.com/"})).await;
-    assert!(recorder.last().secrets.is_none());
+    assert!(recorder.last().host.secrets.is_none());
 }
 
 #[tokio::test]
@@ -292,29 +290,15 @@ async fn test_fields_become_the_runs_output_schema() {
     let recorder = Recorder::new(answered(Status::Complete));
     let fields = json!({"price": {"type": "number", "description": "In USD"}, "listed": {"type": "date"}});
     call(ServerConfig::default(), &recorder, json!({"task": "t", "start": START, "fields": fields})).await;
-    let schema = recorder.last().output_schema.unwrap();
-    let price = &schema.fields()[0];
-    assert_eq!((price.name.as_str(), price.description.as_deref()), ("price", Some("In USD")));
-    assert_eq!(price.ty, fastbrowse_core::output_schema::OutputType::Number(Vec::new()));
-    assert_eq!(schema.fields()[1].name, "listed");
-}
-
-fn fields(names: &[&str]) -> IndexMap<String, (String, Option<String>)> {
-    names.iter().map(|name| (name.to_string(), ("string".to_string(), None))).collect()
-}
-
-#[test]
-fn test_field_names_that_cannot_be_a_model_field_are_refused() {
-    for name in ["_private", "model_config", "class", "two words", "json"] {
-        assert!(output_model(&fields(&[name])).is_err(), "{name}");
-    }
-}
-
-#[test]
-fn test_too_many_fields_are_refused() {
-    let names: Vec<String> = (0..21).map(|i| format!("f{i}")).collect();
-    let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    assert!(output_model(&fields(&names)).is_err());
+    let schema = recorder.last().task.output_schema.unwrap();
+    assert_eq!(
+        Value::Object(schema),
+        json!({
+            "type": "object",
+            "properties": {"price": {"type": "number", "description": "In USD"}, "listed": {"type": "string"}},
+            "required": ["price", "listed"],
+        })
+    );
 }
 
 #[tokio::test]
@@ -327,12 +311,7 @@ async fn test_a_configuration_error_in_a_run_is_a_tool_error() {
 }
 
 fn settings(change: impl Fn(&mut Settings)) -> Settings {
-    let mut settings = Settings {
-        openrouter_api_key: Some(Secret::new("or")),
-        ai_gateway_api_key: Some(Secret::new("gw")),
-        chrome: Some(CHROME.into()),
-        ..Settings::default()
-    };
+    let mut settings = common::model_settings();
     change(&mut settings);
     settings
 }
@@ -373,7 +352,7 @@ fn test_configure_refuses_a_setup_that_cannot_work() {
         (&["--secret", "password=UNSET@https://a.example"], |_| {}, "unset variables: UNSET"),
         (&["--profile", "p", "--max-concurrent", "2"], |_| {}, "one Chrome at a time"),
         (&[], |_| {}, "BROWSER_USE_API_KEY"),
-        (&["--local", "--cloud-profile", "p"], |_| {}, "--cloud-profile needs the cloud browser"),
+        (&["--local", "--cloud-profile", "p"], |_| {}, "cloud_profile needs the cloud browser"),
         (&["--headed"], |s| s.chrome = Some("no-such-chrome".into()), "Chrome was not found"),
         // FASTBROWSE_HEADED alone still means local Chrome, as it did before cloud became the default.
         (
@@ -419,6 +398,11 @@ fn test_a_secret_flag_must_name_an_origin() {
 }
 
 #[test]
+fn test_a_stand_in_run_that_names_nothing_is_refused() {
+    assert!(matches!(parse(&argv(&["--run-task", "nope"])), Err(fastbrowse_cli::argparse::Exit::Usage(_))));
+}
+
+#[test]
 fn test_a_secret_origin_is_parsed_as_an_origin() {
     let args = parse(&argv(&["--secret", "p=V@https://a.example:8443"])).unwrap();
     assert_eq!(args.secret, [("p".to_string(), "V".to_string(), "https://a.example:8443".to_string())]);
@@ -429,6 +413,31 @@ fn test_loopback_hosts() {
     for (host, loopback) in [("127.0.0.1", true), ("::1", true), ("localhost", true), ("0.0.0.0", false)] {
         assert_eq!(is_loopback(host), loopback, "{host}");
     }
+}
+
+/// Every loopback address runs without a token, so each needs the Host and Origin checks that stop DNS rebinding.
+#[tokio::test]
+async fn test_every_loopback_address_checks_host_and_origin() {
+    let server = McpServer::new(ServerConfig::default(), Recorder::new(answered(Status::Complete)).runner());
+    let listener = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { mcp::http::serve_on(listener, server, "127.0.0.2").await });
+    let post = async |headers: &str| {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.2", port)).await.unwrap();
+        let request = format!(
+            "POST /mcp HTTP/1.1\r\n{headers}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\
+             Connection: close\r\n\r\n{{}}"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response
+    };
+    assert!(post("Host: evil.test:80").await.starts_with("HTTP/1.1 421"));
+    let origin = format!("Host: 127.0.0.2:{port}\r\nOrigin: http://evil.test:80");
+    assert!(post(&origin).await.starts_with("HTTP/1.1 403"));
+    let own = post(&format!("Host: 127.0.0.2:{port}")).await;
+    assert!(own.starts_with("HTTP/1.1 406"), "{own}");
 }
 
 async fn http(port: u16, request: &str) -> String {
@@ -465,8 +474,8 @@ async fn test_http_needs_the_bearer_token_except_for_the_health_check() {
 
 #[tokio::test]
 async fn test_a_run_that_overruns_its_deadline_is_abandoned() {
-    let hangs = runner(|args: RunArgs| async move {
-        args.cancel.guard(tokio::time::sleep(Duration::from_secs(30))).await?;
+    let hangs = runner(|args: Call| async move {
+        args.host.cancel.guard(tokio::time::sleep(Duration::from_secs(30))).await?;
         unreachable!("the deadline stops the run first")
     });
     let config = ServerConfig { grace_seconds: 0.0, ..ServerConfig::default() };
@@ -481,10 +490,10 @@ async fn test_a_call_waiting_for_a_slot_does_not_spend_its_own_time_limit() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (on_start, on_release) = (started.clone(), release.clone());
-    let both = runner(move |args: RunArgs| {
+    let both = runner(move |args: Call| {
         let (started, release) = (on_start.clone(), on_release.clone());
         async move {
-            if args.task == "first" {
+            if args.task.task == "first" {
                 started.notify_one();
                 release.notified().await;
             }

@@ -13,7 +13,9 @@ use std::task::{Context, Poll, Waker};
 
 use fastbrowse_agent::AgentError;
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question, RetriesExhausted};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Question, RetriesExhausted,
+};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostComponent, CostLine, LLMPurpose, Limits};
 use fastbrowse_core::py::dump::Dump;
@@ -34,6 +36,21 @@ pub fn cases(name: &str) -> Vec<Value> {
         Value::Array(cases) => cases,
         other => panic!("expected a list of cases, got {other}"),
     }
+}
+
+/// A golden file's JSON as Python's json.dump(indent=1, ensure_ascii=False) wrote it, before its final newline.
+pub fn pretty(value: &Value) -> String {
+    let mut out = Vec::new();
+    let mut serializer =
+        serde_json::Serializer::with_formatter(&mut out, serde_json::ser::PrettyFormatter::with_indent(b" "));
+    serde::Serialize::serialize(value, &mut serializer).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+/// Writes a golden file as `pretty` lays it out.
+pub fn save(name: &str, value: &Value) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
+    fs::write(&path, pretty(value) + "\n").unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 }
 
 pub fn parse<T: DeserializeOwned>(value: &Value) -> T {
@@ -81,11 +98,22 @@ impl Script {
     }
 }
 
-pub struct ReplayJev(Script);
+/// Replays recorded Jev answers. Under `FASTBROWSE_UPDATE_GOLDEN=1` it answers from the recording without comparing
+/// the requests, and keeps each request as written now in `asked` for the test to record.
+pub struct ReplayJev(Script, DecisionProfile, pub Mutex<Vec<(String, String)>>);
+
+/// Jev's profile, with the fewer options per choice a case sets to reach group questions with few controls.
+pub fn case_profile(case: &Value) -> DecisionProfile {
+    let mut profile = DecisionProfile::jev();
+    if let Some(options) = case["max_choice_options"].as_u64() {
+        profile.max_choice_options = options as usize;
+    }
+    profile
+}
 
 impl ReplayJev {
     pub fn new(case: &Value) -> ReplayJev {
-        ReplayJev(Script::new(case, "jev"))
+        ReplayJev(Script::new(case, "jev"), case_profile(case), Mutex::new(Vec::new()))
     }
 
     pub fn finish(&self) {
@@ -94,6 +122,10 @@ impl ReplayJev {
 }
 
 impl DecisionClient for ReplayJev {
+    fn profile(&self) -> DecisionProfile {
+        self.1.clone()
+    }
+
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
@@ -103,12 +135,13 @@ impl DecisionClient for ReplayJev {
         let name = &self.0.name;
         let written: serde_json::Map<String, Value> =
             questions.iter().map(|(key, question)| (key.clone(), question.dump())).collect();
-        assert_eq!(write(state, Style::HTTPX), call["jev"]["state"].as_str().unwrap(), "{name}: Jev state #{index}");
-        assert_eq!(
-            write(&Value::Object(written), Style::HTTPX),
-            call["jev"]["questions"].as_str().unwrap(),
-            "{name}: Jev questions #{index}"
-        );
+        let (state, questions) = (write(state, Style::HTTPX), write(&Value::Object(written), Style::HTTPX));
+        if capture::updating() {
+            self.2.lock().unwrap().push((state, questions));
+        } else {
+            assert_eq!(state, call["jev"]["state"].as_str().unwrap(), "{name}: Jev state #{index}");
+            assert_eq!(questions, call["jev"]["questions"].as_str().unwrap(), "{name}: Jev questions #{index}");
+        }
         let response = call["response"].clone();
         Box::pin(async move { jev_response(&response) })
     }
@@ -151,7 +184,6 @@ impl LLMClient for ReplayLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
@@ -171,7 +203,6 @@ impl LLMClient for ReplayLLM {
             );
             assert_eq!(schema.name(), request["schema_name"].as_str().unwrap(), "{name}: schema name #{index}");
             assert_eq!(dumps(&schema.json_schema()), request["schema"].as_str().unwrap(), "{name}: schema #{index}");
-            assert_eq!(max_output_tokens, request["max_output_tokens"].as_i64().unwrap(), "{name}: cap #{index}");
             let data = schema.validate_json(&dumps(&call["response"]["data"])).map_err(LLMError::Failed)?;
             let cost: CostLine = parse(&call["response"]["cost"]);
             Ok(Generation { data, cost })

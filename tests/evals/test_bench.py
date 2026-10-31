@@ -1,10 +1,12 @@
+import dataclasses
+import hashlib
 import json
 from pathlib import Path
 
 import httpx
 import pytest
 
-from fastbrowse.evals.bench import agent_environment, compare_runs, corpus, load_run, run_params
+from fastbrowse.evals.bench import agent_environment, compare_runs, corpus, load_run, priced, run_dollars, run_params
 from fastbrowse.evals.replay import (
     EMBEDDED_JSON,
     MISS_STATUS,
@@ -18,6 +20,7 @@ from fastbrowse.evals.replay import (
     nearest_body,
     request_key,
 )
+from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
 
 LLM = "/llm/chat/completions"
 JEV = "/jev/v1/systemone"
@@ -62,17 +65,22 @@ def test_fixture_ports_are_placeholders() -> None:
 
 
 def test_capture_dates_are_placeholders() -> None:
-    def state(day: str, weekday: str, months: tuple[str, str], week: list[str]) -> dict[str, object]:
-        return {
-            "date": f"{day} ({weekday}). In one month: {months[0]}; in two months: {months[1]}",
-            "next_days": week,
-            "captured_at": f"{day}T10:11:12.345678+00:00",
-        }
+    def state(day: str, weekday: str, *months: str) -> dict[str, object]:
+        date = "\n".join([f"{day} ({weekday})", *months])
+        return {"date": date, "note": f"today: {json.dumps(date)}", "captured_at": f"{day}T10:11:12.345678+00:00"}
 
-    friday = state("2026-10-23", "Friday", ("November 2026", "December 2026"), ["Saturday 2026-10-24"])
-    monday = state("2027-02-01", "Monday", ("March 2027", "April 2027"), ["Tuesday 2027-02-02"])
+    october = (
+        "October 2026: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; "
+        "Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25"
+    )
+    february = (
+        "February 2027: Mon 1 8 15 22; Tue 2 9 16 23; Wed 3 10 17 24; Thu 4 11 18 25; "
+        "Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28"
+    )
+    friday = state("2026-10-23", "Friday", october)
+    monday = state("2027-02-01", "Monday", february, october)
     assert request_key(LLM, friday) == request_key(LLM, monday)
-    assert canonical_value(friday) == {"date": "<today>", "next_days": ["<next day>"], "captured_at": "<timestamp>"}
+    assert canonical_value(friday) == {"date": "<today>", "note": 'today: "<today>"', "captured_at": "<timestamp>"}
 
 
 def test_screenshots_are_placeholders() -> None:
@@ -82,6 +90,16 @@ def test_screenshots_are_placeholders() -> None:
 
     assert request_key(LLM, message("iVBORw0KGgoAAA")) == request_key(LLM, message("iVBORw0KGgoBBB"))
     assert "<image>" in canonical_json(message("x"))
+
+
+def test_a_screenshot_jev_is_sent_as_an_asset_is_a_placeholder() -> None:
+    # Jev names an image asset by its pixels' digest, so a frame painted a pixel differently missed in CI.
+    def state(png: str) -> dict[str, object]:
+        name = f"screenshot-{hashlib.sha256(png.encode()).hexdigest()}"
+        asset = {"type": "image", "format": "png", "data_base64": png}
+        return {"state": {"viewport_screenshot": name}, "assets": {name: asset}}
+
+    assert request_key(JEV, state("iVBORw0KGgoAAA")) == request_key(JEV, state("iVBORw0KGgoBBB"))
 
 
 def test_a_date_the_task_names_is_kept() -> None:
@@ -117,12 +135,6 @@ def test_miss_diff_shows_the_changed_line() -> None:
     assert '-  "requirements": [],' in diff
     assert '+   "Find the price."' in diff
     assert miss_diff(requested, None) == "(nothing recorded on this path)"
-
-
-def test_miss_diff_is_cut() -> None:
-    diff = miss_diff({"a": list(range(500))}, {"a": []}, limit=10)
-    assert len(diff.splitlines()) == 11
-    assert diff.endswith("more lines")
 
 
 def test_nearest_body_is_the_most_similar() -> None:
@@ -170,15 +182,13 @@ def test_replay_ignores_the_bearer_token_and_serves_duplicates_in_order() -> Non
 def test_replay_miss_is_an_error_with_a_diff() -> None:
     cassette = Cassette(task="t")
     cassette.exchanges.append(_exchange(LLM, {"model": "m", "x": 1}, "{}"))
-    misses = []
-    proxy = Proxy(cassette, on_miss=misses.append)
+    proxy = Proxy(cassette)
     with proxy as base:
         response = _post(base, LLM, {"model": "m", "x": 2, "response_format": {"json_schema": {"name": "Plan"}}})
     assert response.status_code == MISS_STATUS
     assert "replay miss" in response.json()["error"]["message"]
-    assert [m.purpose for m in misses] == ["llm:Plan"] and misses[0].model == "m"
-    assert '+ "x": 2' in misses[0].diff
-    assert proxy.misses == misses
+    assert [m.purpose for m in proxy.misses] == ["llm:Plan"] and proxy.misses[0].model == "m"
+    assert '+ "x": 2' in proxy.misses[0].diff
 
 
 def test_record_forwards_everything_and_fill_only_misses() -> None:
@@ -193,7 +203,7 @@ def test_record_forwards_everything_and_fill_only_misses() -> None:
         _post(base, JEV, {"q": "a"})
         _post(base, JEV, {"q": "a"})
     assert sent == ["a", "a"] and len(cassette.exchanges) == 2
-    assert cassette.cost == pytest.approx(0.02)
+    assert [exchange.cost for exchange in cassette.exchanges] == [0.01, 0.01]
 
     filling = Proxy(cassette, forward=forward)
     with filling as base:
@@ -207,10 +217,10 @@ def test_record_forwards_everything_and_fill_only_misses() -> None:
 def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "real")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "real")
-    monkeypatch.setenv("FASTBROWSE_LLM_MODEL_PLAN", "other")
+    monkeypatch.setenv("FASTBROWSE_HEADED", "1")
     env = agent_environment("http://127.0.0.1:9")
     assert "real" not in env.values()
-    assert "FASTBROWSE_LLM_MODEL_PLAN" not in env and "AI_GATEWAY_API_KEY" not in env
+    assert "FASTBROWSE_HEADED" not in env and "AI_GATEWAY_API_KEY" not in env
     assert env["FASTBROWSE_DECISION_BASE_URL"] == "http://127.0.0.1:9/jev"
     assert env["FASTBROWSE_LLM_BASE_URL"] == "http://127.0.0.1:9/llm"
 
@@ -265,3 +275,12 @@ def test_a_run_still_going_is_not_compared(tmp_path: Path) -> None:
         load_run(path)
     path.write_text(json.dumps({"meta": {"finished": "2026-10-23T00:00:00+00:00"}, "tasks": []}))
     assert load_run(path)["tasks"] == []
+
+
+def test_an_unpriced_exchange_is_counted_and_a_partial_run_cost_is_not_a_cost() -> None:
+    exchange = Exchange("k", "/p", "plan", None, {}, 200, "application/json", "{}", 0.0, cost=0.25)
+    assert priced([exchange, dataclasses.replace(exchange, cost=None)]) == (0.25, 1)
+    metered = CostLine(component=CostComponent.LLM, dollars=0.25, basis=CostBasis.METERED)
+    unknown = metered.model_copy(update={"dollars": None, "basis": CostBasis.UNKNOWN})
+    assert run_dollars(CostBreakdown(lines=(metered, unknown))) is None
+    assert run_dollars(CostBreakdown(lines=(metered,))) == 0.25

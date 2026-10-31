@@ -1,12 +1,12 @@
-//! tests/test_serve_callbacks.py: frames, the `until` check and a failing client callback over the serve protocol.
+//! Frames, the `until` check and a failing client callback over the serve protocol.
 
 mod common;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::{browser_event, result, run_params, runner, serving, settings};
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
+use common::{Call, browser_event, result, run_params, runner, serving, settings};
+use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{RunResult, SecretResolver, Status};
 use fastbrowse_core::py::base64;
 use serde_json::{Value, json};
@@ -29,23 +29,23 @@ struct Browsing {
 impl Browsing {
     fn runner(&self) -> Arc<dyn Runner> {
         let browsing = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let browsing = browsing.clone();
             async move {
-                *browsing.got_frame_handler.lock().unwrap() = Some(args.on_frame.is_some());
-                *browsing.got_until.lock().unwrap() = Some(args.until.is_some());
+                *browsing.got_frame_handler.lock().unwrap() = Some(args.host.on_frame.is_some());
+                *browsing.got_until.lock().unwrap() = Some(args.host.until.is_some());
                 let outcome = async {
-                    (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+                    (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
                     if browsing.frames {
                         for frame in FRAMES {
-                            (args.on_frame.as_ref().unwrap())(frame.to_vec()).await;
+                            (args.host.on_frame.as_ref().unwrap())(frame.to_vec()).await;
                         }
                     }
-                    let accepted = match &args.until {
+                    let accepted = match &args.host.until {
                         None => true,
-                        Some(until) => args.cancel.guard(until(ORDERS.into())).await?,
+                        Some(until) => args.host.cancel.guard(until(ORDERS.into())).await?,
                     };
-                    if args.cancel.is_tripped() {
+                    if args.host.cancel.is_tripped() {
                         return Err(RunError::Cancelled);
                     }
                     let status = if accepted { Status::Complete } else { Status::Unverified };
@@ -157,11 +157,15 @@ async fn test_a_reply_to_the_check_that_is_not_a_boolean_ends_the_run_as_an_erro
 
 /// Resolves one secret for SHOP, the way the agent does before it types one.
 fn typist() -> Arc<dyn Runner> {
-    runner(|args: RunArgs| async move {
-        (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
-        let secrets: Arc<dyn SecretResolver> = args.secrets.clone().unwrap();
-        let value = args.cancel.guard(secrets.resolve("SHOP_PASSWORD", "https://shop.example.com")).await?;
-        if args.cancel.is_tripped() {
+    runner(|args: Call| async move {
+        (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+        let secrets: Arc<dyn SecretResolver> = args.host.secrets.clone().unwrap();
+        let value = args
+            .host
+            .cancel
+            .guard(fastbrowse_core::safety::resolve_secret(&*secrets, "SHOP_PASSWORD", "https://shop.example.com"))
+            .await?;
+        if args.host.cancel.is_tripped() {
             return Err(RunError::Cancelled);
         }
         Ok(RunResult { answer: Some(format!("typed {}", value.is_some())), ..result(Status::Complete) })
@@ -198,11 +202,11 @@ async fn test_a_secret_reply_of_the_wrong_shape_ends_the_run_as_an_error_result_
 
 #[tokio::test]
 async fn test_a_run_that_fails_on_its_own_is_an_error_result() {
-    let broken = runner(|_| async { Err(RunError::Failed("ValueError: no such page".into())) });
+    let broken = runner(|_| async { Err(RunError::Invalid("no such page".into())) });
     let mut client = serving(broken, settings());
     let response = client.request("run", Some(run_params("run-1", json!({"until": true, "frames": true})))).await;
     assert!(response.get("error").is_none());
-    assert_eq!(response["result"], errored("ValueError: no such page"));
+    assert_eq!(response["result"], errored("no such page"));
 }
 
 #[tokio::test]

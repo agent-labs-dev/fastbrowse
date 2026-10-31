@@ -4,9 +4,9 @@
 //! does: a quote cut one character apart from Python's is another citation id.
 
 use fastbrowse_core::page::Capture;
-use fastbrowse_core::py::text;
+use fastbrowse_core::py::text::{self, is_space, is_word};
 
-use crate::pyre::{Pat, byte_offsets, is_digit, is_space, is_word};
+use crate::pyre::{Pat, byte_offsets, is_digit};
 
 /// A capture with its text indexed by code point.
 pub(crate) struct Page<'a> {
@@ -168,12 +168,6 @@ pub(crate) fn loose_matches(value: &str, text: &str) -> Vec<(usize, usize)> {
     loose(value).find_iter(&chars)
 }
 
-/// `_loose(value).search(text) is not None`.
-pub(crate) fn loose_search(value: &str, text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    loose(value).search(&chars, 0).is_some()
-}
-
 /// `re.fullmatch(r"\s*\|?[\s:|\-]+\|?\s*", line) and "---" in line`: a markdown table's separator row.
 fn separator_row(line: &str) -> bool {
     !line.is_empty() && line.chars().all(|c| is_space(c) || matches!(c, ':' | '|' | '-')) && line.contains("---")
@@ -288,7 +282,7 @@ fn sentences(chars: &[char]) -> Vec<(usize, usize)> {
     found
 }
 
-fn currency(c: char) -> bool {
+pub(crate) fn currency(c: char) -> bool {
     matches!(c, '$' | '\u{a3}' | '\u{20ac}' | '\u{a5}')
 }
 
@@ -370,18 +364,6 @@ pub(crate) fn alnum_runs(value: &str) -> Vec<String> {
     runs
 }
 
-/// `re.findall(r"\b\d[\d,]*\b", text)`.
-pub(crate) fn numbers(value: &str) -> Vec<String> {
-    let chars: Vec<char> = value.chars().collect();
-    let pattern = Pat::Seq(vec![
-        Pat::Boundary,
-        Pat::class(is_digit),
-        Pat::star(Pat::class(|c| is_digit(c) || c == ',')),
-        Pat::Boundary,
-    ]);
-    pattern.find_iter(&chars).into_iter().map(|(start, end)| chars[start..end].iter().collect()).collect()
-}
-
 /// `re.fullmatch(r"[^\n()]*[^\s()]\s*\(\s*(\d+)\s*\)\s*", title)`: a heading that states its count, and the count.
 pub(crate) fn counted_heading(title: &str) -> Option<String> {
     let chars: Vec<char> = title.chars().collect();
@@ -411,34 +393,6 @@ pub(crate) fn counted_heading(title: &str) -> Option<String> {
         return None;
     }
     chars[at + 1..].iter().all(|c| is_space(*c)).then_some(count)
-}
-
-/// The empty-result sentence `_counted_collections` accepts in place of members, `re.IGNORECASE`, between `\b`s.
-pub(crate) fn states_empty(value: &str) -> bool {
-    let words = |options: &[&str]| Pat::alt(options.iter().map(|option| Pat::ilit(option)).collect());
-    let pattern = Pat::Seq(vec![
-        Pat::Boundary,
-        Pat::alt(vec![
-            Pat::Seq(vec![
-                Pat::ilit("no "),
-                Pat::opt(Pat::ilit("matching ")),
-                words(&["comments", "reviews", "results", "items", "records", "messages", "posts", "entries"]),
-                Pat::lit(" "),
-                words(&["yet", "found", "available"]),
-            ]),
-            Pat::Seq(vec![
-                Pat::ilit("be the first to "),
-                words(&["post", "add", "write", "leave"]),
-                Pat::lit(" "),
-                words(&["a", "an"]),
-                Pat::lit(" "),
-                words(&["comment", "review", "reply", "message", "post"]),
-            ]),
-        ]),
-        Pat::Boundary,
-    ]);
-    let chars: Vec<char> = value.chars().collect();
-    pattern.search(&chars, 0).is_some()
 }
 
 #[cfg(test)]

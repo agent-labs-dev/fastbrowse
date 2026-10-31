@@ -90,7 +90,6 @@ fn build(spec: &Value, http: &Http) -> Client {
             };
             let options = LLMOptions {
                 reasoning_effort: spec.get("reasoning").and_then(Value::as_str).and_then(ReasoningEffort::parse),
-                purpose_reasoning: HashMap::new(),
                 provider_routing,
                 strict: spec.get("strict").and_then(Value::as_bool).unwrap_or(true),
                 extra_body: spec.get("extra_body").and_then(Value::as_object).cloned().unwrap_or_default(),
@@ -145,6 +144,7 @@ fn llm_error(error: &LLMError) -> Value {
     let kind = match error {
         LLMError::Failed(_) => "LLMError",
         LLMError::RetriesExhausted(_) => "LLMRetriesExhausted",
+        LLMError::Rejected(_) => "LLMRejected",
         LLMError::Budget(_) => "BudgetExceeded",
     };
     json!({"error": {"type": kind, "message": normalized(&error.to_string())}})
@@ -156,6 +156,7 @@ fn jev_error(error: &DecisionError) -> Value {
         DecisionError::InputTooLarge(_) => "JevInputTooLarge",
         DecisionError::TransportFailed(_) => "JevTransportFailed",
         DecisionError::RetriesExhausted(_) => "JevRetriesExhausted",
+        DecisionError::Rejected(_) => "JevRejected",
         DecisionError::Budget(_) => "BudgetExceeded",
     };
     let mut dumped = json!({"type": kind, "message": normalized(&error.to_string())});
@@ -266,10 +267,9 @@ async fn replay(case: &Value) -> Value {
                     .collect();
                 let model = schema(call["schema"].as_str().unwrap());
                 let purpose = LLMPurpose::parse(call["purpose"].as_str().unwrap()).unwrap();
-                let cap = call.get("max_output_tokens").and_then(Value::as_i64).unwrap_or(2000);
                 let ledger_ref = (call.get("ledger") != Some(&Value::Bool(false))).then_some(&*ledger);
                 let schema: &dyn ResponseSchema = &model;
-                let generating = llm.generate_value(purpose, &messages, schema, cap, ledger_ref);
+                let generating = llm.generate_value(purpose, &messages, schema, ledger_ref);
                 let finished = async {
                     match generating.await {
                         Ok(generated) => json!({"ok": {"data": generated.data, "cost": cost_dump(&generated.cost)}}),

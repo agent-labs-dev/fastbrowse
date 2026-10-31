@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/models.py`: what a caller passes in and what a run returns.
+//! What a caller passes in and what a run returns.
 //!
 //! Every model here is pydantic's `Frozen`: unknown fields refused, numbers read leniently ([`crate::py::lax`]),
 //! fields written in declaration order with None written as null. [`crate::py::dump::Dump`] gives each the three
@@ -7,7 +7,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -112,11 +111,12 @@ impl Operation {
 }
 
 str_enum! {
-    /// The model whose choice a step carries out, even when code dispatches it.
-    doc: "The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\nreader's, because the reader asked for the rest of the list.";
+    /// Who chose a step: Jev, the LLM, or a rule in code.
+    doc: "Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the\nnext page of a list or DONE once a lookup is answered.";
     pub enum Decider {
         Jev = "jev",
         Llm = "llm",
+        Code = "code",
     }
 }
 
@@ -332,6 +332,39 @@ impl Schema for StepChoice {
     }
 }
 
+/// Why a step acted on a recovery rather than on Jev's pick: the fallback that fired, and the pick it set aside.
+///
+/// The steps a small picker is least likely to get right are the ones it was unsure about, and a run that reports only
+/// the step it took afterwards leaves nothing to learn from but the pick that was abandoned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepFallback {
+    /// The reason the run stopped following Jev, as recovery was told it.
+    pub reason: String,
+    /// Jev's certainty on the step it gave up, on the weakest link of its choices.
+    pub confidence: f64,
+    /// The control Jev chose, by its label, when it chose one.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+impl Schema for StepFallback {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "StepFallback",
+            vec![
+                Field::required("reason", Ty::Str)
+                    .doc("The reason the run stopped following Jev, as recovery was told it."),
+                Field::required("confidence", Ty::Float.le(1).ge(0))
+                    .doc("Jev's certainty on the step it gave up, on the weakest link of its choices."),
+                Field::default("target", Ty::optional(Ty::Str), Value::Null)
+                    .doc("The control Jev chose, by its label, when it chose one."),
+            ],
+        )
+        .ty()
+    }
+}
+
 str_enum! {
     pub enum ArtifactKind {
         Download = "download",
@@ -387,6 +420,8 @@ str_enum! {
         Estimated = "estimated",
         /// No charge was reported, and `dollars` is the most the call could have cost. Never less than the charge.
         Bounded = "bounded",
+        /// The provider's figure so far, read before it finished metering: the final charge can be higher.
+        Unsettled = "unsettled",
         /// No charge information; never counted as zero.
         Unknown = "unknown",
     }
@@ -398,7 +433,6 @@ str_enum! {
         Read = "read",
         FieldText = "field_text",
         Recover = "recover",
-        Verify = "verify",
         Compose = "compose",
         Shortcut = "shortcut",
     }
@@ -408,7 +442,7 @@ str_enum! {
 /// estimate may be under its charge.
 pub fn combined_basis<'a>(lines: impl IntoIterator<Item = &'a CostLine>) -> CostBasis {
     let bases: Vec<CostBasis> = lines.into_iter().map(|line| line.basis).collect();
-    [CostBasis::Unknown, CostBasis::Estimated, CostBasis::Bounded, CostBasis::Metered]
+    [CostBasis::Unknown, CostBasis::Unsettled, CostBasis::Estimated, CostBasis::Bounded, CostBasis::Metered]
         .into_iter()
         .find(|basis| bases.contains(basis))
         .unwrap_or(CostBasis::Metered)
@@ -480,19 +514,6 @@ impl Schema for CostBreakdown {
 }
 
 impl CostBreakdown {
-    /// Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), so the sum can exceed the
-    /// run's wall time.
-    pub fn seconds_by_call(&self) -> IndexMap<String, f64> {
-        let mut totals: IndexMap<String, f64> = IndexMap::new();
-        for line in &self.lines {
-            if let Some(seconds) = line.seconds {
-                let total = totals.entry(line.label()).or_insert(0.0);
-                *total = crate::py::round(*total + seconds, 2);
-            }
-        }
-        totals
-    }
-
     pub fn known_dollars(&self) -> f64 {
         crate::py::sum(self.lines.iter().filter_map(|line| line.dollars))
     }
@@ -526,6 +547,10 @@ pub struct StepResult {
     pub page_changed: Option<bool>,
     #[serde(deserialize_with = "lax::int_ge0")]
     pub duration_ms: i64,
+    /// The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
+    // Left out of the output when absent, so a run whose picker was never overridden reports what it always has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<StepFallback>,
     /// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
     // Left out of the output when empty, so a run that did not ask reports what it always has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -551,6 +576,9 @@ impl Schema for StepResult {
                 Field::default("page_changed", Ty::optional(Ty::Bool), Value::Null)
                     .doc("Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."),
                 Field::required("duration_ms", Ty::Int.ge(0)),
+                Field::default("fallback", Ty::optional(StepFallback::ty()), Value::Null)
+                    .omitted_when_empty()
+                    .doc("The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."),
                 Field::default("choices", Ty::list(StepChoice::ty()), Value::Array(vec![])).omitted_when_empty().doc(
                     "The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.",
                 ),
@@ -1060,7 +1088,6 @@ pub type UntilCheck = Arc<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sy
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_contracts.py, and the parts of tests/test_page.py about `BrowserConnection`.
     use super::*;
     use crate::decision::{Answer, Evaluation};
 
@@ -1115,11 +1142,6 @@ mod tests {
 
     #[test]
     fn seconds_round_as_python_rounds() {
-        let mut line = CostLine::new(CostComponent::Llm, CostBasis::Metered, None);
-        line.purpose = Some(LLMPurpose::Read);
-        line.seconds = Some(0.125);
-        let breakdown = CostBreakdown { lines: vec![line.clone(), CostLine { seconds: Some(1.0), ..line }] };
-        assert_eq!(breakdown.seconds_by_call().get("llm:read"), Some(&1.12));
         assert_eq!(crate::py::round(0.125, 2), 0.12);
         assert_eq!(crate::py::round(2.675, 2), 2.67);
     }

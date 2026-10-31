@@ -5,14 +5,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{Harness, chrome, harness, harness_on, harness_with, sites};
+use common::{
+    Harness, chrome, eval_value, find, harness, harness_on, harness_with, js, observe_until, sites, try_eval,
+    wait_until,
+};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing::misc::rereads;
-use fastbrowse_core::config::{Config, ObservationLimits};
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{BrowserConnection, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
-use misc_support::{eval_value, find, js, observe_until, try_eval, wait_until};
 use relay::{Relay, Verdict};
 use serde_json::{Value, json};
 use tokio::time::timeout;
@@ -391,7 +393,7 @@ async fn push_state_between_history_and_snapshot(pushes: u32) {
             return Verdict::Forward;
         }
         let (command, relay, snapped) = (command.clone(), relay.clone(), snapped.clone());
-        if method(&command) == "Runtime.evaluate" && expression(&command).contains(")('snapshot', ") {
+        if method(&command) == "Runtime.evaluate" && expression(&command).contains(")('snapshot')") {
             // snapshot_first: the snapshot's reply is let through before history is read.
             return Verdict::Later(Box::pin(async move {
                 let reply = relay.call(&command).await;
@@ -499,6 +501,29 @@ async fn test_accepting_a_dialog_that_navigates_is_a_move_the_run_made() {
         true
     );
     let obs = h.observe().await;
+    let clicked = h.page.act(&click(&find(&obs, "Search").id), &obs).await.expect("act");
+    assert_eq!(clicked.outcome, StepOutcome::Executed);
+    let accepted = accept_dialog(&h).await;
+    assert_eq!(accepted.outcome, StepOutcome::Executed);
+    assert!(accepted.moved);
+    h.close().await;
+}
+
+/// The page moved its own address on the same document after the run observed it. The dialog the click opened
+/// carried the new address, so a mark taken against the observed one no longer matched and the accepted confirm's
+/// navigation was not reported as the run's move.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_confirm_after_a_same_document_navigation_is_still_the_runs_move() {
+    let Some(h) = harness().await else { return };
+    h.goto("/?q=guess").await;
+    let session_id = h.session.active_session_id().unwrap();
+    let form = "<button onclick=\"if (confirm('Search again?')) location.href = '/inner.html'\">Search</button>";
+    assert_eq!(
+        eval_value(&h.session, &session_id, &format!("document.body.innerHTML = {}; true", js(form))).await,
+        true
+    );
+    let obs = h.observe().await;
+    assert_eq!(eval_value(&h.session, &session_id, "history.pushState(null, '', '/?q=later'); true").await, true);
     let clicked = h.page.act(&click(&find(&obs, "Search").id), &obs).await.expect("act");
     assert_eq!(clicked.outcome, StepOutcome::Executed);
     let accepted = accept_dialog(&h).await;
@@ -683,22 +708,11 @@ async fn test_a_javascript_error_is_not_read_again() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_offered() {
-    // The listing is sized against a 40-control offscreen cap; the default pool now holds all of it.
-    let max_offscreen_controls = 40;
-    let config = Config {
-        observation: ObservationLimits { max_offscreen_controls, ..ObservationLimits::default() },
-        ..Config::default()
-    };
-    let Some(h) = harness_with(config, SessionOptions::default()).await else { return };
+    let Some(h) = harness_with(Config::default(), SessionOptions::default()).await else { return };
     h.goto("/long-list.html").await;
-    let observation = observe_until(&h.page, "Book 1", 5.0).await;
+    let observation = observe_until(&h.page, "Book 1").await;
     let labels: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
-    assert!(observation.omitted_controls > 0, "the page must be long enough to hit the cap");
     assert!(labels.contains(&"next"));
     assert!(labels.contains(&"Show more books"));
-    assert!(
-        labels.len() as i64
-            <= max_offscreen_controls + observation.controls.iter().filter(|c| !c.offscreen).count() as i64
-    );
     h.close().await;
 }

@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 use crate::llm::ResponseSchema;
 use crate::py::dump::Dump;
-use crate::py::json::{Style, float_str, write};
+use crate::py::json::{Style, scalar_repr, write};
 use crate::py::{lax, text};
 use crate::schema::{ModelTy, Schema, Ty, json_schema};
 
@@ -509,32 +509,18 @@ fn literal(values: &[Value], value: &Value) -> Checked {
     fail(Issue::new("literal_error", format!("Input should be {expected}")).ctx(json!({ "expected": expected })))
 }
 
-/// JSON equality as a literal compares: `1` is not `true`, and `1.0` is `1`.
+/// JSON equality as a literal compares: `1` is not `true`, `1.0` is `1`, and integers past 2^53 stay distinct.
 fn same(allowed: &Value, value: &Value) -> bool {
     match (allowed, value) {
-        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (Value::Number(a), Value::Number(b)) if a.is_f64() || b.is_f64() => a.as_f64() == b.as_f64(),
         (a, b) => a == b,
     }
 }
 
 /// The allowed values as pydantic lists them: each as its Python repr, the last joined with "or".
 fn expected(values: &[Value]) -> String {
-    let shown: Vec<String> = values
-        .iter()
-        .map(|value| match value {
-            Value::String(s) => text::repr(s),
-            Value::Bool(true) => "True".into(),
-            Value::Bool(false) => "False".into(),
-            Value::Null => "None".into(),
-            Value::Number(n) if n.is_f64() => float_str(n.as_f64().unwrap_or_default()),
-            other => other.to_string(),
-        })
-        .collect();
-    match shown.split_last() {
-        Some((last, [])) => last.clone(),
-        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
-        None => String::new(),
-    }
+    let shown: Vec<String> = values.iter().map(scalar_repr).collect();
+    text::or_list(&shown)
 }
 
 /// Whether the value already has the branch's type, which a smart union prefers to any coercion.
@@ -574,6 +560,13 @@ mod tests {
 
     fn cite() -> Ty {
         ModelTy::frozen("_Cite", vec![Field::required("first", Ty::Str), Field::required("last", Ty::Str)]).ty()
+    }
+
+    #[test]
+    fn a_literal_compares_large_integers_exactly() {
+        assert!(!same(&json!(9_007_199_254_740_992_i64), &json!(9_007_199_254_740_993_i64)));
+        assert!(same(&json!(1), &json!(1.0)));
+        assert!(!same(&json!(1), &json!(true)));
     }
 
     /// `retrieval._ReadClaim` and `_ReadResponse`, cut to what the error cases reach.
