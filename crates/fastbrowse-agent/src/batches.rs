@@ -79,6 +79,8 @@ pub async fn evaluate_batches(
     let mut written: Vec<String> = Vec::new();
     let mut batch_size = 0.0;
     let mut sent_chars = 0usize;
+    // Bounds the questions alone: every batch resends the state, so a state counted here would leave a long one room
+    // for a single question per request. The state itself is held to the model's limits below.
     let limit = tokens.batch_tokens.min(tokens.state_plus_all_questions) as f64;
     let profile = jev.profile();
     let most = profile.max_questions.unwrap_or(usize::MAX);
@@ -89,7 +91,7 @@ pub async fn evaluate_batches(
             continue;
         }
         if !batch.is_empty()
-            && (batch.len() >= most || state_size + batch_size + size > limit || {
+            && (batch.len() >= most || batch_size + size > limit || {
                 let with: Vec<&str> = written.iter().map(String::as_str).chain([json.as_str()]).collect();
                 state_chars > tokens.input_chars(&with)
             })
@@ -232,6 +234,20 @@ mod tests {
 
     fn fake(stall: &'static str) -> Fake {
         Fake { sent: Mutex::new(Vec::new()), stall, max_questions: None }
+    }
+
+    #[test]
+    fn test_a_state_past_the_batch_size_still_packs_its_questions() {
+        // A long history took a page's four thousand relevance questions to one request each, and the run's memory with them.
+        let jev = fake("");
+        let state = json!({"recent_actions": "x".repeat(30_000)});
+        let many: IndexMap<String, Question> = (0..4000)
+            .map(|i| (format!("r{i}"), NoulQuestion::new(format!("Is element {i} relevant?"), None, None).into()))
+            .collect();
+        let answered = block_on(evaluate_batches(&jev, &state, &many, &TokenBudget::default(), None, None, false));
+        assert_eq!(answered.unwrap().unwrap().answers.len(), 4000);
+        let sent = jev.sent.lock().unwrap();
+        assert!(sent.len() < 40, "{} requests for 4000 questions", sent.len());
     }
 
     #[test]
