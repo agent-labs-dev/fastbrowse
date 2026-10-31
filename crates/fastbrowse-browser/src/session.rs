@@ -238,6 +238,7 @@ pub(crate) struct State {
     pub(crate) window_opens: u32,
     /// Fetch and XHR requests the run's pages have started, counted, for `requests_mark`.
     pub(crate) requests_started: u64,
+    pub(crate) action_mark: u64,
     /// (session, request id) -> its place in that count, for each such request not yet finished or failed.
     pub(crate) requests_open: HashMap<(String, String), u64>,
     /// (session, request id) -> bytes of a declared body still to arrive, for each open request whose response has come.
@@ -648,6 +649,17 @@ impl BrowserSession {
     pub fn navigating(&self) -> bool {
         let Ok(active) = self.active_session_id() else { return false };
         self.0.state.lock().unwrap().navigating.iter().any(|(session, _)| *session == active)
+    }
+
+    /// The action that follows `mark` has run; `action_waiting` reports on its requests.
+    pub fn action_taken(&self, mark: u64) {
+        self.0.state.lock().unwrap().action_mark = mark;
+    }
+
+    /// Whether a request the last action started is still waiting for its response.
+    pub fn action_waiting(&self) -> bool {
+        let mark = self.0.state.lock().unwrap().action_mark;
+        self.requests_open_since(mark)
     }
 
     /// Whether a fetch, XHR or script request started after `mark` is still waiting for its response.

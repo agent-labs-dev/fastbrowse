@@ -82,6 +82,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Scroll => "Scroll down the page to reveal content below the viewport.",
         Operation::ScrollUp => "Scroll up the page to return to content above the viewport.",
         Operation::Back => "Go back to the previous page.",
+        Operation::Wait => "Wait for the response the page is still waiting on, before judging what the last action did.",
         Operation::SwitchTab => "Switch to another open tab.",
         Operation::Dialog => "Respond to the open browser dialog.",
         Operation::Read => {
@@ -774,6 +775,7 @@ fn offered_operations(
             Operation::Upload => context.has_attachments && indexed.contains_key(operation),
             Operation::SwitchTab => observation.tabs.len() > 1,
             Operation::Back => observation.can_go_back,
+            Operation::Wait => observation.waiting,
             Operation::Escape | Operation::Scroll | Operation::ScrollUp | Operation::Read | Operation::Done => true,
             Operation::Dialog => false,
         })

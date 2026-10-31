@@ -193,6 +193,7 @@ mod tests {
             dialog: None,
             inaccessible_frames: 0,
             can_go_back: false,
+            waiting: false,
             history_entry: None,
         }
     }

@@ -225,6 +225,9 @@ pub struct Observation {
     /// A same-origin http(s) entry sits immediately before the current one in browser history.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub can_go_back: bool,
+    /// The last action's requests have not all been answered, so the page may not show its result yet.
+    #[serde(default)]
+    pub waiting: bool,
     /// The tab's browser history entry this page is. None when the browser would not say.
     #[serde(default)]
     pub history_entry: Option<String>,
@@ -578,6 +581,7 @@ mod tests {
             dialog: None,
             inaccessible_frames: 0,
             can_go_back: false,
+            waiting: false,
             history_entry: None,
         };
         assert_eq!(

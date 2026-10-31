@@ -34,7 +34,7 @@ impl Agent {
         // the page was never there to see.
         let acted = state.history.iter().any(|entry| {
             entry.outcome == StepOutcome::Executed
-                && !matches!(entry.operation, None | Some(Operation::Read | Operation::Scroll | Operation::ScrollUp))
+                && !matches!(entry.operation, None | Some(Operation::Read | Operation::Scroll | Operation::ScrollUp | Operation::Wait))
         });
         if !acted && output_schema.is_none() && !self.asks_to_be_told(state, observation).await? {
             // What was read did not do it, so it answers nothing yet.

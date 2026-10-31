@@ -12,7 +12,7 @@ use super::scripts::{
     ACTIVATION_KEY_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, LEAVE_SUGGESTING_FIELD_JS,
     OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
 };
-use super::{BackTarget, CdpPage, Target, truthy, value_str};
+use super::{BackTarget, CdpPage, SETTLE_SECONDS, Target, truthy, value_str};
 use crate::cdp::secs;
 use crate::error::BrowserError;
 use crate::session::py_json;
@@ -431,6 +431,10 @@ impl CdpPage {
                 Ok((StepOutcome::Executed, None))
             }
             Operation::Back => self.back().await,
+            Operation::Wait => {
+                self.wait_for_lifecycle(self.lifecycle_mark(), SETTLE_SECONDS).await;
+                Ok((StepOutcome::Executed, None))
+            }
             Operation::SwitchTab => {
                 let Some(tab_id) = &action.tab_id else {
                     return Ok((StepOutcome::Failed, Some("switch_tab requires tab_id".into())));

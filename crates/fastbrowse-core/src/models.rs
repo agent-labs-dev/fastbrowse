@@ -70,6 +70,7 @@ str_enum! {
         SwitchTab = "switch_tab",
         Upload = "upload",
         Dialog = "dialog",
+        Wait = "wait",
         Read = "read",
         Done = "done",
         Navigate = "navigate",

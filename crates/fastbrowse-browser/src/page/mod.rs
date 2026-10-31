@@ -609,6 +609,7 @@ impl CdpPage {
                 dialog: self.session.pending_dialog(),
                 inaccessible_frames: int(inaccessible),
                 can_go_back,
+                waiting: self.session.action_waiting(),
                 history_entry,
             })
         })
@@ -670,6 +671,7 @@ impl CdpPage {
             dialog: Some(dialog),
             inaccessible_frames: 0,
             can_go_back: false,
+            waiting: false,
             history_entry: None,
         }
     }
@@ -1203,14 +1205,13 @@ impl CdpPage {
 
     /// Wait for the page to settle after an action, then report whether it changed.
     ///
-    /// Settled is what the browser says: no navigation of the page is on its way, no fetch, XHR or script request
-    /// started after `requests` (a `requests_mark`) is open, and the tasks the action queued have run. A click that navigates has requested it by the time the input is answered, and a request a
-    /// handler starts is reported before the reply to the read that follows. A quick-add cart redrew 0.5s after its
-    /// DOM went quiet, and the run took the add for a click that did nothing and added the item again: its open
-    /// request is what holds the settle now. A blocking JavaScript dialog freezes the renderer, and a read that fails
+    /// Settled is what the browser says: no navigation of the page is on its way and the tasks the action queued have
+    /// run. A request the action started is not waited for: `requests` (a `requests_mark`) lets the next observation
+    /// say it is open, and Jev decides whether to wait for it. A blocking JavaScript dialog freezes the renderer, and a read that fails
     /// mid-navigation is itself evidence of change. `SETTLE_SECONDS` bounds a page that never does any of this.
     #[doc(hidden)]
     pub async fn changed_since(&self, before: &str, requests: u64) -> Result<bool, BrowserError> {
+        self.session.action_taken(requests);
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
@@ -1242,10 +1243,7 @@ impl CdpPage {
                 out = settled => match out {
                     Ok((true, current)) => {
                         let differs = current.as_deref() != Some(before);
-                        if !self.session.requests_open_since(requests)
-                            && !self.session.navigating()
-                            && self.lifecycle_mark() == mark
-                        {
+                        if !self.session.navigating() && self.lifecycle_mark() == mark {
                             return Ok(differs);
                         }
                         unchanged = !differs;
