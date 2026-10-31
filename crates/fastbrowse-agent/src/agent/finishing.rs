@@ -9,7 +9,7 @@ use super::recovery::DONE;
 use super::state::{RunState, Step};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose, draft_answer};
+use crate::retrieval::{compose, draft_answer, verdict};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -89,7 +89,10 @@ impl Agent {
         };
         let answered = if state.compose {
             let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
-            Some(self.trace.phase("compose", compose(&*self.llm, &task, &notes, Some(&ledger))).await?)
+            match self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await? {
+                Some(chosen) => Some(chosen),
+                None => Some(self.trace.phase("compose", compose(&*self.llm, &task, &notes, Some(&ledger))).await?),
+            }
         } else {
             draft_answer(&state.notes)
         };

@@ -3,13 +3,15 @@
 use std::collections::HashSet;
 
 use fastbrowse_core::citations::text_fragment;
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message};
-use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::models::{Citation, CostComponent, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::error::Result;
 use crate::memory::{Notes, fact_id};
@@ -142,6 +144,69 @@ pub async fn compose(
         })
         .collect();
     Ok(assemble_answer(&claims, notes))
+}
+
+const QUOTED: &str = "quote";
+
+/// The answer when Jev says the notes already state it: the notes it picks, in reading order, each citing its quote.
+/// None when the answer has to be worked out, or Jev cannot say, which leaves it to `compose`.
+pub async fn verdict(
+    jev: &dyn DecisionClient,
+    task: &str,
+    notes: &Notes,
+    ledger: Option<&Ledger>,
+) -> Result<Option<ComposedAnswer>> {
+    let facts = notes.facts();
+    let written: Vec<&str> = facts.iter().map(|fact| fact.text.as_str()).collect();
+    let mut questions: IndexMap<String, Question> = IndexMap::from([(
+        "whole".to_string(),
+        Question::Choice(ChoiceQuestion::new(
+            format!("{UNTRUSTED}\nWhat does answering `task` take, given `notes`?"),
+            IndexMap::from([
+                (
+                    QUOTED.to_string(),
+                    "The notes already state the answer: repeating the notes that hold it, after comparing them where the task picks a winner, is enough.".into(),
+                ),
+                (
+                    "work".to_string(),
+                    "The answer needs a number worked out, by counting or adding up, or sentences no note states.".into(),
+                ),
+            ]),
+        )),
+    )]);
+    for (index, fact) in written.iter().enumerate() {
+        let instructions = format!(
+            "{UNTRUSTED}\nIs note {index} ({}) part of what `task` asks to be told? For a task picking a winner, only the winner's notes are; for a value the task names, only the notes stating it. Labels, navigation, column headings and other items are not.",
+            text::repr(fact)
+        );
+        let question = NoulQuestion::new(
+            instructions,
+            Some("This note states the answer or a value of it."),
+            Some("It does not."),
+        );
+        questions.insert(format!("note{index}"), Question::Noul(question));
+    }
+    let state = json!({"task": task, "notes": written});
+    if let Some(ledger) = ledger {
+        ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+    }
+    let Ok(evaluation) = jev.evaluate(&state, &questions).await else {
+        return Ok(None);
+    };
+    if let Some(ledger) = ledger {
+        ledger.record([evaluation.cost.clone()])?;
+    }
+    if !matches!(evaluation.answers.get("whole"), Some(Answer::Choice(answer)) if answer.choice == QUOTED) {
+        return Ok(None);
+    }
+    let picked = |index: usize| matches!(evaluation.answers.get(&format!("note{index}")), Some(Answer::Noul(answer)) if answer.probability > 0.5);
+    let claims: Vec<Claim> = facts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| picked(*index))
+        .map(|(_, fact)| Claim::new(&fact.text, vec![fact_id(fact)]))
+        .collect();
+    Ok((!claims.is_empty()).then(|| assemble_answer(&claims, notes)))
 }
 
 const PARTIAL_NOTICE: &str = "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.";

@@ -300,7 +300,6 @@ fn test_a_source_keeps_its_identifying_context_without_unrelated_capture_changes
     assert_eq!(read_sources(&Notes::new([redraw])), changed);
 }
 
-
 // -- The one stall rule and the one budget-renewal rule -------------------------------------------------------------
 
 const FILES: &str = "https://addons.example.test/project/files";
@@ -1167,4 +1166,56 @@ async fn test_a_gate_answered_with_the_decision_asks_jev_nothing_more() {
     let asked = requested_question(&control_action(Operation::Click, &finish, &[]));
     agent.gate_question(&mut state, &page, &decision, "Finish", question, asked).await.expect("a reversible click");
     assert_eq!(jev.calls.load(Ordering::SeqCst), 0);
+}
+
+/// A Jev that says the notes state the answer and picks only the note holding `winner`.
+struct Verdict(&'static str);
+
+impl DecisionClient for Verdict {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .keys()
+            .map(|key| {
+                let answer = match key.strip_prefix("note") {
+                    Some(index) => {
+                        let note = state["notes"][index.parse::<usize>().unwrap()].as_str().unwrap();
+                        let probability = if note.contains(self.0) { 0.9 } else { 0.1 };
+                        Answer::Noul(NoulAnswer { kind: Default::default(), probability })
+                    }
+                    None => Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "quote".into(),
+                        probabilities: IndexMap::new(),
+                        confidence: 0.9,
+                    }),
+                };
+                (key.clone(), answer)
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_winner_jev_picks_from_the_notes_needs_no_composing() {
+    let page = capture(&[(BlockKind::Paragraph, "Shop A 84.99"), (BlockKind::Paragraph, "Shop B 92.50")]);
+    let facts = ["s0", "s1"].map(|id| {
+        let text = if id == "s0" { "Shop A 84.99" } else { "Shop B 92.50" };
+        Fact::read(text, block_evidence(&page, id), FactReader::JevChoice).answering()
+    });
+    let answer = crate::retrieval::verdict(&Verdict("Shop A"), "Which is cheaper?", &Notes::new(facts), None)
+        .await
+        .expect("a verdict")
+        .expect("an answer");
+    assert!(answer.answer.contains("Shop A") && !answer.answer.contains("Shop B"));
 }
