@@ -344,8 +344,13 @@ def _shape(row: Mapping[str, Any]) -> list[Finding]:
     return problems
 
 
+ATTEMPT_SECONDS = 600.0
+"""The owner's limit on one attempt of any arm, past which it is DNF, a failure."""
+
+
 def _uncapped(run: Mapping[str, Any]) -> bool:
-    """start-gate-v1: the approved budget only decided whether a new run started; no agent had any limit."""
+    """start-gate-v1: the approved budget only decided whether a new run started, and no agent had any limit but the
+    one wall-clock limit on an attempt, which a run records (`ATTEMPT_SECONDS`, or none on earlier runs)."""
     try:
         limits = Limits.model_validate(run.get("agent_limits"), strict=True)
     except ValueError:
@@ -353,8 +358,11 @@ def _uncapped(run: Mapping[str, Any]) -> bool:
     budget = run.get("budget_usd")
     return (
         run.get("agent_limits") == limits.model_dump(mode="json")
-        and all(value is None for value in limits.model_dump().values())
-        and all(name in run and run[name] is None for name in ("max_steps", "max_seconds", "max_dollars"))
+        and all(value is None for name, value in limits.model_dump().items() if name != "max_seconds")
+        and limits.max_seconds in (None, ATTEMPT_SECONDS)
+        and all(name in run and run[name] is None for name in ("max_steps", "max_dollars"))
+        and "max_seconds" in run
+        and run["max_seconds"] == limits.max_seconds
         and _number(budget)
         and budget > 0
     )

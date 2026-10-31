@@ -31,13 +31,14 @@ def candidate() -> dict:
     digest = hashlib.sha256(raw).hexdigest()
     catalog = json.loads(raw)
     tasks = [task for suite in catalog["suites"].values() for task in suite]
+    hosted = {t["id"] for t in tasks if "browser-use" in t["arms"]}
     groups = []
     for name, metric, arms, ids, repeats in (
         (
             "internal-hosted",
             "task-success",
             ["fastbrowse", "browser-use"],
-            sorted(t["id"] for t in tasks if "browser-use" in t["arms"]),
+            sorted(t["id"] for t in tasks if "fastbrowse" in t["arms"]),
             3,
         ),
         (
@@ -76,6 +77,7 @@ def candidate() -> dict:
                     for task in ids
                     for repeat in range(repeats)
                     for arm in arms
+                    if arm != "browser-use" or task in hosted
                 ],
             }
         )
@@ -1180,7 +1182,7 @@ def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid
             Candidate.model_validate(data)
         return
     parsed = Candidate.model_validate(data)
-    assert len(parsed.groups[0].task_ids) == 6
+    assert len(parsed.groups[0].task_ids) == 47
     if schema < 5:
         # The old pairing still reads, but a new measurement on the current catalog must use the pool.
         with pytest.raises(ValueError, match="pair fastbrowse-pool"):
@@ -1238,12 +1240,15 @@ def _head_to_head(candidate: dict, arms: tuple[str, ...]) -> dict:
     out = copy.deepcopy(candidate)
     group = out["groups"][0]
     template = group["rows"][0]
-    ultrafast = set(out["groups"][1]["task_ids"])
+    own = {
+        "jev-ultrafast": set(out["groups"][1]["task_ids"]),
+        "browser-use": {r["task"] for r in group["rows"] if r["arm"] == "browser-use"},
+    }
     group["rows"] = [
         {**template, "task": task, "repeat": repeat, "arm": arm, "dollars": 0.01}
         for arm in arms
         for task in group["task_ids"]
-        if arm != "jev-ultrafast" or task in ultrafast
+        if task in own.get(arm, group["task_ids"])
         for repeat in range(3)
     ]
     return out
@@ -1262,7 +1267,7 @@ def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
     check_catalog(parsed, CATALOG)
     group = parsed.groups[0]
     assert group.measured_arms(benchmarks.HEAD_TO_HEAD) == arms
-    assert len(group.task_ids) == 52
+    assert len(group.task_ids) == 53
 
 
 def test_an_arm_without_a_cost_has_none_on_every_row(candidate):
@@ -1295,7 +1300,7 @@ def test_a_full_arm_cannot_skip_a_task_of_the_set(candidate):
     data = _head_to_head(candidate, ("fastbrowse", "browser-use"))
     group = data["groups"][0]
     task = group["task_ids"][0]
-    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "browser-use" and r["task"] == task)]
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "fastbrowse" and r["task"] == task)]
     with pytest.raises(ValidationError, match="every scheduled slot"):
         Candidate.model_validate(data)
 
@@ -1318,3 +1323,36 @@ def test_an_official_suite_records_its_repeats_and_requires_fastbrowse(candidate
         row["arm"] = "browser-use"
     with pytest.raises(ValidationError, match="bu-bench must measure fastbrowse"):
         Candidate.model_validate(candidate)
+
+
+def test_a_competitor_reference_holds_every_row_it_names(candidate):
+    rows = [r for r in candidate["groups"][0]["rows"] if r["arm"] == "browser-use"]
+    arm = {
+        "arm": "browser-use",
+        "vendor": "Browser Use",
+        "measured_on": "2026-11-01",
+        "version": "browser-use-sdk==3.12.1",
+        "browser": "browser-use-hosted",
+        "campaign_id": "refresh-1",
+    }
+    versions = {r["task"]: 1 for r in rows}
+    body = {
+        "catalog_sha256": candidate["catalog_sha256"],
+        "judge_policy": "browser-internal-opus-v4",
+        "task_versions": versions,
+        "arms": [arm],
+        "rows": rows,
+    }
+    benchmarks.CompetitorReference.model_validate(body)
+    with pytest.raises(ValidationError):
+        benchmarks.CompetitorReference.model_validate({**body, "arms": []})
+
+
+def test_a_did_not_finish_row_is_a_failure(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "jev-ultrafast"))
+    row = next(r for r in data["groups"][0]["rows"] if r["arm"] == "jev-ultrafast")
+    row.update(status="dnf", completed=False, score=0.0)
+    assert Candidate.model_validate(data)
+    row.update(completed=True, score=1.0)
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(data)

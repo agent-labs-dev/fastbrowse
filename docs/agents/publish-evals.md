@@ -3,8 +3,12 @@
 Full browser campaigns run through Parallax. Its exporter validates clean builds, scheduled slots, source
 identity, physical ledgers and private Langfuse read-back before producing the campaign's `benchmark-candidate.json`.
 The file contains sanitized per-run grades, completion, time, cost, LLM and Jev call counts and model
-throughput. Official rubric scores retain their source meaning. Internal hosted and Ultrafast comparisons use
-separate matched task groups.
+throughput. Official rubric scores retain their source meaning.
+
+Every attempt of every agent stops at 10 minutes, with its browser. That attempt is recorded as DNF (status `dnf`), a
+failure inside the score, not ungraded and not retried. Parallax records the limit in each run and manifest, and
+publication refuses a run under any other limit. The retry path for a blocked site or an interrupted run is separate;
+the limit applies to each attempt.
 
 ## What may be published
 
@@ -36,13 +40,23 @@ browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own po
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
 
-`internal-hosted` is the head-to-head: one Parallax invocation over the 52 tasks fastbrowse and the hosted Browser
-Use agent both run, the navigation tasks included, read on each hosted agent's final page through its browser; figures
-approved at 46 or 47 tasks still read. It holds rows from whichever of `fastbrowse`, `browser-use`, `jev-ultrafast` and
-`browser-harness` ran, each with every repeat of every task it runs. Ultrafast returns no answer, so it runs only the
-tasks of the set graded without one. An arm that did not run has no rows and the site shows it as not measured. An arm
+`internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
+read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one Parallax invocation, on Browser Use Cloud browsers
+with the same settings. Each arm runs every repeat of every task it can attempt: `browser-use` skips the task that
+passes only by stopping before an unauthorized step, and `jev-ultrafast` and `browser-harness` also skip the login
+tasks, so they run 47. The catalog states each reason and the site shows those tasks as not run. Ultrafast returns no
+answer, so on an answer task the judge has only its final page. An arm that did not run has no rows and the site shows it as not measured. An arm
 that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
-"cost not reported"; fastbrowse rows always carry a cost. The official suites publish fastbrowse alone, beside the vendor's own published figure, and accept any
+"cost not reported"; fastbrowse rows always carry a cost.
+
+`browser-use` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
+`publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one
+run that measured them, and the site labels them as measured once on that date, not on this release. A dispatch with
+`refresh_competitors` runs both live on a full head-to-head and leaves `competitor-reference.json` in the candidate
+artifact; commit that file to `docs/results/` for later campaigns. Publication refuses the head-to-head, naming each
+stale task, when the reference is missing, is graded under another policy, or no longer matches the catalog.
+
+The official suites publish fastbrowse alone, beside the vendor's own published figure, and accept any
 positive repeat count: every task and repeat is one row with its upstream score kept as the upstream defines it, the
 group records the repeat count, and a task's figure is the mean of its repeats' scores.
 

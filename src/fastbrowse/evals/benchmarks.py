@@ -49,6 +49,10 @@ class PublicModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+DNF = "dnf"
+"""The status of an attempt stopped at the owner's 10 minute limit on one attempt: a failure, scored as one."""
+
+
 class Row(PublicModel):
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
@@ -72,10 +76,12 @@ class Row(PublicModel):
 
     @model_validator(mode="after")
     def completion(self) -> Self:
+        if self.status == DNF and (self.completed or self.score):
+            raise ValueError("A did-not-finish attempt is a failure")
         # fastbrowse-pool is fastbrowse itself on another browser, so its completion is its own run status too.
         if self.arm in FASTBROWSE_ARMS:
-            status = Status(self.status)
-            if self.completed != (status is Status.COMPLETE):
+            finished = self.status != DNF and Status(self.status) is Status.COMPLETE
+            if self.completed != finished:
                 raise ValueError("Fastbrowse completion must agree with its run status")
             if self.dollars is None:
                 raise ValueError("Fastbrowse rows report their cost")
@@ -118,19 +124,24 @@ class Coverage(NamedTuple):
 # current catalog by `check_catalog`. The hosted group grew to 52 when the hosted agent's final page became readable,
 # so it runs the six navigation tasks too.
 #
-# The head-to-head (internal-hosted) is one Parallax invocation over one task set, the tasks fastbrowse and the hosted
-# Browser Use agent both run, with rows from whichever of its arms ran. Browser Use
-# Ultrafast returns no answer, so it runs only the tasks of that set graded without one; Browser Harness, a coding agent
-# given no credentials, runs only its credential-free completion tasks. The official suites publish
-# the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks them publishable.
+# The head-to-head (internal-hosted) is one Parallax invocation over fastbrowse's tasks, with rows from whichever of its
+# arms ran, each on the tasks the catalog lists it for. Browser Use Ultrafast and Browser Harness take no credentials or
+# authorization setting, and the hosted Browser Use agent no authorization setting; the catalog states why each skips a
+# task. The official suites publish the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks
+# them publishable.
 HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browser-harness")
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
     "internal-hosted": Coverage(
-        frozenset({46, 47, 52}), 3, "task-success", HEAD_TO_HEAD, (), ("jev-ultrafast", "browser-harness")
+        frozenset({46, 47, 52, 53}),
+        3,
+        "task-success",
+        HEAD_TO_HEAD,
+        (),
+        ("browser-use", "jev-ultrafast", "browser-harness"),
     ),
-    "internal-ultrafast": Coverage(frozenset({6}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
+    "internal-ultrafast": Coverage(frozenset({6, 47}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
     "bu-bench": Coverage(frozenset({200}), None, "weighted-rubric", OFFICIAL, ("fastbrowse",)),
     "online-mind2web": Coverage(frozenset({300}), None, "full-task-success", OFFICIAL, ("fastbrowse",)),
@@ -148,6 +159,17 @@ def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
     return COVERAGE[group].arms
 
 
+class ReferenceArm(PublicModel):
+    """A competitor whose rows in a group were measured once, by an earlier run, and are not of this build."""
+
+    arm: Arm
+    vendor: Limit
+    measured_on: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    version: Limit
+    browser: Limit
+    campaign_id: Identifier
+
+
 class Group(PublicModel):
     id: GroupId
     agent_sha: Sha
@@ -159,13 +181,16 @@ class Group(PublicModel):
     limits: Annotated[list[Limit], Field(min_length=1, max_length=12)]
     rows: list[Row]
     blocked: list[BlockedSlot] = []
+    references: list[ReferenceArm] = []
+    """Which arms' rows come from the fixed competitor reference; an arm not named here was measured on this build."""
 
     @model_serializer(mode="wrap")
-    def without_empty_blocked(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A group with nothing blocked keeps the bytes it has always had, so approved candidates still match."""
+    def without_empty_lists(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A group with nothing blocked or referenced keeps its old bytes, so approved candidates still match."""
         data = handler(self)
-        if not data["blocked"]:
-            del data["blocked"]
+        for name in ("blocked", "references"):
+            if not data[name]:
+                del data[name]
         return data
 
     @model_validator(mode="after")
@@ -242,6 +267,28 @@ SCHEMA = 5
 """The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
 candidate of official suites alone, and the approved published figures and the staged candidate were written under 3
 and 4, where an approval binds the bytes it approved."""
+
+
+class CompetitorReference(PublicModel):
+    """Competitor rows measured once by a `refresh_competitors` campaign, checked in at `REFERENCE_PATH`. Later
+    campaigns read them only to publish them beside their own rows; no campaign runs these vendors otherwise. Public
+    fields only: the same rows a candidate carries, with task versions so a changed task is refused, not dropped."""
+
+    catalog_sha256: Digest
+    judge_policy: Identifier
+    task_versions: dict[Identifier, Annotated[int, Field(gt=0)]]
+    arms: Annotated[list[ReferenceArm], Field(min_length=1)]
+    rows: Annotated[list[Row], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def closed(self) -> Self:
+        named = {a.arm for a in self.arms}
+        if named & set(FASTBROWSE_ARMS) or {r.arm for r in self.rows} != named:
+            raise ValueError("a competitor reference holds exactly the rows of its named competitors")
+        return self
+
+
+REFERENCE_PATH = "docs/results/competitor-reference.json"
 
 
 class Candidate(PublicModel):

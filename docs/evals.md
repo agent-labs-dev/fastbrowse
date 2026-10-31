@@ -6,9 +6,9 @@ The [benchmark page](https://fastbrowse.ai/benchmarks) describes these measureme
 
 | Comparison | Arms | Measurement |
 |---|---|---|
-| C1, agent against agent (`internal-hosted`) | fastbrowse, Browser Use hosted default | Source task success on matched tasks |
+| C1, agent against agent (`internal-hosted`) | fastbrowse and Jev Ultrafast live, Browser Use hosted default and Browser Harness from the competitor reference | Source task success on each task an agent can attempt |
 | C2, backend against backend (`internal-backend`) | fastbrowse on its own browser pool, fastbrowse on a Browser Use Cloud browser | Source task success on matched tasks |
-| C3, against Ultrafast (`internal-ultrafast`) | fastbrowse on its own browser pool, Jev Ultrafast | Source task success on matched tasks |
+| C3, against Ultrafast (`internal-ultrafast`) | fastbrowse on its own browser pool, Jev Ultrafast | Source task success on the tasks both run |
 
 These three are the only comparisons; [benchmark results](benchmarks.md) records the figures each has. The
 upstream suites below and the Codex with Cua Driver arm are diagnostics, not comparisons:
@@ -18,7 +18,7 @@ upstream suites below and the Codex with Cua Driver arm are diagnostics, not com
 | BU Bench | fastbrowse, with Browser Use's published figures as a separate reference | Official weighted rubric score |
 | Online-Mind2Web | fastbrowse, with published figures as a separate reference | Official full-task success |
 
-Ultrafast coverage and hosted-default fallbacks are reported separately. An official benchmark's partial
+An attempt stops at 10 minutes and counts as DNF, a failure. An official benchmark's partial
 rubric score is not a solved-task percentage. A reported comparison needs matching task revision, scope,
 judge and browser protocol; missing reference configuration is disclosed rather than assumed equivalent.
 

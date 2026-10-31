@@ -109,7 +109,7 @@ Benchmarking makes three comparisons:
   fastbrowse passed 99.3% at 17.0s and $0.0268 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 6 tasks: not yet measured.
+- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 47 tasks: not yet measured.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.7.1 (agent commit `7b8b0e8f`,
 data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).

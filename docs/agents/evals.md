@@ -12,9 +12,9 @@ fixture suites and the relevant dev tasks.
 
 The internal live suite, external corpora, comparator adapters and recording tools live in Parallax under
 `parallax.browser_use`. Run its `parallax browser internal --help`, `official --help`, `data --help` and
-`track --help` in the maintainer checkout. The internal comparison uses Browser Use hosted default and Jev
-Ultrafast; label the Python SDK agent separately when used. Unsupported Ultrafast tasks use hosted default
-and retain their coverage limitation. Never pool the best score from separate agents.
+`track --help` in the maintainer checkout. The internal comparison runs fastbrowse and Jev Ultrafast live and
+reads Browser Use hosted default and Browser Harness from the competitor reference; label the Python SDK agent
+separately when used. An agent shows tasks it cannot attempt as not run. Never pool the best score from separate agents.
 
 Parallax imports source benchmark grades as source reports. Its own semantic judgments use Jev with an LLM
 fallback. Imported predicates, weighted rubrics and full-task judgments retain their original meanings and
