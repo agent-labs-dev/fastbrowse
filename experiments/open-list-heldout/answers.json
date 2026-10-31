@@ -1,0 +1,19 @@
+{
+ "fetched": "2026-10-31",
+ "answers": {
+  "shop-numbered": 10,
+  "products-numbered": 6,
+  "tablets-load-more": 8,
+  "django-next": 7,
+  "gutenberg-next": 5,
+  "datatable-client-pages": 12
+ },
+ "records": {
+  "shop": 188,
+  "products": 25,
+  "tablets": 21,
+  "django": 41,
+  "gutenberg": 66,
+  "datatable": 57
+ }
+}

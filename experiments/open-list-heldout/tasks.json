@@ -1,0 +1,8 @@
+[
+  {"id": "shop-numbered", "pagination": "numbered pages, 12 pages, records have own links", "start": "https://www.scrapingcourse.com/ecommerce/", "task": "Across all pages of this shop, how many products are priced at $75 or more?"},
+  {"id": "products-numbered", "pagination": "numbered pages, 5 pages, records have own links", "start": "https://web-scraping.dev/products", "task": "Across every page of this product list, how many product listings are priced above $50? Count each listing, even when two listings share a name."},
+  {"id": "tablets-load-more", "pagination": "load more button, records have own links", "start": "https://webscraper.io/test-sites/e-commerce/more/computers/tablets", "task": "Across the whole list of tablets, how many cost more than $200?"},
+  {"id": "django-next", "pagination": "Next link, 5 pages, records have own links", "start": "https://www.djangoproject.com/weblog/2023/", "task": "In the Django weblog's 2023 archive, across every page, how many posts announce security releases?"},
+  {"id": "gutenberg-next", "pagination": "Next link, 3 pages, records have own links", "start": "https://www.gutenberg.org/ebooks/bookshelf/5", "task": "How many books by Gerhard Rohlfs are on this bookshelf, across all of its pages?"},
+  {"id": "datatable-client-pages", "pagination": "numbered pages in the page itself, the address never changes", "start": "https://datatables.net/examples/basic_init/zero_configuration", "task": "In the employee table on this page, across all of its pages, how many employees have London as their office?"}
+]
