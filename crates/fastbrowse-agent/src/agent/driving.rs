@@ -158,12 +158,13 @@ impl Agent {
                 return Err(self.meet_wall(&observation, &raw));
             }
             // Jev's operation can leave a page, or end the run, before anything it shows has been read: an order total
-            // is gone once the order is placed.
+            // is gone once the order is placed. Jev has said the page shows what the task needs, so the read is not
+            // asked again whether it does: the page of a list judged absent was a third of the list lost.
             if decision.operation != Operation::Read
                 && decision.shows_answer.is_some_and(|probability| probability > EVEN_ODDS)
             {
                 let capture = self.capture().await?;
-                self.trace.phase("read", self.read(state, capture, &observation)).await?;
+                self.trace.phase("read", self.read(state, capture, &observation, true)).await?;
             }
             if decision.operation == Operation::Done {
                 if let Some(result) =
@@ -386,7 +387,7 @@ impl Agent {
         if decision.operation == Operation::Read {
             frame = if frames { self.frame().await? } else { None };
             let capture = self.capture().await?;
-            let read_progress = self.trace.phase("read", Box::pin(self.read(state, capture, observation))).await?;
+            let read_progress = self.trace.phase("read", Box::pin(self.read(state, capture, observation, false))).await?;
             progressed = Some(read_progress);
             if read_progress {
                 renew(state);

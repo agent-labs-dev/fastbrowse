@@ -11,7 +11,13 @@ use crate::retrieval::{PageRead, read_page};
 
 impl Agent {
     /// Return whether the read added evidence, since only new evidence makes a read progress.
-    pub(super) async fn read(&self, state: &mut RunState, capture: Capture, observation: &Observation) -> Step<bool> {
+    pub(super) async fn read(
+        &self,
+        state: &mut RunState,
+        capture: Capture,
+        observation: &Observation,
+        shows: bool,
+    ) -> Step<bool> {
         // What a failed page shows, an empty result included, is not what the task asked to be told.
         if state.page_failed {
             return Ok(false);
@@ -34,7 +40,7 @@ impl Agent {
         let known = read_sources(&state.notes);
         let (tokens, ledger) = (&self.config.tokens, state.ledger.clone());
         let PageRead { facts, compose } =
-            read_page(&*self.jev, &capture, &state.task, tokens, Some(&ledger), &self.trace).await?;
+            read_page(&*self.jev, &capture, &state.task, tokens, Some(&ledger), &self.trace, shows).await?;
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
         if added > 0 {

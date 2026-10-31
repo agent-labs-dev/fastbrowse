@@ -96,6 +96,7 @@ fn read_request(
     task: &str,
     candidates: &[Candidate],
     blocks: Option<&[&Block]>,
+    shows: bool,
 ) -> (Value, IndexMap<String, Question>) {
     let groups = read_groups(candidates);
     let mut criteria: IndexMap<String, Value> = IndexMap::new();
@@ -123,7 +124,9 @@ fn read_request(
             .push_str(" The passages that fit are shown, most relevant first; other passages have been omitted.");
     }
     let mut offered = criteria;
-    offered.insert(ABSENT.into(), "This page contains no evidence for the task; skip reading it.".into());
+    if !shows {
+        offered.insert(ABSENT.into(), "This page contains no evidence for the task; skip reading it.".into());
+    }
     offered.insert(
         SYNTHESIS.into(),
         "The answer must be composed from several facts, and this page holds at least one.".into(),
@@ -221,7 +224,7 @@ async fn focus<'a>(
     let fits = |shown: usize| {
         let blocks = passages(shown);
         let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
-        let (state, questions) = read_request(page, task, &candidates, Some(&blocks));
+        let (state, questions) = read_request(page, task, &candidates, Some(&blocks), false);
         candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
     };
     let (mut shown, mut high) = (0, ranked.len());
@@ -264,18 +267,19 @@ pub(crate) async fn read_page(
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
     trace: &Trace,
+    shows: bool,
 ) -> Result<PageRead> {
     let page = Page::new(capture);
     let all: Vec<&Block> = capture.blocks.iter().collect();
     let mut candidates = page_read_candidates(&page, &all, jev.profile().max_choice_options);
-    let (mut state, mut asked) = read_request(&page, task, &candidates, None);
+    let (mut state, mut asked) = read_request(&page, task, &candidates, None, shows);
     if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
         let (kept, narrowed, _) = focus(jev, &page, task, tokens, ledger, trace).await?;
         if narrowed.is_empty() {
             return Ok(PageRead::default());
         }
         candidates = narrowed;
-        (state, asked) = read_request(&page, task, &candidates, Some(&kept));
+        (state, asked) = read_request(&page, task, &candidates, Some(&kept), shows);
     }
     if let Some(ledger) = ledger {
         ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -480,7 +484,7 @@ mod tests {
                 context: String::new(),
             })
             .collect();
-        let (_, questions) = read_request(&page, "Find the second avatar name", &candidates, None);
+        let (_, questions) = read_request(&page, "Find the second avatar name", &candidates, None, false);
         let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
         let expected: Vec<Value> = ["1 of 2", "2 of 2"]
             .iter()

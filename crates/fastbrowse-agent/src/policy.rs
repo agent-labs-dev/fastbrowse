@@ -880,7 +880,7 @@ pub fn build_request(
         questions.insert(
             keys::SHOWS_ANSWER.into(),
             noul(
-                "Does this page show a fact the task needs, to report or to finish its work, which the notes do not hold yet? A part of a larger answer counts.",
+                "Does this page show a fact the task needs, to report or to finish its work, which the notes do not hold yet? A part of a larger answer counts: records of a list the task covers, even when the notes hold others like them.",
                 "The page states such a fact.",
                 "The page states none.",
             ),

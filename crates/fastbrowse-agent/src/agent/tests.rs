@@ -912,7 +912,7 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
         (BlockKind::Paragraph, "Date Picker 1: 01/01/2026"),
         (BlockKind::Paragraph, field),
     ]);
-    let added = agent.read(&mut state, page, &observation(&[])).await.expect("a read");
+    let added = agent.read(&mut state, page, &observation(&[]), false).await.expect("a read");
     assert!(added);
     let fact = state.notes.facts().into_iter().find(|f| f.answers).expect("a fact");
     assert_eq!(fact.reader, FactReader::JevChoice);
