@@ -987,6 +987,18 @@ impl Agent {
         {
             facts.push("This list page has not been read: turning to another page leaves its records unread.".into());
         }
+        let scrolled = state
+            .steps
+            .iter()
+            .rev()
+            .take_while(|step| step.operation != Operation::Read)
+            .filter(|step| step.operation == Operation::Scroll && step.page_changed == Some(true))
+            .count();
+        if scrolled > 0 && state.ready_plan.as_ref().is_some_and(|plan| helpers::unread(plan, &state.notes)) {
+            facts.push(format!(
+                "The notes hold nothing from the {scrolled} scrolls since the last read: only a read keeps what they showed."
+            ));
+        }
         facts.extend(helpers::unsent_fact(&state.history, observation));
         if !state.continuing.is_empty() {
             facts.push("The list being read goes on: the notes hold only the pages read so far.".into());
