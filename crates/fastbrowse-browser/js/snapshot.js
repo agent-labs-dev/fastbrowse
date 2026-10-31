@@ -283,6 +283,17 @@
     'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
     'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
     ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
+  // A page says an element it styled or scripted is pressable without any role: a declared click handler, or the
+  // pointer cursor. The cursor inherits, so only the element it starts on counts, and an element inside a control or
+  // holding one leaves the click to that control.
+  const pressable = memo(e => {
+    const view = e.ownerDocument.defaultView;
+    const starts =
+      e.hasAttribute('onclick') ||
+      (view.getComputedStyle(e).cursor === 'pointer' &&
+        (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
+    return starts && !e.parentElement?.closest(SELECTOR) && !e.querySelector(SELECTOR);
+  });
   // Types whose value is a calendar date, not free text: the field writer must produce the type's ISO shape
   // and the native value setter, not typed keystrokes, is what a picker widget actually commits.
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
@@ -309,7 +320,7 @@
     // element to act on. Name it generic rather than null so the control walk does not drop it before the
     // drag it offers can be seen.
     if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop')) return 'generic';
-    return null;
+    return pressable(e) ? 'button' : null;
   };
 
   const submitSemantics = memo(e => {
@@ -355,8 +366,9 @@
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
     registry.track(root);
-    for (const e of root.querySelectorAll(SELECTOR)) yield e;
+    const listed = new Set(root.querySelectorAll(SELECTOR));
     for (const e of root.querySelectorAll('*')) {
+      if (listed.has(e) || pressable(e)) yield e;
       if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);

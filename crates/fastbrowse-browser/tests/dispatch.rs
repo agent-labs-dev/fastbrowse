@@ -168,6 +168,32 @@ async fn test_transparent_input_hit_must_be_the_input_or_its_own_label() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_element_the_page_makes_pressable_is_offered_and_pressed() {
+    let Some(h) = harness().await else { return };
+    h.goto("/todos.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<a id=more style=cursor:pointer>More</a><div onclick=\"this.title=1\">Handler</div>\
+         <div style=cursor:pointer><span>Nested</span></div><a name=top>Named anchor</a>\
+         <div style=cursor:pointer>Wrapper <a href=#inner>Inner link</a></div>'; window.pressed = 0; \
+         document.getElementById('more').addEventListener('click', () => window.pressed++);",
+    )
+    .await;
+    let obs = h.observe().await;
+    let labels: Vec<(&str, &str)> = obs.controls.iter().map(|c| (c.label.as_str(), c.role.as_str())).collect();
+    assert_eq!(
+        labels,
+        [("More", "button"), ("Handler", "button"), ("Nested", "button"), ("Inner link", "link")],
+        "the cursor counts where it starts, and a control inside takes the click",
+    );
+    let more = obs.controls.iter().find(|c| c.label == "More").expect("More");
+    let result = h.page.act(&action(Operation::Click, more), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h.page, "window.pressed").await, json!(1));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_link_inside_a_label_does_not_count_as_its_input() {
     // A link filling the label takes the click itself; the input never toggles.
     let Some(h) = harness().await else { return };
