@@ -137,10 +137,15 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     }
     let shown: Vec<&Control> = new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect();
     let hidden: Vec<&Control> = old.iter().filter(|(key, _)| !new.contains_key(*key)).map(|(_, c)| *c).collect();
-    if !shown.is_empty() {
+    // Leaving for another address in another document replaces every control: the list of what went is the whole page
+    // left, and what came is the page the step's own elements show. A long run resent both, for each page it ever left,
+    // on every decision. The same document, or the same address, keeps its lists, which are then all that says what
+    // the action did.
+    let replaced = navigated && before.document_key != after.document_key;
+    if !replaced && !shown.is_empty() {
         parts.push(format!("showed {}", listed(&shown)));
     }
-    if !hidden.is_empty() {
+    if !replaced && !hidden.is_empty() {
         parts.push(format!("removed {}", listed(&hidden)));
     }
     if let Some(chosen) = chosen {
@@ -226,6 +231,20 @@ mod tests {
         assert!(!done.set_something);
         assert!(done.summary.contains("Ticket type expanded: True -> False"));
         assert!(done.summary.contains("removed 2 controls: One way, Round trip"));
+    }
+
+    #[test]
+    fn test_only_a_page_left_behind_goes_unlisted() {
+        let (mut before, mut after) = (observation(options()), observation(vec![control("a", "Apply", "button")]));
+        (before.document_key, after.document_key) = ("one".into(), "two".into());
+        after.url = "https://example.test/next".into();
+        assert_eq!(effect(&before, &after, None).summary, "went to https://example.test/next");
+        // The same address in a new document: the lists are all that says what the action did.
+        after.url = before.url.clone();
+        assert!(effect(&before, &after, None).summary.contains("removed 2 controls"));
+        after.url = "https://example.test/next".into();
+        after.document_key = "one".into();
+        assert!(effect(&before, &after, None).summary.contains("showed 1 control: Apply"));
     }
 
     #[test]
