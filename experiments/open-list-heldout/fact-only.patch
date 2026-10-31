@@ -1,0 +1,19 @@
+diff --git a/crates/fastbrowse-agent/src/policy.rs b/crates/fastbrowse-agent/src/policy.rs
+index 359d603f..f151fb6c 100644
+--- a/crates/fastbrowse-agent/src/policy.rs
++++ b/crates/fastbrowse-agent/src/policy.rs
+@@ -66,12 +66,10 @@ pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTIO
+ pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
+ /// Asked of a step while a list is open. Stated in `page_facts` alone this moved neither pick: replayed on recorded
+ /// steps, Jev left a list for a record's link and finished off it until its own questions said what an open list means.
+-const OPEN_LIST_TARGET: &str = "\nWhile a list being read goes on, the control that turns to its next page or loads more of it is the target: a record's own links lead away from the list.";
++const OPEN_LIST_TARGET: &str = "\nA list being read goes on.";
+ 
+ fn open_list_action(list: &str) -> String {
+-    format!(
+-        "\nA list being read goes on: its last page read is {list}, and the notes hold only the pages read so far, so a total or comparison over it cannot be finished yet. Show the rest and read it: turn to its next page, load more of it, or narrow it with the page's own filter or sort. On any other page, a record's own page included, the list is not in view: go back to it."
+-    )
++    format!("\nA list being read goes on: its last page read is {list}.")
+ }
+ pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
+ pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
