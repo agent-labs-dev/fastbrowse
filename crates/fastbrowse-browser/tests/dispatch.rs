@@ -517,6 +517,31 @@ fn drag(source: &fastbrowse_core::page::Control, destination: &fastbrowse_core::
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_drop_the_page_posts_does_not_hold_the_action() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = `<p id=status>Card A is in To Do.</p>
+          <div class=column aria-label='To Do' data-column='To Do' ondragover='event.preventDefault()' ondrop='dropped(event)'>
+          <h2>To Do</h2><div class=card aria-label='Card A' draggable=true ondragstart=\"event.dataTransfer.setData('text/plain', 'Card A')\">Card A</div></div>
+          <div class=column aria-label=Done data-column=Done ondragover='event.preventDefault()' ondrop='dropped(event)'><h2>Done</h2></div>`;
+        window.dropped = e => { e.preventDefault(); const column = e.currentTarget, card = document.querySelector('.card');
+          column.appendChild(card); card.setAttribute('aria-label', 'Card A (' + column.dataset.column + ')');
+          status.textContent = 'Card A is in ' + column.dataset.column + '.';
+          window.response = fetch(location.href, {method: 'POST', body: 'card'}).then(r => (window.kept = r)); };
+        true",
+    )
+    .await;
+    let obs = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.act(&drag(find(&obs, "Card A"), find(&obs, "Done")), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert!(started.elapsed().as_secs_f64() < 2.0, "took {:?}", started.elapsed());
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drag_hit_tests_the_destination_before_pressing() {
     for destination_change in ["none", "covered", "renamed"] {
         let Some(h) = harness().await else { return };

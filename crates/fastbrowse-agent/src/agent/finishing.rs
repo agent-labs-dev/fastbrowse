@@ -5,8 +5,9 @@ use fastbrowse_core::page::Observation;
 use indexmap::IndexMap;
 use serde_json::Value;
 
+use super::helpers::unsent_fact;
 use super::recovery::DONE;
-use super::state::{RunState, Step};
+use super::state::{RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
 use crate::retrieval::{compose, draft_answer, verdict};
@@ -29,8 +30,28 @@ impl Agent {
         output_schema: Option<&RecordSchema>,
         until: Option<&UntilCheck>,
     ) -> Step<Option<RunResult>> {
-        // Jev can say DONE on what it never read, and an answer comes only from what it read.
-        if output_schema.is_none() && state.notes.facts().is_empty() {
+        // A task to carry out is not done by reading. Over HTTP nothing can be carried out, and what scripts build on
+        // the page was never there to see.
+        let acted = state.history.iter().any(|entry| {
+            entry.outcome == StepOutcome::Executed
+                && !matches!(entry.operation, None | Some(Operation::Read | Operation::Scroll | Operation::ScrollUp))
+        });
+        if !acted && output_schema.is_none() && !self.asks_to_be_told(state, observation).await? {
+            // What was read did not do it, so it answers nothing yet.
+            state.notes = Notes::default();
+            let reason = "The task asks for something to be carried out, and no step has done it.";
+            if self.page.over_http() {
+                return Err(self.page.needs_browser(reason.into()).into());
+            }
+            self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
+            return Ok(None);
+        }
+        // Jev can say DONE on what it never read, or on a page its last action changed, and an answer comes only from
+        // what it read.
+        let unread = state.read_documents.get(&observation.document_key) != Some(&false);
+        if output_schema.is_none()
+            && (state.notes.facts().is_empty() || (!observation.document_key.is_empty() && unread))
+        {
             let capture = self.capture().await?;
             self.read(state, capture, observation).await?;
         }
@@ -46,6 +67,12 @@ impl Agent {
             let reason = "Nothing read so far answers the task, so it is not done.";
             self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
             return Ok(None);
+        }
+        // A form filled and left unsent is an ending of its own when that is where the task said to stop and ask.
+        if let Some(unsent) = unsent_fact(&state.history, observation)
+            && self.stops_to_confirm(state, observation).await?
+        {
+            return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
         }
         let result = Box::pin(self.conclude(state, output_schema)).await?;
         let reached = match until {

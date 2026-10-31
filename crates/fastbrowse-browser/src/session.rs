@@ -240,6 +240,8 @@ pub(crate) struct State {
     pub(crate) requests_started: u64,
     /// (session, request id) -> its place in that count, for each such request not yet finished or failed.
     pub(crate) requests_open: HashMap<(String, String), u64>,
+    /// (session, request id) -> bytes of a declared body still to arrive, for each open request whose response has come.
+    pub(crate) request_bytes_due: HashMap<(String, String), i64>,
     /// (session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating.
     pub(crate) status_contexts: HashMap<(String, i64), String>,
     pub(crate) active_target_id: String,
@@ -1275,12 +1277,36 @@ impl Shared {
                     }
                 }
             }
-            "Network.loadingFinished" | "Network.loadingFailed" => {
+            // Chrome reports a body nobody reads as finished only when the page drops it, which may be never: a page
+            // that posts and ignores the reply. The bytes arriving are the same news, so a declared length ends it too.
+            "Network.responseReceived"
+            | "Network.dataReceived"
+            | "Network.loadingFinished"
+            | "Network.loadingFailed" => {
                 if let Some(session) = session {
                     let key = (session.to_owned(), str_of(&params["requestId"]));
-                    if self.state.lock().unwrap().requests_open.remove(&key).is_some() {
-                        // Wakes a settle waiting on lifecycle events to look at the page again.
-                        self.lifecycle.send_modify(|generation| *generation += 1);
+                    let mut state = self.state.lock().unwrap();
+                    let finished = match event.method.as_str() {
+                        "Network.responseReceived" => match declared_length(&params["response"]["headers"]) {
+                            Some(length) if state.requests_open.contains_key(&key) => {
+                                state.request_bytes_due.insert(key.clone(), length);
+                                length <= 0
+                            }
+                            _ => false,
+                        },
+                        "Network.dataReceived" => state.request_bytes_due.get_mut(&key).is_some_and(|due| {
+                            *due -= params["encodedDataLength"].as_i64().unwrap_or(0);
+                            *due <= 0
+                        }),
+                        _ => true,
+                    };
+                    if finished {
+                        state.request_bytes_due.remove(&key);
+                        if state.requests_open.remove(&key).is_some() {
+                            drop(state);
+                            // Wakes a settle waiting on lifecycle events to look at the page again.
+                            self.lifecycle.send_modify(|generation| *generation += 1);
+                        }
                     }
                 }
             }
@@ -1292,6 +1318,7 @@ impl Shared {
                 state.frame_sessions.retain(|(_, sid)| *sid != child);
                 // A target that went away answers nothing more.
                 state.requests_open.retain(|(sid, _), _| *sid != child);
+                state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.navigating.retain(|(sid, _)| *sid != child);
             }
             // A scoped run adopts popups where they attach paused, not here, after their first request may have left.
@@ -2026,6 +2053,13 @@ const BLANK_DOCUMENT_JS: &str = r#"document.documentElement.outerHTML === "<html
 /// sites, and a blank window a page opened may hold whatever that page wrote into it.
 fn empty_window(target: &Value) -> bool {
     target["type"] == "page" && target["url"] == "about:blank" && target["openerId"].as_str().is_none_or(str::is_empty)
+}
+
+/// The body length a response's headers declare, whatever case they arrive in.
+fn declared_length(headers: &Value) -> Option<i64> {
+    let headers = headers.as_object()?;
+    let (_, length) = headers.iter().find(|(name, _)| name.eq_ignore_ascii_case("content-length"))?;
+    length.as_str()?.trim().parse().ok()
 }
 
 #[cfg(test)]

@@ -281,14 +281,9 @@ impl FetchedPage {
         self.needed_browser.load(Ordering::Relaxed)
     }
 
-    fn needs_browser(&self, message: impl Into<String>) -> BrowserError {
-        self.needed_browser.store(true, Ordering::Relaxed);
-        BrowserError::NeedsBrowser(message.into())
-    }
-
     fn current(&self) -> PageResult<Capture> {
         let capture = self.loaded.lock().unwrap().capture.clone();
-        capture.ok_or_else(|| self.needs_browser("no page has been fetched yet"))
+        capture.ok_or_else(|| self.needs_browser("no page has been fetched yet".into()))
     }
 
     /// The address a click on `id` opens: a link to another document. A link to a place in this one, or one a script
@@ -314,6 +309,15 @@ impl FetchedPage {
 }
 
 impl Page for FetchedPage {
+    fn over_http(&self) -> bool {
+        true
+    }
+
+    fn needs_browser(&self, message: String) -> BrowserError {
+        self.needed_browser.store(true, Ordering::Relaxed);
+        BrowserError::NeedsBrowser(message)
+    }
+
     /// A fetched run downloads nothing, so it has nothing to report.
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()
@@ -365,7 +369,7 @@ impl Page for FetchedPage {
                 // A guessed address, not the caller's page: the loop falls back to `start` on a browser failure, and
                 // concluding that the task needs a browser here would end the run.
                 Err(NotFetched(message)) if back_to.is_some() => Err(BrowserError::Failed(message)),
-                Err(NotFetched(message)) => Err(self.needs_browser(message)),
+                Err(NotFetched(message)) => Err(self.needs_browser(message.into())),
             }
         })
     }
@@ -386,10 +390,11 @@ impl Page for FetchedPage {
             let Some(url) = link else {
                 return Err(self.needs_browser(
                     "this run reads pages over HTTP and can only follow links; run it again without fetch mode to \
-                     use a browser",
+                     use a browser"
+                        .into(),
                 ));
             };
-            self.open(&url).await.map_err(|NotFetched(message)| self.needs_browser(message))?;
+            self.open(&url).await.map_err(|NotFetched(message)| self.needs_browser(message.into()))?;
             Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: true })
         })
     }
@@ -407,7 +412,7 @@ impl Page for FetchedPage {
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move {
             self.gate().await?;
-            Err(self.needs_browser("a browserless run renders no pixels, so it has no screenshot to take"))
+            Err(self.needs_browser("a browserless run renders no pixels, so it has no screenshot to take".into()))
         })
     }
 

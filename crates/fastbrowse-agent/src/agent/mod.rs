@@ -556,7 +556,12 @@ impl Agent {
             background: state.context.clone(),
             omitted_actions: 0,
             problem: None,
-            withheld: Vec::new(),
+            // A page read and unchanged since has nothing more to give a read.
+            withheld: if Self::page_read(state, observation) {
+                vec![fastbrowse_core::models::Operation::Read]
+            } else {
+                Vec::new()
+            },
             no_value_fields: state
                 .missing
                 .iter()

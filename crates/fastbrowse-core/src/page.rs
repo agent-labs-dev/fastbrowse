@@ -455,6 +455,16 @@ pub struct ActResult {
 pub type PageResult<T> = Result<T, BrowserError>;
 
 pub trait Page: Send + Sync {
+    /// Whether this page was fetched over HTTP: its scripts never ran, and it can only follow links.
+    fn over_http(&self) -> bool {
+        false
+    }
+
+    /// The error that ends this run's page and sends it on to a browser.
+    fn needs_browser(&self, message: String) -> BrowserError {
+        BrowserError::NeedsBrowser(message)
+    }
+
     fn artifacts(&self) -> Vec<Artifact>;
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>>;

@@ -785,6 +785,7 @@ async fn test_a_done_answers_from_the_notes_with_no_further_question() {
     let mut state = run_state();
     state.task = "Report the answer.".into();
     state.notes = Notes::new([fact]);
+    state.history.push(crate::policy::HistoryEntry::new(Some(Operation::Click), None, StepOutcome::Executed, true));
     let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let agent = Agent::new(
         Arc::new(FinishPage(observation(&[]))),

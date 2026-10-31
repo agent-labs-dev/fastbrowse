@@ -74,7 +74,11 @@ fn value_questions<'a>(
         .filter(|entry| entry.operation == Some(Operation::Fill) && entry.target.as_deref() == Some(&described))
         .filter_map(|entry| entry.text.as_deref().map(text::repr))
         .collect();
-    let tried = if tried.is_empty() { String::new() } else { format!(" Already typed here: {}.", tried.join(", ")) };
+    let tried = if tried.is_empty() {
+        String::new()
+    } else {
+        format!(" Already typed here: {}. A value the page rejected is not typed again.", tried.join(", "))
+    };
     let options = word_options(task, group);
     let mut asked = vec![("source", source_question, sources)];
     if !group.is_empty() {
@@ -660,6 +664,15 @@ impl Agent {
         ]);
         let question = "What does the task want at its end?";
         Ok(self.ask_choice(state, observation, question, criteria).await? == "told")
+    }
+
+    pub(super) async fn stops_to_confirm(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let criteria = IndexMap::from([
+            ("confirm".to_string(), JsonValue::from("The task says to stop before sending and ask for confirmation.")),
+            ("no".to_string(), JsonValue::from("The task does not say that.")),
+        ]);
+        let question = "What does the task say about sending what was typed?";
+        Ok(self.ask_choice(state, observation, question, criteria).await? == "confirm")
     }
 
     /// Several choices about this page in one request, each answer one its question offered.
