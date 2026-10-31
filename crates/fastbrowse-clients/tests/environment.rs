@@ -304,7 +304,7 @@ fn completion(cost: Option<f64>) -> Response {
 async fn llm_requests(env: &[(&str, &str)], cost: Option<f64>) -> (Vec<Request>, Generation<Value>) {
     let script = Script::new([common::Step::Reply(completion(cost))]);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await.unwrap();
+    let result = llm.generate_value(LLMPurpose::Start, &[Message::user("?")], &answer_model(), None).await.unwrap();
     (script.requests(), result)
 }
 
@@ -336,7 +336,7 @@ async fn test_gateway_usage_without_a_cost_is_bounded() {
     let script =
         Script::new([common::Step::Reply(completion(None)), common::Step::Reply(Response::json(200, &endpoints))]);
     let llm = settings(&[("AI_GATEWAY_API_KEY", "g")]).llm(&script.http()).unwrap();
-    let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await.unwrap();
+    let result = llm.generate_value(LLMPurpose::Start, &[Message::user("?")], &answer_model(), None).await.unwrap();
     let model = DEFAULT_LLM;
     assert_eq!(script.requests()[1].url, format!("https://ai-gateway.vercel.sh/v1/models/{model}/endpoints"));
     assert_eq!(result.cost.basis, CostBasis::Bounded);

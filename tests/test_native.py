@@ -14,7 +14,7 @@ import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import pytest
@@ -23,8 +23,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from fastbrowse import native, run_task
 from fastbrowse.config import Config
 from fastbrowse.evals.harness import providers, transient_seconds
-from fastbrowse.jev import ChoiceAnswer, ChoiceQuestion, Evaluation, Question
-from fastbrowse.llm import Generation
+from fastbrowse.jev import Evaluation, Question
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
@@ -123,6 +122,7 @@ def test_every_run_task_argument_crosses() -> None:
         "on_frame",
         "until",
         "check_access",
+        "open_browser",
         "jev",
         "llm",
         "http",
@@ -205,7 +205,7 @@ class Counted:
 
     def __init__(self) -> None:
         self.jev = ScriptedJev(steps(""))
-        self.llm = ScriptedLLM()
+        self.llm = ScriptedLLM("https://pypi.example/httpx")
         self.requests: list[str] = []
         self.purposes: list[LLMPurpose] = []
         evaluate, generate = self.jev.evaluate, self.llm.generate
@@ -237,7 +237,6 @@ async def test_the_callers_own_clients_serve_the_rust_run() -> None:
     async with counted.http:
         result = await run_task(
             "Read the release",
-            start="https://pypi.example/httpx",
             fetch=True,
             jev=counted.jev,
             llm=counted.llm,
@@ -247,7 +246,7 @@ async def test_the_callers_own_clients_serve_the_rust_run() -> None:
     assert result.status is Status.COMPLETE, result.error
     assert counted.requests == ["https://pypi.example/httpx"]
     assert counted.questions > 0
-    assert LLMPurpose.PLAN in counted.purposes
+    assert LLMPurpose.START in counted.purposes
     assert result.cost.known_dollars == 0.0
 
 
@@ -270,7 +269,6 @@ async def test_a_reservation_the_rust_ledger_refuses_ends_the_run_budget_exceede
     async with counted.http:
         result = await run_task(
             "Read the release",
-            start="https://pypi.example/httpx",
             fetch=True,
             jev=counted.jev,
             llm=counted.llm,
@@ -314,7 +312,6 @@ async def test_an_llm_client_that_raises_fails_as_that_client_and_the_run_report
     async with counted.http:
         result = await run_task(
             "Read the release",
-            start="https://pypi.example/httpx",
             fetch=True,
             jev=counted.jev,
             llm=counted.llm,
@@ -348,7 +345,7 @@ async def test_a_redirect_the_callers_client_would_follow_is_checked_against_the
     assert result.status is not Status.COMPLETE
 
 
-UNKNOWN = CostLine(component=CostComponent.LLM, basis=CostBasis.UNKNOWN, purpose=LLMPurpose.PLAN)
+UNKNOWN = CostLine(component=CostComponent.LLM, basis=CostBasis.UNKNOWN, purpose=LLMPurpose.START)
 
 
 @pytest.mark.usefixtures("rust_core")
@@ -364,7 +361,6 @@ async def test_receipts_a_client_adds_to_ledger_lines_count_in_the_result() -> N
     async with counted.http:
         result = await run_task(
             "Read the release",
-            start="https://pypi.example/httpx",
             fetch=True,
             jev=counted.jev,
             llm=counted.llm,
@@ -373,35 +369,13 @@ async def test_receipts_a_client_adds_to_ledger_lines_count_in_the_result() -> N
     assert UNKNOWN in result.cost.lines
 
 
-def reading(counted: Counted) -> None:
-    """Jev holds the page as evidence for the plan's one requirement, so the run asks the LLM to read it, inline."""
-    evaluate = counted.jev.evaluate
-
-    async def evidence(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-        evaluation = await evaluate(state, questions)
-        picks = {"read_assessment": "evidence", "req_1": "synthesis"}
-        answers = dict(evaluation.answers)
-        for key, choice in picks.items():
-            if key in answers:
-                options = list(cast(ChoiceQuestion, questions[key]).criteria)
-                probabilities = {option: float(option == choice) for option in options}
-                answers[key] = ChoiceAnswer(choice=choice, probabilities=probabilities, confidence=1.0)
-        return evaluation.model_copy(update={"answers": answers})
-
-    counted.jev.evaluate = evidence  # ty: ignore[invalid-assignment]
-
-
 @pytest.mark.usefixtures("rust_core")
 async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises() -> None:
     counted = Counted()
-    reading(counted)
     reading_started = asyncio.Event()
     cleanup: list[str] = []
 
     async def hanging(purpose: LLMPurpose, messages: Any, schema: type[BaseModel], *, ledger: Any, **_: Any) -> Any:
-        if purpose is LLMPurpose.PLAN:
-            plan = schema.model_validate({"requirements": [], "answer_expected": True})
-            return Generation(data=plan, cost=CostLine(component=CostComponent.LLM, basis=CostBasis.ESTIMATED))
         ledger.reserve(CostComponent.LLM)
         reading_started.set()
         try:
@@ -422,7 +396,6 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
         run = asyncio.create_task(
             run_task(
                 "Read the version",
-                start="https://pypi.example/httpx",
                 fetch=True,
                 jev=counted.jev,
                 llm=counted.llm,
@@ -444,7 +417,7 @@ async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_
 
     async def truncated(purpose: LLMPurpose, messages: Any, schema: type[BaseModel], **kwargs: Any) -> Any:
         try:
-            schema.model_validate_json('{"requirements": [')
+            schema.model_validate_json('{"url": [')
         except ValidationError as exc:
             errors.append(exc)
         return await generate(purpose, messages, schema, **kwargs)
@@ -453,7 +426,6 @@ async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_
     async with counted.http:
         await run_task(
             "Read the release",
-            start="https://pypi.example/httpx",
             fetch=True,
             jev=counted.jev,
             llm=counted.llm,
@@ -464,14 +436,14 @@ async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_
 
 
 @pytest.mark.usefixtures("rust_core")
-async def test_cancelling_a_run_stops_the_plan_it_began_before_run_task_raises() -> None:
+async def test_cancelling_a_run_stops_the_model_call_it_began_before_run_task_raises() -> None:
     counted = Counted()
-    planning = asyncio.Event()
+    asking = asyncio.Event()
     stopped: list[str] = []
 
     async def hanging(purpose: LLMPurpose, *_: Any, ledger: Any, **__: Any) -> Any:
         ledger.reserve(CostComponent.LLM)
-        planning.set()
+        asking.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -483,19 +455,18 @@ async def test_cancelling_a_run_stops_the_plan_it_began_before_run_task_raises()
         run = asyncio.create_task(
             run_task(
                 "Read the version",
-                start="https://pypi.example/httpx",
                 fetch=True,
                 jev=counted.jev,
                 llm=counted.llm,
                 http=counted.http,
             )
         )
-        await asyncio.wait_for(planning.wait(), 10)
+        await asyncio.wait_for(asking.wait(), 10)
         run.cancel()
         with pytest.raises(asyncio.CancelledError):
             await run
-        # The core cancels the plan it began and joins it before the cancellation reaches the caller.
-        assert stopped == ["plan"]
+        # The core cancels the call it began and joins it before the cancellation reaches the caller.
+        assert stopped == ["start"]
 
 
 @pytest.mark.parametrize("command", ["fastbrowse", "fastbrowse_mcp"])
@@ -521,8 +492,8 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
         asked.append(request.url.path)
         if asked.count("/api/v1/chat/completions") == 1:
             return httpx.Response(503, json={"error": "busy"})
-        plan = json.dumps({"requirements": [], "answer_expected": False})
-        choice = {"index": 0, "message": {"role": "assistant", "content": plan}, "finish_reason": "stop"}
+        proposal = json.dumps({"url": "https://pypi.example/httpx"})
+        choice = {"index": 0, "message": {"role": "assistant", "content": proposal}, "finish_reason": "stop"}
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         return httpx.Response(200, json={"id": "x", "model": "m", "choices": [choice], "usage": usage})
 
@@ -531,7 +502,6 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
         with traced() as events:
             result = await run_task(
                 "Read the release",
-                start="https://pypi.example/httpx",
                 fetch=True,
                 jev=ScriptedJev(steps("")),
                 http=http,

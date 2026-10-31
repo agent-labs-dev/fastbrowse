@@ -81,13 +81,9 @@ const BASE: Preset = Preset {
     models: None,
 };
 
-/// Sonnet plans, reads and verifies; Haiku writes field text and shortcuts, whose output is checked downstream, as
-/// flash-lite does on OpenRouter.
-fn claude_model(purpose: LLMPurpose) -> &'static str {
-    match purpose {
-        LLMPurpose::FieldText | LLMPurpose::Shortcut => "claude-haiku-5-5",
-        _ => "claude-sonnet-5-5",
-    }
+/// Haiku proposes the start page, whose address the run opens and Jev then sees.
+fn claude_model(_: LLMPurpose) -> &'static str {
+    "claude-haiku-5-5"
 }
 
 /// Groq documents strict decoding on a few models only; gpt-oss-120b is the largest of them.

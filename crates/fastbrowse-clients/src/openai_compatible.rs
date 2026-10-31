@@ -29,9 +29,8 @@ pub fn openrouter_provider_routing() -> Value {
 }
 
 /// DeepSeek is served by many OpenRouter providers, and most of them null every optional object (see
-/// [`flat_optional_objects`]). At its default temperature it also broke one plan in four on Together: a lone
-/// requirement list, or `"true"` repeated to the output cap; at 0 all 20 replays of the same request planned every
-/// requirement. Other models keep their schema as written and their default temperature, which Gemini 3 is
+/// [`flat_optional_objects`]). At its default temperature it also repeated `"true"` to the output cap on
+/// Together; at 0 it did not. Other models keep their schema as written and their default temperature, which Gemini 3 is
 /// documented to need.
 fn deepseek(model: &str) -> bool {
     model.starts_with("deepseek/")

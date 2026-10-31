@@ -6,16 +6,12 @@ from fastbrowse.models import Frozen
 
 
 class Thresholds(Frozen):
-    recover_below: float = 0.55
-    """Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts."""
     login_required_above: float = 0.70
     bot_check_above: float = 0.70
     """Jev's agreement, on a page it also judged a wall, that the wall is a bot check and not a sign-in."""
     irreversible_above: float = 0.50
     requested_above: float = 0.50
     """Jev's agreement that the task asks for a commit, above which an authorized run takes it."""
-    rewrite_from: float = 0.30
-    """Jev's doubt that the read facts already answer the task, from which the LLM composer writes it instead."""
 
 
 class ObservationLimits(Frozen):

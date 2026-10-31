@@ -5,14 +5,11 @@ package dev.agentlabs.fastbrowse.protocol;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
- * next page of a list or DONE once a lookup is answered.
+ * Who chose a step: Jev, or a rule in code, such as the next page of a list.
  */
 public enum Decider {
     @JsonProperty("jev")
     JEV,
-    @JsonProperty("llm")
-    LLM,
     @JsonProperty("code")
     CODE
 }

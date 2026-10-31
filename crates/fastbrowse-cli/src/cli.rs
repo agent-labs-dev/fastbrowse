@@ -133,7 +133,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--json"),
             Opt::value("--record"),
             Opt::flag("--fetch"),
-            Opt::flag("--fetch-first"),
+            Opt::flag("--browser"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -168,7 +168,7 @@ pub struct Args {
     pub json: bool,
     pub record: Option<PathBuf>,
     pub fetch: bool,
-    pub fetch_first: bool,
+    pub browser: bool,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
@@ -226,7 +226,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         json: parsed.flag("--json"),
         record: path("--record"),
         fetch: parsed.flag("--fetch"),
-        fetch_first: parsed.flag("--fetch-first"),
+        browser: parsed.flag("--browser"),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
@@ -374,7 +374,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         foreground: args.foreground,
         proxy_country: args.proxy_country.clone(),
         fetch: args.fetch,
-        fetch_first: args.fetch_first,
+        browser: args.browser,
         ..RunTask::default()
     };
     fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;

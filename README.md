@@ -49,7 +49,7 @@ You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer it
 [OpenRouter](https://openrouter.ai/) key and a [Browser Use](https://browser-use.com/) key:
 
 ```sh
-export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM that plans, reads and writes
+export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages and composed answers
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
@@ -120,10 +120,10 @@ data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture.svg" alt="The task is planned and the start page opened in parallel; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, and the answer cites every claim.">
+  <img src="assets/architecture.svg" alt="The run opens its start page; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, Jev decides when it is done, and the answer cites every claim.">
 </picture>
 
-The LLM plans, reads and writes. Jev picks each action. Code owns the gates: irreversible actions stop without
+Jev picks each action, reads each page and decides when the run is done. An LLM proposes the first address when none is given and writes an answer that has to be composed. Code owns the gates: irreversible actions stop without
 `--authorize`, secrets reach models by name only, and supported cookie banners are refused through autoconsent.
 More in [docs/design.md](docs/design.md).
 
@@ -193,7 +193,7 @@ async def main() -> None:
   exception's type.
 
 **Citations.** `result.citations` holds a `Citation` per numbered link in `result.answer`: `id`, `text`,
-`requirement_id`, `url`, `quote` and `deep_link`. Counts, totals and superlatives cite every record they were
+`url`, `quote` and `deep_link`. Counts, totals and superlatives cite every record they were
 derived from. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
 scrolls to the quote; it may not resolve on a page that changes or needs a session.
 
@@ -379,12 +379,11 @@ timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
 ## Safety model
 
 - **Irreversible actions.** Jev judges each click, Enter press and dialog acceptance. Without authorization, a
-  confident irreversible action stops at `needs_confirmation`, and an uncertain one goes to recovery. This is a
+  irreversible action stops at `needs_confirmation`. This is a
   classifier, not a guarantee: a page can word a harmful control to look harmless.
 - **Secrets.** Models see names only. A value is resolved at the moment it is typed, only on its declared origin,
   and redacted from everything the run returns. A password field is typed only from a stored secret.
-- **Page content is data.** Reader and verifier prompts say so, and completion is judged against quotes and page
-  state, not the model's say-so.
+- **Page content is data.** Every prompt says so, and what a run reports is copied from quotes on the page.
 
 ## Evals and development
 

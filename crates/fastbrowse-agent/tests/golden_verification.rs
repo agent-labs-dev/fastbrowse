@@ -6,11 +6,8 @@ mod common;
 use common::capture::*;
 use common::*;
 use fastbrowse_agent::memory::Notes;
-use fastbrowse_agent::planner::Plan;
-use fastbrowse_agent::policy::HistoryEntry;
-use fastbrowse_agent::retrieval::ComposedAnswer;
 use fastbrowse_agent::verification::{self, *};
-use fastbrowse_core::config::{Thresholds, TokenBudget};
+use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::{Capture, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -59,13 +56,9 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
     let jev = KeyedJev::new(case, ledgers.clone(), log.clone());
     let llm = KeyedLLM::new(case, ledgers, log.clone());
     let trace = Trace::collecting();
-    let mut tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
-    // These cases were recorded with LLM prompts fitted to the decision budget's tokens: a model with that window.
-    tokens.llm_context_tokens = Some(tokens.state_plus_largest_question.min(tokens.state_plus_all_questions));
+    let tokens: TokenBudget = opt(args, "tokens").unwrap_or_default();
     let notes: Option<Notes> = args.get("notes").filter(|n| n.get("$notes").is_some()).map(notes_arg);
     let notes_ref = || notes.as_ref().expect("a notes argument");
-    let history: Vec<HistoryEntry> = opt(args, "history").unwrap_or_default();
-    let visited = strings(args.get("visited").unwrap_or(&Value::Null));
     let result: Value = match name {
         "page_state" => {
             let questions = strings(args.get("questions").unwrap_or(&Value::Null));
@@ -78,43 +71,11 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
                 context.as_ref(),
             ))
         }
-        "check_done" => {
-            let draft: Option<ComposedAnswer> = opt(args, "draft");
-            let options = DoneOptions {
-                tokens: tokens.clone(),
-                history: &history,
-                visited: &visited,
-                changed_since_read: false,
-                unsent: None,
-                page_read: false,
-                site_failure: None,
-                continuing: Default::default(),
-                ledger: None,
-                trace: trace.clone(),
-            };
-            outcome(block_on(check_done(
-                &jev,
-                args["task"].as_str().unwrap(),
-                &parse::<Plan>(&args["plan"]),
-                &parse::<Observation>(&args["observation"]),
-                notes_ref(),
-                &parse::<Thresholds>(&args["thresholds"]),
-                draft.as_ref(),
-                &options,
-            )))
-        }
         "extract" => {
             let schema = record_schema(&args["schema"])?;
             let options = ExtractOptions { notes: notes.as_ref(), tokens: tokens.clone(), ledger: ledger.as_ref() };
             let capture: Capture = parse(&args["capture"]);
-            outcome(block_on(verification::extract(
-                &jev,
-                &llm,
-                args["task"].as_str().unwrap(),
-                &capture,
-                &schema,
-                &options,
-            )))
+            outcome(block_on(verification::extract(&jev, args["task"].as_str().unwrap(), &capture, &schema, &options)))
         }
         other => return Err(format!("no replay for {other}")),
     };

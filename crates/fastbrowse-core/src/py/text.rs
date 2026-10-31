@@ -97,25 +97,6 @@ pub fn starts_with_ignore_case(text: &str, word: &str) -> Option<usize> {
     Some(chars.next().map_or(text.len(), |(at, _)| at))
 }
 
-/// `re.search(r"\b(w1|w2|...)\b", text, re.IGNORECASE)`: the first whole-word match, as a byte range.
-pub fn find_word(text: &str, words: &[&str]) -> Option<(usize, usize)> {
-    let mut previous: Option<char> = None;
-    for (at, c) in text.char_indices() {
-        if is_word(c) && !previous.is_some_and(is_word) {
-            for word in words {
-                if let Some(length) = starts_with_ignore_case(&text[at..], word) {
-                    let end = at + length;
-                    if !text[end..].chars().next().is_some_and(is_word) {
-                        return Some((at, end));
-                    }
-                }
-            }
-        }
-        previous = Some(c);
-    }
-    None
-}
-
 /// A list as pydantic words it: `a, b or c`.
 pub fn or_list(items: &[String]) -> String {
     match items.split_last() {
@@ -241,8 +222,6 @@ mod tests {
         assert_eq!(quote("p@ss w\"ord"), "p%40ss%20w%22ord");
         assert_eq!(quote_plus("p@ss w\"ord"), "p%40ss+w%22ord");
         assert_eq!(quote_path("/a b/c~"), "/a%20b/c~");
-        assert_eq!(find_word("Pause my subscription", &["subscription"]), Some((9, 21)));
-        assert_eq!(find_word("Pauses", &["pause"]), None);
         assert_eq!(prefix("\u{6771}\u{4eac}x", 2), "\u{6771}\u{4eac}");
     }
 }

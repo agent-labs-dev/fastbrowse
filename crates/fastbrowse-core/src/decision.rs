@@ -670,9 +670,9 @@ mod tests {
     #[test]
     fn a_callers_thresholds_stand_and_its_limits_are_bounded() {
         let mut given = Config::default();
-        given.thresholds.recover_below = 0.4;
+        given.thresholds.bot_check_above = 0.4;
         let fitted = DecisionProfile::unknown().fit(Some(given));
-        assert_eq!(fitted.thresholds.recover_below, 0.4);
+        assert_eq!(fitted.thresholds.bot_check_above, 0.4);
         assert_eq!(fitted.observation.group_size, 26);
     }
 }

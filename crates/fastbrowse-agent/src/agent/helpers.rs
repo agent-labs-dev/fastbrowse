@@ -1,34 +1,19 @@
-//! The loop's stateless helpers: judgements over the plan, the notes and a page that hold no state of their own.
+//! The loop's stateless helpers: judgements over the notes and a page that hold no state of their own.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use fastbrowse_core::decision::NoulQuestion;
 
 use fastbrowse_core::models::{Evidence, Operation, StepOutcome, UNTRUSTED};
-use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Dialog, Observation};
-use fastbrowse_core::py::dump::{Dump, include, to_value};
-use fastbrowse_core::py::json::{Style, dumps, write};
-use fastbrowse_core::py::{sha256_hex, text};
-use fastbrowse_core::safety::{irreversible_question, origin_of};
-use indexmap::IndexMap;
-use serde_json::{Value, json};
+use fastbrowse_core::py::json::dumps;
+use fastbrowse_core::py::text;
+use fastbrowse_core::safety::irreversible_question;
+use serde_json::json;
 use url::Url;
 
-use super::state::RunState;
-use crate::memory::{Notes, fact_id, unique};
-use crate::planner::{Plan, Requirement, RequirementKind};
+use crate::memory::{Notes, unique};
 use crate::policy::{Decision, HistoryEntry};
-
-/// Operations that do not act on the page: a read changes nothing, and DONE is judged again by the finish.
-pub(crate) fn not_acting(operation: Operation) -> bool {
-    matches!(operation, Operation::Read | Operation::Done)
-}
-
-/// Recovery can direct page operations without a control; directed DONE still requires verification.
-pub(crate) fn page_operation(operation: Operation) -> bool {
-    matches!(operation, Operation::Read | Operation::Scroll | Operation::ScrollUp | Operation::Back | Operation::Escape)
-}
 
 pub(crate) fn parse(url: &str) -> Option<Url> {
     Url::parse(url).ok()
@@ -54,17 +39,9 @@ pub(crate) fn netloc_of(url: &str) -> String {
     parse(url).map(|u| netloc(&u)).unwrap_or_default()
 }
 
-pub(crate) fn unread(plan: &Plan, notes: &Notes) -> bool {
-    // A plan can file a question under an action ("find the quote using the search form"), and a run that owes an
-    // answer with nothing read would hand the composer empty notes: one did, and ended complete on "".
-    let unresolved = notes.unresolved(plan).iter().any(|r| r.kind == RequirementKind::Information);
-    unresolved || (plan.page_answer_expected() && notes.facts().is_empty())
-}
-
-/// A fact's identity for progress: its source quote, where it was read and what it answers.
-pub(crate) type EvidenceKey = (String, Option<String>, String);
-
-pub(crate) fn answer_evidence(notes: &Notes, include_answer: bool) -> BTreeSet<EvidenceKey> {
+/// The sources the notes quote. A new summary over retained quotes is not a new source, so it cannot restore the budget
+/// for finding one.
+pub(crate) fn read_sources(notes: &Notes) -> BTreeSet<(String, Option<String>, String)> {
     let source = |evidence: &Evidence| -> String {
         let page = notes.captured_page(evidence);
         dumps(&json!({
@@ -76,78 +53,16 @@ pub(crate) fn answer_evidence(notes: &Notes, include_answer: bool) -> BTreeSet<E
             "page_title": page.map(|page| page.title.clone()),
         }))
     };
-    let known = notes.evidence();
-    // A new summary over retained quotes cannot restore the budget for finding missing source evidence.
-    if !include_answer {
-        let mut keys: BTreeSet<EvidenceKey> = known
-            .values()
-            .map(|evidence| (evidence.url.clone(), evidence.frame_id.clone(), source(evidence)))
-            .collect();
-        for fact in notes.facts() {
-            if fact.is_collection()
-                && fact.comparison.as_ref().is_some_and(|c| c.complete)
-                && notes.current(&fact_id(fact))
-            {
-                keys.insert((String::new(), None, fact.dump_json()));
-            }
-        }
-        return keys;
-    }
     notes
-        .facts()
-        .into_iter()
-        .map(|fact| {
-            let mut basis: Vec<String> = notes
-                .expand_evidence_ids(fact.basis.iter().map(String::as_str))
-                .iter()
-                .filter_map(|key| known.get(key))
-                .map(source)
-                .collect();
-            basis.sort();
-            let value = match &fact.evidence {
-                Some(evidence) => source(evidence),
-                None => fact.text.clone(),
-            };
-            (
-                fact.evidence.as_ref().map(|e| e.url.clone()).unwrap_or_default(),
-                fact.evidence.as_ref().and_then(|e| e.frame_id.clone()),
-                dumps(&json!({
-                    "value": value,
-                    "text": fact.text,
-                    "requirements": notes.fact_requirements(&fact_id(fact)),
-                    "comparison": fact.comparison.as_ref().map(Dump::dump),
-                    "basis": basis,
-                })),
-            )
-        })
+        .evidence()
+        .values()
+        .map(|evidence| (evidence.url.clone(), evidence.frame_id.clone(), source(evidence)))
         .collect()
-}
-
-/// Whether the plan only asks to find things, with nothing to do on the site.
-pub(crate) fn lookup(plan: &Plan) -> bool {
-    !plan.requirements.is_empty() && plan.requirements.iter().all(|r| r.kind == RequirementKind::Information)
 }
 
 /// Whether this page has anything on it for a run to act on or read.
 pub(crate) fn drew_something(observation: &Observation) -> bool {
     !observation.controls.is_empty() || !text::strip(&observation.viewport_text).is_empty()
-}
-
-pub(crate) fn read_exhausted(state: &RunState) -> String {
-    let missing: Vec<String> = state
-        .notes
-        .unresolved(state.plan())
-        .iter()
-        .filter(|r| r.kind == RequirementKind::Information)
-        .map(|r| format!("{}: {}", r.id, r.text))
-        .collect();
-    let asks = state.plan().requirements.iter().any(|r| r.kind == RequirementKind::Information);
-    match (missing.is_empty(), asks) {
-        // Jev picks DONE from this history, so a lookup whose notes cite every requirement is told so.
-        (true, true) => "Every information requirement has cited evidence.".to_string(),
-        (true, false) => format!("Still missing evidence for {}.", state.task),
-        (false, _) => format!("Still missing evidence for {}.", missing.join("; ")),
-    }
 }
 
 /// Name which one was chosen, not just what it read: a label alone cannot identify one of six identically labelled
@@ -157,82 +72,6 @@ pub(crate) fn describe(control: &Control) -> String {
         Some(context) if !context.is_empty() => format!("{} ({context})", control.label),
         _ => control.label.clone(),
     }
-}
-
-/// An address as origin and path: the query and fragment a site writes back do not make it another page.
-pub(crate) fn place(url: &str) -> (String, String) {
-    let path = path_of(url);
-    (origin_of(url), if path.is_empty() { "/".into() } else { path })
-}
-
-/// The next of a field's values in turn after those its fills have typed so far, in order, else the last.
-pub(crate) fn next_value(values: &[String], entries: &[HistoryEntry], label: Option<&str>) -> String {
-    let mut done = 0;
-    for entry in entries {
-        if entry.operation == Some(Operation::Fill)
-            && entry.outcome == StepOutcome::Executed
-            && entry.target.as_deref() == label
-            && done < values.len()
-            && entry.text.as_deref() == Some(values[done].as_str())
-        {
-            done += 1;
-        }
-    }
-    values[done.min(values.len() - 1)].clone()
-}
-
-/// Where the run began, then every address it has been on since, each once.
-pub(crate) fn visited(addresses: &IndexMap<String, ()>, redact: impl Fn(&str) -> String) -> Vec<String> {
-    unique(addresses.keys().map(|url| redact(url)))
-}
-
-pub(crate) fn recovery_text(value: &str) -> String {
-    text::split(value).collect::<Vec<&str>>().join(" ")
-}
-
-/// One bounded account for both models, without presenting a proposed subgoal as an executed action.
-pub(crate) fn recovery_memory(state: &RunState, limit: i64, redact: impl Fn(&str) -> String) -> String {
-    if state.recovery_log.is_empty() && state.recoveries == 0 {
-        return String::new();
-    }
-    // Redacted again on the way out: a secret resolved after a record was written is still blanked.
-    let mut lines = vec![format!("recovery {} of {limit} in this stall", state.recoveries)];
-    lines.extend(state.recovery_log.iter().cloned());
-    redact(&lines.join("\n"))
-}
-
-pub(crate) fn controls_text(observation: &Observation) -> String {
-    let listed: Vec<Value> = observation
-        .controls
-        .iter()
-        .enumerate()
-        .map(|(index, control)| {
-            let mut entry = serde_json::Map::new();
-            entry.insert("index".into(), index.into());
-            let fields = include(
-                to_value(control, true).unwrap_or(Value::Null),
-                &[
-                    "label",
-                    "context",
-                    "role",
-                    "value",
-                    "operations",
-                    "selected",
-                    "expanded",
-                    "required",
-                    "invalid",
-                    "input_type",
-                    "input_name",
-                    "autocomplete",
-                ],
-            );
-            if let Value::Object(fields) = fields {
-                entry.extend(fields);
-            }
-            Value::Object(entry)
-        })
-        .collect();
-    dumps(&Value::Array(listed))
 }
 
 /// A caller-supplied address as the link it stands for, so it meets the same gates a link on a page does.
@@ -253,19 +92,6 @@ pub(crate) fn decision_label(decision: &Decision) -> Option<String> {
     }
 }
 
-/// The reader's question. `began_at` is the run's first page, given once a list may run past one page.
-pub fn read_question(task: &str, wanted: &[Requirement], began_at: Option<&str>) -> String {
-    let lines: Vec<String> = wanted.iter().map(|r| format!("- {}", r.text)).collect();
-    // Unresolved requirements may refer to an earlier one; keep the task's constraints in every read.
-    let question = format!("{task}\n\nRequirements still to evidence:\n{}", lines.join("\n"));
-    match began_at {
-        None => question,
-        Some(began) => format!(
-            "{question}\n\nThe task's \"this page\" is {began}, where the run began, and \"the next page\" is the one after it. A task that names how many pages it covers ends at the last one it names."
-        ),
-    }
-}
-
 pub(crate) fn dialog_question(task: &str, dialog: Option<&Dialog>) -> Option<NoulQuestion> {
     let dialog = dialog?;
     if !["confirm", "prompt", "beforeunload"].contains(&dialog.kind.as_str()) {
@@ -280,12 +106,6 @@ pub(crate) fn dialog_question(task: &str, dialog: Option<&Dialog>) -> Option<Nou
         Some("Acceptance commits a destructive or externally visible change."),
         Some("Acceptance only navigates, reveals information or edits a reversible draft."),
     ))
-}
-
-pub(crate) fn unread_transaction(state: &RunState) -> bool {
-    // Possible submissions also include searches and filters. Only a requested state change needs a receipt read.
-    state.ready_plan.as_ref().is_some_and(|plan| plan.requirements.iter().any(|r| r.kind == RequirementKind::Action))
-        && state.transaction_candidates.iter().any(|c| !c.outcome_read && c.committing != Some(false))
 }
 
 /// The fact, when there is one, that fields on this page hold a value the run typed with no later action that could
@@ -313,101 +133,6 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
             fields.join(", ")
         )
     })
-}
-
-/// The action recovery named, taken only when Jev is unsure or escalates and the control still offers it. Jev sees
-/// recovery's subgoal either way, so a pick it is sure of spends the direction unused.
-pub(crate) fn follow_recovery(
-    state: &mut RunState,
-    observation: &Observation,
-    decision: &Decision,
-    uncertain: bool,
-) -> Option<Decision> {
-    let directed = state.directed.take()?;
-    if !uncertain && decision.operation != Operation::Escalate {
-        return None;
-    }
-    let (operation, control_id) = directed;
-    if operation == Operation::Navigate {
-        let control_id = control_id?;
-        if observation.dialog.is_some()
-            || (!navigation_urls(
-                &state.task,
-                &observation.url,
-                state.caller_start.as_deref(),
-                state.start_landing_url.as_deref(),
-                true,
-            )
-            .contains(&control_id)
-                && state.reload_target(&observation.url).as_ref() != Some(&control_id))
-        {
-            return None;
-        }
-        return Some(Decision { operation, target: None, url: Some(control_id), directed: true, ..decision.clone() });
-    }
-    // Recovery names one control and a drag needs two, so the drop target has to be one Jev chose for a drag.
-    if operation == Operation::Drag && decision.operation != Operation::Drag {
-        return None;
-    }
-    let Some(control_id) = control_id else {
-        return Some(Decision { operation, target: None, directed: true, ..decision.clone() });
-    };
-    let target = observation.controls.iter().find(|c| c.id == control_id && c.operations.contains(&operation))?;
-    Some(Decision { operation, target: Some(target.clone()), directed: true, ..decision.clone() })
-}
-
-pub(crate) fn partition_proof(plan: &Plan, notes: &Notes, invented: &HashSet<String>) -> String {
-    let places: HashSet<(String, String)> = notes.evidence().values().map(|source| place(&source.url)).collect();
-    let facts: Vec<Value> = notes
-        .facts()
-        .into_iter()
-        .filter_map(|fact| {
-            let evidence = fact.evidence.as_ref()?;
-            Some(json!({
-                "evidence": evidence.dump(),
-                "current": notes.current(&fact_id(fact)),
-                "page": notes.captured_page(evidence).map(Dump::dump),
-            }))
-        })
-        .collect();
-    let support: serde_json::Map<String, Value> = plan
-        .requirements
-        .iter()
-        .map(|requirement| {
-            let mut ids: Vec<String> =
-                notes.supporting_evidence(&requirement.id).iter().map(crate::memory::evidence_id).collect();
-            ids.sort();
-            (requirement.id.clone(), json!(ids))
-        })
-        .collect();
-    let mut inactive: Vec<String> = notes.facts().into_iter().map(fact_id).filter(|key| !notes.current(key)).collect();
-    inactive.sort();
-    let collections: BTreeSet<String> = notes
-        .facts()
-        .into_iter()
-        .filter(|fact| fact.tally.is_some() || fact.comparison.is_some())
-        .map(|fact| {
-            let mut entry = serde_json::Map::new();
-            entry.insert("tally".into(), fact.tally.as_ref().map_or(Value::Null, Dump::dump));
-            entry.insert("comparison".into(), fact.comparison.as_ref().map_or(Value::Null, Dump::dump));
-            if fact.is_collection() {
-                entry.insert("scope".into(), json!(fact.scope));
-            }
-            entry.insert("requirements".into(), json!(notes.fact_requirements(&fact_id(fact))));
-            write(&Value::Object(entry), Style::DUMPS.sorted())
-        })
-        .collect();
-    let mut guessed: Vec<&String> = invented.iter().filter(|url| places.contains(&place(url))).collect();
-    guessed.sort();
-    let proof = json!({
-        "plan": plan.dump(),
-        "facts": facts,
-        "support": support,
-        "inactive": inactive,
-        "collections": collections.into_iter().collect::<Vec<_>>(),
-        "invented": guessed,
-    });
-    sha256_hex(write(&proof, Style::DUMPS.sorted()).as_bytes())
 }
 
 /// The prose between an answer's links, with each link's destination between them.

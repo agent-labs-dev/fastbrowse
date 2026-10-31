@@ -16,9 +16,8 @@ What is measured per task: spawn to the `initialize` reply (startup), spawn to t
 process's user and system CPU and peak RSS (from `wait4`, so only that process and what it waited for), and the
 step count. The result is graded by the suite's own checks against what the site recorded.
 
-A live recording is not enough for a replay at zero latency. The agent asks for its plan while the browser starts
-and takes its first step without it if it has not arrived (`agent.py`, `if state.planning.done()`), so the first
-Jev state carries no requirements when the plan took three seconds and carries them when it took none. `fill`
+A replay can ask what its recording did not: a page redraw can reorder a step, so a question comes out differently.
+`fill`
 replays what the cassette has and sends only the misses upstream, pass after pass, until a run at the chosen
 latency asks nothing new.
 """

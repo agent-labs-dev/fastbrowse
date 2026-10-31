@@ -54,12 +54,11 @@ type BudgetStop struct {
 
 type Citation struct {
 	// The number used by this fact's links in the answer, stable within a run.
-	ID            int64   `json:"id"`
-	Text          string  `json:"text"`
-	RequirementID *string `json:"requirement_id"`
-	URL           string  `json:"url"`
-	Quote         string  `json:"quote"`
-	DeepLink      string  `json:"deep_link"`
+	ID       int64  `json:"id"`
+	Text     string `json:"text"`
+	URL      string `json:"url"`
+	Quote    string `json:"quote"`
+	DeepLink string `json:"deep_link"`
 }
 
 type CostBasis string
@@ -96,13 +95,11 @@ type CostLine struct {
 	Seconds *float64 `json:"seconds"`
 }
 
-// Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
-// next page of a list or DONE once a lookup is answered.
+// Who chose a step: Jev, or a rule in code, such as the next page of a list.
 type Decider string
 
 const (
 	DeciderJev  Decider = "jev"
-	DeciderLLM  Decider = "llm"
 	DeciderCode Decider = "code"
 )
 
@@ -154,7 +151,6 @@ type FactReader string
 
 const (
 	FactReaderJevChoice FactReader = "jev_choice"
-	FactReaderLLM       FactReader = "llm"
 )
 
 // The client's side of the handshake.
@@ -173,12 +169,8 @@ type InitializeResult struct {
 type LLMPurpose string
 
 const (
-	LLMPurposePlan      LLMPurpose = "plan"
-	LLMPurposeRead      LLMPurpose = "read"
-	LLMPurposeFieldText LLMPurpose = "field_text"
-	LLMPurposeRecover   LLMPurpose = "recover"
-	LLMPurposeCompose   LLMPurpose = "compose"
-	LLMPurposeShortcut  LLMPurpose = "shortcut"
+	LLMPurposeStart   LLMPurpose = "start"
+	LLMPurposeCompose LLMPurpose = "compose"
 )
 
 type Limits struct {
@@ -233,7 +225,6 @@ const (
 	OperationDialog    Operation = "dialog"
 	OperationRead      Operation = "read"
 	OperationDone      Operation = "done"
-	OperationEscalate  Operation = "escalate"
 	OperationNavigate  Operation = "navigate"
 )
 
@@ -316,7 +307,7 @@ type RunParams struct {
 	CloudTimeoutMinutes *int64            `json:"cloud_timeout_minutes,omitempty"`
 	AllowedOrigins      []string          `json:"allowed_origins,omitempty"`
 	Fetch               bool              `json:"fetch,omitempty"`
-	FetchFirst          bool              `json:"fetch_first,omitempty"`
+	Browser             bool              `json:"browser,omitempty"`
 }
 
 type RunResult struct {
@@ -422,22 +413,12 @@ type StepEvent struct {
 }
 
 type StepFact struct {
-	Text          string  `json:"text"`
-	RequirementID *string `json:"requirement_id"`
+	Text string `json:"text"`
 	// None for a count, total or winner derived from other facts rather than read from the page.
 	Quote    *string    `json:"quote"`
 	URL      *string    `json:"url"`
 	Reader   FactReader `json:"reader"`
 	DeepLink *string    `json:"deep_link"`
-}
-
-type StepFallback struct {
-	// The reason the run stopped following Jev, as recovery was told it.
-	Reason string `json:"reason"`
-	// Jev's certainty on the step it gave up, on the weakest link of its choices.
-	Confidence float64 `json:"confidence"`
-	// The control Jev chose, by its label, when it chose one.
-	Target *string `json:"target"`
 }
 
 type StepOutcome string
@@ -461,11 +442,9 @@ type StepResult struct {
 	Note       *string  `json:"note"`
 	// Facts added to the notes by this step, with resolved secrets redacted.
 	Facts []StepFact `json:"facts"`
-	// Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
+	// Whether the page's fingerprint changed; None for steps that do not act (read).
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
-	// The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
-	Fallback *StepFallback `json:"fallback,omitempty"`
 	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
 	Choices []StepChoice `json:"choices,omitempty"`
 }

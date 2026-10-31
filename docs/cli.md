@@ -20,7 +20,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so sign-ins persist (implies `--local`) |
 | `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--fetch-first` | read over HTTP, and start a browser only if the task needs one |
+| `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
 | `--cdp-url URL`, `--cdp-port PORT` | drive a browser already running, at a `ws://` URL or on `127.0.0.1:PORT` |
 | `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab |
 | `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
@@ -134,13 +134,13 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 
 | Status | Exit | Meaning |
 |:--|--:|:--|
-| `complete` | 0 | every information requirement is backed by a quote, and every action that changes the site is confirmed on the page |
-| `unverified` | 10 | it believes it finished but could not back every claim |
+| `complete` | 0 | Jev judged the task done |
+| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
 | `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
-| `stuck` | 9 | recovery ran out without reaching a page state the run had not seen |
+| `stuck` | 9 | the stall budget ran out without reaching a page state the run had not seen |
 | `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
 | `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
 | `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |

@@ -18,17 +18,12 @@ The run loop is [crates/fastbrowse-agent/src/agent](../../crates/fastbrowse-agen
 - **[fastbrowse-browser](../../crates/fastbrowse-browser/src)** indexes the page. [browser/snapshot.js](../../crates/fastbrowse-browser/js/snapshot.js) runs in the page and returns the controls
   with what tells them apart (role, label, the card or row that disambiguates twins, whether a field blocks
   its form); [browser/capture.js](../../crates/fastbrowse-browser/js/capture.js) returns the text as source blocks with stable spans, so a reader can cite them.
-- **[policy.rs](../../crates/fastbrowse-agent/src/policy.rs)** batches operation and target choices, read assessment and applicable wall checks.
+- **[policy.rs](../../crates/fastbrowse-agent/src/policy.rs)** batches operation and target choices and applicable wall checks.
   Large target sets use a further choice inside a group. [decision.rs](../../crates/fastbrowse-core/src/decision.rs) is the client's shape;
   [system_one.rs](../../crates/fastbrowse-clients/src/system_one.rs) serves the System One API: OpenRouter when keyed, the recommended route for Jev and the LLM, otherwise direct TypeSafe, or Telnyx, Ollama or another host when chosen; [vercel.rs](../../crates/fastbrowse-clients/src/vercel.rs) serves the
   Vercel AI Gateway, which is also the Jev primary when no other Jev key is set. [environment.rs](../../crates/fastbrowse-clients/src/environment.rs) selects routes; [failover.rs](../../crates/fastbrowse-clients/src/failover.rs) switches after retries.
-- **[retrieval](../../crates/fastbrowse-agent/src/retrieval)** routes short facts through Jev and other reads through the LLM. A read claim cites source
-  blocks and code copies its quote from them; a count the page does not state rests on its basis facts; [memory.rs](../../crates/fastbrowse-agent/src/memory.rs) holds notes with citation ids, and [citations.rs](../../crates/fastbrowse-core/src/citations.rs) builds deep links.
-- **[verification](../../crates/fastbrowse-agent/src/verification)** decides whether a run may finish: Jev's done check against the plan's requirements,
-  then the LLM verifier for what Jev doubted and for any requirement evidenced on an address the run guessed
-  from the task, then the answer: code checks each claim cites a current quote and each cited count or comparison
-  rests on a list read to its end, and Jev checks each claim against its quotes and the page's other current quotes,
-  and that the answer states each answer check and information requirement.
+- **[retrieval](../../crates/fastbrowse-agent/src/retrieval)** is Jev's read: one choice over quoted spans cut from the capture, and a composed answer the LLM writes from the notes when Jev asks for one. [memory.rs](../../crates/fastbrowse-agent/src/memory.rs) holds notes with citation ids, and [citations.rs](../../crates/fastbrowse-core/src/citations.rs) builds deep links.
+- **[verification](../../crates/fastbrowse-agent/src/verification)** fills a caller's `output_schema` from spans Jev picks. A run ends when Jev picks DONE.
 - **[safety.rs](../../crates/fastbrowse-core/src/safety.rs)** owns secrets and irreversible actions. **[effects.rs](../../crates/fastbrowse-core/src/effects.rs)** says what an action actually did,
   which is how a no-op is told from progress. **[telemetry.rs](../../crates/fastbrowse-core/src/telemetry.rs)** is the ledger: steps, calls, dollars.
 - **[cli.rs](../../crates/fastbrowse-cli/src/cli.rs)**, **[mcp](../../crates/fastbrowse-cli/src/mcp)**, **[serve.rs](../../crates/fastbrowse-cli/src/serve.rs)** and **`run_task`** are the four entry points; [options.rs](../../crates/fastbrowse-cli/src/options.rs) holds the rules

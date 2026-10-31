@@ -81,8 +81,8 @@ this policy.
 A click the hit test refuses, because another element is topmost at every point of the control it tried,
 is put to Jev's [Box](https://docs.typesafe.ai/primitives/box) on the same route. Jev is shown the viewport and
 the control, and asked whether the control is shown with nothing drawn over it, and where it is. Box always
-answers with a box, so the click lands at the box's centre only when both answers reach the bar an action's
-target is held to (`recover_below`); otherwise the click stays refused. The step's irreversible-action check
+answers with a box, so the click lands at the box's centre only when both answers clear even odds; otherwise the
+click stays refused. The step's irreversible-action check
 runs on that click as on any other.
 
 ## Provider failover
@@ -122,11 +122,8 @@ summarises how concentrated the distribution is; it is not the chosen option's p
 ([Confidence](https://docs.typesafe.ai/confidence)). Noul has no separate confidence: its probability is
 the answer.
 
-Every threshold in `crates/fastbrowse-core/src/config.rs` (`recover_below` 0.55, `login_required_above` 0.70)
-and in `crates/fastbrowse-agent/src/retrieval/` (the 0.90 read bar, which a chosen value, an absent answer, a
-page adding no new evidence and a counted list covering a requirement each reach before it stands; a record on a later page of a filtered count or comparison matches from
-0.70 and is rejected at 0.20 or below, and a list is taken to be needed through its last page from 0.70) is **ours**. None is a Typesafe recommendation. Each is set per
-question on the evals.
+Every threshold in `crates/fastbrowse-core/src/config.rs` (such as `login_required_above` 0.70) is **ours**. None is a
+Typesafe recommendation. Each is set per question on the evals.
 
 ## How the questions are written
 
@@ -136,15 +133,13 @@ and where fastbrowse follows it:
 
 - **Narrow, explicit judgments, with true/false descriptions that match the instruction.** Every Noul
   question in `crates/fastbrowse-agent/src/verification/` and `crates/fastbrowse-core/src/safety.rs` carries both descriptions.
-- **Concrete option boundaries, plus an escape option when coverage is incomplete.** The short-fact read
-  offers `synthesis` for the LLM reader and `absent` for no relevant evidence. Scalar field extraction offers
-  `none`, and the policy offers `escalate`. Repeated short values from the same page and frame share one option
+- **Concrete option boundaries, plus an escape option when coverage is incomplete.** The read offers
+  `synthesis` for an answer composed from more than one fact and `absent` for no relevant evidence. Scalar field
+  extraction offers `none`. Repeated short values from the same page and frame share one option
   with every source context, so identical answers do not compete as separate choices.
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
-  operation and target choices, read assessment and applicable sign-in and bot checks. Grouped targets need
-  a second choice; code-selected pagination needs no policy call. The done check batches one
-  question per requirement, information and action alike, and whether a draft needs rewriting.
+  operation and target choices and applicable sign-in and bot checks. Grouped targets need a second choice.
 - **Filter before choosing on a dense page.** The Jev 1.13 jaggedness notes say accuracy falls with a large
   state full of irrelevant detail, and suggest a Noul to filter for relevance. When a page has more controls than
   one group step can offer (`group_size` times the model's options per Choice) or its request does not fit Jev's

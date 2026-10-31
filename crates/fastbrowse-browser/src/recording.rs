@@ -471,12 +471,10 @@ fn describe(step: &StepResult) -> String {
     let target = step.target.as_ref().map(|t| format!(" {t}")).unwrap_or_default();
     let by = match step.decided_by {
         Decider::Jev => "picked by Jev",
-        Decider::Llm => "picked by the LLM",
         Decider::Code => "picked by code",
     };
     match step.operation {
         Operation::Read => format!("read the page \u{b7} {by}"),
-        Operation::Escalate => "ask the planner".into(),
         Operation::Done => "check the answer".into(),
         operation => format!("{}{target} \u{b7} {by}", operation.as_str().replace('_', " ")),
     }
@@ -565,7 +563,6 @@ mod tests {
             facts: vec![],
             page_changed: None,
             duration_ms: 10,
-            fallback: None,
             choices: Vec::new(),
         };
         assert_eq!(describe(&step), "switch tab Docs \u{b7} picked by Jev");

@@ -584,7 +584,6 @@ mod tests {
                 Field::default("records", Ty::list(cite()), json!([])),
                 Field::default("orders_list", Ty::optional(cite()), Value::Null),
                 Field::required("text", Ty::Str),
-                Field::default("requirement_id", Ty::optional(Ty::Str), Value::Null),
             ],
         )
         .ty();
@@ -628,7 +627,7 @@ mod tests {
         assert_eq!(
             checked.unwrap(),
             json!({"claims": [{"cite": null, "excerpt": null, "draws_on": [], "records": [], "orders_list": null,
-                "text": "t", "requirement_id": null}], "answered": true})
+                "text": "t"}], "answered": true})
         );
     }
 

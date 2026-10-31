@@ -35,8 +35,6 @@ public enum Operation {
     READ,
     @JsonProperty("done")
     DONE,
-    @JsonProperty("escalate")
-    ESCALATE,
     @JsonProperty("navigate")
     NAVIGATE
 }

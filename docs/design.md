@@ -2,9 +2,9 @@
 
 fastbrowse splits a browser agent into three owners:
 
-- **Jev picks.** A batched request chooses an operation and its possible targets from indexed controls. It also judges whether unread evidence should be preserved before interaction, and checks sign-in and bot walls on fresh pages. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. On a page with more quotable spans than one choice can offer, the same kind of check narrows the passages before Jev picks a short fact. Large target sets use a second choice within the selected group. Code can follow a list's next-page link without an action-choice call.
-- **An LLM reads and writes.** Proposing a direct address for the task while the start page loads, planning checkable requirements from the task alone, reading page content for answers when Jev cannot pick a short fact from quoted spans, writing non-secret field text, recovering when Jev stays unsure, composing the final answer.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, budgets, and the definition of success: only `COMPLETE`, which requires Jev to judge every requirement met.
+- **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
+- **An LLM helps at the two ends.** With no start page given, it proposes the first address from the task. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose answers Jev can quote calls no LLM.
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled ends `unverified`.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
@@ -15,8 +15,7 @@ the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fa
 Jev judges every model-selected click, including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
-for it; otherwise the run stops at `needs_confirmation`. A pick under `Thresholds.recover_below` never
-reaches this gate, since it goes to recovery before it acts.
+for it; otherwise the run stops at `needs_confirmation`.
 
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
@@ -28,89 +27,46 @@ that every externally visible change is detected.
 
 The operation choice can open another literal HTTP(S) address from the caller's task. The address is a
 closed choice, revalidated before dispatch, and uses the browser's origin grant and live access checks.
-Page instructions cannot add addresses to that choice. Recovery can select the same supplied addresses;
-addresses inferred by the startup shortcut retain their separate verification rules.
+Page instructions cannot add addresses to that choice.
 When a site failure that can clear stands on the current page (an HTTP 408, 419, 429 or 5xx status, an address
 the browser could not open, or a page Jev judges to report that the site failed), the page's own address joins
 that choice, so Jev can reload it. Code states the failure and how many steps it has stood in the step state's
-`page_facts` and to the done check, where an answer drawn from it is not the task's; Jev picks the reload, a retry
-control, or another route. A run whose recovery runs out on such a failure ends `unavailable` with its address.
+`page_facts`, with the reminder that a failure is not the task's answer; Jev picks the reload, a retry control, or
+another route. A run whose stall budget runs out on such a failure ends `unavailable` with its address.
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
 ## Reading and citations
 
-Jev's read assessment is the READ decision: when Jev judges the page evidence the notes do not yet preserve,
-the step reads it, even over a DONE, because the answer is written from the notes; only ESCALATE stands. Code
-does not force a read. It tells Jev, in the step state's `page_facts`, when a page was read and has not changed
-since, when it changed after it was last read, when a list page has not been read, when a field still holds a value the
-run typed and no action has sent, and when an action that may have committed a change has not had its page read,
-and the done check is told of the unsent value too. Jev is asked the read assessment on every page it can read
-except one read and unchanged, whose evidence the notes already hold, for evidence toward an unanswered
-requirement and for a value a remaining action needs, such as a code shown on another page. Scrolling does not
-change a page: a read takes in all of it. Navigation notes write each source URL once and refer to it from later
-claims. Every READ Jev picks goes to the reader, including a repeat of content already read; a read that adds no
-evidence counts toward the stall rule like any other step that moved nothing. The reader is sent
-the tally, ranking and paging guidance only when the capture holds records, the plan counts them, or a pager
-is in play. Identical relevance questions share one score within a pass, while controls remain separate action
-targets.
+READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task
+asks to be told that the notes do not hold yet; when it does, and Jev picked another operation, the run reads first,
+because an order total is gone once the order is placed. The step state's `page_facts` tell Jev when a page was read
+and has not changed since, and when it changed after it was last read. Every READ Jev picks goes to the reader. A read
+that adds no new source quote counts toward the stall rule like any other step that moved nothing.
+
+Fetch reads the same way: by default a run reads pages over HTTP, and a step that needs a browser starts one and runs
+the task again on it. `fetch` forbids the browser, and `browser` starts one from the first step.
 
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
-so choosing the next page is an ordinary step. When a run that reads a whole list lands on a later page, Jev decides
-whether the page belongs to that list and whether the list goes on; the page's records join the notes when it does,
-and a page off the list gets an ordinary read.
+so choosing the next page is an ordinary step.
 
-For a bounded set of short quoted spans, Jev chooses a scalar fact, requests synthesis, or judges the
-requirement absent from the page. Identical values from the same page and frame share one choice with all
-their source contexts. A selected repeated value retains every span through `Fact.basis`. Uncertain choices,
-comparisons, partial evidence and paginated lists reach the LLM reader. `FactReader` records `jev_choice` or
-`llm`. Neither reader writes page text: Jev picks a value from spans code cut from the capture, and the LLM
-reader cites the capture's source blocks by id (one block, or
-consecutive blocks of one frame from the chunk it was shown). Code copies the quote from those blocks, so a
-table's escaped pipe or a record read as two lines cannot drop a fact, and a claim citing a block it was
-not shown is rejected. A prose claim can name a literal excerpt within its cited blocks. Code requires a
-unique match in the offered chunk and copies the original span, retaining its source hash and offsets.
-Missing or ambiguous excerpts are rejected. Complete record citations remain unchanged.
+A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
+answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
+relevance pass narrows them first. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
+writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
+with all their source contexts. When Jev says the answer must be composed, every candidate is kept as a fact and the
+answer is written once, when the run ends.
 
-When quotes from the same address are already in notes, the short-fact batch can also ask whether the full
-page adds relevant evidence. Literal diffs against matching source blocks help distinguish changed values
-from cosmetic changes. A negative answer with at least 90% probability skips the read without marking any
-requirement evidenced.
-Missing or uncertain answers use the normal readers. This check is omitted when the full comparison does
-not fit the input budget or the read needs pagination, continuation or incomplete-comparison context.
-
-A filtered count or a comparison over a list that runs to further pages is read by the LLM on its first page,
-which cites the matching records, and for a comparison the delimiters around each record's label and value.
-The cited records name the list and say whether the count is grouped. When the reader says the list goes on, Jev
-is asked, with the task, whether the requirement needs every page of the list or only pages the task names; the
-reader does not decide this. From a yes at 0.70 or above, code pages the list itself and each later page of the
-same shape is put to Jev in one request, a yes or no for each record of the one run of blocks shaped like those
-records, matched against the requirement's own text. Code counts the matches, or ranks the kept records by the
-comparison's delimiters, and ends the list on the page with no next-page control. A record Jev judges between 0.20 and 0.70
-is sent to the LLM on its own, with only the records Jev was unsure of; a page whose title or record shape
-differs goes to the LLM reader.
-
-For a count, total or superlative, the reader cites every compared record on every page. Its conclusion
-lists those facts in `draws_on`, using evidence ids from collected notes or `claim:N` for earlier claims in
-the same response, indexed from zero. Code resolves these references and drops unknown ones with a debug
-log. `Fact.basis` keeps the resolved ids, including when a span is reused. A conclusion the page does not
-state (a count it never prints) cites no blocks: it is a derived fact with no evidence of its own, keyed
-`derived:<hash>`, and it is judged and linked through its basis records.
-
-Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited
-facts and text-fragment deep links; unused facts have no citation. An answer citing an unknown reference
-fails the claim check, and the run falls back to an answer drafted from verified facts. Jev checks the answer's claims against their quotes before completion; a derived fact contributes its basis records, never its own conclusion.
-Both drafted and composed claims include the transitive basis of each cited fact, deduplicated in read order.
-The claim check, numbered links and citation records all use those expanded ids.
+Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
+text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes, and a claim
+citing nothing the notes hold is dropped, so every claim stands on its quotes. Otherwise the answer is drafted from
+the facts Jev picked.
 
 ## Prompt limits and progress
 
-`Config.observation` names the group size for group-then-element choices. `Config.tokens` names the input
-budgets and reader/composer output limits. A step request shows Jev the whole viewport, working notes and
-history; one that does not fit Jev's limit loses its oldest actions first and then has its long texts cut, each
-cut saying what it left out. Verdict prompts retain all requirement evidence or stop at `observation_limit`. The notes
-budget keeps a retained fact's basis with it; requirement evidence includes its transitive basis. The Jev
-completion check reduces page text first to make room for that evidence. Cut page text carries a marker
+`Config.observation` names the group size for group-then-element choices. `Config.tokens` names the input budgets. A
+step request shows Jev the whole viewport, working notes and history; one that does not fit Jev's limit loses its
+oldest actions first and then has its long texts cut, each cut saying what it left out. Cut page text carries a marker
 when there is room for one; an excerpt too small to carry the marker is empty.
 
 A money or time limit keeps collected facts and their citations in a partial answer. The status stays
@@ -120,18 +76,13 @@ cancellation and finish their cleanup. Returning while a paid request still runs
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a step that
-changes nothing, a read that adds nothing, a refused DONE, or a return to a page state already seen with
-nothing read since is no progress, and `unchanged_actions` such steps in a row go to recovery. A page state
-not seen before or a read that adds evidence resets the count and renews the `max_recoveries` budget.
-Recovery asks Jev first: its state names what failed, and the stalled action is left out of its options,
-which are the page's controls plus back, scroll, escape and the caller's start page. A pick at
-`recover_below` or above is the next decision; only when Jev stays unsure does the LLM recover. Its
-subgoal reaches Jev with the next step on that page, asked with the same problem and with the stalled action
-still left out, so a refused DONE cannot undo it; the action recovery names is taken only when Jev is unsure
-again or escalates. When the LLM gives up, the run stops with its diagnosis as the status, and a sign-in it names
-ends `needs_login` only when Jev agrees the page is a wall. An HTTP error page goes to Jev like any other, with its status among the step's page facts, so Jev
-reloads it when the status can clear, goes back, picks another link or escalates; code only waits out a 403,
-429 or 503 once per document.
+changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no
+progress, and `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
+evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
+action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends `stuck`,
+or as the site failure standing on the page. An HTTP error page goes to Jev like any other, with its status among the
+step's page facts, so Jev reloads it when the status can clear, goes back or picks another link; code only waits out a
+403, 429 or 503 once per document.
 
 ## Run events and images
 
@@ -139,8 +90,7 @@ reloads it when the status can clear, goes back, picks another link or escalates
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
 `Config(step_frames=True)` adds a PNG after each step unless a fresh observation shows a resolved secret.
 `Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
-out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too). The list is taken by the next step recorded, so
-when recovery or the LLM overrides an unsure decision, the step it records still shows what Jev had.
+out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too).
 
 `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after the async handler returns;
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from

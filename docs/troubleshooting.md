@@ -20,7 +20,7 @@ run also writes an answer from them, marked `Answer (unverified)`, when the task
   `sign-in required at <origin>`.
 - The run reached a field that takes a secret, such as a password, and none is stored. The error is
   `'<field>' wants a secret and none is stored`.
-- The site answered HTTP 401 and recovery found no way on. The error is
+- The site answered HTTP 401 and Jev found no way on. The error is
   `Could not complete the task after HTTP 401 at <url> in this browser session; the cause is unknown.`
 
 `RunResult.wall` says what the wall asked for, so a caller can route it without parsing the error: `kind` is
@@ -62,7 +62,7 @@ changed during the run, ends `needs_login` too when the field takes a credential
   its script runs, and stops only when the page stays put. The error is `bot check at <origin>; it is not a
   sign-in and no credential passes it. Retry using an attached local browser or choose another source for
   this research.`
-- The site answered HTTP 403 and recovery found no way on. The error is
+- The site answered HTTP 403 and Jev found no way on. The error is
   `Could not complete the task after HTTP 403 at <url> in this browser session; the cause is unknown.`
 
 A bot check can block a cloud browser before any task step runs. Credentials do not resolve a CAPTCHA, so
@@ -89,11 +89,11 @@ be fine, and the same run later may pass.
   retryable status.
 - Before the first step, the start page never loaded, or Chrome reported a dropped, refused or empty
   connection. A name that does not resolve is not counted here, since it can be a mistyped address.
-- The site answered HTTP 408, 419, 429 or a 5xx status, and recovery found no way on.
+- The site answered HTTP 408, 419, 429 or a 5xx status, and Jev found no way on.
 - Mid-run, the browser could not open an address the run chose, after its own retries:
   `Could not complete the task after opening <url> failed in this browser session: <error>.`
 - Jev judged that the page reports the site failed, such as an error shown in place of search results, a
-  maintenance notice or a load that never finished, and reloading and recovery found no way past it:
+  maintenance notice or a load that never finished, and reloading found no way past it:
   `Could not complete the task after the page at <url> reported that the site failed to deliver what was asked.`
 - A browser command went unanswered. One that stays unanswered for 120 seconds ends the run, even if the
   browser still answers health checks, and the error says the page did not answer or the browser stopped
@@ -163,12 +163,11 @@ field-writing generation.
 
 ## stuck (exit 9)
 
-**What it means.** Recovery ran out without reaching a page state the run had not seen.
+**What it means.** The stall budget ran out without reaching a page state the run had not seen.
 
 **Common causes.**
 
-- Recovery found no way forward, and Jev, given its subgoal, found none before `max_recoveries` ran out.
-  `error` holds recovery's diagnosis.
+- Jev, told each time what failed, found no way forward before `max_recoveries` ran out.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
@@ -180,15 +179,12 @@ the start page, the status and the `--json` step trace, as [CONTRIBUTING.md](../
 
 ## unverified (exit 10)
 
-**What it means.** The run believes it finished, but could not back every requirement or claim with a quote
-from the page. Treat the answer as unconfirmed.
+**What it means.** Jev finished, but the data the run was asked for could not be filled from the page. Treat the
+result as unconfirmed.
 
 **Common causes.**
 
-- A claim in the answer, or a field of the requested data, was not backed by the page.
-- The checks rejected the finish, and recovery could not gather the missing answer outputs.
-- The task asked for a screenshot, and the run could not hand it over: a secret on screen, a dialog or a
-  timeout can withhold it.
+- A field of the requested data was not backed by the page.
 - The output schema has a field the run cannot fill. A run fills a flat object of required string, number,
   integer and boolean fields; with any other field it ends `unverified` with no data.
 
@@ -203,8 +199,7 @@ send, because the run was not authorized to take it, or was authorized but Jev j
 for it. Nothing was committed by that action.
 
 **Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
-`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step. An uncertain pick of
-such an action goes to recovery instead of stopping here.
+`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step.
 
 **Next step.** Confirm the action is what you want, then run again with authorization:
 
@@ -218,15 +213,12 @@ authorize it.
 
 ## observation_limit (exit 11)
 
-**What it means.** The page, or the evidence the run must report, cannot fit the configured prompt budget.
+**What it means.** The page cannot fit the configured prompt budget.
 
 **Common causes.**
 
 - A page whose state exceeds Jev's input limits even with no controls offered:
   `the state on <url> exceeds Jev's input limits with no controls`.
-- Requirement evidence that cannot fit the notes budget without losing facts:
-  `Requirement evidence exceeds the <n> character notes budget`, or
-  `The final page cannot fit every earlier record in its collected evidence`.
 
 **Next step.** Try a `--start` URL closer to the goal, or a narrower task that needs fewer facts in one
 answer. The embedding API takes the budgets in `Config` (`observation` and `tokens`) if you need to
@@ -241,7 +233,7 @@ limit. It stops rather than guess.
 
 - The run opened no page: `the task names no page to start from, and none was given`.
 - A field needs a value the task never states. The run first tries to go on without it, then stops with
-  `'<field>' needs a value the task does not give`, or with recovery's diagnosis.
+  `'<field>' needs a value the task does not give`.
 - The page asks for a file and the run has none: `the page asks for a file and none was provided`.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret

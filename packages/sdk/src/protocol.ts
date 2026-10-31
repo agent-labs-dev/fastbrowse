@@ -4,18 +4,17 @@
 export type ArtifactKind = 'download';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
-export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'compose' | 'shortcut';
+export type LLMPurpose = 'start' | 'compose';
 /**
- * Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
- * next page of a list or DONE once a lookup is answered.
+ * Who chose a step: Jev, or a rule in code, such as the next page of a list.
  */
-export type Decider = 'jev' | 'llm' | 'code';
+export type Decider = 'jev' | 'code';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
  */
 export type ErrorCode = -32700 | -32600 | -32601 | -32602 | -32603 | -32001 | -32002 | -32003 | -32004;
 export type RequestId = number | string;
-export type FactReader = 'jev_choice' | 'llm';
+export type FactReader = 'jev_choice';
 export type JsonValue = unknown;
 /**
  * What the server sends without being asked.
@@ -37,7 +36,6 @@ export type Operation =
   | 'dialog'
   | 'read'
   | 'done'
-  | 'escalate'
   | 'navigate';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
 export type Status =
@@ -98,7 +96,6 @@ export interface Citation {
    */
   id: number;
   text: string;
-  requirement_id: string | null;
   url: string;
   quote: string;
   deep_link: string;
@@ -286,14 +283,10 @@ export interface StepResult {
    */
   facts: StepFact[];
   /**
-   * Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
+   * Whether the page's fingerprint changed; None for steps that do not act (read).
    */
   page_changed: boolean | null;
   duration_ms: number;
-  /**
-   * The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it.
-   */
-  fallback?: StepFallback | null;
   /**
    * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
    */
@@ -301,7 +294,6 @@ export interface StepResult {
 }
 export interface StepFact {
   text: string;
-  requirement_id: string | null;
   /**
    * None for a count, total or winner derived from other facts rather than read from the page.
    */
@@ -309,20 +301,6 @@ export interface StepFact {
   url: string | null;
   reader: FactReader;
   deep_link: string | null;
-}
-export interface StepFallback {
-  /**
-   * The reason the run stopped following Jev, as recovery was told it.
-   */
-  reason: string;
-  /**
-   * Jev's certainty on the step it gave up, on the weakest link of its choices.
-   */
-  confidence: number;
-  /**
-   * The control Jev chose, by its label, when it chose one.
-   */
-  target: string | null;
 }
 export interface StepChoice {
   id: string;
@@ -388,7 +366,7 @@ export interface RunParams {
   cloud_timeout_minutes?: number | null;
   allowed_origins?: string[] | null;
   fetch?: boolean;
-  fetch_first?: boolean;
+  browser?: boolean;
 }
 export interface SecretRef {
   name: string;

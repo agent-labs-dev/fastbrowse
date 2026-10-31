@@ -3,14 +3,12 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
     NoulAnswer, Question,
 };
-use fastbrowse_core::llm::Generation;
 use fastbrowse_core::models::{
     Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Event, EventHandler, Evidence, FactReader,
     Limits, Operation, Status, StepOutcome, StepResult,
@@ -19,23 +17,18 @@ use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::safety::Redactor;
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::json;
 
 use super::Agent;
 use super::driving::edit_progress;
-use super::helpers::{answer_evidence, follow_recovery, next_value, unread, unsent_fact, visited};
-use super::reading::{ListRead, leaves_unread_page, list_links};
-use super::state::{Flow, RunState, Spawned, TransactionCandidate};
-use crate::memory::{Fact, Notes, fact_id};
-use crate::planner::{Plan, Requirement, RequirementKind};
+use super::helpers::{read_sources, unsent_fact};
+use super::state::{Flow, RunState};
+use crate::memory::{Fact, Notes};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
 use crate::scripted::{ScriptedJev, ScriptedLLM};
-
-const INFO: RequirementKind = RequirementKind::Information;
 
 /// The page behind an agent whose tests never touch it.
 struct NoPage;
@@ -100,26 +93,15 @@ fn free() -> CostLine {
     CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0))
 }
 
-fn planned(plan: Plan) -> Arc<Spawned<Generation<Plan>>> {
-    Arc::new(Spawned::spawn(async move { Ok(Generation { data: plan, cost: free() }) }))
-}
-
-/// A run whose empty plan has already arrived.
-async fn run_state() -> RunState {
-    let plan = Plan::new(Vec::new(), false);
-    let planning = planned(plan.clone());
-    planning.wait().await;
-    let mut state = RunState::new(
+/// A run at its first step.
+fn run_state() -> RunState {
+    RunState::new(
         "Find a train from Bristol to York on 16 October 2026".into(),
         IndexMap::new(),
         Vec::new(),
         Authorization::default(),
         Arc::new(Ledger::new(Limits::default())),
-        planning,
-        false,
-    );
-    state.ready_plan = Some(plan);
-    state
+    )
 }
 
 fn observation(controls: &[Control]) -> Observation {
@@ -145,12 +127,6 @@ fn button(label: &str) -> Control {
     Control::new(&label.to_lowercase(), "button", label, [Operation::Click])
 }
 
-fn link(key: &str, label: &str, href: &str) -> Control {
-    let mut control = Control::new(key, "link", label, [Operation::Click]);
-    control.href = Some(href.into());
-    control
-}
-
 fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         operation,
@@ -165,21 +141,11 @@ fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
         cost: Vec::new(),
         input_tokens: 0,
         bot_check: None,
+        shows_answer: None,
         site_failure: None,
-        read_assessment: crate::policy::ReadAssessment::Absent,
-        directed: false,
         destination: None,
         offered: Vec::new(),
     }
-}
-
-/// A link the page marks `rel="next"`.
-fn pager(key: &str, label: &str, href: &str) -> Control {
-    Control { next_page: Some(true), ..link(key, label, href) }
-}
-
-fn draggable() -> Control {
-    Control::new("drag1", "generic", "Card A", [Operation::Click, Operation::Drag])
 }
 
 /// One whole block, as the reader's cite of it copies.
@@ -198,44 +164,14 @@ fn executed(operation: Option<Operation>, target: Option<&str>, page_changed: bo
     HistoryEntry::new(operation, target, StepOutcome::Executed, page_changed)
 }
 
-fn typed(target: &str, text: &str) -> HistoryEntry {
-    HistoryEntry { text: Some(text.into()), ..executed(Some(Operation::Fill), Some(target), false) }
-}
-
 fn set(ids: &[&str]) -> HashSet<String> {
     ids.iter().map(|id| id.to_string()).collect()
 }
 
 #[tokio::test]
-async fn test_a_step_abandoned_while_waiting_for_the_plan_leaves_the_plan_to_the_rest_of_the_run() {
-    let plan = Plan::new(Vec::new(), false);
-    let (release, released) = tokio::sync::oneshot::channel::<()>();
-    let mut state = run_state().await;
-    state.ready_plan = None;
-    state.planning = Arc::new(Spawned::spawn({
-        let plan = plan.clone();
-        async move {
-            let _ = released.await;
-            Ok(Generation { data: plan, cost: free() })
-        }
-    }));
-    // A redraw drops the waiting step's future mid-wait, as Python cancels its task.
-    assert!(tokio::time::timeout(Duration::from_millis(10), state.await_plan()).await.is_err());
-    release.send(()).unwrap();
-    assert_eq!(state.await_plan().await.unwrap(), plan);
-}
-
-#[test]
-fn test_an_answer_owed_with_nothing_read_is_unread() {
-    let action_only = Plan::new(vec![Requirement::new("r1", "Search for the quote", RequirementKind::Action)], true);
-    assert!(unread(&action_only, &Notes::default()));
-    assert!(!unread(&Plan { answer_expected: false, ..action_only }, &Notes::default()));
-}
-
-#[tokio::test]
 async fn test_the_next_observation_records_what_an_action_did() {
     let field_before = field("Search elsewhere");
-    let mut state = run_state().await;
+    let mut state = run_state();
     state.acted_from = Some(observation(std::slice::from_ref(&field_before)));
     state.history.push(executed(Some(Operation::Fill), Some("Search elsewhere"), true));
     let after = Control { value: Some("York".into()), ..field_before };
@@ -247,7 +183,7 @@ async fn test_the_next_observation_records_what_an_action_did() {
 #[tokio::test]
 async fn test_what_the_browser_saw_an_action_do_stays_beside_the_page_change() {
     let field_before = field("Search elsewhere");
-    let mut state = run_state().await;
+    let mut state = run_state();
     state.acted_from = Some(observation(std::slice::from_ref(&field_before)));
     state.history.push(HistoryEntry {
         effect: Some("downloaded the file the link points at".into()),
@@ -258,46 +194,6 @@ async fn test_what_the_browser_saw_an_action_do_stays_beside_the_page_change() {
         state.history.last().unwrap().effect.as_deref(),
         Some("downloaded the file the link points at; nothing visible changed")
     );
-}
-
-#[tokio::test]
-async fn test_a_drag_named_by_recovery_is_not_built_from_a_choice_with_no_drop_target() {
-    let (source, destination) = (draggable(), button("Done"));
-    let page = observation(&[source.clone(), destination.clone()]);
-    // Jev chose a click on the drop target, so there is no drag destination to build from.
-    let decision = code_decision(Operation::Click, Some(destination));
-    let mut state = run_state().await;
-    state.directed = Some((Operation::Drag, Some(source.id)));
-    assert!(follow_recovery(&mut state, &page, &decision, true).is_none());
-}
-
-#[tokio::test]
-async fn test_a_named_action_is_not_taken_over_a_confident_choice_or_on_a_control_that_went() {
-    let search = Control::new("search", "button", "Search", [Operation::Click]);
-    let decision = code_decision(Operation::Click, Some(search.clone()));
-    let mut state = run_state().await;
-    state.directed = Some((Operation::Click, Some("search".into())));
-    assert!(follow_recovery(&mut state, &observation(std::slice::from_ref(&search)), &decision, false).is_none());
-    // Answer outputs still open do not let the direction overrule a pick Jev is sure of.
-    state.open_answer_outputs = vec!["price".into()];
-    state.directed = Some((Operation::Click, Some("search".into())));
-    assert!(follow_recovery(&mut state, &observation(&[search]), &decision, false).is_none());
-    state.directed = Some((Operation::Click, Some("search".into())));
-    assert!(follow_recovery(&mut state, &observation(&[]), &decision, true).is_none());
-}
-
-#[test]
-fn test_every_visited_address_is_shown_redacted() {
-    let mut redactor = Redactor::new();
-    let mut addresses: IndexMap<String, ()> = IndexMap::new();
-    addresses.insert("https://a.test/?user=ada".into(), ());
-    for i in 0..5 {
-        addresses.insert(format!("https://a.test/{i}"), ());
-    }
-    redactor.register("username", "ada", None);
-    let shown = visited(&addresses, |url| redactor.redact(url));
-    assert_eq!(shown[0], "https://a.test/?user=[secret:username]");
-    assert_eq!(shown[1..], (0..5).map(|i| format!("https://a.test/{i}")).collect::<Vec<_>>());
 }
 
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
@@ -336,25 +232,10 @@ fn test_an_upload_is_judged_by_the_page_not_by_a_value() {
     assert_eq!(progress("a.pdf", None, false, Operation::Upload, &[]), None);
 }
 
-#[test]
-fn test_a_field_set_back_to_an_earlier_value_is_typed_in_the_order_the_task_gives() {
-    let values: Vec<String> = ["A", "B", "A", "C"].map(String::from).to_vec();
-    for (typed_so_far, expected) in [
-        (&[][..], "A"),
-        (&["A"][..], "B"),
-        (&["A", "B"][..], "A"),
-        (&["A", "B", "A"][..], "C"),
-        (&["A", "B", "A", "C"][..], "C"),
-    ] {
-        let entries: Vec<HistoryEntry> = typed_so_far.iter().map(|text| typed("Name", text)).collect();
-        assert_eq!(next_value(&values, &entries, Some("Name")), expected, "{typed_so_far:?}");
-    }
-}
-
 #[tokio::test]
 async fn test_http_error_visit_cannot_evidence_navigation_completion() {
     let agent = agent();
-    let mut state = run_state().await;
+    let mut state = run_state();
     let front = observation(&[button("Discussion")]);
     let failed =
         Observation { url: "https://example.test/discussion".into(), response_status: Some(419), ..front.clone() };
@@ -371,78 +252,36 @@ async fn test_http_error_visit_cannot_evidence_navigation_completion() {
 
 fn capacities() -> (Fact, Fact) {
     let page = capture(&[(BlockKind::Paragraph, "Pine capacity 10"), (BlockKind::Paragraph, "Oak capacity 7")]);
-    let pine = Fact::read(None, "Pine capacity 10", block_evidence(&page, "s0"), FactReader::Llm);
-    let oak = Fact::read(None, "Oak capacity 7", block_evidence(&page, "s1"), FactReader::Llm);
+    let pine = Fact::read("Pine capacity 10", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let oak = Fact::read("Oak capacity 7", block_evidence(&page, "s1"), FactReader::JevChoice);
     (pine, oak)
 }
 
 #[test]
-fn test_derived_paraphrases_do_not_create_new_read_evidence() {
+fn test_a_new_summary_of_held_quotes_is_not_a_new_source() {
     let (pine, oak) = capacities();
-    let both = vec![fact_id(&pine), fact_id(&oak)];
-    let mut notes = Notes::new([pine, oak]);
-    let before = answer_evidence(&notes, false);
-    let completion = answer_evidence(&notes, true);
-    notes.add(Fact::derived(None, "Pine has greater capacity.", both.clone(), FactReader::Llm).unwrap());
-    assert_eq!(answer_evidence(&notes, false), before);
-    assert_ne!(answer_evidence(&notes, true), completion);
-    notes.add(Fact::derived(None, "Pine is the capacity winner.", both, FactReader::Llm).unwrap());
-    assert_eq!(answer_evidence(&notes, false), before);
+    let mut notes = Notes::new([pine.clone(), oak]);
+    let before = read_sources(&notes);
+    notes.add(Fact { text: "Pine has greater capacity.".into(), ..pine });
+    assert_eq!(read_sources(&notes), before);
     let third = capture(&[(BlockKind::Paragraph, "Third capacity 12")]);
-    notes.add(Fact::read(None, "Third capacity 12", block_evidence(&third, "s0"), FactReader::Llm));
-    assert_ne!(answer_evidence(&notes, false), before);
+    notes.add(Fact::read("Third capacity 12", block_evidence(&third, "s0"), FactReader::JevChoice));
+    assert_ne!(read_sources(&notes), before);
 }
 
 #[test]
-fn test_answer_evidence_tracks_identifying_context_without_unrelated_capture_changes() {
+fn test_a_source_keeps_its_identifying_context_without_unrelated_capture_changes() {
     let page = capture(&[(BlockKind::Paragraph, "12")]);
     let quoted = block_evidence(&page, "s0");
-    let fact = Fact::read(None, "12", quoted.clone(), FactReader::Llm);
-    let before = answer_evidence(&Notes::new([fact.clone()]), true);
+    let fact = Fact::read("12", quoted.clone(), FactReader::JevChoice);
+    let before = read_sources(&Notes::new([fact.clone()]));
     let headed = Evidence { heading_path: vec!["Admission price".into()], ..quoted };
     let contextual = Fact { evidence: Some(headed.clone()), ..fact };
-    let changed = answer_evidence(&Notes::new([contextual.clone()]), true);
+    let changed = read_sources(&Notes::new([contextual.clone()]));
     assert_ne!(changed, before);
     let redraw =
         Fact { evidence: Some(Evidence { capture_sha256: "unrelated-redraw".into(), ..headed }), ..contextual };
-    assert_eq!(answer_evidence(&Notes::new([redraw]), true), changed);
-}
-
-#[test]
-fn test_answer_evidence_changes_when_a_conclusion_gains_an_existing_supporting_quote() {
-    for quoted in [false, true] {
-        let (pine, oak) = capacities();
-        let text = "Pine has the highest capacity.";
-        let winner = if quoted {
-            Fact::read(None, text, pine.evidence.clone().unwrap(), FactReader::Llm)
-        } else {
-            Fact::derived(None, text, vec![fact_id(&pine)], FactReader::Llm).unwrap()
-        };
-        let oak_id = fact_id(&oak);
-        let mut notes = Notes::new([pine, oak, winner.clone()]);
-        let before = answer_evidence(&notes, true);
-        let mut basis = winner.basis.clone();
-        basis.push(oak_id);
-        notes.add(Fact { basis, ..winner });
-        assert_ne!(answer_evidence(&notes, true), before, "quoted: {quoted}");
-    }
-}
-
-#[test]
-fn test_answer_evidence_tracks_promoted_context_without_turning_paraphrases_into_read_progress() {
-    let page = capture(&[(BlockKind::Paragraph, "Admission 12; hours 9am")]);
-    let fact = Fact::read(None, "Admission 12", block_evidence(&page, "s0"), FactReader::Llm);
-    let mut notes = Notes::new([fact.clone()]);
-    let answer_before = answer_evidence(&notes, true);
-    let read_before = answer_evidence(&notes, false);
-    notes.add(Fact { text: "Hours 9am".into(), requirement_id: Some("r".into()), ..fact.clone() });
-    assert_ne!(answer_evidence(&notes, true), answer_before);
-    assert_eq!(answer_evidence(&notes, false), read_before);
-    assert_eq!(notes.fact_requirements(&fact_id(&fact)), ["r"]);
-    let promoted = answer_evidence(&notes, true);
-    notes.unevidence(["r"]);
-    assert_ne!(answer_evidence(&notes, true), promoted);
-    assert!(notes.fact_requirements(&fact_id(&fact)).is_empty());
+    assert_eq!(read_sources(&Notes::new([redraw])), changed);
 }
 
 // tests/test_download_gate.py
@@ -489,7 +328,7 @@ fn buttons_at(url: &str, labels: &[&str]) -> Observation {
 
 /// A run on the file list that spent one recovery there, then clicked through to the download page.
 async fn left_the_list() -> (Agent, RunState) {
-    let mut state = run_state().await;
+    let mut state = run_state();
     let agent = agent();
     agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1"])).await.expect("settled");
     state.recoveries = 1;
@@ -521,130 +360,6 @@ async fn test_going_back_to_a_page_state_after_new_evidence_is_progress() {
     state.landing = Some(Some((Operation::Click, Some("Back to files".into()))));
     agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1"])).await.expect("settled");
     assert_eq!(state.unchanged, 0);
-}
-
-// -- A stopping run commits an answer ------------------------------------------------------------------------------
-
-/// An LLM that writes `answer` for the one composer call a stopping run makes.
-struct Composer(serde_json::Value);
-
-impl fastbrowse_core::llm::LLMClient for Composer {
-    fn generate_value<'a>(
-        &'a self,
-        purpose: fastbrowse_core::models::LLMPurpose,
-        _: &'a [fastbrowse_core::llm::Message],
-        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
-        Box::pin(async move {
-            assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Compose);
-            let data = schema.validate_json(&self.0.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
-            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
-        })
-    }
-}
-
-/// A run whose one requirement was read off a table, with the agent that answers its composer call with `claims`.
-async fn stopped_with(claims: impl Fn(&Fact) -> serde_json::Value) -> (Agent, RunState) {
-    let mut state = run_state().await;
-    let page = capture(&[(BlockKind::Paragraph, "| Country | IMF (2026) |\n| South Korea | 2,245,847 |")]);
-    let fact = Fact::read(Some("r1"), "South Korea 2,245,847", block_evidence(&page, "s0"), FactReader::Llm);
-    state.notes = Notes::new([fact.clone()]);
-    state.ready_plan = Some(Plan::new(vec![Requirement::new("r1", "Report the 12th-highest GDP.", INFO)], true));
-    let agent = Agent::new(
-        Arc::new(NoPage),
-        Arc::new(ScriptedJev::new(Vec::new())),
-        Arc::new(Composer(json!({"claims": claims(&fact)}))),
-    );
-    (agent, state)
-}
-
-#[tokio::test]
-async fn test_a_stopping_run_commits_an_answer_instead_of_its_notes() {
-    // A table lookup used to arrive as its rows with no sentence naming the country.
-    let (agent, mut state) = stopped_with(|fact| {
-        json!([{"text": "South Korea has the 12th-highest GDP at 2,245,847 US$ millions.", "evidence_ids": [fact_id(fact)]}])
-    })
-    .await;
-    let (notes, ledger) = (state.notes.clone(), state.ledger.clone());
-    let error = Some("ran out of recoveries".to_string());
-    let committed = agent.stopping_result(&notes, &mut state, &ledger, Status::Stuck, error).await;
-    assert_eq!(committed.status, Status::Stuck);
-    let answer = committed.answer.expect("an answer");
-    assert!(answer.starts_with("Answer (unverified)"), "{answer}");
-    assert!(answer.contains("South Korea") && answer.contains("2,245,847"), "{answer}");
-}
-
-#[tokio::test]
-async fn test_a_commit_with_no_claims_falls_back_to_the_notes() {
-    let (agent, mut state) = stopped_with(|_| json!([])).await;
-    let (notes, ledger) = (state.notes.clone(), state.ledger.clone());
-    let result = agent.stopping_result(&notes, &mut state, &ledger, Status::Unverified, None).await;
-    assert_eq!(result.status, Status::Unverified);
-    let answer = result.answer.expect("an answer");
-    assert!(!answer.starts_with("Answer (unverified)") && answer.contains("2,245,847"), "{answer}");
-}
-
-/// The plan call, priced at a cent as a metered provider prices it.
-struct MeteredPlan;
-
-impl fastbrowse_core::llm::LLMClient for MeteredPlan {
-    fn generate_value<'a>(
-        &'a self,
-        purpose: fastbrowse_core::models::LLMPurpose,
-        _: &'a [fastbrowse_core::llm::Message],
-        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        ledger: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
-        Box::pin(async move {
-            if let Some(ledger) = ledger {
-                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
-            }
-            let reply = json!({"requirements": [], "answer_expected": true, "answer_checks": ["Report the price"]});
-            let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
-            let cost = CostLine {
-                purpose: Some(purpose),
-                ..CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.01))
-            };
-            Ok(Generation { data, cost })
-        })
-    }
-}
-
-#[tokio::test]
-async fn test_abandoned_head_start_bills_the_finished_plan_receipt() {
-    // The plan is the only call, so an abandoned run bills its receipt once and starts no follow-up.
-    let head = super::HeadStart::begin(Arc::new(MeteredPlan), "Report the price", None, None, None);
-    head.planning.wait().await;
-    let costs = head.abandon().await;
-    assert_eq!(costs.len(), 1);
-    assert_eq!((costs[0].basis, costs[0].dollars), (CostBasis::Metered, Some(0.01)));
-}
-
-#[tokio::test]
-async fn test_a_head_start_asks_for_a_shortcut_only_at_a_sites_entry_point() {
-    let llm = Arc::new(ScriptedLLM);
-    let entry = super::HeadStart::begin(llm.clone(), "Find the price", Some("https://shop.test/"), None, None);
-    let inside = super::HeadStart::begin(llm, "Find the price", Some("https://shop.test/cart"), None, None);
-    assert!(entry.proposing.is_some());
-    assert!(inside.proposing.is_none());
-    entry.discard().await;
-    inside.discard().await;
-}
-
-#[test]
-fn test_a_shortcut_is_worth_proposing_only_from_a_sites_entry_point() {
-    for (start, worth) in [
-        ("https://shop.test", true),
-        ("https://shop.test/", true),
-        ("https://shop.test/?q=mug", true),
-        ("https://shop.test/#top", true),
-        ("https://shop.test/cart", false),
-        ("https://shop.test/cart/", false),
-        ("about:blank", false),
-    ] {
-        assert_eq!(super::shortcut_worth_proposing(start), worth, "{start}");
-    }
 }
 
 /// A page with no browser behind it, which cannot open the address it is given.
@@ -710,8 +425,6 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
     assert_eq!(result.status, Status::Blocked);
     assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
     assert!(result.steps.is_empty() && result.evidence.is_empty() && result.final_url.is_none());
-    // The plan was asked for before the page, and what it spent is still reported.
-    assert!(!result.cost.lines.is_empty());
 }
 
 #[test]
@@ -771,7 +484,7 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
     let agent = agent().with_secrets(Some(Arc::new(Unresolved)));
     let page = at("https://b.test/login", std::slice::from_ref(&password));
     agent.seen().raw = Some(page.clone());
-    let mut state = run_state().await;
+    let mut state = run_state();
     let Err(super::state::Flow::Stop(stop)) = agent.text(&mut state, &page, &password).await else {
         panic!("the field was filled");
     };
@@ -796,11 +509,11 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
     let trace = Trace::collecting();
     let agent = agent().with_events(Some(on_event)).with_trace(trace.clone());
     agent.redactor().register("password", "hunter2", Some("https://acme.test"));
-    let mut state = run_state().await;
+    let mut state = run_state();
     let step = StepResult {
         index: 0,
         operation: Operation::Done,
-        decided_by: Decider::Llm,
+        decided_by: Decider::Jev,
         outcome: StepOutcome::Failed,
         url: "https://acme.test/account?pw=hunter2".into(),
         target: Some("Signed in with hunter2".into()),
@@ -809,7 +522,6 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         facts: Vec::new(),
         page_changed: None,
         duration_ms: 0,
-        fallback: None,
         choices: Vec::new(),
     };
     // Choices taken before the secret was registered are masked as the step is recorded.
@@ -907,7 +619,7 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
     ] {
         let jev = Arc::new(Gatekeeper { irreversible, requested, calls: Default::default() });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
-        let mut state = run_state().await;
+        let mut state = run_state();
         state.task = "Check out and finish the order.".into();
         state.authorization = Authorization { irreversible_actions: authorized };
         let finish = button("Finish");
@@ -915,8 +627,7 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(finish.clone())) };
         let question = (!credential).then(|| irreversible_question(&state.task, Operation::Click, &finish, None));
         let asked = requested_question(&state.task, &control_action(Operation::Click, &finish, &[]));
-        let gated =
-            agent.gate_question(&mut state, &observation, &decision, Decider::Jev, "Finish", question, asked).await;
+        let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, asked).await;
         let case = format!("authorized {authorized}, credential {credential}, requested {requested}");
         assert_eq!(gated.is_ok(), acts, "{case}");
         assert_eq!(jev.calls.load(Ordering::SeqCst), calls, "{case}");
@@ -1008,12 +719,11 @@ impl DecisionClient for DoneCheckJev {
 }
 
 #[tokio::test]
-async fn test_a_cited_read_claim_finishes_after_one_done_check() {
+async fn test_a_done_answers_from_the_notes_with_no_further_question() {
     let page = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
-    let fact = Fact::read(Some("r1"), "The answer is 42", block_evidence(&page, "s0"), FactReader::Llm);
-    let mut state = run_state().await;
+    let fact = Fact::read("The answer is 42", block_evidence(&page, "s0"), FactReader::JevChoice).answering();
+    let mut state = run_state();
     state.task = "Report the answer.".into();
-    state.ready_plan = Some(Plan::new(vec![Requirement::new("r1", "Report the answer", INFO)], true));
     state.notes = Notes::new([fact]);
     let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let agent = Agent::new(
@@ -1022,74 +732,11 @@ async fn test_a_cited_read_claim_finishes_after_one_done_check() {
         Arc::new(ScriptedLLM),
     );
 
-    let result = agent.finish(&mut state, None, None).await.expect("finish").expect("a completed result");
+    let page = observation(&[]);
+    let result = agent.finish(&mut state, &page, None, None).await.expect("finish").expect("a completed result");
     assert_eq!(result.status, Status::Complete);
-    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
-}
-
-#[tokio::test]
-async fn test_a_done_jev_does_not_answer_is_rejected_and_the_history_says_why() {
-    let mut state = run_state().await;
-    state.task = "Report the answer.".into();
-    state.ready_plan = Some(Plan::new(vec![Requirement::new("r1", "Report the answer", INFO)], true));
-    state.recoveries = 99;
-    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), Arc::new(Receipts(None)), Arc::new(ScriptedLLM));
-
-    // With the recovery budget spent, the rejection ends the run; what matters is that nothing finished it.
-    let finished = agent.finish(&mut state, None, None).await;
-    assert!(!matches!(finished, Ok(Some(ref result)) if result.status == Status::Complete));
-    let effect = state.history.last().and_then(|entry| entry.effect.clone()).unwrap_or_default();
-    assert_eq!(effect, "DONE rejected: r1: Report the answer (Jev gave no answer)");
-}
-
-/// A Jev that answers every yes/no with one probability, or with nothing.
-struct Receipts(Option<f64>);
-
-impl fastbrowse_core::decision::DecisionClient for Receipts {
-    fn evaluate<'a>(
-        &'a self,
-        _: &'a serde_json::Value,
-        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
-    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
-        let answers = self
-            .0
-            .map(|probability| {
-                let answer = Answer::Noul(NoulAnswer { kind: Default::default(), probability });
-                questions.keys().map(|key| (key.clone(), answer.clone())).collect()
-            })
-            .unwrap_or_default();
-        Box::pin(
-            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
-        )
-    }
-
-    fn profile(&self) -> DecisionProfile {
-        ScriptedJev::new(Vec::new()).profile()
-    }
-}
-
-#[tokio::test]
-async fn test_a_receipt_is_read_only_for_a_step_jev_says_committed() {
-    use fastbrowse_core::safety::irreversible_question;
-    // Adding to a cart on an authorized checkout used to force a full read of the list after every click.
-    for (probability, owed) in [(Some(0.1), false), (Some(0.9), true), (None, true)] {
-        let agent = Agent::new(Arc::new(NoPage), Arc::new(Receipts(probability)), Arc::new(ScriptedLLM));
-        let mut state = run_state().await;
-        state.task = "Add the backpack to the cart and finish the order.".into();
-        state.authorization = Authorization { irreversible_actions: true };
-        state.ready_plan =
-            Some(Plan::new(vec![Requirement::new("a1", "Finish the order", RequirementKind::Action)], false));
-        state.transaction_candidates.push(TransactionCandidate {
-            question: irreversible_question(&state.task, Operation::Click, &button("Add to cart"), None),
-            from_url: "https://shop.test/inventory".into(),
-            landed_url: Some("https://shop.test/inventory".into()),
-            landed_status: None,
-            committing: None,
-            outcome_read: false,
-        });
-        assert_eq!(agent.unread_receipt(&mut state).await.ok(), Some(owed), "{probability:?}");
-    }
 }
 
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
@@ -1182,7 +829,7 @@ impl DecisionClient for Answers {
 #[tokio::test]
 async fn test_a_choice_jev_was_not_offered_is_a_failed_decision_and_not_an_empty_value() {
     let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("input:nope"))), Arc::new(ScriptedLLM));
-    let mut state = run_state().await;
+    let mut state = run_state();
     state.inputs.insert("name".into(), "Ada".into());
     let page = observation(&[]);
     let error = agent.text(&mut state, &page, &field("Name")).await.expect_err("an unusable pick");
@@ -1190,60 +837,26 @@ async fn test_a_choice_jev_was_not_offered_is_a_failed_decision_and_not_an_empty
 }
 
 #[tokio::test]
-async fn test_a_comparison_code_cannot_rank_is_traced_as_declined() {
-    use crate::comparison::{NumericComparison, Order, QuotedField};
-    use fastbrowse_core::telemetry::Trace;
-    let trace = Trace::collecting();
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM)).with_trace(trace.clone());
-    let mut state = run_state().await;
-    let comparison = NumericComparison {
-        order: Order::Lowest,
-        limit: 1,
-        label: QuotedField::new("", " - "),
-        value: QuotedField::new(" - ", " "),
-    };
-    state.comparisons.insert("r".into(), comparison);
-    agent.settle_ended(&mut state, &["r".to_string()]);
-    assert!(trace.events().iter().any(|e| e.to_string().contains("comparison_declined")));
-}
-
-#[tokio::test]
-async fn test_no_answer_on_a_value_is_not_a_finding_that_it_is_absent() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
-    let mut state = run_state().await;
-    let page = observation(&[]);
-    let error = agent.value_absent(&mut state, &page, &field("Name")).await.expect_err("no answer");
-    assert!(format!("{error:?}").contains("expected a noul answer"), "{error:?}");
-}
-
-#[tokio::test]
 async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
     let field = "Date Picker 2: 27/12/2026";
-    // The scripted LLM has no reader reply, so a read that reached it would fail.
     let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
-    let mut state = run_state().await;
-    state.ready_plan = Some(Plan::new(
-        vec![
-            Requirement::new("pick", "Pick the last Sunday of December 2026 in Date Picker 2", RequirementKind::Action),
-            Requirement::new("shown", "Report the date shown in the Date Picker 2 field", INFO),
-        ],
-        true,
-    ));
+    let mut state = run_state();
+    state.task = "Pick the last Sunday of December 2026 in Date Picker 2 and report the date shown there.".into();
     // How a capture states a form field: its label, then the value it holds.
     let page = capture(&[
         (BlockKind::Heading, "Date Picker"),
         (BlockKind::Paragraph, "Date Picker 1: 01/01/2026"),
         (BlockKind::Paragraph, field),
     ]);
-    let added = agent.read(&mut state, Some(page), None).await.expect("a read");
+    let added = agent.read(&mut state, page, &observation(&[])).await.expect("a read");
     assert!(added);
-    let fact = state.notes.facts().into_iter().find(|f| f.requirement_id.as_deref() == Some("shown")).expect("a fact");
+    let fact = state.notes.facts().into_iter().find(|f| f.answers).expect("a fact");
     assert_eq!(fact.reader, FactReader::JevChoice);
     assert_eq!(fact.text, field);
     assert_eq!(fact.evidence.as_ref().map(|e| e.quote.as_str()), Some(field));
 }
 
-// -- A stall is put to Jev first, and the LLM only hears of it when Jev stays unsure --------------------------------
+// -- A stall is put to Jev again, with what went wrong -----------------------------------------------------------
 
 /// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it, and that has moved on from
 /// the observation asked about when its flag is set.
@@ -1342,91 +955,44 @@ impl fastbrowse_core::decision::DecisionClient for Unsure {
     }
 }
 
-/// An LLM that answers every recovery with a scroll and counts the times it was asked.
-#[derive(Default)]
-struct Recoverer(std::sync::atomic::AtomicUsize, bool);
-
-impl fastbrowse_core::llm::LLMClient for Recoverer {
-    fn generate_value<'a>(
-        &'a self,
-        purpose: fastbrowse_core::models::LLMPurpose,
-        _: &'a [fastbrowse_core::llm::Message],
-        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
-        Box::pin(async move {
-            assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Recover);
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let reply =
-                json!({"diagnosis": "Stuck", "next_subgoal": "Scroll on", "give_up": self.1, "operation": "scroll"});
-            let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
-            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
-        })
-    }
-}
-
 /// Recovery after a click on Apply changed nothing, put to a Jev that would click Next at `confidence`.
-async fn stalled_on_apply(confidence: f64) -> (RunState, Arc<Unsure>, Arc<Recoverer>) {
+async fn stalled_on_apply(confidence: f64) -> (RunState, Arc<Unsure>) {
     let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
     let jev = Arc::new(Unsure(ScriptedJev::new(script), confidence, Default::default()));
-    let llm = Arc::new(Recoverer::default());
-    let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), llm.clone());
-    let mut state = run_state().await;
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
     let apply = button("Apply");
     let page = observation(&[apply.clone(), button("Next")]);
     let decision = code_decision(Operation::Click, Some(apply));
     let withheld = super::recovery::withheld(&decision);
     agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.expect("recovered");
-    (state, jev, llm)
+    (state, jev)
 }
 
 #[tokio::test]
-async fn test_giving_up_ends_the_run_with_the_diagnosis() {
+async fn test_past_the_recovery_budget_the_run_ends_with_the_reason() {
     let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
     let jev = Arc::new(Unsure(ScriptedJev::new(script), 0.1, Default::default()));
-    let llm = Arc::new(Recoverer(Default::default(), true));
-    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
-    let mut state = run_state().await;
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
     let apply = button("Apply");
     let page = observation(&[apply.clone(), button("Next")]);
     let decision = code_decision(Operation::Click, Some(apply));
     let withheld = super::recovery::withheld(&decision);
     let error = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
-    assert!(matches!(error, Some(Flow::Stop(stop)) if stop.error.as_deref() == Some("Stuck")));
-    assert_eq!(state.hint, None);
+    assert!(matches!(error, Some(Flow::Stop(stop)) if stop.error.as_deref() == Some("nothing changed")));
 }
 
 #[tokio::test]
-async fn test_giving_up_on_a_consult_leaves_the_run_going() {
-    let llm = Arc::new(Recoverer(Default::default(), true));
-    let jev = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 0.1, Default::default()));
-    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm);
-    let mut state = run_state().await;
-    let page = observation(&[button("Next")]);
-    agent.consult(&mut state, &page, "uncertain next step").await.expect("still going");
-    assert!(state.gave_up.is_none());
-    assert_eq!(state.hint.as_deref(), Some("Scroll on"));
-}
-
-#[tokio::test]
-async fn test_a_stall_jev_is_sure_of_is_answered_without_the_llm() {
-    let (state, jev, llm) = stalled_on_apply(0.9).await;
-    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+async fn test_a_stall_is_answered_by_jev_even_when_it_is_unsure() {
+    let (state, jev) = stalled_on_apply(0.3).await;
     let (_, picked) = state.picked.expect("Jev's pick is the next decision");
     assert_eq!((picked.operation, picked.target.map(|c| c.label)), (Operation::Click, Some("Next".to_string())));
     // Jev was told what failed, and the click that changed nothing was not among its options.
     let shown = jev.2.lock().unwrap()[0].to_string();
     assert!(shown.contains("did not move the task on from this page"), "{shown}");
     assert!(!shown.contains("\"Apply\""), "{shown}");
-}
-
-#[tokio::test]
-async fn test_the_llm_recovers_only_when_jev_stays_unsure() {
-    let (state, _, llm) = stalled_on_apply(0.3).await;
-    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert!(state.picked.is_none());
-    assert_eq!(state.directed, Some((Operation::Scroll, None)));
-    assert_eq!(state.steps.last().map(|step| step.decided_by), Some(Decider::Llm));
 }
 
 // -- A covered click is put to Jev's eyes: pressed where the screenshot shows the control, only when Jev is sure ----
@@ -1481,8 +1047,8 @@ impl DecisionClient for Seeing {
 async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
     let page = Arc::new(Screenshots(Default::default(), moved));
     let jev = Arc::new(Seeing { images, shown, asked: Default::default() });
-    let agent = Agent::new(page.clone(), jev.clone(), Arc::new(Recoverer::default()));
-    let mut state = run_state().await;
+    let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
     let target = button("Pick a date");
     let seen = observation(std::slice::from_ref(&target));
     let clicked = agent.click_where_seen(&mut state, &seen, &target).await.expect("asked");
@@ -1515,402 +1081,4 @@ async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
 async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_screenshot() {
     let (clicked, page, jev) = click_where_seen(true, 0.9, true).await;
     assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && !jev.asked.lock().unwrap().is_empty());
-}
-
-// -- Jev reads a step as text, and sees the page only when that leaves it unsure ---------------------------------------
-
-/// The scripted Jev, its every choice held at the given confidence from text and at 0.9 once shown the page, and the
-/// number of images each request carried.
-struct Looks(ScriptedJev, f64, std::sync::Mutex<Vec<usize>>);
-
-impl DecisionClient for Looks {
-    fn evaluate<'a>(
-        &'a self,
-        state: &'a serde_json::Value,
-        questions: &'a IndexMap<String, Question>,
-    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        self.evaluate_images(state, questions, &fastbrowse_core::decision::NO_IMAGES)
-    }
-
-    fn evaluate_images<'a>(
-        &'a self,
-        state: &'a serde_json::Value,
-        questions: &'a IndexMap<String, Question>,
-        images: &'a Images,
-    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        self.2.lock().unwrap().push(images.len());
-        let confidence = if images.is_empty() { self.1 } else { 0.9 };
-        let answered = self.0.evaluate(state, questions);
-        Box::pin(async move {
-            let mut evaluation = answered.await?;
-            for answer in evaluation.answers.values_mut() {
-                if let Answer::Choice(choice) = answer {
-                    choice.confidence = confidence;
-                }
-            }
-            Ok(evaluation)
-        })
-    }
-
-    fn profile(&self) -> DecisionProfile {
-        DecisionProfile { images: true, ..DecisionProfile::jev() }
-    }
-}
-
-#[tokio::test]
-async fn test_jev_sees_the_page_only_when_its_text_pick_is_unsure() {
-    for (text, images, confidence) in [(0.9, vec![0], 0.9), (0.3, vec![0, 1], 0.9)] {
-        let next = || crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None };
-        let jev = Arc::new(Looks(ScriptedJev::new(vec![next(), next()]), text, Default::default()));
-        let agent = Agent::new(Arc::new(Screenshots::default()), jev.clone(), Arc::new(Recoverer::default()));
-        let state = run_state().await;
-        let context = agent.context(&state, &observation(&[button("Next")]), Vec::new(), false, true).expect("context");
-        let decision =
-            agent.decide_looking(&state, &observation(&[button("Next")]), &context).await.expect("a decision");
-        assert_eq!(*jev.2.lock().unwrap(), images, "text pick at {text}");
-        assert!((decision.confidence() - confidence).abs() < 1e-9, "{}", decision.confidence());
-        assert_eq!(decision.cost.len(), images.len());
-    }
-}
-
-/// The LLM reader's one reply: the code a sign-in needs, quoted as context from the second block.
-struct ContextReader;
-
-impl fastbrowse_core::llm::LLMClient for ContextReader {
-    fn generate_value<'a>(
-        &'a self,
-        purpose: fastbrowse_core::models::LLMPurpose,
-        messages: &'a [fastbrowse_core::llm::Message],
-        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
-        Box::pin(async move {
-            assert_eq!(purpose, fastbrowse_core::models::LLMPurpose::Read);
-            assert!(format!("{messages:?}").contains("Read only the context claims"), "{messages:?}");
-            let reply = json!({
-                "claims": [{"cite": {"first": "s1", "last": "s1"}, "text": "ada@example.com: 587373", "requirement_id": null}],
-                "answered": false,
-            });
-            let data = schema.validate_json(&reply.to_string()).map_err(fastbrowse_core::llm::LLMError::Failed)?;
-            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
-        })
-    }
-}
-
-#[tokio::test]
-async fn test_a_code_jev_finds_no_requirement_in_is_still_kept_for_the_sign_in() {
-    // Jev found nothing on the Phone page for the orders the read was asked about, and the code never reached the notes.
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(None, 0.98)), Arc::new(ContextReader));
-    let mut state = run_state().await;
-    state.ready_plan = Some(Plan::new(
-        vec![
-            Requirement::new(
-                "in",
-                "Sign in as ada@example.com with the code from the Phone page",
-                RequirementKind::Action,
-            ),
-            Requirement::new("orders", "Report the most expensive order", INFO),
-        ],
-        true,
-    ));
-    let page = capture(&[(BlockKind::Heading, "Authenticator"), (BlockKind::Paragraph, "ada@example.com: 587373")]);
-    agent.read(&mut state, Some(page), None).await.expect("a read");
-    let fact = state.notes.facts().into_iter().find(|f| f.text.contains("587373")).expect("the code");
-    assert_eq!(fact.requirement_id, None);
-}
-
-/// A plan still being written when the run stops. A provider finishes and bills a non-streamed generation after the
-/// connection closes, so a request dropped in flight is charged as unknown, as the OpenAI-compatible client does.
-struct SlowPlan;
-
-struct ChargedIfDropped<'a> {
-    ledger: Option<&'a Ledger>,
-    armed: bool,
-}
-
-impl Drop for ChargedIfDropped<'_> {
-    fn drop(&mut self) {
-        if let (true, Some(ledger)) = (self.armed, self.ledger) {
-            ledger.state().lines.push(CostLine::new(CostComponent::Llm, CostBasis::Unknown, None));
-        }
-    }
-}
-
-impl fastbrowse_core::llm::LLMClient for SlowPlan {
-    fn generate_value<'a>(
-        &'a self,
-        purpose: fastbrowse_core::models::LLMPurpose,
-        messages: &'a [fastbrowse_core::llm::Message],
-        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        ledger: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
-        Box::pin(async move {
-            let mut charged = ChargedIfDropped { ledger, armed: true };
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            charged.armed = false;
-            MeteredPlan.generate_value(purpose, messages, schema, ledger).await
-        })
-    }
-}
-
-/// A tab that crashed before the run could read it.
-struct Crashed;
-
-impl Page for Crashed {
-    fn artifacts(&self) -> Vec<Artifact> {
-        Vec::new()
-    }
-
-    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
-        // Long enough for the plan's request to be in flight when the run stops.
-        Box::pin(async {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            Err(BrowserError::Failed("the tab crashed".into()))
-        })
-    }
-
-    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
-        Box::pin(async { Ok(true) })
-    }
-
-    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
-        unreachable!("the run is given no start")
-    }
-
-    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
-        Box::pin(async { Err(BrowserError::Failed("the tab crashed".into())) })
-    }
-
-    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
-        unreachable!("nothing was observed, so no step acts")
-    }
-
-    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
-        Box::pin(async { Ok(false) })
-    }
-
-    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
-        Box::pin(async { Err(BrowserError::Failed("the tab crashed".into())) })
-    }
-
-    fn withhold_frames(&self, _: bool) {}
-
-    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
-        Box::pin(async { Err(BrowserError::Failed("the tab crashed".into())) })
-    }
-
-    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
-        Box::pin(async { Ok(None) })
-    }
-
-    fn lifecycle_mark(&self) -> u64 {
-        0
-    }
-
-    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
-        Box::pin(async { false })
-    }
-}
-
-#[tokio::test]
-async fn test_a_run_that_stops_before_its_plan_arrives_keeps_the_plans_receipt_and_its_own_status() {
-    // A run stopped at its first step used to cancel the plan in flight. The provider billed it anyway, the receipt
-    // was lost, and the unknown charge replaced the stop with "spend limit cannot be enforced".
-    let agent = Agent::new(Arc::new(Crashed), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(SlowPlan));
-    let options = super::RunOptions {
-        limits: Some(Limits { max_dollars: Some(1.0), ..Limits::default() }),
-        ..Default::default()
-    };
-    let result = agent.run("Tidy up my list", options).await.expect("a result, not an error");
-    assert_eq!(result.status, Status::Error, "{:?}", result.error);
-    assert!(result.error.as_deref().is_some_and(|error| error.contains("the tab crashed")), "{:?}", result.error);
-    assert!(!result.cost.has_unknown(), "{:?}", result.cost);
-    assert_eq!(result.cost.known_dollars(), 0.01);
-}
-
-#[tokio::test]
-async fn a_task_cancelled_before_it_began_never_runs() {
-    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let flag = ran.clone();
-    let task = Spawned::<()>::spawn(async move {
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
-    });
-    assert!(task.cancel_unstarted());
-    assert!(task.wait().await.is_none());
-    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
-}
-
-#[tokio::test]
-async fn a_task_already_begun_is_joined_not_cancelled() {
-    let task = Spawned::spawn(async {
-        tokio::task::yield_now().await;
-        Ok(7)
-    });
-    tokio::task::yield_now().await;
-    assert!(!task.cancel_unstarted());
-    assert_eq!(task.wait().await.and_then(Result::ok), Some(7));
-}
-
-/// Answers whether a page continues the list left open.
-struct SameList(f64);
-
-impl fastbrowse_core::decision::DecisionClient for SameList {
-    fn evaluate<'a>(
-        &'a self,
-        _: &'a serde_json::Value,
-        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
-    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
-        use fastbrowse_core::decision::{Answer, Evaluation, NoulAnswer};
-        let noul =
-            |key: &String| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.0 }));
-        let answers = questions.keys().map(noul).collect();
-        Box::pin(async move {
-            Ok(Evaluation { model: "same-list".into(), answers, input_tokens: 0, cost: free(), requests: 1 })
-        })
-    }
-
-    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
-        ScriptedJev::new(Vec::new()).profile()
-    }
-}
-
-/// Jev's word places a later page, and it is given the page's links with the one the page marks as next.
-#[tokio::test]
-async fn test_jev_places_a_later_page_of_a_list_from_its_links() {
-    let mut state = run_state().await;
-    state.list_url = Some("https://site.test/page/1".into());
-    let capture = crate::retrieval::testing::capture(&[]);
-    let page = at("https://site.test/page/2", &[link("n", "3", "/page/3"), pager("m", "Weiter", "/page/3")]);
-    for (probability, place) in [(0.06, (false, false)), (0.97, (true, true))] {
-        let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(probability)), Arc::new(ScriptedLLM));
-        let placed = agent.place_in_list(&state, &capture, &page).await.ok().flatten().expect("placed");
-        assert_eq!((placed.same_list, placed.goes_on), place);
-    }
-    let links = list_links(&page);
-    assert_eq!(links[0], json!({"label": "3", "href": "/page/3"}));
-    assert_eq!(links[1], json!({"label": "Weiter", "href": "/page/3", "next_page": true}));
-}
-
-#[tokio::test]
-async fn test_a_page_jev_puts_off_the_list_leaves_the_list_open() {
-    let mut state = run_state().await;
-    state.through_end = true;
-    state.list_url = Some("https://site.test/page/1".into());
-    let capture = crate::retrieval::testing::capture(&[]);
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(0.06)), Arc::new(ScriptedLLM));
-    let page = at("https://site.test/item/4", &[]);
-    assert_eq!(agent.read_list_page(&mut state, &capture, &page, &[]).await.ok(), Some(ListRead::OffList));
-    assert!(state.through_end);
-}
-
-#[tokio::test]
-async fn test_moving_on_from_an_unread_page_of_an_open_list_is_put_to_jev() {
-    let mut state = run_state().await;
-    state.ready_plan = Some(Plan::new(vec![Requirement::new("count", "Count the quotes", INFO)], true));
-    let page = at("https://site.test/page/5", &[]);
-    let click = code_decision(Operation::Click, None);
-    assert!(!leaves_unread_page(&state, &page, &click));
-    state.continuing.insert("count".into());
-    assert!(leaves_unread_page(&state, &page, &click));
-    assert!(!leaves_unread_page(&state, &page, &code_decision(Operation::Scroll, None)));
-    state.read_documents.insert(page.document_key.clone(), false);
-    assert!(!leaves_unread_page(&state, &page, &click));
-}
-
-/// An LLM reader that finds nothing on the page.
-struct EmptyReader;
-
-impl fastbrowse_core::llm::LLMClient for EmptyReader {
-    fn generate_value<'a>(
-        &'a self,
-        _: fastbrowse_core::models::LLMPurpose,
-        _: &'a [fastbrowse_core::llm::Message],
-        schema: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
-        Box::pin(async move {
-            let data = schema
-                .validate_json(&json!({"claims": [], "answered": false}).to_string())
-                .map_err(fastbrowse_core::llm::LLMError::Failed)?;
-            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)) })
-        })
-    }
-}
-
-/// A detour to an item's own page, read in full, leaves the list to be read whole when the run comes back to it.
-#[tokio::test]
-async fn test_reading_a_page_off_the_list_keeps_the_list_read_whole() {
-    let mut state = run_state().await;
-    state.ready_plan = Some(Plan::new(vec![Requirement::new("count", "Count the quotes", INFO)], true));
-    state.through_end = true;
-    state.continuing.insert("count".into());
-    state.list_url = Some("https://site.test/page/1".into());
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(0.06)), Arc::new(EmptyReader));
-    let mut capture = crate::retrieval::testing::capture(&[(BlockKind::Paragraph, "An author's biography")]);
-    capture.url = "https://site.test/item/4".into();
-    let page = at("https://site.test/item/4", &[]);
-    agent.read(&mut state, Some(capture), Some(&page)).await.expect("a read");
-    assert!(state.through_end);
-    assert_eq!(state.list_url.as_deref(), Some("https://site.test/page/1"));
-    assert!(state.continuing.contains("count"));
-}
-
-#[tokio::test]
-async fn test_a_page_off_the_list_leaves_it_open_and_a_later_page_ends_it() {
-    let mut state = run_state().await;
-    state.continuing.insert("count".into());
-    state.list_url = Some("https://site.test/page/7".into());
-    let mut capture = crate::retrieval::testing::capture(&[]);
-    capture.url = "https://site.test/author".into();
-    for (probability, ended) in [(0.06, false), (0.97, true)] {
-        let agent = Agent::new(Arc::new(NoPage), Arc::new(SameList(probability)), Arc::new(ScriptedLLM));
-        assert_eq!(agent.on_open_list(&mut state, &capture).await.ok(), Some(ended));
-    }
-}
-
-/// A field writer that answers once released, at a metered price.
-struct HeldWriter(tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>);
-
-impl fastbrowse_core::llm::LLMClient for HeldWriter {
-    fn generate_value<'a>(
-        &'a self,
-        _: fastbrowse_core::models::LLMPurpose,
-        _: &'a [fastbrowse_core::llm::Message],
-        _: &'a dyn fastbrowse_core::llm::ResponseSchema,
-        _: Option<&'a Ledger>,
-    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, fastbrowse_core::llm::LLMError>> {
-        Box::pin(async move {
-            if let Some(released) = self.0.lock().await.take() {
-                let _ = released.await;
-            }
-            Ok(Generation {
-                data: json!({"missing": false, "text": "90028", "values": []}),
-                cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.003)),
-            })
-        })
-    }
-}
-
-#[tokio::test]
-async fn test_a_field_write_dropped_by_a_redraw_is_billed_from_its_own_receipt() {
-    let (release, released) = tokio::sync::oneshot::channel::<()>();
-    let llm = HeldWriter(tokio::sync::Mutex::new(Some(released)));
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(llm));
-    let state = run_state().await;
-    // A redraw drops the step's future with the request out.
-    let dropped = agent.written::<super::state::FieldText>(&state, Vec::new());
-    assert!(tokio::time::timeout(Duration::from_millis(10), dropped).await.is_err());
-    release.send(()).unwrap();
-    for _ in 0..100 {
-        if !state.ledger.state().lines.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    let lines = state.ledger.state().lines.clone();
-    assert_eq!(
-        lines.iter().map(|line| (line.basis, line.dollars)).collect::<Vec<_>>(),
-        [(CostBasis::Metered, Some(0.003))]
-    );
 }

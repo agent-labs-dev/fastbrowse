@@ -24,7 +24,7 @@ fn spans(trace: &Trace) -> Vec<(String, String)> {
 }
 
 fn llm(script: &Script, trace: &Trace) -> OpenAICompatibleLLM {
-    let models = HashMap::from([(LLMPurpose::Read, "m".to_string())]);
+    let models = HashMap::from([(LLMPurpose::Start, "m".to_string())]);
     OpenAICompatibleLLM::new("key", script.traced(trace), "https://llm.test", models, LLMOptions::default()).unwrap()
 }
 
@@ -35,15 +35,15 @@ async fn test_llm_calls_are_traced_when_they_fail_or_are_cancelled() {
     let schema = answer_model();
     let broken = || reply(200, json!({"choices": [{"message": {"content": "not json"}}], "usage": {"cost": 0.0}}));
     let failing = Script::new([broken(), broken()]);
-    assert!(llm(&failing, &trace).generate_value(LLMPurpose::Read, &messages, &schema, None).await.is_err());
+    assert!(llm(&failing, &trace).generate_value(LLMPurpose::Start, &messages, &schema, None).await.is_err());
     // Python cancels the task; here the future is dropped once its request is in flight.
     let hanging = Script::new([Step::Cancel]);
     let client = llm(&hanging, &trace);
     tokio::select! {
-        _ = client.generate_value(LLMPurpose::Read, &messages, &schema, None) => panic!("not cancelled"),
+        _ = client.generate_value(LLMPurpose::Start, &messages, &schema, None) => panic!("not cancelled"),
         _ = hanging.cancel.notified() => {}
     }
-    assert_eq!(spans(&trace), [("llm:read".into(), "error".into()), ("llm:read".into(), "cancelled".into())]);
+    assert_eq!(spans(&trace), [("llm:start".into(), "error".into()), ("llm:start".into(), "cancelled".into())]);
     let events = trace.events();
     let last = events.iter().rfind(|e| e["event"] == "http").unwrap();
     assert_eq!((&last["error"], &last["request"]["messages"][0]["content"]), (&json!("cancelled"), &json!("Answer.")));
@@ -85,7 +85,7 @@ async fn test_a_model_call_leaves_its_request_and_reply_in_the_trace_without_its
     let content = json!({"answer": "yes"}).to_string();
     let script = Script::new([reply(200, json!({"choices": [{"message": {"content": content}}], "note": "key"}))]);
     let (client, schema) = (llm(&script, &trace), answer_model());
-    assert!(client.generate_value(LLMPurpose::Read, &[Message::user("Answer.")], &schema, None).await.is_ok());
+    assert!(client.generate_value(LLMPurpose::Start, &[Message::user("Answer.")], &schema, None).await.is_ok());
     let events = trace.events();
     let http: Vec<&Value> = events.iter().filter(|e| e["event"] == "http").collect();
     assert_eq!(http.len(), 1);

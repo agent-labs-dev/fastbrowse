@@ -8,9 +8,6 @@ use crate::py::{lax, text};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
-    /// Operation/target confidence under this waits for the plan, then goes to LLM recovery if the step acts.
-    #[serde(deserialize_with = "lax::float")]
-    pub recover_below: f64,
     #[serde(deserialize_with = "lax::float")]
     pub login_required_above: f64,
     /// Jev's agreement that the page is a bot check, above which the run waits for it to clear or stops on it.
@@ -21,20 +18,15 @@ pub struct Thresholds {
     /// Jev's agreement that the task asks for a commit, above which an authorized run takes it.
     #[serde(deserialize_with = "lax::float")]
     pub requested_above: f64,
-    /// Jev's doubt that the read facts already answer the task, from which the LLM composer writes it instead.
-    #[serde(deserialize_with = "lax::float")]
-    pub rewrite_from: f64,
 }
 
 impl Default for Thresholds {
     fn default() -> Self {
         Thresholds {
-            recover_below: 0.55,
             login_required_above: 0.70,
             bot_check_above: 0.70,
             irreversible_above: 0.50,
             requested_above: 0.50,
-            rewrite_from: 0.30,
         }
     }
 }
@@ -80,10 +72,6 @@ pub struct TokenBudget {
     /// takes a state far past what the budget allows an LLM prompt.
     #[serde(skip)]
     pub decision_chars: Option<(i64, i64)>,
-    /// The context window, in tokens, of the LLM that reads and composes, as its provider lists it. A reader or
-    /// composer prompt is fitted to it at `chars_per_token`; with none known, the page and notes go whole.
-    #[serde(skip)]
-    pub llm_context_tokens: Option<i64>,
 }
 
 impl Default for TokenBudget {
@@ -94,7 +82,6 @@ impl Default for TokenBudget {
             batch_tokens: 8000,
             chars_per_token: 3.0,
             decision_chars: None,
-            llm_context_tokens: None,
         }
     }
 }
@@ -117,12 +104,6 @@ impl TokenBudget {
         let room = (largest - biggest).min(total - crate::py::sum(sizes.iter().copied()));
         // `int()` truncates toward zero before the floor at zero.
         (room.trunc() as i64).max(0)
-    }
-
-    /// Characters an LLM prompt may hold: its model's context window where the provider lists one, and no bound
-    /// where it does not.
-    pub fn llm_chars(&self) -> i64 {
-        self.llm_context_tokens.map_or(i64::MAX, |tokens| (tokens as f64 * self.chars_per_token) as i64)
     }
 }
 
@@ -193,13 +174,6 @@ mod tests {
         let tokens = TokenBudget::default();
         assert_eq!(tokens.input_chars::<&str>(&[]), 48_000);
         assert_eq!(tokens.input_chars(&["abc", "\u{6771}\u{4eac}"]), 47_997);
-    }
-
-    #[test]
-    fn an_llm_prompt_is_bounded_only_by_its_models_listed_context() {
-        let tokens = TokenBudget::default();
-        assert_eq!(tokens.llm_chars(), i64::MAX);
-        assert_eq!(TokenBudget { llm_context_tokens: Some(1000), ..tokens }.llm_chars(), 3000);
     }
 
     #[test]

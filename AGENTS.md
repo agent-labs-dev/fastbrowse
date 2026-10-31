@@ -156,8 +156,7 @@ These are the things a change must not quietly break.
   code-selected pagination skips classification. The classifier is not a guarantee against missed changes.
 - **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE and a return to a
   page state already seen with nothing read since are each no progress. `unchanged_actions` of them in a row
-  go to recovery, which asks Jev again without the stalled action. A page state not seen before or new evidence
-  renews the recovery budget. Rewriting a field's current value cannot count as progress even if the page
+  ask Jev again without the stalled action. A page state not seen before or new evidence renews that budget. Rewriting a field's current value cannot count as progress even if the page
   changes.
 
 
@@ -165,10 +164,9 @@ These are the things a change must not quietly break.
 
 A prompt is code, and a model's output is untrusted until code accepts it.
 
-- **One call does one job.** A request that states a task states everything the next step needs from it. The
-  plan call writes its own answer checks instead of leaving a terse draft for a second call to repair. Split a
+- **One call does one job.** A request that states a task states everything the next step needs from it. Split a
   job across calls only when the two cannot be asked in the same breath, and give each half its own contract.
-- **The LLM proposes.** A schema, a count or a citation is checked by code against the quotes or the page
+- **The LLM proposes.** A schema or a citation is checked by code against the quotes or the page
   state, and the run's next step and its end are Jev's. Trust an LLM's output only where code can prove it
   complete; where it cannot, repair it deterministically or ask again. A partial result is reported as
   partial.

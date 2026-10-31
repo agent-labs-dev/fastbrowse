@@ -175,7 +175,7 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
 
 #[tokio::test]
 async fn a_run_naming_no_browser_needs_the_cloud_key() {
-    let error = run(task(|_, _| {})).await.unwrap_err();
+    let error = run(task(|o, _| o.browser = true)).await.unwrap_err();
     assert!(matches!(&error, RunError::Configuration(message) if message.contains("BROWSER_USE_API_KEY")), "{error}");
 }
 
@@ -226,6 +226,11 @@ async fn a_cancelled_run_closes_its_connection_before_it_returns() {
     assert!(read.is_ok_and(|read| read.is_ok()), "the connection was left open");
 }
 
+/// A caller's browser that cannot be opened, which shows a run reached it.
+fn no_browser() -> fastbrowse_run::OpenBrowser {
+    Arc::new(|| Box::pin(async { Err("no browser here".to_string()) }))
+}
+
 /// A page the static read refuses as a script-rendered shell, and a DevTools port with no discovery route.
 fn shell_and_no_devtools() -> Http {
     Http::new(Arc::new(move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
@@ -240,7 +245,7 @@ fn shell_and_no_devtools() -> Http {
 }
 
 #[tokio::test]
-async fn test_fetch_first_goes_to_the_browser_when_the_read_needs_one() {
+async fn test_a_run_goes_to_the_browser_when_the_read_needs_one() {
     let read = |change: fn(&mut RunTask)| {
         task(move |o, h| {
             o.start = Some("https://shop.example/app".into());
@@ -251,15 +256,12 @@ async fn test_fetch_first_goes_to_the_browser_when_the_read_needs_one() {
     // Fetch mode ends where the read does, naming why.
     let result = run(read(|o| o.fetch = true)).await.unwrap();
     assert_eq!(result.status, Status::Blocked, "{:?}", result.error);
-    // Fetch-first takes the same shell to the browser: the handed-over port is asked for its socket.
-    let result = run(read(|o| {
-        o.fetch_first = true;
-        o.cdp_port = Some(9222);
-    }))
-    .await
-    .unwrap();
+    // By default the same shell goes to the browser: the caller's is asked for.
+    let mut options = read(|_| {});
+    options.1.open_browser = Some(no_browser());
+    let result = run(options).await.unwrap();
     assert_eq!(result.status, Status::Error);
-    assert!(result.error.as_deref().is_some_and(|error| error.contains("answered 404")), "{:?}", result.error);
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("no browser here")), "{:?}", result.error);
 }
 
 /// Jev as the scripted client answers, except that every page is a bot check.
@@ -286,7 +288,7 @@ impl DecisionClient for SeesBotCheck {
 }
 
 #[tokio::test]
-async fn test_fetch_first_takes_a_bot_check_jev_saw_in_the_document_to_the_browser() {
+async fn test_a_run_takes_a_bot_check_jev_saw_in_the_document_to_the_browser() {
     let http = Http::new(Arc::new(move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
         let response = if request.url.contains("/json/version") {
             Response::new(404, Vec::new())
@@ -301,11 +303,9 @@ async fn test_fetch_first_takes_a_bot_check_jev_saw_in_the_document_to_the_brows
         h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
         o.start = Some("https://shop.example/app".into());
         h.http = Some(http);
-        o.fetch_first = true;
-        o.cdp_port = Some(9222);
+        h.open_browser = Some(no_browser());
     });
     let result = run(options).await.unwrap();
-    // The handed-over port is asked for its socket, so the run reached the browser.
     assert_eq!(result.status, Status::Error, "{:?}", result.error);
-    assert!(result.error.as_deref().is_some_and(|error| error.contains("answered 404")), "{:?}", result.error);
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("no browser here")), "{:?}", result.error);
 }

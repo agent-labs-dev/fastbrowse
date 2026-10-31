@@ -23,7 +23,7 @@ fn completion(content: &str, finish_reason: &str) -> Step {
 async fn generate(env: &[(&str, &str)], replies: Vec<Step>) -> (Vec<Request>, Generation<Value>) {
     let script = Script::new(replies);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await.unwrap();
+    let result = llm.generate_value(LLMPurpose::Start, &[Message::user("?")], &answer_model(), None).await.unwrap();
     (script.requests(), result)
 }
 
@@ -373,7 +373,7 @@ async fn test_an_error_that_echoes_a_key_outside_the_authorization_header_is_scr
         Script::new([Step::Reply(Response::json(401, &json!({"error": {"message": "bad key azure-secret"}})))]);
     let llm = settings(&env).llm(&script.http()).unwrap();
     let error = llm
-        .generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None)
+        .generate_value(LLMPurpose::Start, &[Message::user("?")], &answer_model(), None)
         .await
         .unwrap_err()
         .to_string();
@@ -397,7 +397,7 @@ async fn a_refused_openrouter_key_moves_the_run_to_the_gateway_key_beside_it() {
     let script = Script::new(vec![refused(), costed(), costed()]);
     let llm = settings(&env).llm(&script.http()).unwrap();
     for _ in 0..2 {
-        let result = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await;
+        let result = llm.generate_value(LLMPurpose::Start, &[Message::user("?")], &answer_model(), None).await;
         assert_eq!(result.unwrap().data, json!({"answer": "ok"}));
     }
     let hosts: Vec<String> =
@@ -408,6 +408,6 @@ async fn a_refused_openrouter_key_moves_the_run_to_the_gateway_key_beside_it() {
     // Without a gateway key the refusal names the host that refused it.
     let script = Script::new(vec![refused()]);
     let llm = settings(&env[..1]).llm(&script.http()).unwrap();
-    let error = llm.generate_value(LLMPurpose::Read, &[Message::user("?")], &answer_model(), None).await;
+    let error = llm.generate_value(LLMPurpose::Start, &[Message::user("?")], &answer_model(), None).await;
     assert_eq!(error.unwrap_err().to_string(), "LLM HTTP 401: User not found. (openrouter.ai rejected the API key)");
 }

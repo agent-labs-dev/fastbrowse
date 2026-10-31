@@ -1,6 +1,6 @@
 # LLM providers
 
-The LLM plans, reads and writes. By default it goes to OpenRouter when `OPENROUTER_API_KEY` is set, otherwise to
+The LLM proposes a first address when a run has no start page, and writes an answer that has to be composed from more than one fact. By default it goes to OpenRouter when `OPENROUTER_API_KEY` is set, otherwise to
 the Vercel AI Gateway, and `FASTBROWSE_LLM_BASE_URL` points it at any other OpenAI-compatible chat completions
 endpoint instead. `FASTBROWSE_LLM_PROVIDER` names the provider outright and fills in the rest:
 
@@ -24,7 +24,7 @@ from, how the schema is asked for and where a reasoning effort goes. The table i
 | `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `google/gemini-3.8-flash` |
 | `gateway` | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` | strict `json_schema` | `reasoning.effort`: `low` for Gemini 3.8 Flash, `none` for DeepSeek, otherwise only when set | `google/gemini-3.8-flash` |
 | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
-| `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-sonnet-5-5`, `claude-haiku-5-5` for field text and shortcuts |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY`, as `x-api-key` | structured outputs (`output_config.format`) | `output_config.effort`, only when set | `claude-haiku-5-5`, `claude-haiku-5-5` for field text and shortcuts |
 | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` | strict `json_schema` | `reasoning_effort` | none |
 | `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` | strict `json_schema` | `reasoning_effort` | `openai/gpt-oss-120b` |
 | `together` | `https://api.together.ai/v1` | `TOGETHER_API_KEY` | `json_schema`, not strict | not taken | none |
@@ -46,7 +46,7 @@ Rules that hold across the table:
   `FASTBROWSE_LLM_API_KEY`. `azure` takes an address only on `.openai.azure.com` or `.services.ai.azure.com` over
   https.
 - **A model is named, or the run does not start.** Without a default, the run stops before its first request and
-  asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on the first plan instead.
+  asks for `FASTBROWSE_LLM_MODEL`: an OpenRouter id sent elsewhere would fail as a 404 on its first call instead.
 - **The reasoning effort is sent only when `FASTBROWSE_LLM_REASONING` is set**, except on OpenRouter and the
   gateway, where Gemini 3.8 Flash defaults to `low` and DeepSeek to `none`. Anthropic refuses `none`, since Claude
   takes `low`, `medium` or `high`. A provider whose OpenAI-compatible API takes no effort stops the run with a

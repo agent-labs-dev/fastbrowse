@@ -171,8 +171,8 @@ class RunParams(Params):
     """The only origins the run may open, each exact."""
     fetch: bool = False
     """Read every page over HTTP and start no browser."""
-    fetch_first: bool = False
-    """Read over HTTP first, and start a browser only if the task turns out to need one."""
+    browser: bool = False
+    """Start a browser from the first step, rather than reading over HTTP until the task needs one."""
 
 
 class RunCancelParams(Params):

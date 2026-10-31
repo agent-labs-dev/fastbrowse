@@ -59,7 +59,7 @@ impl Agent {
         else {
             return Ok(None);
         };
-        let bar = self.config.thresholds.recover_below;
+        let bar = fastbrowse_core::decision::EVEN_ODDS;
         if shown.probability < bar || found.confidence.is_some_and(|confidence| confidence < bar) {
             return Ok(None);
         }

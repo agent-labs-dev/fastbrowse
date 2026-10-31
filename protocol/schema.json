@@ -143,18 +143,6 @@
           "title": "Text",
           "type": "string"
         },
-        "requirement_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Requirement Id"
-        },
         "url": {
           "title": "Url",
           "type": "string"
@@ -171,7 +159,6 @@
       "required": [
         "id",
         "text",
-        "requirement_id",
         "url",
         "quote",
         "deep_link"
@@ -291,10 +278,9 @@
       "type": "object"
     },
     "Decider": {
-      "description": "Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the\nnext page of a list or DONE once a lookup is answered.",
+      "description": "Who chose a step: Jev, or a rule in code, such as the next page of a list.",
       "enum": [
         "jev",
-        "llm",
         "code"
       ],
       "title": "Decider",
@@ -460,8 +446,7 @@
     },
     "FactReader": {
       "enum": [
-        "jev_choice",
-        "llm"
+        "jev_choice"
       ],
       "title": "FactReader",
       "type": "string"
@@ -501,12 +486,8 @@
     "JsonValue": {},
     "LLMPurpose": {
       "enum": [
-        "plan",
-        "read",
-        "field_text",
-        "recover",
-        "compose",
-        "shortcut"
+        "start",
+        "compose"
       ],
       "title": "LLMPurpose",
       "type": "string"
@@ -674,7 +655,6 @@
         "dialog",
         "read",
         "done",
-        "escalate",
         "navigate"
       ],
       "title": "Operation",
@@ -1164,9 +1144,9 @@
           "title": "Fetch",
           "type": "boolean"
         },
-        "fetch_first": {
+        "browser": {
           "default": false,
-          "title": "Fetch First",
+          "title": "Browser",
           "type": "boolean"
         }
       },
@@ -1563,18 +1543,6 @@
           "title": "Text",
           "type": "string"
         },
-        "requirement_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Requirement Id"
-        },
         "quote": {
           "anyOf": [
             {
@@ -1618,50 +1586,12 @@
       },
       "required": [
         "text",
-        "requirement_id",
         "quote",
         "url",
         "reader",
         "deep_link"
       ],
       "title": "StepFact",
-      "type": "object"
-    },
-    "StepFallback": {
-      "additionalProperties": false,
-      "properties": {
-        "reason": {
-          "description": "The reason the run stopped following Jev, as recovery was told it.",
-          "title": "Reason",
-          "type": "string"
-        },
-        "confidence": {
-          "description": "Jev's certainty on the step it gave up, on the weakest link of its choices.",
-          "maximum": 1,
-          "minimum": 0,
-          "title": "Confidence",
-          "type": "number"
-        },
-        "target": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The control Jev chose, by its label, when it chose one.",
-          "title": "Target"
-        }
-      },
-      "required": [
-        "reason",
-        "confidence",
-        "target"
-      ],
-      "title": "StepFallback",
       "type": "object"
     },
     "StepOutcome": {
@@ -1753,25 +1683,13 @@
             }
           ],
           "default": null,
-          "description": "Whether the page's fingerprint changed; None for steps that do not act (read, escalate).",
+          "description": "Whether the page's fingerprint changed; None for steps that do not act (read).",
           "title": "Page Changed"
         },
         "duration_ms": {
           "minimum": 0,
           "title": "Duration Ms",
           "type": "integer"
-        },
-        "fallback": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StepFallback"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."
         },
         "choices": {
           "default": [],

@@ -43,7 +43,7 @@ public record RunParams(
     @JsonProperty("cloud_timeout_minutes") Long cloudTimeoutMinutes,
     @JsonProperty("allowed_origins") List<String> allowedOrigins,
     @JsonProperty("fetch") Boolean fetch,
-    @JsonProperty("fetch_first") Boolean fetchFirst) {
+    @JsonProperty("browser") Boolean browser) {
 
     /** A builder for a {@code RunParams}, every field unset. */
     public static Builder builder() {
@@ -81,7 +81,7 @@ public record RunParams(
         private Long cloudTimeoutMinutes;
         private List<String> allowedOrigins;
         private Boolean fetch;
-        private Boolean fetchFirst;
+        private Boolean browser;
 
         private Builder() {}
 
@@ -230,13 +230,13 @@ public record RunParams(
             return this;
         }
 
-        public Builder fetchFirst(Boolean fetchFirst) {
-            this.fetchFirst = fetchFirst;
+        public Builder browser(Boolean browser) {
+            this.browser = browser;
             return this;
         }
 
         public RunParams build() {
-            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, fetchFirst);
+            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser);
         }
     }
 }

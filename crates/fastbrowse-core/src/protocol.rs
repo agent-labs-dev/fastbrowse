@@ -296,9 +296,9 @@ pub struct RunTask {
     /// Read every page over HTTP and start no browser.
     #[serde(default)]
     pub fetch: bool,
-    /// Read over HTTP first, and start a browser only if the task turns out to need one.
+    /// Start a browser from the first step, rather than reading over HTTP until the task needs one.
     #[serde(default)]
-    pub fetch_first: bool,
+    pub browser: bool,
 }
 
 /// One run: the run's arguments, and what the server needs to talk to the client about it.
@@ -585,7 +585,7 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("cloud_timeout_minutes", Ty::optional(count(u32::MAX)), none()),
         Field::default("allowed_origins", Ty::optional(Ty::list(Ty::Str)), none()),
         Field::default("fetch", Ty::Bool, false),
-        Field::default("fetch_first", Ty::Bool, false),
+        Field::default("browser", Ty::Bool, false),
     ]
 }
 

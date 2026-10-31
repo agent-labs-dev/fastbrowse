@@ -21,7 +21,7 @@ pub enum AgentError {
     /// `policy.ObservationTooLarge`: the page's state cannot fit Jev's limits even with no controls offered.
     #[error("{0}")]
     ObservationTooLarge(String),
-    /// `memory.NotesTooLarge`: a verdict cannot fit its requirement evidence without losing facts.
+    /// `memory.NotesTooLarge`: a verdict cannot fit its evidence without losing facts.
     #[error("{0}")]
     NotesTooLarge(String),
     /// Python's `ValueError`: an answer or an argument the code cannot use.

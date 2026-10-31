@@ -37,7 +37,7 @@ async fn generate(
 ) -> (Vec<Request>, Result<Generation<Value>, LLMError>) {
     let script = Script::new(replies);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result = llm.generate_value(LLMPurpose::Read, messages, &answer_model(), None).await;
+    let result = llm.generate_value(LLMPurpose::Start, messages, &answer_model(), None).await;
     (script.requests(), result)
 }
 
@@ -55,7 +55,7 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
     assert_eq!(request.header("anthropic-version"), Some("2023-06-01"));
     assert_eq!(request.header("authorization"), None);
     let sent = body(request);
-    assert_eq!(sent["model"], "claude-sonnet-5-5");
+    assert_eq!(sent["model"], "claude-haiku-5-5");
     assert_eq!(sent["max_tokens"], 128_000, "the documented output maximum the API requires");
     assert_eq!(sent["system"], "Plan.");
     assert_eq!(
@@ -163,7 +163,7 @@ fn test_an_extra_body_cannot_replace_the_messages_fields() {
 #[test]
 fn test_defaults_and_pins() {
     let providers = settings(&ENV).providers();
-    assert!(providers.contains("LLM claude-haiku-5-5, claude-sonnet-5-5 via Anthropic"), "{providers}");
+    assert!(providers.contains("LLM claude-haiku-5-5 via Anthropic"), "{providers}");
     let pinned = settings(&[ENV.as_slice(), &[("FASTBROWSE_LLM_MODEL", "claude-opus-5-5")]].concat());
     assert!(pinned.providers().contains("LLM claude-opus-5-5 via Anthropic"), "{}", pinned.providers());
 }

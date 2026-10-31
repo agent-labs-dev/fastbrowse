@@ -7,11 +7,13 @@
 
 pub mod fetch;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use fastbrowse_agent::agent::{Agent, HeadStart, RunOptions};
+use fastbrowse_agent::agent::{Agent, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
 use fastbrowse_browser::adapters::browser_use_cloud::{BrowserUseCloudBrowser, BrowserUseCloudOptions};
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
@@ -28,14 +30,14 @@ use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
     ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BudgetResource, BudgetStop, Bytes, CostBreakdown,
-    CostLine, Event, EventHandler, FrameHandler, LLMPurpose, Limits, LocalChrome, RunResult, SecretResolver, Status,
-    UntilCheck, WallKind,
+    CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, UntilCheck,
+    WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::Page;
 use fastbrowse_core::py::text::repr;
-use fastbrowse_core::telemetry::LedgerState;
+use fastbrowse_core::telemetry::{Ledger, LedgerState};
 use serde_json::{Map, Value};
 use tokio::sync::Notify;
 
@@ -88,6 +90,9 @@ pub struct Host {
     pub on_event: Option<EventHandler>,
     pub on_frame: Option<FrameHandler>,
     pub until: Option<UntilCheck>,
+    /// The caller's browser, opened only if the run reaches a step that needs one: it answers the address to attach
+    /// to, and the caller closes it after the run.
+    pub open_browser: Option<OpenBrowser>,
     pub config: Option<Config>,
     pub settings: Option<Settings>,
     /// The HTTP client the model clients and DevTools discovery use; a caller's outlives the run.
@@ -96,6 +101,9 @@ pub struct Host {
     /// [`RunError::Cancelled`].
     pub cancel: Cancel,
 }
+
+/// See [`Host::open_browser`].
+pub type OpenBrowser = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync>;
 
 /// A run's stop signal, shared by whoever may stop it and the run itself.
 #[derive(Clone, Default)]
@@ -172,8 +180,8 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
     };
     let chrome = task.chrome.clone().unwrap_or_default();
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
-    if task.fetch && task.fetch_first {
-        return refuse("fetch never starts a browser and fetch_first may start one, so pass one of them".into());
+    if task.fetch && task.browser {
+        return refuse("fetch never starts a browser and browser always does, so pass one of them".into());
     }
     if task.fetch {
         // None of these names anything a browserless run has, and accepting one would report a browser that was never
@@ -195,20 +203,6 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
         ]);
         if !browser.is_empty() {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
-        }
-    }
-    if task.fetch_first {
-        // A recording or an attached window has to exist from the first step, and the fetched attempt has neither.
-        let first = given(&[
-            ("record", task.record.is_some()),
-            ("attach", task.attach),
-            ("target_match", task.target_match.is_some()),
-        ]);
-        if !first.is_empty() {
-            return refuse(format!(
-                "fetch_first may finish with no browser, so it cannot be combined with {}",
-                first.join(", ")
-            ));
         }
     }
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
@@ -509,6 +503,24 @@ fn refused(message: &str) -> Refused {
     Refused { message: message.into(), unavailable: false }
 }
 
+/// Whether a run reads over HTTP before any browser starts. A browser it was told to use, or anything that only has a
+/// meaning from the first step in a browser (a recording, an attached window, a signed-in profile, a window to watch),
+/// goes straight to it.
+fn reads_first(task: &RunTask) -> bool {
+    let chrome = task.chrome.clone().unwrap_or_default();
+    task.fetch
+        || !(task.browser
+            || task.record.is_some()
+            || task.attach
+            || task.target_match.is_some()
+            || task.cdp_url.is_some()
+            || task.cdp_port.is_some()
+            || task.cloud_profile.is_some()
+            || task.foreground
+            || chrome.headed
+            || chrome.profile.is_some())
+}
+
 /// Whether a run starts a Browser Use Cloud browser: it is handed none, fetches without one, and was not asked for
 /// local Chrome by `local`, a headed window or a kept profile, which only local Chrome has.
 pub fn on_cloud(task: &RunTask, chrome: &LocalChrome) -> bool {
@@ -524,11 +536,13 @@ async fn browser(
     http: &Http,
 ) -> Result<(BrowserConnection, Owned), Refused> {
     let key = host.browser_api_key.as_deref();
-    let foreground = task.foreground || task.cursor == Some(true);
-    let handed = match (&task.cdp_url, task.cdp_port) {
-        (Some(url), _) => Some(url.clone()),
-        (None, Some(port)) => Some(resolve_cdp_port(port, "127.0.0.1", http).await?),
-        (None, None) => None,
+    let lazily = host.open_browser.is_some();
+    let foreground = lazily || task.foreground || task.cursor == Some(true);
+    let handed = match (&host.open_browser, &task.cdp_url, task.cdp_port) {
+        (Some(open), ..) => Some(open().await.map_err(|error| refused(&error))?),
+        (None, Some(url), _) => Some(url.clone()),
+        (None, None, Some(port)) => Some(resolve_cdp_port(port, "127.0.0.1", http).await?),
+        (None, None, None) => None,
     };
     if let Some(cdp_url) = handed {
         if key.is_some() {
@@ -537,7 +551,7 @@ async fn browser(
         // The caller's browser outlives the run. The session either opens its own tab and closes only that, or,
         // attaching, drives a window already open and leaves it open.
         let connection = BrowserConnection {
-            attach: task.attach || task.target_match.is_some(),
+            attach: lazily || task.attach || task.target_match.is_some(),
             target_match: task.target_match.clone(),
             foreground,
             ..BrowserConnection::new(cdp_url, true)
@@ -616,17 +630,14 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         // No thresholds were measured on this model, so the run starts from Jev's: an eval reads its result with that.
         http.trace.event("decision_unvalidated", Map::new);
     }
-    let mut config = profile.fit(host.config.clone());
+    let config = profile.fit(host.config.clone());
     let llm: Arc<dyn LLMClient> = match host.llm.take() {
         Some(llm) => llm,
         None => Arc::from(settings.llm(&http)?),
     };
-    // The reader and the composer are the prompts fitted to a window, and the smaller of theirs bounds both.
-    let (read, compose) = (llm.context_tokens(LLMPurpose::Read).await, llm.context_tokens(LLMPurpose::Compose).await);
-    config.tokens.llm_context_tokens = read.into_iter().chain(compose).min();
     let mut fetch_spent: Vec<CostLine> = Vec::new();
     let mut limits = task.limits.clone();
-    if task.fetch || task.fetch_first {
+    if host.open_browser.is_some() || reads_first(&task) {
         let began = std::time::Instant::now();
         let read =
             fetched(&task, &host, schema.clone(), &config, http.clone(), jev.clone(), llm.clone(), origins.clone())
@@ -646,19 +657,17 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     }
     let chrome = task.chrome.clone().unwrap_or_else(|| settings.local_chrome());
     // A `chrome` argument names local Chrome; with no browser named at all the run takes the cloud one.
-    if host.browser_api_key.is_none() && task.chrome.is_none() && on_cloud(&task, &chrome) {
+    if host.browser_api_key.is_none()
+        && host.open_browser.is_none()
+        && task.chrome.is_none()
+        && on_cloud(&task, &chrome)
+    {
         host.browser_api_key = Some(settings.browser_key()?.to_string());
     }
     let mut browser_cost: Vec<CostLine> = Vec::new();
-    // Begun before the browser, which takes 2 to 3 seconds to start and open a tab, so the shortcut is ready to open
-    // when the tab is.
-    let head =
-        HeadStart::begin(llm.clone(), &task.task, task.start.as_deref(), task.context.as_deref(), limits.clone());
-    let head_stop = head.stopper();
     let scratch = Scratch::new().map_err(|error| RunError::Invalid(error.to_string()))?;
     let mut session: Option<BrowserSession> = None;
     let mut owned: Option<Owned> = None;
-    let mut head = Some(head);
     // Kept outside the run so each is closed however the run ends, before the browser is.
     let recording: Filming = Arc::default();
     let mut recording_failed: Option<String> = None;
@@ -719,10 +728,10 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             inputs: task.inputs.clone().unwrap_or_default(),
             attachments: attachments(&task),
             output_schema: schema.clone(),
-            limits: None,
+            limits: limits.clone(),
+            ledger: None,
             authorization: task.authorization.clone(),
             until: host.until.clone(),
-            head_start: head.take(),
         };
         let result = agent.run(&task.task, run).await.map_err(|error| refused(&error.to_string()))?;
         // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
@@ -750,19 +759,10 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         stop(owned, &mut browser_cost).await;
     }
     let mut result = match outcome {
-        None => {
-            // The agent may hold the head start by now, and was dropped with it still running.
-            head_stop.discard().await;
-            return Err(RunError::Cancelled);
-        }
+        None => return Err(RunError::Cancelled),
         Some(Ok(result)) => result,
         Some(Err(refusal)) => {
-            // A cloud browser that cannot be started is an outage, not a failed run. The plan and shortcut were asked
-            // for before the browser failed, and what they spent is real.
-            let lines = match &head {
-                Some(head) => head.abandon().await,
-                None => Vec::new(),
-            };
+            // A cloud browser that cannot be started is an outage, not a failed run.
             RunResult {
                 status: if refusal.unavailable { Status::Unavailable } else { Status::Error },
                 budget: None,
@@ -770,7 +770,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
                 data: Value::Null,
                 evidence: Vec::new(),
                 steps: Vec::new(),
-                cost: CostBreakdown { lines },
+                cost: CostBreakdown { lines: Vec::new() },
                 artifacts: session.as_ref().map(BrowserSession::artifacts).unwrap_or_default(),
                 citations: Vec::new(),
                 error: Some(refusal.message),
@@ -781,10 +781,6 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             }
         }
     };
-    // A run that never began leaves its head start running; one that did has settled it already.
-    if let Some(head) = &head {
-        head.discard().await;
-    }
     if let Some(message) = recording_failed {
         return Err(RunError::Recording(message));
     }
@@ -881,10 +877,7 @@ async fn fetched(
         };
         return Ok(Read { result, needs_browser: false, spent: LedgerState::default() });
     }
-    let head =
-        HeadStart::begin(llm.clone(), &task.task, task.start.as_deref(), task.context.as_deref(), task.limits.clone());
-    let head_stop = head.stopper();
-    let ledger = head.ledger.clone();
+    let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
     let trace = http.trace.clone();
     let fetched = Arc::new(fetch::FetchedPage::new(http, origins, host.check_access.clone()));
     let page: Arc<dyn Page> = fetched.clone();
@@ -903,17 +896,11 @@ async fn fetched(
         attachments: attachments(task),
         output_schema: schema,
         limits: None,
+        ledger: Some(ledger.clone()),
         authorization: task.authorization.clone(),
         until: host.until.clone(),
-        head_start: Some(head),
     };
-    let outcome = match host.cancel.guard(agent.run(&task.task, run)).await {
-        Ok(done) => done,
-        Err(cancelled) => {
-            head_stop.discard().await;
-            return Err(cancelled);
-        }
-    };
+    let outcome = host.cancel.guard(agent.run(&task.task, run)).await?;
     let result = outcome.map_err(|error| RunError::Invalid(error.to_string()))?;
     // Read from the page rather than the message: a refusal the page itself raised means the task needs a browser. It
     // ends the run blocked, or unverified when the refusal was the screenshot an ending frame asked for. A bot check Jev

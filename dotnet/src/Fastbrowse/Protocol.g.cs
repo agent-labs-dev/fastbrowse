@@ -90,9 +90,6 @@ public sealed record Citation
     [JsonPropertyName("text")]
     public required string Text { get; init; }
 
-    [JsonPropertyName("requirement_id")]
-    public string? RequirementId { get; init; }
-
     [JsonPropertyName("url")]
     public required string Url { get; init; }
 
@@ -165,16 +162,13 @@ public sealed record CostLine
 }
 
 /// <summary>
-/// Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
-/// next page of a list or DONE once a lookup is answered.
+/// Who chose a step: Jev, or a rule in code, such as the next page of a list.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<Decider>))]
 public enum Decider
 {
     [JsonStringEnumMemberName("jev")]
     Jev,
-    [JsonStringEnumMemberName("llm")]
-    Llm,
     [JsonStringEnumMemberName("code")]
     Code,
 }
@@ -232,8 +226,6 @@ public enum FactReader
 {
     [JsonStringEnumMemberName("jev_choice")]
     JevChoice,
-    [JsonStringEnumMemberName("llm")]
-    Llm,
 }
 
 /// <summary>
@@ -260,18 +252,10 @@ public sealed record InitializeResult
 [JsonConverter(typeof(JsonStringEnumConverter<LLMPurpose>))]
 public enum LLMPurpose
 {
-    [JsonStringEnumMemberName("plan")]
-    Plan,
-    [JsonStringEnumMemberName("read")]
-    Read,
-    [JsonStringEnumMemberName("field_text")]
-    FieldText,
-    [JsonStringEnumMemberName("recover")]
-    Recover,
+    [JsonStringEnumMemberName("start")]
+    Start,
     [JsonStringEnumMemberName("compose")]
     Compose,
-    [JsonStringEnumMemberName("shortcut")]
-    Shortcut,
 }
 
 public sealed record Limits
@@ -361,8 +345,6 @@ public enum Operation
     Read,
     [JsonStringEnumMemberName("done")]
     Done,
-    [JsonStringEnumMemberName("escalate")]
-    Escalate,
     [JsonStringEnumMemberName("navigate")]
     Navigate,
 }
@@ -513,8 +495,8 @@ public sealed record RunParams
     [JsonPropertyName("fetch")]
     public bool? Fetch { get; init; }
 
-    [JsonPropertyName("fetch_first")]
-    public bool? FetchFirst { get; init; }
+    [JsonPropertyName("browser")]
+    public bool? Browser { get; init; }
 }
 
 public sealed record RunResult
@@ -698,9 +680,6 @@ public sealed record StepFact
     [JsonPropertyName("text")]
     public required string Text { get; init; }
 
-    [JsonPropertyName("requirement_id")]
-    public string? RequirementId { get; init; }
-
     /// <summary>
     /// None for a count, total or winner derived from other facts rather than read from the page.
     /// </summary>
@@ -715,27 +694,6 @@ public sealed record StepFact
 
     [JsonPropertyName("deep_link")]
     public string? DeepLink { get; init; }
-}
-
-public sealed record StepFallback
-{
-    /// <summary>
-    /// The reason the run stopped following Jev, as recovery was told it.
-    /// </summary>
-    [JsonPropertyName("reason")]
-    public required string Reason { get; init; }
-
-    /// <summary>
-    /// Jev's certainty on the step it gave up, on the weakest link of its choices.
-    /// </summary>
-    [JsonPropertyName("confidence")]
-    public required double Confidence { get; init; }
-
-    /// <summary>
-    /// The control Jev chose, by its label, when it chose one.
-    /// </summary>
-    [JsonPropertyName("target")]
-    public string? Target { get; init; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<StepOutcome>))]
@@ -787,19 +745,13 @@ public sealed record StepResult
     public required IReadOnlyList<StepFact> Facts { get; init; }
 
     /// <summary>
-    /// Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
+    /// Whether the page's fingerprint changed; None for steps that do not act (read).
     /// </summary>
     [JsonPropertyName("page_changed")]
     public bool? PageChanged { get; init; }
 
     [JsonPropertyName("duration_ms")]
     public required long DurationMs { get; init; }
-
-    /// <summary>
-    /// The fallback that decided this step instead of Jev's pick, when <c>Config.step_choices</c> asked for it.
-    /// </summary>
-    [JsonPropertyName("fallback")]
-    public StepFallback? Fallback { get; init; }
 
     /// <summary>
     /// The controls Jev was offered for this step's decision, when <c>Config.step_choices</c> asked for them.

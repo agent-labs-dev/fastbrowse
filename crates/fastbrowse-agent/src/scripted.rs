@@ -83,9 +83,6 @@ impl ScriptedJev {
         if key == keys::OPERATION {
             return Some(step.map_or(Operation::Done, |step| step.operation).as_str().to_string());
         }
-        if key == keys::READ_ASSESSMENT {
-            return Some("absent".into());
-        }
         let step = step?;
         if key == "pick" {
             return step.pick.clone();
@@ -162,17 +159,14 @@ impl DecisionClient for ScriptedJev {
     }
 }
 
-/// A plan that requires nothing and no shortcut: the answer by what is asked.
-///
-/// Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
+/// No start page: the answer by what is asked.
 pub struct ScriptedLLM;
 
 impl ScriptedLLM {
     fn reply(purpose: LLMPurpose) -> Option<Value> {
         match purpose {
-            LLMPurpose::Plan => Some(json!({"requirements": [], "answer_expected": false})),
-            LLMPurpose::Shortcut => Some(json!({"url": null})),
-            _ => None,
+            LLMPurpose::Start => Some(json!({"url": null})),
+            LLMPurpose::Compose => Some(json!({"claims": []})),
         }
     }
 }
@@ -207,8 +201,7 @@ mod tests {
     use fastbrowse_core::decision::NoulQuestion;
 
     use super::*;
-    use crate::planner::Plan;
-    use crate::shortcut::Shortcut;
+    use crate::start::StartPage;
     use crate::support::generate;
     use crate::support::testing::block_on;
 
@@ -283,10 +276,8 @@ mod tests {
     }
 
     #[test]
-    fn test_the_plan_and_the_shortcut_are_told_apart_by_purpose_not_by_order() {
-        let shortcut = block_on(generate::<Shortcut>(&ScriptedLLM, LLMPurpose::Shortcut, &[], None)).unwrap();
-        let plan = block_on(generate::<Plan>(&ScriptedLLM, LLMPurpose::Plan, &[], None)).unwrap();
-        assert_eq!(shortcut.data.url, None);
-        assert!(plan.data.requirements.is_empty() && !plan.data.answer_expected);
+    fn test_the_start_page_is_answered_by_purpose() {
+        let start = block_on(generate::<StartPage>(&ScriptedLLM, LLMPurpose::Start, &[], None)).unwrap();
+        assert_eq!(start.data.url, None);
     }
 }

@@ -201,7 +201,7 @@ def check_run(executable: Path) -> None:
     """One run on local Chrome ends `complete`, having clicked the page's button."""
     with fixture_site() as (start, marks), serving(executable, "--run-task", "fastbrowse.scripted:run_task") as client:
         handshake(client)
-        params = {"run_id": "smoke", "task": TASK, "start": start, "local": True}
+        params = {"run_id": "smoke", "task": TASK, "start": start, "local": True, "browser": True}
         result, ahead = client.request("run", params, RUN_SECONDS)
     events = [message["params"]["event"] for message in ahead if message["method"] == "run/event"]
     clicks = [

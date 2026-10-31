@@ -18,7 +18,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use fastbrowse_agent::memory::{Notes, NotesState};
+use fastbrowse_agent::memory::{Fact, Notes};
 use fastbrowse_agent::retrieval::{Annotation, ScalarField};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, Question};
@@ -113,13 +113,13 @@ pub fn scalar_field(field: &Value) -> ScalarField {
 }
 
 pub fn notes_arg(value: &Value) -> Notes {
-    let state: NotesState = parse(&value["$notes"]);
-    Notes::from_state(state)
+    let facts: Vec<(String, Fact)> = parse(&value["$notes"]["facts"]);
+    Notes::new(facts.into_iter().map(|(_, fact)| fact))
 }
 
-/// A notes state as JSON, owners sorted as Rust keeps them.
+/// The notes' facts as JSON, by id.
 pub fn notes_json(notes: &Notes) -> Value {
-    serde_json::to_value(notes.state()).expect("notes state")
+    json!({"facts": notes.facts_by_id().iter().collect::<Vec<_>>()})
 }
 
 pub fn sorted_owners(mut state: Value) -> Value {

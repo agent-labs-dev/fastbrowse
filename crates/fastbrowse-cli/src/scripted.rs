@@ -49,7 +49,6 @@ fn step(index: i64) -> Event {
             facts: Vec::new(),
             page_changed: None,
             duration_ms: 1,
-            fallback: None,
             choices: Vec::new(),
         },
         frame: None,

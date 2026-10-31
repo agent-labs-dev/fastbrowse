@@ -33,7 +33,6 @@ pub(crate) mod keys {
     use fastbrowse_core::models::Operation;
 
     pub const OPERATION: &str = "operation";
-    pub const READ_ASSESSMENT: &str = "read_assessment";
     pub const DRAG_DESTINATION: &str = "drag_destination";
     pub const DRAG_DESTINATION_GROUP: &str = "drag_destination_group";
     pub const SWITCH_TAB_TARGET: &str = "switch_tab_target";
@@ -41,6 +40,7 @@ pub(crate) mod keys {
     pub const NAVIGATE_GROUP: &str = "navigate_group";
     pub const LOGIN_REQUIRED: &str = "login_required";
     pub const BOT_CHECK: &str = "bot_check";
+    pub const SHOWS_ANSWER: &str = "shows_answer";
 
     /// The question that picks `operation`'s target.
     pub fn target(operation: Operation) -> String {
@@ -53,8 +53,8 @@ pub(crate) mod keys {
     }
 }
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPrioritize unread_requirements when choosing the next target to research.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text counts the characters of page text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
-const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, unread_requirements, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, and next_page marks the\none the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task or subgoal names\none of those, choose the element whose context matches it.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text counts the characters of page text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
+const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, and next_page marks the\none the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task or subgoal names\none of those, choose the element whose context matches it.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
@@ -64,15 +64,6 @@ fn untrusted(rules: &str) -> String {
 
 pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTION_RULES));
 pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
-/// Asked of a step while a list is open. Stated in `page_facts` alone this moved neither pick: replayed on recorded
-/// steps, Jev left a list for a record's link and finished off it until its own questions said what an open list means.
-const OPEN_LIST_TARGET: &str = "\nWhile a list being read goes on, the control that turns to its next page or loads more of it is the target: a record's own links lead away from the list.";
-
-fn open_list_action(list: &str) -> String {
-    format!(
-        "\nA list being read goes on: its last page read is {list}, and the notes hold only the pages read so far, so a total or comparison over it cannot be finished yet. Show the rest and read it: turn to its next page, load more of it, or narrow it with the page's own filter or sort. On any other page, a record's own page included, the list is not in view: go back to it."
-    )
-}
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
 pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
@@ -96,8 +87,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Read => {
             "Read this page's content, the whole page including text outside the viewport, to extract information the task needs."
         }
-        Operation::Done => "Every requirement is satisfied.",
-        Operation::Escalate => "No offered operation can make progress.",
+        Operation::Done => "The task is done: what it asks is carried out, and everything it needs has been read.",
     }
 }
 
@@ -114,18 +104,10 @@ str_enum! {
     }
 }
 
-str_enum! {
-    pub enum ReadAssessment {
-        Absent = "absent",
-        Editing = "editing",
-        Evidence = "evidence",
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryEntry {
-    /// None for a move code made before Jev's first step, such as opening a shortcut address.
+    /// None for a move code made before Jev's first step.
     #[serde(deserialize_with = "lax::nullable")]
     pub operation: Option<Operation>,
     #[serde(deserialize_with = "lax::nullable")]
@@ -141,7 +123,7 @@ pub struct HistoryEntry {
     /// What the action visibly did: the address, controls shown or removed, and values before and after.
     #[serde(default)]
     pub effect: Option<String>,
-    /// The read added facts or satisfied a requirement, rather than just visiting the content.
+    /// The read added facts, rather than just visiting the content.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub read_progress: bool,
     /// True for a click that chose an option or ticked a box, a value set and kept in the record as a typed one is;
@@ -166,29 +148,22 @@ impl HistoryEntry {
     }
 }
 
-/// A requirement as Jev sees it. The notes cite requirements by id, which Jev cannot match to a requirement it sees
-/// only as text: told nothing but the notes, it judged a page whose answer it had read still worth reading and scrolled
-/// instead of finishing.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RequirementState {
-    pub id: String,
-    pub text: String,
-    /// The notes hold evidence citing this requirement.
-    pub answered_in_notes: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepContext {
     pub task: String,
     #[serde(deserialize_with = "lax::nullable")]
     pub subgoal: Option<String>,
-    pub requirements: Vec<RequirementState>,
     pub notes: String,
+    /// The notes hold a fact standing as the task's answer. Told nothing but the notes, Jev judged a page whose answer
+    /// it had read still worth reading and scrolled instead of finishing.
+    #[serde(default)]
+    pub answered_in_notes: bool,
     pub history: Vec<HistoryEntry>,
     #[serde(deserialize_with = "lax::boolean")]
     pub check_login: bool,
+    /// A page Jev has not seen, so it is asked whether this shows what the task asks to be told.
+    pub check_answer: bool,
     /// Asked apart from `check_login`: credentials mean a sign-in wall is work to do, but nothing a caller can supply
     /// passes a CAPTCHA, so a page is worth checking for one whether or not a secret is held for it.
     #[serde(deserialize_with = "lax::boolean")]
@@ -197,20 +172,14 @@ pub struct StepContext {
     pub has_attachments: bool,
     /// Names of stored secrets the current origin may receive; a fill can type one without Jev seeing it.
     pub secrets: Vec<String>,
-    /// None while planning; an empty list means no information remains to collect.
-    #[serde(default)]
-    pub unread_requirements: Option<Vec<String>>,
     #[serde(default)]
     pub start_url: Option<String>,
     #[serde(default)]
     pub start_landing_url: Option<String>,
-    /// Recent reasons, diagnoses and subgoals, separate from actions actually taken.
-    #[serde(default)]
-    pub recovery_memory: String,
-    /// The caller's background, which Jev reads beside the task and never as a requirement.
+    /// The caller's background, which Jev reads beside the task and never as part of the task.
     #[serde(default)]
     pub background: Option<String>,
-    /// Why Jev is asked again on this page: a stall or an unsure pick, and the action withheld for it.
+    /// Why Jev is asked again on this page: a stall, and the action withheld for it.
     #[serde(default)]
     pub problem: Option<String>,
     /// Page operations not offered this time, because the problem is that they changed nothing.
@@ -222,15 +191,9 @@ pub struct StepContext {
     /// What code knows about this page that bears on reading it, such as that it changed after it was read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub page_facts: Vec<String>,
-    /// This page was read and nothing has changed it since, so the notes hold what a read takes from it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub page_read: bool,
     /// The page's own address when a site failure that can clear stands on it, offered to navigate to as a reload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<String>,
-    /// The last page read of a list the reader saw go on, which the run has to come back to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_list: Option<String>,
     /// The viewport as a PNG, given to a route that takes images.
     #[serde(skip)]
     pub screenshot: Option<Vec<u8>>,
@@ -249,26 +212,23 @@ impl StepContext {
         StepContext {
             task: task.into(),
             subgoal: None,
-            requirements: Vec::new(),
             notes: String::new(),
             history: Vec::new(),
             check_login: false,
+            check_answer: false,
             check_bot: false,
             has_attachments: false,
             secrets: Vec::new(),
-            unread_requirements: None,
+            answered_in_notes: false,
             start_url: None,
             start_landing_url: None,
-            recovery_memory: String::new(),
             background: None,
             omitted_actions: 0,
             problem: None,
             withheld: Vec::new(),
             no_value_fields: Vec::new(),
             page_facts: Vec::new(),
-            page_read: false,
             reload: None,
-            open_list: None,
             screenshot: None,
         }
     }
@@ -291,25 +251,17 @@ pub struct Decision {
     pub input_tokens: i64,
     #[serde(default)]
     pub bot_check: Option<f64>,
+    /// Whether this page shows what the task asks to be told, so it is read before an action leaves it.
+    pub shows_answer: Option<f64>,
     /// Jev's probability that the page reports the site failed to deliver what was asked.
     #[serde(default)]
     pub site_failure: Option<f64>,
-    #[serde(default = "absent")]
-    pub read_assessment: ReadAssessment,
-    /// Recovery's action on this decision's page. Its confidence scores the action Jev chose instead, so it says
-    /// nothing about this one.
-    #[serde(default)]
-    pub directed: bool,
     /// Drop target of a drag: the control the element Jev chose to drag is released onto.
     #[serde(default)]
     pub destination: Option<Control>,
     /// The controls Jev chose among, kept only when `Config.step_choices` asks for them.
     #[serde(skip)]
     pub offered: Vec<Control>,
-}
-
-fn absent() -> ReadAssessment {
-    ReadAssessment::Absent
 }
 
 impl Decision {
@@ -505,10 +457,6 @@ fn notes_marker(omitted_chars: usize) -> String {
     format!("\n[Notes cut: {omitted_chars} characters omitted to fit the request]")
 }
 
-fn recovery_marker(omitted_chars: usize) -> String {
-    format!("\n[Recovery memory cut: {omitted_chars} characters omitted to fit the request]")
-}
-
 /// The observation and context cut until the request with `controls` fits, or None if no cut makes it fit.
 ///
 /// When dropping actions alone makes room, the oldest go first and values set last, keeping the most recent that fit.
@@ -552,12 +500,6 @@ fn trim(
     } else {
         // The excess is counted in JSON-escaped characters, so each text is cut as it is written into the state.
         let room = |text: &str, excess: i64| (dumped_len(text) as i64 - excess).max(0) as usize;
-        let full = without(&context, 0);
-        let excess = fitting.excess(&observation, controls, &full);
-        if excess > 0 {
-            context.recovery_memory =
-                cut_with(&context.recovery_memory, room(&context.recovery_memory, excess), true, recovery_marker);
-        }
         let excess = fitting.excess(&observation, controls, &without(&context, 0));
         if excess > 0 {
             observation.viewport_text =
@@ -571,7 +513,6 @@ fn trim(
         context = without(&context, dropped);
     }
     let cut = context.history.len() < history.len()
-        || context.recovery_memory != original.recovery_memory
         || context.notes != original.notes
         || observation.viewport_text != page_text;
     (cut && fitting.fits(&observation, controls, &context)).then_some((observation, context))
@@ -676,8 +617,7 @@ async fn shortlist(
         "rules": *RELEVANCE,
         "task": context.task,
         "subgoal": context.subgoal,
-        "requirements": context.requirements,
-        "unread_requirements": context.unread_requirements,
+        "answered_in_notes": context.answered_in_notes,
         "recent_actions": context.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
         "page": {"url": observation.url, "title": observation.title},
     });
@@ -793,7 +733,7 @@ fn offered_operations(
     urls: &[String],
 ) -> Vec<Operation> {
     if observation.dialog.is_some() {
-        return vec![Operation::Dialog, Operation::Escalate];
+        return vec![Operation::Dialog];
     }
     Operation::ALL
         .iter()
@@ -810,12 +750,7 @@ fn offered_operations(
             Operation::Upload => context.has_attachments && indexed.contains_key(operation),
             Operation::SwitchTab => observation.tabs.len() > 1,
             Operation::Back => observation.can_go_back,
-            Operation::Escape
-            | Operation::Scroll
-            | Operation::ScrollUp
-            | Operation::Read
-            | Operation::Done
-            | Operation::Escalate => true,
+            Operation::Escape | Operation::Scroll | Operation::ScrollUp | Operation::Read | Operation::Done => true,
             Operation::Dialog => false,
         })
         .collect()
@@ -849,48 +784,17 @@ pub fn build_request(
     if let Some(reload) = context.reload.as_ref().filter(|url| !urls.contains(url)) {
         urls.push(reload.clone());
     }
-    if let Some(list) = context.open_list.as_ref().filter(|url| **url != observation.url && !urls.contains(url)) {
-        urls.push(list.clone());
-    }
     let offered = offered_operations(observation, &indexed, context, &urls);
     let mut questions: IndexMap<String, Question> = IndexMap::new();
-    let list_rule = context.open_list.as_deref().map(open_list_action).unwrap_or_default();
-    let target_rules = format!("{}{}", *TARGET, if context.open_list.is_some() { OPEN_LIST_TARGET } else { "" });
+    let target_rules = TARGET.as_str();
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            format!("{}{list_rule}", *NEXT_ACTION),
+            NEXT_ACTION.as_str(),
             offered.iter().map(|op| (op.as_str().to_string(), Value::from(operation_label(*op)))),
         )
         .into(),
     );
-    // Whether the page holds evidence the notes lack is moot once it was read unchanged: the notes hold what a read
-    // takes from it. Asked anyway, the assessment overrode Jev's pick of a list's next page with a read of the page
-    // already read, until the run stalled on it.
-    let reading = observation.dialog.is_none() && !context.withheld.contains(&Operation::Read) && !context.page_read;
-    if reading {
-        let instructions = format!(
-            "{UNTRUSTED}\nDoes the current page contain evidence for an unanswered information requirement, or a value the task's remaining actions need, that should be read before further interaction? The page is all of its text, not only the viewport: page.text shows the viewport, and page.offscreen_text counts the characters outside it that a read takes in too. When what page.text shows goes on past the viewport, as a list or table whose rows continue, judge whether the whole page holds the evidence. A value shown here and needed elsewhere, such as a code to type on another page, is kept only by reading it: once the page is left, only the notes hold it. Use unread_requirements, the collected notes and recent actions; while planning, judge from the task. Evidence can answer part of a comparison or explain a failed action. Matching records in a paginated list are evidence for a count or comparison even when this page cannot supply the final answer. Read those records before opening a record's detail link or leaving the list. A relevant error, refusal, result or total must be preserved even when the page also has an editable form. Field values, suggestions and previews are inputs, unless inspecting their labels, disabled state or layout is requested. Preserve inspection evidence before leaving. Treat prices or availability a picker shows beside its options as inputs (a calendar's fare per day) while a value is still being chosen. A review page before a final submit is evidence: the totals it shows may not appear again once the submit commits. A rewritten URL alone proves nothing. Judge the content regardless of control labels or roles."
-        );
-        let criteria = [
-            (
-                ReadAssessment::Absent,
-                "The page adds nothing the unanswered requirements or the remaining actions need.",
-            ),
-            (
-                ReadAssessment::Editing,
-                "Only inputs toward a later result are relevant; no requested inspection needs this form read.",
-            ),
-            (
-                ReadAssessment::Evidence,
-                "The page contains relevant evidence, including requested form inspection, partial results, a failure or a value a remaining action needs, that the notes do not yet preserve. Read it before interacting again.",
-            ),
-        ];
-        questions.insert(
-            keys::READ_ASSESSMENT.into(),
-            choice(instructions, criteria.map(|(key, text)| (key.as_str().to_string(), Value::from(text)))).into(),
-        );
-    }
     let mut targets: IndexMap<Operation, Vec<Control>> = IndexMap::new();
     let mut groups: IndexMap<Operation, Vec<Vec<Control>>> = IndexMap::new();
     let limit = max_options;
@@ -901,12 +805,12 @@ pub fn build_request(
         }
         let candidates = &indexed[operation];
         if candidates.len() <= limit {
-            questions.insert(keys::target(*operation), target_question(*operation, candidates, &target_rules).into());
+            questions.insert(keys::target(*operation), target_question(*operation, candidates, target_rules).into());
             targets.insert(*operation, candidates.clone());
             continue;
         }
         let parts = chunks(candidates, size);
-        questions.insert(keys::group(*operation), group_question(*operation, &parts, &target_rules).into());
+        questions.insert(keys::group(*operation), group_question(*operation, &parts, target_rules).into());
         groups.insert(*operation, parts);
     }
     let drops: Vec<Control> = controls.iter().filter(|control| !control.label.is_empty()).cloned().collect();
@@ -933,7 +837,7 @@ pub fn build_request(
     let mut navigation_groups: Vec<Vec<String>> = Vec::new();
     if offered.contains(&Operation::Navigate) {
         let instructions = format!(
-            "{UNTRUSTED}\nChoose the caller-supplied address that advances the next unanswered requirement, or this page's own address to reload it after a site failure. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
+            "{UNTRUSTED}\nChoose the caller-supplied address that advances what the task still needs, or this page's own address to reload it after a site failure. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
         );
         if urls.len() > limit {
             navigation_groups = chunks(&urls, size);
@@ -947,6 +851,16 @@ pub fn build_request(
     }
     if context.check_login {
         questions.insert(keys::LOGIN_REQUIRED.into(), login_question());
+    }
+    if context.check_answer {
+        questions.insert(
+            keys::SHOWS_ANSWER.into(),
+            noul(
+                "Does this page show a fact the task needs, to report or to finish its work, which the notes do not hold yet? A part of a larger answer counts.",
+                "The page states such a fact.",
+                "The page states none.",
+            ),
+        );
     }
     questions.insert(
         "site_failure".into(),
@@ -975,7 +889,7 @@ pub fn build_request(
         destinations: drops,
         destination_groups: drop_groups,
         navigation_groups,
-        target_rules,
+        target_rules: target_rules.to_string(),
     }
 }
 
@@ -1008,10 +922,10 @@ async fn evaluate(
 
     let evaluation = ask(&request.questions).await?;
     let operation_answer = choice_answer(&evaluation, keys::OPERATION)?;
-    let mut operation = Operation::parse(&operation_answer.choice).ok_or_else(|| {
+    let operation = Operation::parse(&operation_answer.choice).ok_or_else(|| {
         AgentError::Invalid(format!("{} is not a valid Operation", text::repr(&operation_answer.choice)))
     })?;
-    let mut operation_confidence = operation_answer.confidence;
+    let operation_confidence = operation_answer.confidence;
     let mut target: Option<Control> = None;
     let mut tab_id: Option<String> = None;
     let mut url: Option<String> = None;
@@ -1048,7 +962,7 @@ async fn evaluate(
             let group = &request.navigation_groups[group_index(&group_answer.choice, request.navigation_groups.len())?];
             group_confidence = group_answer.confidence;
             let question = choice(
-                format!("{UNTRUSTED}\nChoose the caller-supplied address for the next unanswered requirement."),
+                format!("{UNTRUSTED}\nChoose the caller-supplied address for what the task still needs."),
                 group.iter().enumerate().map(|(i, url)| (i.to_string(), Value::from(url.as_str()))),
             );
             let questions = IndexMap::from([(keys::NAVIGATE_TARGET.to_string(), question.clone().into())]);
@@ -1084,23 +998,6 @@ async fn evaluate(
         // A drag is only as certain as the weaker of its two ends.
         target_confidence = Some(target_confidence.map_or(destination_confidence, |t| t.min(destination_confidence)));
     }
-    let (read_assessment, read_confidence) = if request.questions.contains_key(keys::READ_ASSESSMENT) {
-        let answer = choice_answer(&evaluation, keys::READ_ASSESSMENT)?;
-        let assessment = ReadAssessment::parse(&answer.choice).ok_or_else(|| {
-            AgentError::Invalid(format!("{} is not a valid ReadAssessment", text::repr(&answer.choice)))
-        })?;
-        (assessment, answer.confidence)
-    } else {
-        (ReadAssessment::Absent, 0.0)
-    };
-    // Jev judging the page evidence to read is its decision to READ, before finishing too: the answer is written from
-    // the notes, so a DONE on evidence left unread answers without it. Only ESCALATE stands, as it claims nothing. The
-    // assessment is not asked of a page already read, so this cannot repeat.
-    if read_assessment == ReadAssessment::Evidence && operation != Operation::Escalate {
-        (operation, target, url, tab_id, target_confidence, destination) =
-            (Operation::Read, None, None, None, None, None);
-        operation_confidence = read_confidence;
-    }
     Ok(Decision {
         operation,
         url,
@@ -1114,9 +1011,8 @@ async fn evaluate(
         cost,
         input_tokens: tokens,
         bot_check: noul_probability(&evaluation, keys::BOT_CHECK),
+        shows_answer: noul_probability(&evaluation, keys::SHOWS_ANSWER),
         site_failure: noul_probability(&evaluation, "site_failure"),
-        read_assessment,
-        directed: false,
         destination,
         offered: Vec::new(),
     })
@@ -1150,8 +1046,7 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
             "response_status": observation.response_status,
         }),
     );
-    state.insert("requirements".into(), json!(context.requirements));
-    state.insert("unread_requirements".into(), json!(context.unread_requirements));
+    state.insert("answered_in_notes".into(), context.answered_in_notes.into());
     state.insert("notes".into(), context.notes.clone().into());
     state.insert("recent_actions".into(), Value::Array(context.history.iter().map(Dump::dump_exclude_none).collect()));
     if context.omitted_actions > 0 {
@@ -1160,9 +1055,6 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
     state.insert("elements".into(), Value::Array(controls.iter().map(|c| Value::Object(element(c))).collect()));
     if let Some(background) = context.background.as_deref().map(text::strip).filter(|b| !b.is_empty()) {
         state.insert("background".into(), background.into());
-    }
-    if !context.recovery_memory.is_empty() {
-        state.insert("recovery_memory".into(), context.recovery_memory.clone().into());
     }
     if let Some(problem) = &context.problem {
         state.insert("problem".into(), problem.clone().into());
@@ -1311,7 +1203,7 @@ fn target_element(control: &Control, operation: Operation) -> Map<String, Value>
 /// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
 pub(crate) fn login_question() -> Question {
     noul(
-        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task or unread_requirements ask to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in.",
+        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task asks to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in.",
         "A sign-in, verification or access wall blocks the task and the task gives no way through it.",
         "The task can progress without signing in, or the task supplies the credentials to sign in.",
     )
@@ -1606,50 +1498,6 @@ mod tests {
         let states = jev.states.lock().unwrap();
         assert_eq!(states[0]["page"]["offscreen_text"], 38_000);
         assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
-    }
-
-    #[test]
-    fn test_done_on_evidence_left_unread_reads_it_first() {
-        let jev = fake(&[("operation", "done"), ("read_assessment", "evidence")], "");
-        let page = observation((0..3).map(button).collect());
-        let mut context = StepContext::new("Find which shop sells the grinder cheaper");
-        let unread =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
-        assert_eq!(unread.operation, Operation::Read);
-        context.page_read = true;
-        let read = block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
-        assert_eq!(read.operation, Operation::Done);
-    }
-
-    #[test]
-    fn test_a_page_read_unchanged_keeps_jevs_pick_of_its_next_page() {
-        let jev = fake(&[("operation", "click"), ("click_target", "b2"), ("read_assessment", "evidence")], "");
-        let page = observation((0..3).map(button).collect());
-        let mut context = StepContext::new("Count the quotes by one author across every page");
-        let unread =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
-        assert_eq!(unread.operation, Operation::Read);
-        context.page_read = true;
-        let read = block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
-        assert_eq!((read.operation, read.target.map(|c| c.id)), (Operation::Click, Some("b2".into())));
-        assert!(!jev.requests.lock().unwrap()[1].contains_key("read_assessment"));
-    }
-
-    #[test]
-    fn test_an_open_list_is_put_in_the_questions_that_can_leave_it() {
-        let page = observation(vec![button(1)]);
-        let mut context = StepContext::new("Count the quotes by one author across every page");
-        let rules = |request: &Request| {
-            let written = |key: &str| request.questions[key].dump_json();
-            (written(keys::OPERATION), written(&keys::target(Operation::Click)))
-        };
-        let closed = rules(&build_request(&page, &page.controls, &context, &Config::default(), 40));
-        assert!(!closed.0.contains("A list being read goes on") && !closed.1.contains("list being read goes on"));
-        context.open_list = Some("https://example.com/page/2/".into());
-        let request = build_request(&page, &page.controls, &context, &Config::default(), 40);
-        let open = rules(&request);
-        assert!(open.0.contains("its last page read is https://example.com/page/2/"));
-        assert!(open.1.contains("a record's own links lead away from the list"));
     }
 
     #[test]

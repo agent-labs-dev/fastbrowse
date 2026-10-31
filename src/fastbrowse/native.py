@@ -89,7 +89,7 @@ _PLAIN = (
     "cloud_timeout_minutes",
     "cursor",
     "fetch",
-    "fetch_first",
+    "browser",
 )
 """`run_task` arguments that are JSON already and belong to the run itself."""
 
@@ -385,6 +385,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     until: UntilCheck | None = arguments["until"]
     secrets: SecretResolver | None = arguments["secrets"]
     check_access: Callable[[], Awaitable[None]] | None = arguments["check_access"]
+    open_browser: Callable[[], Awaitable[str]] | None = arguments["open_browser"]
     jev: JevClient | None = arguments["jev"]
     llm: LLMClient | None = arguments["llm"]
     http: httpx.AsyncClient | None = arguments["http"]
@@ -411,6 +412,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
             until=None if until is None else raised.wrap(until),
             resolve_secret=None if secrets is None else raised.wrap(secrets.resolve),
             check_access=None if check_access is None else _check(check_access),
+            open_browser=None if open_browser is None else raised.wrap(open_browser),
             jev=None if jev is None else _jev(jev),
             llm=None if llm is None else _llm(llm),
             http=None if http is None else _http(http),

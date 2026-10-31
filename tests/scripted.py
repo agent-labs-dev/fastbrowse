@@ -95,15 +95,10 @@ class ScriptedJev:
 
 
 class ScriptedLLM:
-    """A plan that requires nothing and no shortcut: the answer by what is asked.
+    """Proposes `start` as the start page, the one thing a run asks an LLM."""
 
-    Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
-    """
-
-    _REPLIES: Mapping[LLMPurpose, JsonValue] = {
-        LLMPurpose.PLAN: {"requirements": [], "answer_expected": False},
-        LLMPurpose.SHORTCUT: {"url": None},
-    }
+    def __init__(self, start: str | None = None) -> None:
+        self.start = start
 
     async def generate[T: BaseModel](
         self,
@@ -116,6 +111,6 @@ class ScriptedLLM:
         if ledger is not None:
             ledger.reserve(CostComponent.LLM)
         return Generation(
-            data=schema.model_validate(self._REPLIES[purpose]),
+            data=schema.model_validate({"url": self.start}),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.ESTIMATED, dollars=0.0, purpose=purpose),
         )

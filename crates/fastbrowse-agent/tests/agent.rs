@@ -285,8 +285,8 @@ fn nth(script: &Value, n: usize) -> Option<&Value> {
 }
 
 /// Jev's answer from a case's `jev` script: `pick` names a choice per question key (a list is taken in turn), `pick`
-/// under `pick` any other choice, `nouls` a probability per noul (a list is taken in turn) and `noul` the rest, `confidence` the pick's. Asked
-/// again with a problem, Jev escalates; the wall questions default to no.
+/// under `pick` any other choice, `nouls` a probability per noul (a list is taken in turn) and `noul` the rest, `confidence` the pick's.
+/// The wall questions default to no.
 fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value]) -> Value {
     let asked_again = state.get("problem").is_some();
     let confidence = if asked_again { 0.0 } else { script["confidence"].as_f64().unwrap_or(0.9) };
@@ -311,20 +311,13 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
             continue;
         }
         let options: Vec<&String> = question["criteria"].as_object().unwrap().keys().collect();
-        let picked = if key == "operation" && asked_again {
-            Some("escalate".to_string())
-        } else {
-            let general = (key != "operation"
-                && key != "read_assessment"
-                && !key.ends_with("_target")
-                && !key.ends_with("_group"))
+        let general = (key != "operation" && !key.ends_with("_target") && !key.ends_with("_group"))
             .then(|| &script["pick"]["pick"]);
-            nth(&script["pick"][key], answered(key))
-                .or_else(|| general.and_then(|pick| nth(pick, 0)))
-                .and_then(Value::as_str)
-                .map(String::from)
-                .or_else(|| (key == "operation").then(|| "escalate".to_string()))
-        };
+        let picked = nth(&script["pick"][key], answered(key))
+            .or_else(|| general.and_then(|pick| nth(pick, 0)))
+            .and_then(Value::as_str)
+            .map(String::from)
+            .or_else(|| (key == "operation").then(|| "done".to_string()));
         let choice = picked.filter(|p| options.contains(&p)).unwrap_or_else(|| options[0].clone());
         let probabilities: serde_json::Map<String, Value> =
             options.iter().map(|o| ((*o).clone(), Value::from(if **o == choice { 1.0 } else { 0.0 }))).collect();

@@ -6,7 +6,5 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 public enum FactReader {
     @JsonProperty("jev_choice")
-    JEV_CHOICE,
-    @JsonProperty("llm")
-    LLM
+    JEV_CHOICE
 }

@@ -1,29 +1,22 @@
-//! Scalar fields copied by span: candidates cut from a capture or the notes, Jev's choice among them, and text values
-//! the LLM proposes and code finds in the cited block.
+//! Scalar fields copied by span: candidates cut from a capture or the notes, and Jev's choice among them.
 
-use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, Question};
-use fastbrowse_core::llm::Message;
-use fastbrowse_core::models::{CostComponent, CostLine, Evidence, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, Evidence};
 use fastbrowse_core::output_schema::{OutputField, OutputType};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::float_str;
 use fastbrowse_core::py::text;
-use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
-use super::chunks::{Cite, chunk_page, cited, evidence, marks, read_message};
-use super::notes_room;
-use super::reading::reader_chunk_chars;
-use super::text::{Page, SpanKind, cells, currency, found, lines_of, names, spans, table_header_from_text};
-use crate::comparison::digit;
+use super::chunks::evidence;
+use super::text::{Page, SpanKind, cells, currency, lines_of, spans, table_header_from_text};
 use crate::error::{AgentError, Result};
 use crate::memory::Notes;
-use crate::support::generate;
+use crate::pyre::digit;
 
 /// `ScalarValue = str | int | float | Decimal | date | bool`. A `Decimal` keeps the digits it was written with and a
 /// date its ISO form, as `str()` gives them; read back from JSON both are plain strings, which write the same.
@@ -172,7 +165,8 @@ impl ScalarField {
             Annotation::Int | Annotation::Float | Annotation::Decimal => Some(SpanKind::Number),
             Annotation::Date => Some(SpanKind::Date),
             Annotation::Bool => Some(SpanKind::Bool),
-            Annotation::Str | Annotation::Other => None,
+            Annotation::Str => Some(SpanKind::Str),
+            Annotation::Other => None,
         }
     }
 }
@@ -284,11 +278,25 @@ fn scalar_candidate(field: &ScalarField, raw: &str) -> Option<ScalarValue> {
             let value = digits(raw)?.float()?;
             field.holds(value).then_some(ScalarValue::Float(value))
         }
-        Annotation::Str | Annotation::Other => None,
+        Annotation::Str => Some(ScalarValue::Str(raw.to_string())),
+        Annotation::Other => None,
     }
 }
 
-const UNSUPPORTED_SCALAR: &str = "Only scalar int/float/Decimal/date/bool fields are copied by span; text fields are proposed by propose_text_fields, and records and lists are deferred.";
+const UNSUPPORTED_SCALAR: &str =
+    "Only scalar str/int/float/Decimal/date/bool fields are copied by span; records and lists are deferred.";
+
+/// What the text alone does not say about a block.
+fn marks(block: &Block) -> String {
+    let mut marks = Vec::new();
+    if block.kind == BlockKind::Heading {
+        marks.push("heading");
+    }
+    if block.frame_id.is_some() {
+        marks.push("inside an embedded frame");
+    }
+    if marks.is_empty() { String::new() } else { format!("({}) ", marks.join(", ")) }
+}
 
 /// `_context`: a table value is told apart by its column header and its row, not by the whole table; any value by
 /// what its block is (`marks`), which Jev chose a page heading above a frame by as the heading the frame's form shows.
@@ -573,188 +581,6 @@ pub async fn choose_candidate(
         Some(Answer::Choice(answer)) => copy_field(answer, &pool),
         _ => None,
     })
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TextProposal {
-    pub field: String,
-    pub value: String,
-    pub source_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TextProposals {
-    pub fields: Vec<TextProposal>,
-}
-
-impl Schema for TextProposal {
-    fn ty() -> Ty {
-        ModelTy::frozen(
-            "_TextProposal",
-            vec![
-                Field::required("field", Ty::Str),
-                Field::required("value", Ty::Str),
-                Field::required("source_id", Ty::Str),
-            ],
-        )
-        .ty()
-    }
-}
-
-impl Schema for TextProposals {
-    fn ty() -> Ty {
-        ModelTy::frozen("_TextProposals", vec![Field::required("fields", Ty::list(TextProposal::ty()))]).ty()
-    }
-}
-
-/// A text value and the evidence code found it in.
-pub type Proposed = IndexMap<String, (String, Evidence)>;
-
-fn wanted(fields: &IndexMap<String, ScalarField>) -> String {
-    let lines: Vec<String> = fields
-        .iter()
-        .map(|(name, field)| {
-            let described = [&field.description, &field.title]
-                .into_iter()
-                .flatten()
-                .find(|value| !value.is_empty())
-                .map_or(name.as_str(), String::as_str);
-            format!("- {name}: {described}")
-        })
-        .collect();
-    lines.join("\n")
-}
-
-/// The LLM names each text value and the block it is in; code keeps it only if that block, offered in this chunk,
-/// contains the value up to its punctuation's shape, and keeps the block's own spelling. A text value is often part of
-/// a block ("httpx 0.28.1"), which a copy of whole blocks cannot express, so the block is its evidence.
-#[allow(clippy::too_many_arguments)]
-pub async fn propose_text_fields(
-    llm: &dyn fastbrowse_core::llm::LLMClient,
-    task: &str,
-    capture: &Capture,
-    fields: &IndexMap<String, ScalarField>,
-    max_chars: Option<i64>,
-    tokens: &TokenBudget,
-    ledger: Option<&Ledger>,
-) -> Result<(Proposed, Vec<CostLine>)> {
-    let page = Page::new(capture);
-    let system = format!(
-        "# Field extraction\nFor each requested field shown on this page, give only that field's value exactly as the page writes it, and the source_id of the block it is in. Omit a field the page does not show; never infer it.\n\n# Trust\n{UNTRUSTED}"
-    );
-    let question = format!("{task}\n\n# Fields\n{}", wanted(fields));
-    let chunk_chars = max_chars
-        .unwrap_or_else(|| reader_chunk_chars(&page, tokens, &system, &question, &[], "", &TextProposals::ty()));
-    let mut found_fields: Proposed = IndexMap::new();
-    let mut costs = Vec::new();
-    for part in chunk_page(&page, chunk_chars, 1) {
-        let missing: Vec<&String> = fields.keys().filter(|name| !found_fields.contains_key(*name)).collect();
-        if missing.is_empty() {
-            break;
-        }
-        let messages = [Message::system(system.clone()), read_message(&page, &part, &question, &[], "")];
-        let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, ledger).await?;
-        if let Some(ledger) = ledger {
-            ledger.record([result.cost.clone()])?;
-        }
-        costs.push(result.cost.clone());
-        for proposal in result.data.fields {
-            let value = text::squash(&proposal.value);
-            if !missing.contains(&&proposal.field) || value.is_empty() {
-                continue;
-            }
-            if let Some(quoted) = cited(&page, &part, &Cite::one(&proposal.source_id))
-                && let Some(written) = found(&quoted.quote, &value).filter(|w| !w.is_empty())
-            {
-                found_fields.insert(proposal.field, (written, quoted));
-            }
-        }
-    }
-    Ok((found_fields, costs))
-}
-
-/// Read text fields from the compared pages rather than only the page the run ended on.
-///
-/// A derived selection quotes nothing itself, so resolve it to its current quoted basis. A literal value needs one
-/// unambiguous record context; a name the task supplies can use the record compared for that name.
-pub async fn propose_text_fields_from_notes(
-    llm: &dyn fastbrowse_core::llm::LLMClient,
-    task: &str,
-    notes: &Notes,
-    fields: &IndexMap<String, ScalarField>,
-    capture: Option<&Capture>,
-    tokens: &TokenBudget,
-    ledger: Option<&Ledger>,
-) -> Result<Proposed> {
-    if notes.facts().is_empty() {
-        return Ok(IndexMap::new());
-    }
-    let wanted = wanted(fields);
-    let mut messages = vec![
-        Message::system(format!(
-            "# Field extraction\nFor each requested field, give only that field's value, as source_id the [id] of the note whose quote contains it. Derived conclusions choose records but do not supply quotes: cite an original quoted basis note. A field that picks one of the things the task names (which is newer, cheaper, larger) takes that name as the task writes it, citing the note that decides it. Omit any other field no note's quote contains; never infer it.\n\n# Trust\n{UNTRUSTED}"
-        )),
-        Message::user(format!("# Task\n{task}\n\n# Fields\n{wanted}\n\n# Notes\n")),
-    ];
-    let room = notes_room(tokens, &messages, &TextProposals::ty());
-    let rendered = notes.render(room, true, false)?;
-    messages[1].content.push_str(&rendered);
-    let result = generate::<TextProposals>(llm, LLMPurpose::Read, &messages, ledger).await?;
-    if let Some(ledger) = ledger {
-        ledger.record([result.cost.clone()])?;
-    }
-    let current = notes.current_evidence(capture);
-    let mut proposed: Proposed = IndexMap::new();
-    for proposal in result.data.fields {
-        let value = text::squash(&proposal.value);
-        let mut quoted = current.get(&proposal.source_id).cloned();
-        if quoted.is_none() && notes.derived(&proposal.source_id) && notes.current(&proposal.source_id) {
-            let given = names(task, &value).is_some_and(|written| !written.is_empty());
-            quoted = compared(notes, &proposal.source_id, &value, &current, given);
-        }
-        let Some(quoted) = quoted else { continue };
-        if !fields.contains_key(&proposal.field) || proposed.contains_key(&proposal.field) || value.is_empty() {
-            continue;
-        }
-        let written = found(&quoted.quote, &value)
-            .filter(|w| !w.is_empty())
-            .or_else(|| names(task, &value).filter(|w| !w.is_empty()));
-        if let Some(written) = written {
-            proposed.insert(proposal.field, (written, quoted));
-        }
-    }
-    Ok(proposed)
-}
-
-/// Where a quote sits and what it says: address, frame, block, offsets, text and hovered control.
-type Span = (String, Option<String>, String, i64, i64, String, Option<String>);
-
-/// `_compared`: a derived field must resolve to its current quoted basis, not to the conclusion's prose.
-fn compared(
-    notes: &Notes,
-    key: &str,
-    name: &str,
-    current: &IndexMap<String, Evidence>,
-    given: bool,
-) -> Option<Evidence> {
-    let facts = notes.facts_by_id();
-    let records: Vec<(&crate::memory::Fact, &Evidence)> =
-        notes.expand_evidence_ids([key]).iter().filter_map(|k| Some((facts.get(k)?, current.get(k)?))).collect();
-    let mut matches: Vec<&(&crate::memory::Fact, &Evidence)> =
-        records.iter().filter(|(_, evidence)| found(&evidence.quote, name).is_some()).collect();
-    if matches.is_empty() && given {
-        matches = records.iter().filter(|(fact, _)| names(&fact.text, name).is_some()).collect();
-    }
-    // Repeated captures of an unchanged quote agree; distinct record contexts must not inherit each other's field.
-    let mut unique: IndexMap<Span, Evidence> = IndexMap::new();
-    for (_, e) in matches {
-        let span =
-            (e.url.clone(), e.frame_id.clone(), e.source_id.clone(), e.start, e.end, e.quote.clone(), control_json(e));
-        unique.insert(span, (*e).clone());
-    }
-    if unique.len() == 1 { unique.into_values().next() } else { None }
 }
 
 /// `copy_field`: the candidate Jev chose, when exactly one has its id.

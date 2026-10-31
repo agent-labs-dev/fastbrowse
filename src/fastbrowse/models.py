@@ -70,16 +70,13 @@ class Operation(StrEnum):
     DIALOG = "dialog"
     READ = "read"
     DONE = "done"
-    ESCALATE = "escalate"
     NAVIGATE = "navigate"
 
 
 class Decider(StrEnum):
-    """Who chose a step: Jev, the LLM (a recovery or a reader that named it), or a rule in code, such as the
-    next page of a list or DONE once a lookup is answered."""
+    """Who chose a step: Jev, or a rule in code, such as the next page of a list."""
 
     JEV = "jev"
-    LLM = "llm"
     CODE = "code"
 
 
@@ -120,7 +117,6 @@ class Citation(Frozen):
     id: int = Field(ge=1)
     """The number used by this fact's links in the answer, stable within a run."""
     text: str
-    requirement_id: str | None = None
     url: str
     quote: str
     deep_link: str
@@ -128,12 +124,10 @@ class Citation(Frozen):
 
 class FactReader(StrEnum):
     JEV_CHOICE = "jev_choice"
-    LLM = "llm"
 
 
 class StepFact(Frozen):
     text: str
-    requirement_id: str | None = None
     quote: str | None = None
     """None for a count, total or winner derived from other facts rather than read from the page."""
     url: str | None = None
@@ -151,16 +145,6 @@ class StepChoice(Frozen):
     operations: tuple[Operation, ...]
     chosen: bool = False
     """Whether Jev chose this control: the target, and for a drag the destination too."""
-
-
-# Why a step acted on a recovery rather than on Jev's pick: the fallback that fired, and the pick it set aside.
-class StepFallback(Frozen):
-    reason: str
-    """The reason the run stopped following Jev, as recovery was told it."""
-    confidence: float = Field(ge=0, le=1)
-    """Jev's certainty on the step it gave up, on the weakest link of its choices."""
-    target: str | None = None
-    """The control Jev chose, by its label, when it chose one."""
 
 
 class ArtifactKind(StrEnum):
@@ -199,12 +183,8 @@ class CostBasis(StrEnum):
 
 
 class LLMPurpose(StrEnum):
-    PLAN = "plan"
-    READ = "read"
-    FIELD_TEXT = "field_text"
-    RECOVER = "recover"
+    START = "start"
     COMPOSE = "compose"
-    SHORTCUT = "shortcut"
 
 
 class CostLine(Frozen):
@@ -256,10 +236,8 @@ class StepResult(Frozen):
     facts: tuple[StepFact, ...] = ()
     """Facts added to the notes by this step, with resolved secrets redacted."""
     page_changed: bool | None = None
-    """Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."""
+    """Whether the page's fingerprint changed; None for steps that do not act (read)."""
     duration_ms: int = Field(ge=0)
-    fallback: StepFallback | None = Field(default=None, exclude_if=lambda fallback: fallback is None)
-    """The fallback that decided this step instead of Jev's pick, when `Config.step_choices` asked for it."""
     choices: tuple[StepChoice, ...] = Field(default=(), exclude_if=lambda choices: not choices)
     """The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them."""
 

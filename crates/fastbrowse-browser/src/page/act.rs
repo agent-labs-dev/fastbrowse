@@ -450,7 +450,7 @@ impl CdpPage {
                 self.session.handle_dialog(accept, action.text.as_deref()).await?;
                 Ok((StepOutcome::Executed, None))
             }
-            Operation::Read | Operation::Done | Operation::Escalate => Err(BrowserError::Failed(format!(
+            Operation::Read | Operation::Done => Err(BrowserError::Failed(format!(
                 "{} does not dispatch through the browser layer",
                 action.operation.as_str()
             ))),

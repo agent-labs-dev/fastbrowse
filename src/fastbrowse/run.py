@@ -97,7 +97,8 @@ async def run_task(
     record: Path | None = None,
     cursor: bool | None = None,
     fetch: bool = False,
-    fetch_first: bool = False,
+    browser: bool = False,
+    open_browser: Callable[[], Awaitable[str]] | None = None,
     settings: Mapping[str, str] | None = None,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
@@ -169,14 +170,16 @@ async def run_task(
     as needing a browser. Browser, recording, download and `cursor=True` options mean nothing here and are an error
     rather than ignored.
 
-    `fetch_first` reads the same way, and when the fetched run ends `blocked` because the page refused
-    something only a browser can do, runs the task again on the browser the other options describe. That run
-    spends what the attempt left of `limits`, and its cost lists the attempt's calls first. A recording or an
-    attached window has to exist from the first step, so `record`, `attach` and `target_match` are an error.
+    Without `fetch`, a run reads the same way until the page refuses something only a browser can do, then runs the
+    task again on the browser the other options describe, spending what the attempt left of `limits`, with the
+    attempt's calls listed first in its cost. `browser` starts the browser from the first step, as do `record`,
+    `attach`, `target_match`, `cdp_url`, `cdp_port`, a signed-in profile, a headed window and `foreground`.
+
+    `open_browser` is the caller's own browser, opened only if the run needs one: it returns the address of a tab in
+    front to drive, and the caller closes it after the run.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
-    caller already knows. The planner, recovery and the answer see it in its own section headed as not
-    requirements, and Jev sees it as `background`; requirements come from `task` alone.
+    caller already knows. Jev sees it as `background`.
 
     `settings` configures the run by the environment variables' own names (`OPENROUTER_API_KEY`,
     `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_LLM_PROVIDER`,

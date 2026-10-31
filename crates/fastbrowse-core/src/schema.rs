@@ -267,11 +267,6 @@ pub fn definitions(roots: &[(Ty, Mode)]) -> Value {
     sort(json!({ "$defs": defs }), None)
 }
 
-/// `json_schema` of a type that describes itself.
-pub fn json_schema_of<T: Schema>() -> Value {
-    json_schema(&T::ty())
-}
-
 struct Generator {
     mode: Mode,
     defs: BTreeMap<String, Value>,
