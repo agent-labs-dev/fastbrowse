@@ -474,6 +474,19 @@ async fn test_page_ready_is_told_once_the_opening_page_is_open_and_only_then() {
 }
 
 #[test]
+fn test_the_trace_keeps_each_page_a_step_saw_without_its_secrets() {
+    let trace = Trace::collecting();
+    let agent = agent().with_trace(trace.clone());
+    agent.redactor().register("password", "hunter2", Some("https://acme.test"));
+    let seen = Observation { viewport_text: "Signed in with hunter2".into(), ..at("https://acme.test/a", &[]) };
+    agent.record_page(&run_state(), &seen);
+    let events = trace.events();
+    assert_eq!(events[0]["event"], "page");
+    assert_eq!(events[0]["url"], "https://acme.test/a");
+    assert_eq!(events[0]["text"], "Signed in with [secret:password]");
+}
+
+#[test]
 fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
     use super::state::Stop;
     use fastbrowse_core::models::WallKind;

@@ -14,7 +14,7 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::origin_of;
-use serde_json::Map;
+use serde_json::{Map, Value, json};
 
 use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Withheld, withheld};
@@ -110,6 +110,7 @@ impl Agent {
                     decision
                 }
             };
+            self.record_page(state, &observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
             // A page can say it failed and still show the answer, as one with a stale Loading line does: the likelier
@@ -204,6 +205,22 @@ impl Agent {
                 chosen: chosen.contains(&control.id.as_str()),
             })
             .collect()
+    }
+
+    /// What this step showed the run, in the trace, so a run can be checked against the pages it saw.
+    pub(super) fn record_page(&self, state: &RunState, observation: &Observation) {
+        self.event("page", || {
+            let controls: Vec<Value> =
+                observation.controls.iter().map(|control| json!({"label": control.label, "value": control.value})).collect();
+            Map::from_iter([
+                ("step".into(), state.steps.len().into()),
+                ("url".into(), observation.url.clone().into()),
+                ("title".into(), observation.title.clone().into()),
+                ("status".into(), observation.response_status.into()),
+                ("text".into(), observation.viewport_text.clone().into()),
+                ("controls".into(), controls.into()),
+            ])
+        });
     }
 
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
@@ -502,6 +519,11 @@ impl Agent {
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
+        if let Some(value) = state.history.last().and_then(|entry| entry.text.clone()) {
+            self.event("typed", || {
+                Map::from_iter([("step".into(), state.steps.len().into()), ("value".into(), value.into())])
+            });
+        }
         let note = self.redact(act.detail.as_deref().unwrap_or_default());
         let facts: Vec<_> = state.notes.facts()[facts_before.min(state.notes.facts().len())..]
             .iter()

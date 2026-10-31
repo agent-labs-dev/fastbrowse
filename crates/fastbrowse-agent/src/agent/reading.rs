@@ -49,7 +49,11 @@ impl Agent {
         let progressed = read_sources(&state.notes).iter().any(|key| !known.contains(key));
         self.event("read", || {
             Map::from_iter([
+                ("step".into(), state.steps.len().into()),
                 ("url".into(), capture.url.clone().into()),
+                ("title".into(), capture.title.clone().into()),
+                ("sha256".into(), capture.sha256.clone().into()),
+                ("text".into(), capture.text.clone().into()),
                 ("chars".into(), text::len(&capture.text).into()),
                 ("facts_added".into(), added.into()),
             ])
