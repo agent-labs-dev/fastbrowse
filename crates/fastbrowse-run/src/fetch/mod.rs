@@ -369,7 +369,7 @@ impl Page for FetchedPage {
                 // A guessed address, not the caller's page: the loop falls back to `start` on a browser failure, and
                 // concluding that the task needs a browser here would end the run.
                 Err(NotFetched(message)) if back_to.is_some() => Err(BrowserError::Failed(message)),
-                Err(NotFetched(message)) => Err(self.needs_browser(message.into())),
+                Err(NotFetched(message)) => Err(self.needs_browser(message)),
             }
         })
     }
@@ -394,7 +394,7 @@ impl Page for FetchedPage {
                         .into(),
                 ));
             };
-            self.open(&url).await.map_err(|NotFetched(message)| self.needs_browser(message.into()))?;
+            self.open(&url).await.map_err(|NotFetched(message)| self.needs_browser(message))?;
             Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: true })
         })
     }
