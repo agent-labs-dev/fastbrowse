@@ -10,6 +10,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -29,6 +30,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -49,6 +51,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -68,6 +71,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -87,6 +91,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -107,6 +112,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -126,6 +132,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -145,6 +152,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -165,6 +173,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -184,6 +193,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -203,6 +213,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -223,6 +234,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -307,6 +319,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -327,6 +340,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -347,6 +361,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -367,6 +382,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -386,6 +402,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -405,6 +422,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -424,6 +442,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -443,6 +462,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -462,6 +482,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -481,6 +502,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -500,6 +522,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -519,6 +542,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"

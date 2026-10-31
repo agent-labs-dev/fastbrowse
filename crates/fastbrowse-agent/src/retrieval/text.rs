@@ -345,9 +345,9 @@ pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
             _ => {}
         }
     }
-    let mut pieces: Vec<Option<(usize, usize)>> = vec![None; spans.len()];
+    let mut pieces = vec![None; spans.len()];
     if let Some(limit) = limit.filter(|limit| *limit > 0) {
-        let cut: Vec<((usize, usize), Option<(usize, usize)>)> = spans
+        (spans, pieces) = spans
             .iter()
             .flat_map(|&(start, end)| {
                 let count = (end - start).div_ceil(limit);
@@ -356,8 +356,7 @@ pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
                     .enumerate()
                     .map(move |(n, from)| ((from, (from + limit).min(end)), (count > 1).then_some((n + 1, count))))
             })
-            .collect();
-        (spans, pieces) = cut.into_iter().unzip();
+            .unzip();
     }
     let starts: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.0).collect());
     let ends: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.1).collect());

@@ -10,6 +10,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Open",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -28,6 +29,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Quantity 0",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -49,6 +51,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Open",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -67,6 +70,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Quantity 1",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -88,6 +92,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Open",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -106,6 +111,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Quantity 2",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -127,6 +133,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Open",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -145,6 +152,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Quantity 3",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -166,6 +174,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Open",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -184,6 +193,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Quantity 4",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -205,6 +215,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Open",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -223,6 +234,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Quantity 5",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -244,6 +256,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Inner 0",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -263,6 +276,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Remove",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -282,6 +296,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Inner 1",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -301,6 +316,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Remove",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -320,6 +336,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Inner 2",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -339,6 +356,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Remove",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -358,6 +376,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Inner 3",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -377,6 +396,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Remove",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -396,6 +416,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Inner 4",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -415,6 +436,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Remove",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -434,6 +456,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Inner 5",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -453,6 +476,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Remove",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
