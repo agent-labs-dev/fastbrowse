@@ -148,7 +148,7 @@ fn refused(kind: &str, message: String) -> PyErr {
 /// (`fastbrowse.native` writes it); `browser_api_key`, `secrets` (the refs the resolver offers, as JSON), `config`
 /// (JSON) and `settings` (environment variable names to values, as JSON, read instead of the environment and `.env`)
 /// are the host's side. Each callback is a Python function: `on_event` gets each event as JSON, `on_frame` each JPEG as
-/// bytes, `until` the final URL, `resolve_secret` a name and an origin. `open_browser` answers the address of the browser it opened. `check_access`, `jev`,
+/// bytes, `until` the final URL, `resolve_secret` a name and an origin. `open_browser` answers the address of the browser it opened; `page_ready` is told when the first page is open. `check_access`, `jev`,
 /// `llm` and `http` are the caller's own objects wrapped by `fastbrowse.native` into functions that answer JSON (see `bridge`).
 ///
 /// Each is called with the GIL held, and a coroutine one returns is run on the loop and awaited. An event, frame,
@@ -156,7 +156,7 @@ fn refused(kind: &str, message: String) -> PyErr {
 #[pyfunction]
 #[pyo3(signature = (
     task, *, browser_api_key=None, secrets=None, config=None, settings=None, on_event=None, on_frame=None, until=None,
-    resolve_secret=None, check_access=None, open_browser=None, jev=None, llm=None, http=None, trace=false,
+    resolve_secret=None, check_access=None, open_browser=None, page_ready=None, jev=None, llm=None, http=None, trace=false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn run_task(
@@ -172,6 +172,7 @@ fn run_task(
     resolve_secret: Option<Py<PyAny>>,
     check_access: Option<Py<PyAny>>,
     open_browser: Option<Py<PyAny>>,
+    page_ready: Option<Py<PyAny>>,
     jev: Option<Py<PyAny>>,
     llm: Option<Py<PyAny>>,
     http: Option<Py<PyAny>>,
@@ -255,6 +256,16 @@ fn run_task(
         run.open_browser = Some(Arc::new(move || {
             let call = call.clone();
             Box::pin(async move { call(()).await })
+        }));
+    }
+    if let Some(function) = page_ready {
+        let call: HostCall<(), ()> = host_call(event_loop.clone(), function, no_argument, nothing);
+        run.page_ready = Some(Arc::new(move || {
+            let call = call.clone();
+            Box::pin(async move {
+                // A raised callback stops the run through `Raised` on the Python side; there is no answer to carry.
+                let _ = call(()).await;
+            })
         }));
     }
     if let Some(function) = jev {

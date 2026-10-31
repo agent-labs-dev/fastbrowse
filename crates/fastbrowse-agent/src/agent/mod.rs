@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use fastbrowse_clients::validation::{Lines, jev_spend};
+use fastbrowse_core::BoxFuture;
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::DecisionClient;
@@ -90,6 +91,9 @@ struct Seen {
     resume: Option<Resume>,
 }
 
+/// Told once the run's first page is open: see [`Agent::with_page_ready`].
+pub type PageReady = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+
 pub struct Agent {
     page: Arc<dyn Page>,
     jev: Arc<dyn DecisionClient>,
@@ -97,6 +101,7 @@ pub struct Agent {
     config: Config,
     secrets: Option<Arc<dyn SecretResolver>>,
     on_event: Option<EventHandler>,
+    page_ready: Option<PageReady>,
     trace: Trace,
     /// The run's secrets, shared with its trace.
     redactor: Arc<Mutex<Redactor>>,
@@ -114,6 +119,7 @@ impl Agent {
             config,
             secrets: None,
             on_event: None,
+            page_ready: None,
             trace: Trace::disabled().redacting(Arc::clone(&redactor)),
             redactor,
             seen: Mutex::new(Seen::default()),
@@ -133,6 +139,12 @@ impl Agent {
 
     pub fn with_events(mut self, on_event: Option<EventHandler>) -> Agent {
         self.on_event = on_event;
+        self
+    }
+
+    /// `page_ready` is called once the opening page is open, before the first decision.
+    pub fn with_page_ready(mut self, page_ready: Option<PageReady>) -> Agent {
+        self.page_ready = page_ready;
         self
     }
 
@@ -246,6 +258,12 @@ impl Agent {
         Ok(if loop_returned { result } else { self.ending_frame(result).await })
     }
 
+    async fn tell_page_ready(&self) {
+        if let Some(page_ready) = &self.page_ready {
+            page_ready().await;
+        }
+    }
+
     /// The run up to its loop's result: the opening page, the run state, then the loop.
     async fn body(
         &self,
@@ -257,6 +275,7 @@ impl Agent {
     ) -> Result<RunResult, Flow> {
         if let Some(Resume { state, url }) = resume {
             self.trace.phase("open", self.page.navigate(&url, None)).await?;
+            self.tell_page_ready().await;
             let state = slot.insert(state.carried_on(ledger.clone()));
             return Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await;
         }
@@ -276,6 +295,7 @@ impl Agent {
             // The caller gave a goal and no page, so this address was worked out from the task.
             self.front_page_if_blank(opening).await?;
         }
+        self.tell_page_ready().await;
         let mut state = RunState::new(
             task.to_string(),
             options.inputs.clone(),

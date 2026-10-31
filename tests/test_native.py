@@ -123,6 +123,7 @@ def test_every_run_task_argument_crosses() -> None:
         "until",
         "check_access",
         "open_browser",
+        "page_ready",
         "jev",
         "llm",
         "http",

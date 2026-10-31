@@ -386,6 +386,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     secrets: SecretResolver | None = arguments["secrets"]
     check_access: Callable[[], Awaitable[None]] | None = arguments["check_access"]
     open_browser: Callable[[], Awaitable[str]] | None = arguments["open_browser"]
+    page_ready: Callable[[], Awaitable[None]] | None = arguments["page_ready"]
     jev: JevClient | None = arguments["jev"]
     llm: LLMClient | None = arguments["llm"]
     http: httpx.AsyncClient | None = arguments["http"]
@@ -413,6 +414,7 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
             resolve_secret=None if secrets is None else raised.wrap(secrets.resolve),
             check_access=None if check_access is None else _check(check_access),
             open_browser=None if open_browser is None else raised.wrap(open_browser),
+            page_ready=None if page_ready is None else raised.wrap(page_ready),
             jev=None if jev is None else _jev(jev),
             llm=None if llm is None else _llm(llm),
             http=None if http is None else _http(http),

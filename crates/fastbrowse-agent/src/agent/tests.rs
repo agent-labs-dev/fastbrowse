@@ -378,7 +378,9 @@ async fn test_going_back_to_a_page_state_after_new_evidence_is_progress() {
 }
 
 /// A page with no browser behind it, which cannot open the address it is given.
-struct Unfetchable;
+struct Unfetchable {
+    opens: bool,
+}
 
 impl Page for Unfetchable {
     fn artifacts(&self) -> Vec<Artifact> {
@@ -394,7 +396,13 @@ impl Page for Unfetchable {
     }
 
     fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
-        Box::pin(async { Err(BrowserError::NeedsBrowser("the page renders its content with scripts".into())) })
+        let opens = self.opens;
+        Box::pin(async move {
+            if opens {
+                return Ok(());
+            }
+            Err(BrowserError::NeedsBrowser("the page renders its content with scripts".into()))
+        })
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
@@ -434,12 +442,35 @@ impl Page for Unfetchable {
 
 #[tokio::test]
 async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason() {
-    let agent = Agent::new(Arc::new(Unfetchable), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let agent = Agent::new(
+        Arc::new(Unfetchable { opens: false }),
+        Arc::new(ScriptedJev::new(Vec::new())),
+        Arc::new(ScriptedLLM),
+    );
     let options = super::RunOptions { start: Some("https://example.test/".into()), ..Default::default() };
     let result = agent.run("Read the price", options).await.expect("a result, not an error");
     assert_eq!(result.status, Status::Blocked);
     assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
     assert!(result.steps.is_empty() && result.evidence.is_empty() && result.final_url.is_none());
+}
+
+#[tokio::test]
+async fn test_page_ready_is_told_once_the_opening_page_is_open_and_only_then() {
+    for (opens, told) in [(true, 1), (false, 0)] {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        let agent =
+            Agent::new(Arc::new(Unfetchable { opens }), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
+                .with_page_ready(Some(Arc::new(move || {
+                    let counter = counter.clone();
+                    Box::pin(async move {
+                        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    })
+                })));
+        let options = super::RunOptions { start: Some("https://example.test/".into()), ..Default::default() };
+        let _ = agent.run("Read the price", options).await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), told);
+    }
 }
 
 #[test]

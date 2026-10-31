@@ -99,6 +99,7 @@ async def run_task(
     fetch: bool = False,
     browser: bool = False,
     open_browser: Callable[[], Awaitable[str]] | None = None,
+    page_ready: Callable[[], Awaitable[None]] | None = None,
     settings: Mapping[str, str] | None = None,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
@@ -176,7 +177,8 @@ async def run_task(
     `attach`, `target_match`, `cdp_url`, `cdp_port`, a signed-in profile, a headed window and `foreground`.
 
     `open_browser` is the caller's own browser, opened only if the run needs one: it returns the address of a tab in
-    front to drive, and the caller closes it after the run.
+    front to drive, and the caller closes it after the run. `page_ready` is awaited once the browser's first page
+    is open, before the first decision, so a caller timing the agent can keep browser setup off its clock.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.

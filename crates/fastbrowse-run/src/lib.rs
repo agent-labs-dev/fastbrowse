@@ -93,6 +93,9 @@ pub struct Host {
     /// The caller's browser, opened only if the run reaches a step that needs one: it answers the address to attach
     /// to, and the caller closes it after the run.
     pub open_browser: Option<OpenBrowser>,
+    /// Called once the browser run's first page is open, the moment setup ends and the agent's own work begins, so a
+    /// caller timing the agent can keep browser setup off its clock.
+    pub page_ready: Option<PageReady>,
     pub config: Option<Config>,
     pub settings: Option<Settings>,
     /// The HTTP client the model clients and DevTools discovery use; a caller's outlives the run.
@@ -104,6 +107,8 @@ pub struct Host {
 
 /// See [`Host::open_browser`].
 pub type OpenBrowser = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync>;
+
+pub use fastbrowse_agent::agent::PageReady;
 
 /// A run's stop signal, shared by whoever may stop it and the run itself.
 #[derive(Clone, Default)]
@@ -720,7 +725,8 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             .with_config(config.clone())
             .with_secrets(host.secrets.clone())
             .with_trace(http.trace.clone())
-            .with_events(captioned(host.on_event.clone(), &recording));
+            .with_events(captioned(host.on_event.clone(), &recording))
+            .with_page_ready(host.page_ready.clone());
         let run = RunOptions {
             start: task.start.clone(),
             // With no page named, the first address is worked out from the task, unless attaching to an existing
