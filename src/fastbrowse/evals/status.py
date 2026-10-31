@@ -55,3 +55,8 @@ def status_matches(arm: str, status: str | None, expected: Status, answered: boo
     if expected != Status.COMPLETE:
         return arm == "fastbrowse" and status == expected.value
     return normalize(status, hosted=arm == "browser-use", answered=answered) == Ending.DONE
+
+
+TIMING_BASIS = "session-ready-to-answer"
+"""What a row's `seconds` measures: from the browser session being ready to the agent's final answer, so opening and
+closing the session are outside it. Every row records it, and rows on different bases are never compared."""

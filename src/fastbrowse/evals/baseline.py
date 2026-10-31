@@ -21,6 +21,9 @@ FIELDS = {
     "correct",
     "normalized_status",
     "seconds",
+    "timing_basis",
+    "session_open_seconds",
+    "session_close_seconds",
     "dollars",
     "llm_calls",
     "tokens_per_second",
@@ -42,6 +45,8 @@ RUN_FIELDS = {
     "git_sha",
     "git_dirty",
     "agent_limits",
+    "timing_basis",
+    "session_open_limit_seconds",
     "budget_policy",
 }
 

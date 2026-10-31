@@ -35,7 +35,7 @@ from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
 from fastbrowse.evals.mock_tasks import MockTask
-from fastbrowse.evals.status import normalize
+from fastbrowse.evals.status import TIMING_BASIS, normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import (
@@ -167,6 +167,8 @@ def _row(
         "failure": failure,
         "status": result.status.value,
         "seconds": round(seconds, 1),
+        # The suite's Chrome starts once, before any task, so no task's seconds include opening or closing it.
+        "timing_basis": TIMING_BASIS,
         "transient_seconds": round(lost, 2),
         "dollars": None if result.cost.has_unknown else round(result.cost.known_dollars, 5),
         "unknown_cost": result.cost.has_unknown,

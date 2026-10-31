@@ -57,6 +57,9 @@ class Attempt(EvidenceModel):
     passed: bool | None
     completed: bool
     seconds: Number | None
+    timing_basis: Identifier | None = None
+    session_open_seconds: Number | None = None
+    session_close_seconds: Number | None = None
     dollars: Number | None
     unknown_cost: bool
     estimated_api_cost: ApiCostEstimate | None = None
@@ -71,8 +74,9 @@ class Attempt(EvidenceModel):
     @model_serializer(mode="wrap")
     def serialize_estimate(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data = handler(self)
-        if self.estimated_api_cost is None:
-            data.pop("estimated_api_cost", None)
+        for name in ("estimated_api_cost", "timing_basis", "session_open_seconds", "session_close_seconds"):
+            if getattr(self, name) is None:
+                data.pop(name, None)
         return data
 
     @model_validator(mode="after")
@@ -155,6 +159,9 @@ def _project(row: Mapping[str, Any], source: Source, index: int, selected: bool)
         seconds=data.get("seconds"),
         dollars=None if unknown else data.get("dollars"),
         unknown_cost=bool(unknown or data.get("dollars") is None),
+        timing_basis=data.get("timing_basis"),
+        session_open_seconds=data.get("session_open_seconds"),
+        session_close_seconds=data.get("session_close_seconds"),
         estimated_api_cost=data.get("estimated_api_cost"),
         git_sha=run.get("git_sha") or data.get("git_sha"),
         git_dirty=run.get("git_dirty", data.get("git_dirty")),

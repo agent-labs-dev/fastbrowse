@@ -42,7 +42,7 @@ from typing import Any, Literal, TypeGuard
 from pydantic import BaseModel, ConfigDict
 
 from fastbrowse.evals import baseline, catalog, versions
-from fastbrowse.evals.status import Ending
+from fastbrowse.evals.status import TIMING_BASIS, Ending
 from fastbrowse.evals.storage import ArchiveReceipt, read_archive
 from fastbrowse.models import Limits
 
@@ -337,6 +337,8 @@ def _shape(row: Mapping[str, Any]) -> list[Finding]:
         problems.append(_finding(REFUSE, "shape", f"{where}: task_version is not an integer"))
     if not _number(row.get("seconds")) or row["seconds"] < 0:
         problems.append(_finding(REFUSE, "shape", f"{where}: seconds is not a finite non-negative number"))
+    if row.get("timing_basis") not in (None, TIMING_BASIS):
+        problems.append(_finding(REFUSE, "shape", f"{where}: seconds include opening or closing the browser session"))
     if row.get("dollars") is not None and (not _number(row.get("dollars")) or row["dollars"] < 0):
         problems.append(_finding(REFUSE, "shape", f"{where}: dollars is neither null nor a finite non-negative number"))
     if not isinstance(row.get("passed"), bool):
@@ -589,7 +591,7 @@ def _selected_matches(entry: Mapping[str, Any], row: Mapping[str, Any]) -> list[
     """The retained attempt is the row: its time, cost and grade cannot differ from what was published."""
     where = _where(row)
     problems = []
-    for field in ("seconds", "dollars", "unknown_cost", "passed"):
+    for field in ("seconds", "timing_basis", "dollars", "unknown_cost", "passed"):
         if field in row and field in entry and entry.get(field) != row.get(field):
             problems.append(_finding(REFUSE, "ledger", f"{where}: the selected attempt's {field} differs from the row"))
     return problems
@@ -677,7 +679,16 @@ def _distinct_repeats(rows: Sequence[Mapping[str, Any]]) -> set[object]:
     return {row.get("repeat") for row in versions._measured(rows) if row.get("repeat") is not None}
 
 
-_MATCHED_CONFIG = ("providers", "model", "text_model", "max_steps", "step_cap", "step_cap_unit", "decision_cap")
+_MATCHED_CONFIG = (
+    "providers",
+    "model",
+    "text_model",
+    "max_steps",
+    "step_cap",
+    "step_cap_unit",
+    "decision_cap",
+    "timing_basis",
+)
 
 
 def _published_release(row: Mapping[str, Any]) -> str | None:

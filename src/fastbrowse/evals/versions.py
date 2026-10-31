@@ -223,14 +223,16 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_version", "status",
          "normalized_status", "task_successful", "passed",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
-         "answered", "session_seconds", "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
+         "answered", "session_seconds", "timing_basis", "session_open_seconds", "session_close_seconds",
+         "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
          "actions", "decisions", "llm_calls", "tokens_per_second",
          "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
              "concurrency", "jev_ultrafast", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
              "benchmark_suite", "benchmark_runner_sha", "benchmark_runner_dirty",
              "benchmark_catalog_sha256", "agent_limits", "budget_policy", "budget_usd", "max_seconds", "max_dollars",
-             "hosted_max_cost_usd", "browsers", "provider_limits")  # fmt: skip
+             "hosted_max_cost_usd", "browsers", "provider_limits", "timing_basis",
+             "session_open_limit_seconds")  # fmt: skip
 
 
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -454,6 +456,8 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
             group = comparison.rows
             arms = {}
             scored = _by_arm(comparison.scored)
+            # Seconds on two clocks say nothing about either arm, so such a comparison reports none.
+            timed = len({r.get("timing_basis") for r in comparison.scored}) <= 1
             for arm, attempts in _by_arm(group).items():
                 arm_rows = scored.get(arm, [])
                 prices = [r["dollars"] for r in arm_rows if r["dollars"] is not None]
@@ -462,7 +466,7 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
                     total=len(arm_rows),
                     excluded=len(attempts) - len(arm_rows),
                     priced=len(prices),
-                    seconds=_metrics([r["seconds"] for r in arm_rows]),
+                    seconds=_metrics([r["seconds"] for r in arm_rows] if timed else []),
                     dollars=_metrics(prices if len(prices) == len(arm_rows) else []),
                 )
             changes = [

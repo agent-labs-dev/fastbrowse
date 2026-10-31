@@ -119,3 +119,12 @@ it prove every request used short-context rates. Estimates exclude subscription 
 infrastructure and runs without reported turn usage. Codex may omit startup prewarm tokens from
 turn totals, so these bounds cover only recorded tokens, not the complete run. The basis is
 `recorded-token-api-equivalent-range`. Estimates remain separate from recorded spend.
+
+## Timing
+
+A row's `seconds` runs from the browser session being ready to the agent's final answer, for every arm. Opening and
+closing the session are outside it and are recorded apart as `session_open_seconds` and `session_close_seconds`. Each
+row records `timing_basis`, currently `session-ready-to-answer`; a row without one was measured on an older clock.
+`benchmarks.py` refuses a group that mixes bases, the release gate never matches rows across them, and `summary`
+reports no seconds for a comparison across them. `bench.py`'s `wall` is a separate diagnostic: spawn to reply on a
+shared Chrome.

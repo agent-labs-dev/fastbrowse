@@ -54,6 +54,9 @@ DNF = "dnf"
 
 
 class Row(PublicModel):
+    """One graded slot. `seconds` is measured as `timing_basis` says; a row without one was measured under an older
+    clock, so it is compared with nothing that has one (`Group.one_clock`)."""
+
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
     arm: Arm
@@ -73,6 +76,20 @@ class Row(PublicModel):
     tokens_per_second: Amount = 0.0
     input_tokens: Annotated[int, Field(ge=0)] = 0
     output_tokens: Annotated[int, Field(ge=0)] = 0
+    timing_basis: Literal["session-ready-to-answer"] | None = None
+    session_open_seconds: Amount | None = None
+    """Opening the browser session, totalled like `seconds` and outside them."""
+    session_close_seconds: Amount | None = None
+    """Closing the browser session, totalled like `seconds` and outside them."""
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_timing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A row from before these fields keeps its old bytes, so approved candidates still match."""
+        data = handler(self)
+        for name in ("timing_basis", "session_open_seconds", "session_close_seconds"):
+            if data.get(name) is None:
+                data.pop(name, None)
+        return data
 
     @model_validator(mode="after")
     def completion(self) -> Self:
@@ -204,6 +221,14 @@ class Group(PublicModel):
             raise ValueError("binary source grades cannot contain partial scores")
         return self
 
+    @model_validator(mode="after")
+    def one_clock(self) -> Self:
+        """Every row of a group is timed alike, references included, whichever arm it is: a comparison between clocks
+        would report the difference between them as speed."""
+        if len({r.timing_basis for r in self.rows}) > 1:
+            raise ValueError("rows timed on different bases cannot be compared in one group")
+        return self
+
     def measured_arms(self, arms: tuple[Arm, ...]) -> tuple[Arm, ...]:
         """The arms of `arms` this group has rows for, in `arms` order."""
         present = {r.arm for r in self.rows}
@@ -263,7 +288,9 @@ class ExportReceipt(PublicModel):
     trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 
 
-SCHEMA = 5
+SCHEMA = 6
+TIMED_SCHEMA = 6
+"""From this schema every row records its timing basis."""
 """The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
 candidate of official suites alone, and the approved published figures and the staged candidate were written under 3
 and 4, where an approval binds the bytes it approved."""
@@ -292,7 +319,7 @@ REFERENCE_PATH = "docs/results/competitor-reference.json"
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[2, 3, 4, 5]
+    schema_version: Literal[2, 3, 4, 5, 6]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -309,6 +336,8 @@ class Candidate(PublicModel):
             raise ValueError("at least one complete, unique benchmark group is required")
         for group in self.groups:
             group.check_slots(group_arms(group.id, self.schema_version))
+            if self.schema_version >= TIMED_SCHEMA and any(r.timing_basis is None for r in group.rows):
+                raise ValueError(f"{group.id}: every row must record its timing basis")
             for field in ("agent_sha", "runner_sha"):
                 if getattr(group, field) != getattr(self, field):
                     raise ValueError("each group must identify the measured agent and runner build")

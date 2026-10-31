@@ -9,7 +9,8 @@ import pytest
 from pydantic import ValidationError
 
 from fastbrowse.evals import benchmarks
-from fastbrowse.evals.benchmarks import Candidate, check_catalog, regressions
+from fastbrowse.evals.benchmarks import SCHEMA, Candidate, Row, check_catalog, regressions
+from fastbrowse.evals.status import TIMING_BASIS
 
 CATALOG = Path(__file__).parents[1] / "src/fastbrowse/evals/benchmark-catalog.json"
 
@@ -73,6 +74,7 @@ def candidate() -> dict:
                         "dollars": 0.01,
                         "physical_runs": 1,
                         "llm_calls": 10,
+                        "timing_basis": TIMING_BASIS,
                     }
                     for task in ids
                     for repeat in range(repeats)
@@ -82,7 +84,7 @@ def candidate() -> dict:
             }
         )
     return {
-        "schema_version": 5,
+        "schema_version": SCHEMA,
         "campaign_id": "test-campaign",
         "agent_sha": "a" * 40,
         "runner_sha": "b" * 40,
@@ -960,7 +962,7 @@ def test_check_diff_holds_a_changed_record_to_the_current_schema(candidate, tmp_
     _repository(tmp_path, monkeypatch, {})
     older = {**candidate, "schema_version": 4, "groups": [candidate["groups"][2]]}
     (tmp_path / "docs/results/benchmark-candidate.json").write_bytes(_bytes(older))
-    with pytest.raises(ValueError, match="must use schema 5"):
+    with pytest.raises(ValueError, match=f"must use schema {SCHEMA}"):
         check_diff("base", Path("catalog.json"))
 
 
@@ -1356,3 +1358,39 @@ def test_a_did_not_finish_row_is_a_failure(candidate):
     row.update(completed=True, score=1.0)
     with pytest.raises(ValidationError):
         Candidate.model_validate(data)
+
+
+def test_a_group_never_mixes_timing_bases(candidate):
+    """One rule for every arm: rows on two clocks are refused, whichever arm or reference they came from."""
+    data = copy.deepcopy(candidate)
+    del data["groups"][0]["rows"][-1]["timing_basis"]
+    data["schema_version"] = 5
+    with pytest.raises(ValidationError, match="different bases"):
+        Candidate.model_validate(data)
+
+
+def test_a_new_schema_row_must_record_its_timing_basis(candidate):
+    data = copy.deepcopy(candidate)
+    for group in data["groups"]:
+        for row in group["rows"]:
+            del row["timing_basis"]
+    with pytest.raises(ValidationError, match="must record its timing basis"):
+        Candidate.model_validate(data)
+    Candidate.model_validate({**data, "schema_version": 5})
+
+
+def test_only_the_session_ready_clock_can_be_published(candidate):
+    data = copy.deepcopy(candidate)
+    data["groups"][0]["rows"][0]["timing_basis"] = "session-included"
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(data)
+
+
+def test_rows_without_a_timing_basis_keep_their_approved_bytes(candidate):
+    data = copy.deepcopy(candidate)
+    row = data["groups"][0]["rows"][0]
+    del row["timing_basis"]
+    dumped = Row.model_validate(row).model_dump()
+    assert not {"timing_basis", "session_open_seconds", "session_close_seconds"} & dumped.keys()
+    timed = Row.model_validate({**row, "timing_basis": TIMING_BASIS, "session_open_seconds": 1.5}).model_dump()
+    assert timed["session_open_seconds"] == 1.5 and "session_close_seconds" not in timed

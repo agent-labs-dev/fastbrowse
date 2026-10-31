@@ -15,6 +15,7 @@ from fastbrowse.evals import baseline as baseline_module
 from fastbrowse.evals import catalog as live
 from fastbrowse.evals import publication, versions
 from fastbrowse.evals.publication import REFUSE, REGRESS
+from fastbrowse.evals.status import TIMING_BASIS
 from fastbrowse.models import Limits
 
 TASK = "pypi-version"
@@ -311,6 +312,17 @@ def test_a_selected_attempt_with_an_altered_cost_is_refused() -> None:
     altered = selected(source) | {"dollars": 0.02}
     report = publication.gate([source], release=RELEASE, ledger=[altered], **TINY)
     assert any("dollars" in finding.detail for finding in report.blocking)
+
+
+def test_a_row_on_the_session_included_clock_is_refused() -> None:
+    report = publication.gate([row(timing_basis="session-included")], release=RELEASE, ledger=None, **TINY)
+    assert any("opening or closing the browser session" in finding.detail for finding in report.blocking)
+
+
+def test_a_selected_attempt_on_another_clock_is_refused() -> None:
+    source = row(timing_basis=TIMING_BASIS)
+    report = publication.gate([source], release=RELEASE, ledger=[selected(source) | {"timing_basis": None}], **TINY)
+    assert any("timing_basis" in finding.detail for finding in report.blocking)
 
 
 def test_an_attempt_with_a_negative_cost_is_refused() -> None:
