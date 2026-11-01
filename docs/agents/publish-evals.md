@@ -6,6 +6,23 @@ The file contains sanitized per-run grades, completion, time, cost, LLM and Jev 
 throughput. Official rubric scores retain their source meaning. Internal hosted and Ultrafast comparisons use
 separate matched task groups.
 
+## What may be published
+
+- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
+  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
+- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
+  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
+  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
+
+## The candidate contract
+
+Three programs share the candidate's schema: Parallax's `parallax browser publish-candidate` writes it,
+`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
+(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
+the changed writer through both readers.
+
+## Schemas
+
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
 `stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
@@ -28,6 +45,8 @@ and the site shows its pass rate and seconds with "cost not reported"; fastbrows
 official suites publish the fastbrowse arm, with a vendor arm's rows only where Parallax marks them publishable, and
 accept any positive repeat count: every task and repeat is one row with its upstream score kept as the upstream
 defines it, the group records the repeat count, and a task's figure is the mean of its repeats' scores.
+
+## Validation and approval
 
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
