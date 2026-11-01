@@ -1279,4 +1279,9 @@ fn a_failure_kind_names_the_error_and_none_of_its_text() {
     assert_eq!(failure_kind(&invalid), "Invalid");
     let llm = fastbrowse_core::llm::LLMError::Rejected("the page said secret".into());
     assert_eq!(failure_kind(&AgentError::Llm(llm)), "Llm.Rejected");
+    let navigation =
+        BrowserError::Failed("Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret".into());
+    assert_eq!(super::browser_failure_kind(&navigation), "Failed/Page.navigate/net::ERR_ABORTED");
+    let script = BrowserError::Failed("page script returned an unexpected tuple".into());
+    assert_eq!(super::browser_failure_kind(&script), "Failed");
 }

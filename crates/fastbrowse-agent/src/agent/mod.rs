@@ -372,7 +372,8 @@ impl Agent {
                 let unavailable = error.is_unavailable()
                     || (state.is_none()
                         && matches!(error, BrowserError::NavigationTimeout(_) | BrowserError::SiteUnreachable(_)));
-                self.failed(failure_kind(&error), error.to_string(), unavailable, state, ledger)
+                let kind = browser_failure_kind(&error);
+                self.failed(kind, error.to_string(), unavailable, state, ledger)
             }
             Flow::Agent(error) => {
                 let unavailable = error.is_unavailable();
@@ -701,6 +702,18 @@ fn failure_kind(error: &impl std::fmt::Debug) -> String {
     let debug = format!("{error:?}");
     let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
     names.trim_end_matches('(').replace('(', ".")
+}
+
+/// `failure_kind`, then the call and the error code of a `{method} failed ({code})` message, whose rest can be an address.
+fn browser_failure_kind(error: &BrowserError) -> String {
+    let kind = failure_kind(error);
+    let message = error.to_string();
+    let Some((method, rest)) = message.split_once(" failed (") else { return kind };
+    if method.contains(char::is_whitespace) {
+        return kind;
+    }
+    let code: String = rest.chars().take_while(|c| c.is_alphanumeric() || matches!(c, ':' | '_' | '-')).collect();
+    format!("{kind}/{method}/{code}")
 }
 
 fn blocked_without_browser(message: String) -> RunResult {
