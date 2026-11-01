@@ -1,8 +1,9 @@
 name: Benchmark campaign
 
 # Runs the live browser benchmark campaign (Parallax) for one fastbrowse build and publishes it to the site.
-# Dispatch only, by hand or by the release workflow on a minor release: every run drives real browsers and real
-# model calls, so it spends money and is never triggered by a push or a pull request. When every group has run,
+# Dispatch only, by hand, by the release workflow on a minor release, or by a repository_dispatch from an integration:
+# every run drives real browsers and real model calls, so it spends money and is never triggered by a push or a pull
+# request. When every group has run,
 # publish-evals.yml opens a pull request on agent-labs-dev/fastbrowse-site with the candidate and the site's group
 # files; merging that pull request is the approval.
 #
@@ -99,7 +100,7 @@ jobs:
   resolve:
     name: Resolve the pins and the credentials
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions: {contents: read}
+    permissions: {contents: read, actions: read}
     outputs:
       fastbrowse_sha: ${{ steps.pins.outputs.fastbrowse_sha }}
       parallax_sha: ${{ steps.pins.outputs.parallax_sha }}
@@ -113,7 +114,23 @@ jobs:
       - name: Require the full comparison protocol
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+          GROUPS_CHOSEN: ${{ inputs.groups || github.event.client_payload.groups || 'all' }}
+          # The env block above reads a 0 or an empty value as unset, so a payload is checked as it was sent.
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
         run: |
+          case "$GROUPS_CHOSEN" in
+            fastbrowse|head-to-head|all) ;;
+            *) echo "::error::groups must be fastbrowse, head-to-head or all, got '$GROUPS_CHOSEN'"; exit 1 ;;
+          esac
+          case "$BROWSER" in
+            local|cloud) ;;
+            *) echo "::error::browser must be local or cloud, got '$BROWSER'"; exit 1 ;;
+          esac
+          for key in repeat budget; do
+            jq -e --arg key "$key" 'has($key) | not' <<< "$PAYLOAD" > /dev/null && continue
+            jq -e --arg key "$key" '.[$key] | tonumber? // 0 | . > 0' <<< "$PAYLOAD" > /dev/null \
+              || { echo "::error::$key in client_payload must be above 0"; exit 1; }
+          done
           case "$REPEAT" in
             ''|*[!0-9]*) echo "repeat must be an integer, got '$REPEAT'"; exit 1 ;;
           esac
@@ -140,6 +157,21 @@ jobs:
             echo "parallax_sha=$PARALLAX_SHA"
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
+      # The stage job needs a passing Evals dispatch on this build, and an integration that can only send a
+      # repository_dispatch cannot start one, so it is refused here rather than after the budget is spent.
+      - name: Require an Evals dispatch on the build
+        if: ${{ github.event_name == 'repository_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIXTURE_SHA: ${{ steps.pins.outputs.fastbrowse_sha }}
+        run: |
+          conclusion="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow evals.yml --commit "$FIXTURE_SHA" \
+            --event workflow_dispatch --limit 1 --json status,conclusion \
+            --jq '.[0] | if . == null then "missing" elif .status != "completed" then "running" else .conclusion end')"
+          case "$conclusion" in
+            success|running) ;;
+            *) echo "::error::Evals on $FIXTURE_SHA is $conclusion; dispatch evals.yml at it first"; exit 1 ;;
+          esac
       - name: Check the credentials
         id: credentials
         env:
