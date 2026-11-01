@@ -6,7 +6,10 @@ a case keeps its version while the thing its numbers were measured on has been r
 second tag, one entry per case, and compares it with the build in this checkout.
 
     uv run python -m fastbrowse.evals.freshness            # report stale cases, fail when one can be resynced
-    uv run python -m fastbrowse.evals.freshness --resync   # re-stamp every movable case at this build
+    uv run python -m fastbrowse.evals.freshness --resync   # re-label every movable case at this build
+
+`--resync` only rewrites tags: it runs nothing, so it says a case's figures belong to this build without measuring them
+on it. Re-measuring is a campaign, not this module.
 
 A case listed under `immovable` is never re-stamped and never fails the check. It is reported with the reason it
 cannot move, so a limit is named rather than the case quietly leaving the comparison.
@@ -107,10 +110,10 @@ def check(
 def resync(
     record: dict[str, object], now: dict[str, str] | None = None, known: dict[str, str] | None = None
 ) -> tuple[dict[str, object], list[Finding]]:
-    """Re-stamp every movable case at this build, and return what was refused.
+    """Re-label every movable case at this build, and return what was refused. Nothing is re-measured.
 
     A case that no longer runs is dropped: a tag for a case nothing executes is a claim about nothing. An immovable
-    case keeps its tag and its reason, so the next run reports it again rather than losing it.
+    case keeps its tag, or its lack of one, and its reason, so the next run reports it again rather than losing it.
     """
     now = current() if now is None else now
     known = cases() if known is None else known
@@ -122,10 +125,10 @@ def resync(
     entries: dict[str, dict[str, str]] = {}
     for case, suite in sorted(known.items()):
         entry = written.get(case)
-        if case in reasons and isinstance(entry, dict):
+        if case not in reasons:
+            entries[case] = {"suite": suite, **now}
+        elif isinstance(entry, dict):
             entries[case] = {key: str(value) for key, value in entry.items()}
-            continue
-        entries[case] = {"suite": suite, **now}
     return {"schema_version": 1, "cases": entries, "immovable": reasons}, refused
 
 
@@ -135,7 +138,9 @@ def save(record: dict[str, object], path: Path = PINNED) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report eval cases written against an older build than this one.")
-    parser.add_argument("--resync", action="store_true", help="re-stamp every movable case at this build")
+    parser.add_argument(
+        "--resync", action="store_true", help="re-label every movable case at this build; nothing is re-measured"
+    )
     parser.add_argument("--immovable", nargs=2, metavar=("CASE", "REASON"), help="record why a case cannot be resynced")
     arguments = parser.parse_args(argv)
 
@@ -159,7 +164,10 @@ def main(argv: list[str] | None = None) -> int:
         save(updated)
         for finding in refused:
             print(finding.line())
-        print(f"re-stamped {len(cases()) - len({finding.case for finding in refused})} cases at {now['driver']}")
+        immovable = updated["immovable"]
+        assert isinstance(immovable, dict)
+        moved = len(cases().keys() - immovable.keys())
+        print(f"re-labelled {moved} cases at {now['driver']}; nothing was re-measured")
         return 0
 
     findings = check(record, now)

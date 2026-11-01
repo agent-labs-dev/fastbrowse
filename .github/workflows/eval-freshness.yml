@@ -5,7 +5,8 @@
 # the tags stale on `main` until someone reads the failure and runs `--resync` by hand.
 #
 # This job closes that loop: it runs on a schedule, and again whenever the things a tag is derived from change, and
-# opens a PR carrying the re-stamped book. Merging that PR is the approval; nothing here decides a score.
+# opens a PR carrying the re-labelled book. It runs no eval: the tags move and the figures are not re-measured, so
+# merging that PR accepts the old figures under the new build. Nothing here decides a score.
 #
 # A PR opened with the run's own token starts no CI, so CI could never report on it. `CLAUDE_PR_TOKEN` is a token
 # that may push here, and without it the job still commits to a branch and says the PR was left to a human.
@@ -36,12 +37,13 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {ref: main, fetch-depth: 0}
-      - uses: astral-sh/setup-uv@07a047e60884b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        # The push below names its own token; a persisted checkout token would be sent in its place.
+        with: {ref: main, fetch-depth: 0, persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --locked
-      - name: Re-stamp every movable case at this build
+      - name: Re-label every movable case at this build, measuring nothing
         run: uv run python -m fastbrowse.evals.freshness --resync
-      - name: Open the PR that carries the re-stamped book
+      - name: Open the PR that carries the re-labelled book
         env:
           TOKEN: ${{ secrets.CLAUDE_PR_TOKEN || github.token }}
           # A token that can push here. Without one the branch is still pushed, and the warning says why no PR
@@ -60,7 +62,7 @@ jobs:
             commit -qam "chore(evals): tag cases at fastbrowse $version"
           git push --force "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git" "HEAD:refs/heads/$branch"
           if [ "$HAS_PUSH_TOKEN" != "true" ]; then
-            echo "::warning title=Eval tags left behind::CLAUDE_PR_TOKEN is not set, so the re-stamped book is on $branch and no PR was opened for it."
+            echo "::warning title=Eval tags left behind::CLAUDE_PR_TOKEN is not set, so the re-labelled book is on $branch and no PR was opened for it."
             exit 0
           fi
           if GH_TOKEN="$TOKEN" gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq '.[0].number' | grep -q .; then
@@ -70,8 +72,8 @@ jobs:
           # The body says what moved and why, not just that a file changed: every changed entry is one case
           # whose tag drifted from the build in this checkout, and nothing here changes a case or an expectation.
           body="$(printf '%s\n\n%s\n\n%s\n' \
-            "Eval cases are tagged with the build they were written against, and a release moves that tag on. This is the scheduled re-stamp at \`fastbrowse $version\`: \`$book\` now records this build for every case that can move, and a case that cannot keeps its tag and its recorded reason." \
-            "Reading it: every changed entry is one case whose tag drifted from the build in this checkout. Nothing in the diff changes a case, a fixture or an expectation; it changes the build each number is attributed to, so merging this is the approval for that re-attribution. CI re-runs the freshness check and the eval tests on this PR." \
+            "Eval cases are tagged with the build they were written against, and a release moves that tag on. This PR re-labels those tags at \`fastbrowse $version\` and does not re-measure anything: no eval ran. \`$book\` now records this build for every case that can move, and a case that cannot keeps its tag and its recorded reason." \
+            "Reading it: every changed entry is one case whose tag drifted from the build in this checkout. Nothing in the diff changes a case, a fixture or an expectation; it changes the build each number is attributed to, so merging this accepts numbers measured on an older build under this one. CI re-runs the freshness check and the eval tests on this PR." \
             "This PR is opened and updated by the \`Eval freshness\` workflow; a rerun replaces the same branch.")"
           GH_TOKEN="$TOKEN" gh pr create --base main --head "$branch" \
             --title "chore(evals): tag cases at fastbrowse $version" \
