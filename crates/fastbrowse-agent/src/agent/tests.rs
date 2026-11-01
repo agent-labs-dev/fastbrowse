@@ -1270,3 +1270,13 @@ fn test_a_field_the_task_gives_no_value_for_is_not_called_empty() {
     missing.insert((page.url.clone(), "Reference".to_string(), None));
     assert!(super::helpers::empty_fields_fact(&missing, &page).is_none());
 }
+
+#[test]
+fn a_failure_kind_names_the_error_and_none_of_its_text() {
+    use super::failure_kind;
+    use crate::AgentError;
+    let invalid = AgentError::Invalid("the page said secret".into());
+    assert_eq!(failure_kind(&invalid), "Invalid");
+    let llm = fastbrowse_core::llm::LLMError::Rejected("the page said secret".into());
+    assert_eq!(failure_kind(&AgentError::Llm(llm)), "Llm.Rejected");
+}

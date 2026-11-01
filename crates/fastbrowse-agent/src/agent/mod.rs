@@ -372,17 +372,25 @@ impl Agent {
                 let unavailable = error.is_unavailable()
                     || (state.is_none()
                         && matches!(error, BrowserError::NavigationTimeout(_) | BrowserError::SiteUnreachable(_)));
-                self.failed(error.to_string(), unavailable, state, ledger)
+                self.failed(failure_kind(&error), error.to_string(), unavailable, state, ledger)
             }
             Flow::Agent(error) => {
                 let unavailable = error.is_unavailable();
-                self.failed(error.to_string(), unavailable, state, ledger)
+                self.failed(failure_kind(&error), error.to_string(), unavailable, state, ledger)
             }
-            Flow::Unsure(unsure) => self.failed(unsure.reason, false, state, ledger),
+            Flow::Unsure(unsure) => self.failed("Unsure".into(), unsure.reason, false, state, ledger),
         }
     }
 
-    fn failed(&self, message: String, unavailable: bool, state: Option<&RunState>, ledger: &Ledger) -> RunResult {
+    fn failed(
+        &self,
+        kind: String,
+        message: String,
+        unavailable: bool,
+        state: Option<&RunState>,
+        ledger: &Ledger,
+    ) -> RunResult {
+        self.event("run_failed", || Map::from_iter([("kind".into(), kind.into())]));
         let message = self.redact(&message);
         let status = if unavailable { Status::Unavailable } else { Status::Error };
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
@@ -688,6 +696,13 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
 
 /// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
 /// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
+/// The variant names of an error and no text it carries, so a public log can say what failed without quoting a page.
+fn failure_kind(error: &impl std::fmt::Debug) -> String {
+    let debug = format!("{error:?}");
+    let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
+    names.trim_end_matches('(').replace('(', ".")
+}
+
 fn blocked_without_browser(message: String) -> RunResult {
     RunResult {
         status: Status::Blocked,
