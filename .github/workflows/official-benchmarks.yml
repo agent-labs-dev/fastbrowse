@@ -261,7 +261,7 @@ jobs:
     name: ${{ matrix.suite }}
     needs: resolve
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions: {contents: read}
+    permissions: {contents: read, statuses: write}
     # A full suite is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 350
     strategy:
@@ -352,6 +352,17 @@ jobs:
 
           Path(sys.argv[2]).write_bytes(asyncio.run(main()))
           PY
+      - name: Fetch the progress reporter
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: ci
+          sparse-checkout: scripts/eval_progress.py
+          persist-credentials: false
+      # The token stays out of the suite's step: a job's logs are unreadable until it ends, so this is the live view.
+      - name: Report progress
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nohup python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.suite }}" > /dev/null 2>&1 &
       - name: Run the suite
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -384,6 +395,11 @@ jobs:
             --budget "$BUDGET" \
             --out "$OUT" \
             --execute
+      - name: Report the final progress
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.suite }}" --final
       - name: Send the run to Langfuse
         # A stopped run is tracked too: its experiment lists what ran, and the secrets stay out of its traces.
         if: always()
