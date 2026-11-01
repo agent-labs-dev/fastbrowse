@@ -208,6 +208,11 @@ impl Agent {
             }
             Operation::Fill => {
                 let target = require(target)?;
+                // A fetched page takes no typing, so its value is worked out, and a secret asked for, in the browser.
+                if self.page.over_http() {
+                    let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
+                    return Err(self.page.needs_browser(reason).into());
+                }
                 let text = self.text(state, observation, decision, target).await?;
                 Ok(Action {
                     target_id: Some(target.id.clone()),
