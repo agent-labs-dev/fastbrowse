@@ -137,7 +137,9 @@ async fn test_a_run_nobody_sits_in_front_of_activates_its_target() {
     let script = fake.script();
     assert_eq!(script.count("Target.activateTarget"), 2);
     assert_eq!(script.requested("Target.createTarget", &json!({"url": "about:blank"}), None), 1);
-    assert!(!script.calls.iter().any(|m| m == "Emulation.setFocusEmulationEnabled" || m == "Page.startScreencast"));
+    assert!(!script.calls.iter().any(|m| m == "Page.startScreencast"));
+    // Anything can take the front from the tab, and a hidden tab leaves input unanswered without this.
+    assert_eq!(script.count("Emulation.setFocusEmulationEnabled"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

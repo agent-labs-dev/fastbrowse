@@ -138,7 +138,7 @@ Verified over raw CDP against local headless Chrome and a Browser Use cloud brow
 
 | Capability | Mechanism | Local | Cloud |
 |---|---|---|---|
-| Own tab rendered | `Target.createTarget` + `Target.activateTarget` | pass | pass |
+| Own tab rendered | `Target.createTarget` + `Target.activateTarget` + `Emulation.setFocusEmulationEnabled` | pass | pass |
 | Own tab rendered behind a visible window | `Target.createTarget(background)` + `Emulation.setFocusEmulationEnabled` + a 16px `Page.startScreencast` on a second session | pass | not used |
 | Upload caller bytes | in-page `DataTransfer` + `File` on the input, `input`/`change` events (no host path needed) | pass | pass |
 | Download bytes | `Fetch.enable` at Response stage for Document responses (download-attribute anchors included), `Fetch.getResponseBody` on `Content-Disposition: attachment` | pass | pass |

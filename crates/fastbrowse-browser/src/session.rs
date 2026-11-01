@@ -1021,13 +1021,12 @@ impl BrowserSession {
         for (method, params) in sends {
             commands.push(Box::pin(async move { self.send(method, params, s).await.map(drop) }));
         }
-        // A page behind another tab is hidden and unfocused, so it paints nothing and takes no typing. Focus emulation
-        // has it render and hold focus where it is, which is what lets a run leave the window alone.
-        if !self.0.connection.foreground {
-            commands.push(Box::pin(async move {
-                self.send("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), s).await.map(drop)
-            }));
-        }
+        // A page behind another tab is hidden and unfocused, so it paints nothing, takes no typing and leaves input
+        // unanswered for seconds. Focus emulation has it render and hold focus where it is. A foreground run needs it
+        // too: anything can take the front from a tab the run is still driving.
+        commands.push(Box::pin(async move {
+            self.send("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), s).await.map(drop)
+        }));
         if scoped {
             commands.push(Box::pin(self.bypass_service_workers(session_id, true)));
         }
