@@ -1282,6 +1282,8 @@ fn a_failure_kind_names_the_error_and_none_of_its_text() {
     let navigation =
         BrowserError::Failed("Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret".into());
     assert_eq!(super::browser_failure_kind(&navigation), "Failed/Page.navigate/net::ERR_ABORTED");
+    let hung = BrowserError::Failed("Runtime.evaluate exceeded its command deadline; the page did not answer".into());
+    assert_eq!(super::browser_failure_kind(&hung), "Failed/Runtime.evaluate/exceeded");
     let script = BrowserError::Failed("page script returned an unexpected tuple".into());
     assert_eq!(super::browser_failure_kind(&script), "Failed");
 }

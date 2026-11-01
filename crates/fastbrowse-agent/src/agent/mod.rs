@@ -704,15 +704,25 @@ fn failure_kind(error: &impl std::fmt::Debug) -> String {
     names.trim_end_matches('(').replace('(', ".")
 }
 
-/// `failure_kind`, then the call and the error code of a `{method} failed ({code})` message, whose rest can be an address.
+/// `failure_kind`, then the CDP call a browser message opens with and the code in `failed (code)`. The rest of such a
+/// message can be an address, so nothing else of it is kept.
 fn browser_failure_kind(error: &BrowserError) -> String {
     let kind = failure_kind(error);
     let message = error.to_string();
-    let Some((method, rest)) = message.split_once(" failed (") else { return kind };
-    if method.contains(char::is_whitespace) {
+    let method = message.split_whitespace().next().unwrap_or_default();
+    let is_call = method.split_once('.').is_some_and(|(domain, name)| {
+        domain.chars().next().is_some_and(char::is_uppercase)
+            && !name.is_empty()
+            && name.chars().all(char::is_alphanumeric)
+    });
+    if !is_call {
         return kind;
     }
-    let code: String = rest.chars().take_while(|c| c.is_alphanumeric() || matches!(c, ':' | '_' | '-')).collect();
+    let (_, rest) = message.split_once(method).unwrap_or_default();
+    let code: String = match rest.split_once(" failed (") {
+        Some((_, code)) => code.chars().take_while(|c| c.is_alphanumeric() || matches!(c, ':' | '_' | '-')).collect(),
+        None => rest.split_whitespace().next().unwrap_or_default().into(),
+    };
     format!("{kind}/{method}/{code}")
 }
 
