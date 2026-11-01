@@ -135,6 +135,11 @@ jobs:
               *) echo "::error::suites must be core, dev, heldout, stretch-dev or stretch-heldout, got '$suite'"; exit 1 ;;
             esac
           done
+          for key in groups suites browser; do
+            # The env block reads an empty value as unset, which would widen a paid run to the default.
+            jq -e --arg key "$key" '(. // {})[$key] != ""' <<< "$PAYLOAD" > /dev/null \
+              || { echo "::error::$key in client_payload is empty"; exit 1; }
+          done
           for key in repeat budget; do
             # A workflow_dispatch has no payload, which reads as null here.
             jq -e --arg key "$key" '. // {} | has($key) | not' <<< "$PAYLOAD" > /dev/null && continue
