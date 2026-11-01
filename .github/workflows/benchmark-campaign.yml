@@ -49,6 +49,11 @@ name: Benchmark campaign
 # its actual spend passes about 297 dollars.
 
 on:
+  # The same run, started by an integration that can write the repository but not dispatch workflows (a GitHub
+  # App without actions: write): POST /repos/{repo}/dispatches with event_type benchmark-campaign and the inputs
+  # below as client_payload. Every value reaches the steps through env, as a dispatch input does.
+  repository_dispatch:
+    types: [benchmark-campaign]
   workflow_dispatch:
     inputs:
       campaign_id:
@@ -106,9 +111,9 @@ concurrency:
 
 env:
   UV_PYTHON: "3.13"
-  SUITES: ${{ inputs.suites }}
-  REPEAT: ${{ inputs.smoke && '1' || inputs.repeat }}
-  BUDGET: ${{ inputs.budget }}
+  SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev heldout stretch-dev stretch-heldout' }}
+  REPEAT: ${{ inputs.smoke && '1' || inputs.repeat || github.event.client_payload.repeat || '3' }}
+  BUDGET: ${{ inputs.budget || github.event.client_payload.budget || '300' }}
 
 jobs:
   resolve:
@@ -129,10 +134,10 @@ jobs:
       - name: Require the full comparison protocol
         env:
           SMOKE: ${{ inputs.smoke }}
-          CAMPAIGN_ID: ${{ inputs.campaign_id }}
-          OFFICIAL_RUNS: ${{ inputs.official_runs }}
-          REFRESH: ${{ inputs.refresh_competitors }}
-          GROUPS_CHOSEN: ${{ inputs.groups }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+          OFFICIAL_RUNS: ${{ inputs.official_runs || github.event.client_payload.official_runs }}
+          REFRESH: ${{ inputs.refresh_competitors || github.event.client_payload.refresh_competitors }}
+          GROUPS_CHOSEN: ${{ inputs.groups || github.event.client_payload.groups || 'all' }}
         run: |
           if test "$REFRESH" = true && test "$GROUPS_CHOSEN" = fastbrowse; then
             echo "::error::refresh_competitors needs the head-to-head group"; exit 1
@@ -155,8 +160,8 @@ jobs:
       - name: Resolve the pins
         id: pins
         env:
-          FASTBROWSE_REF: ${{ inputs.fastbrowse_ref }}
-          PARALLAX_SHA: ${{ inputs.parallax_sha }}
+          FASTBROWSE_REF: ${{ inputs.fastbrowse_ref || github.event.client_payload.fastbrowse_ref }}
+          PARALLAX_SHA: ${{ inputs.parallax_sha || github.event.client_payload.parallax_sha }}
         run: |
           fastbrowse_sha="$(git rev-parse "${FASTBROWSE_REF}^{commit}")"
           printf '%s' "$fastbrowse_sha" | grep -Eq '^[0-9a-f]{40}$' \
@@ -180,6 +185,7 @@ jobs:
           PARALLAX_DEPLOY_KEY: ${{ secrets.PARALLAX_DEPLOY_KEY }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          GROUP_SET: ${{ inputs.groups || github.event.client_payload.groups || 'all' }}
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
@@ -199,8 +205,8 @@ jobs:
       - name: Build the group matrix
         id: matrix
         env:
-          GROUP_SET: ${{ inputs.smoke && inputs.groups == 'all' && 'head-to-head' || inputs.groups }}
-          REFRESH: ${{ inputs.refresh_competitors }}
+          GROUP_SET: ${{ inputs.smoke && inputs.groups == 'all' && 'head-to-head' || inputs.groups || github.event.client_payload.groups || 'all' }}
+          REFRESH: ${{ inputs.refresh_competitors || github.event.client_payload.refresh_competitors }}
         run: |
           vendors="jev-ultrafast"
           if test "$REFRESH" = true; then vendors="$vendors browser-use browser-harness"; fi
@@ -399,7 +405,7 @@ jobs:
         # This job runs only when every selected group finished, and the publication gate refuses a ledger whose
         # recorded arms differ from its group's.
         env:
-          CAMPAIGN_ID: ${{ inputs.campaign_id }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
           FIXTURE_RUN: ${{ steps.fixture.outputs.run }}
           # The fixture run's traces and each group's experiments are read back from fastbrowse's Langfuse project
           # (evals/storage.py HOST).
