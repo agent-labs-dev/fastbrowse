@@ -198,6 +198,27 @@ jobs:
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
+          # A key that runs dry mid-run leaves every later attempt ungraded while browsers keep billing.
+          suites=1; if test "$SUITE_SET" = all; then suites=2; fi
+          for key in "$OPENROUTER_API_KEY" "$PARALLAX_JUDGE_API_KEY"; do
+            KEY="$key" NEED="$(python3 -c "print($BUDGET * $suites)")" python3 - <<'PY'
+          import json, os, sys, urllib.request
+
+          def get(path):
+              request = urllib.request.Request(f"https://openrouter.ai/api/v1/{path}",
+                                               headers={"Authorization": f"Bearer {os.environ['KEY']}"})
+              with urllib.request.urlopen(request, timeout=30) as reply:
+                  return json.load(reply)["data"]
+
+          need = float(os.environ["NEED"])
+          left = get("key").get("limit_remaining")
+          credits = get("credits")
+          balance = credits["total_credits"] - credits["total_usage"]
+          for name, value in (("key limit", left), ("account balance", balance)):
+              if value is not None and value < need:
+                  sys.exit(f"::error::OpenRouter {name} has {value:.2f} dollars left, the approved budget needs {need:.2f}")
+          PY
+          done
       - name: Build the suite matrix
         id: matrix
         # Runs after a credential failure too, so one dispatch names everything that is missing.
