@@ -17,6 +17,7 @@ use crate::cdp::secs;
 use crate::error::BrowserError;
 use crate::session::py_json;
 use crate::urlsplit::urlsplit;
+use crate::warn;
 
 const TARGET_STABILITY_SECONDS: f64 = 1.0;
 /// Points the pointer travels through between a drag's press and its release.
@@ -83,6 +84,10 @@ enum Cover {
     None,
     Gone,
 }
+
+/// Bounds an input event Chrome never answers: a tab can leave it pending, delivered or not, for the whole command
+/// deadline. The page is read next, so what the event did is seen there, and a page that has really hung fails that read.
+const INPUT_REPLY_SECONDS: f64 = 10.0;
 
 type Outcome = (StepOutcome, Option<String>);
 
@@ -988,7 +993,7 @@ impl CdpPage {
         // The wheel lands where the page is under the pointer: a point outside the window scrolls nothing.
         let centre = self.evaluate(&session_id, "[innerWidth / 2, innerHeight / 2]").await?;
         let params = json!({"type": "mouseWheel", "x": centre[0], "y": centre[1], "deltaX": 0, "deltaY": delta});
-        self.session.send("Input.dispatchMouseEvent", params, Some(&session_id)).await.map(drop)
+        self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await
     }
 
     pub(crate) async fn back(&self) -> Result<Outcome, BrowserError> {
@@ -1259,7 +1264,13 @@ impl CdpPage {
         send: impl Future<Output = Result<Value, BrowserError>>,
     ) -> Result<(), BrowserError> {
         tokio::select! {
-            sent = send => sent.map(drop),
+            sent = timeout(secs(INPUT_REPLY_SECONDS), send) => match sent {
+                Ok(sent) => sent.map(drop),
+                Err(_) => {
+                    warn("an input event went unanswered; carrying on from what the page shows");
+                    Ok(())
+                }
+            },
             () = self.session.wait_for_dialog() => Ok(()),
         }
     }

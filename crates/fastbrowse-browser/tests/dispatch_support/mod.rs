@@ -33,6 +33,15 @@ pub const PROXY_ERROR: i64 = -31999;
 /// after it went out. Every command is forwarded; one `doomed` picks has its real reply swapped for a CDP error, so
 /// Chrome acts on it and the caller sees it fail, as the patched coroutine did. Returns the proxy's `cdp_url`.
 pub async fn failing_proxy(upstream: String, doomed: impl FnMut(&Value) -> bool + Send + 'static) -> String {
+    proxy(upstream, doomed, true).await
+}
+
+/// A proxy that delivers the commands `doomed` picks and never passes on Chrome's reply.
+pub async fn unanswering_proxy(upstream: String, doomed: impl FnMut(&Value) -> bool + Send + 'static) -> String {
+    proxy(upstream, doomed, false).await
+}
+
+async fn proxy(upstream: String, doomed: impl FnMut(&Value) -> bool + Send + 'static, answer: bool) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let doomed = Arc::new(Mutex::new(doomed));
@@ -67,6 +76,9 @@ pub async fn failing_proxy(upstream: String, doomed: impl FnMut(&Value) -> bool 
                         && let Some(id) = reply["id"].as_u64()
                         && failed.lock().unwrap().remove(&id)
                     {
+                        if !answer {
+                            continue;
+                        }
                         let mut error = json!({"id": id, "error": {"code": PROXY_ERROR, "message": "lost"}});
                         if let Some(session) = reply.get("sessionId") {
                             error["sessionId"] = session.clone();

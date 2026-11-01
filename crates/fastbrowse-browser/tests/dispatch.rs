@@ -8,7 +8,7 @@ mod dispatch_support;
 use std::time::Duration;
 
 use common::{eval_value, find, harness, harness_with, js, observe_until, sites};
-use dispatch_support::{PROXY_ERROR, action, eval_active, failing_proxy, fill};
+use dispatch_support::{PROXY_ERROR, action, eval_active, failing_proxy, fill, unanswering_proxy};
 use fastbrowse_browser::page::scripts::UNCOVER_JS;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing;
@@ -457,6 +457,24 @@ async fn test_secret_fill_does_not_follow_a_replacement() {
 
 // test_retargeting_requires_the_receiving_document_and_guard_to_survive is not ported: it drives
 // `Agent._act_on_twin`, the agent loop's retargeting, which this crate does not have.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unanswered_click_carries_on_from_the_page() {
+    let Some(chrome) = common::chrome() else { return };
+    let proxy = unanswering_proxy(chrome.cdp_url.clone(), |command| {
+        command["method"] == "Input.dispatchMouseEvent" && command["params"]["type"] == "mouseReleased"
+    })
+    .await;
+    let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
+    let h = common::harness_on(connection, Config::default(), SessionOptions::default()).await.expect("harness");
+    h.goto("/dispatch.html").await;
+    let obs = h.observe().await;
+    let started = std::time::Instant::now();
+    h.page.act(&action(Operation::Click, find(&obs, "One way")), &obs).await.expect("the click carries on");
+    assert!(started.elapsed().as_secs() < 30);
+    assert_eq!(eval_active(&h.page, "presses").await, json!(["target"]));
+    h.close().await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_uncertain_press_is_never_replayed() {
