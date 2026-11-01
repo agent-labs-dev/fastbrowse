@@ -88,3 +88,21 @@ def test_a_campaign_refuses_a_bad_payload_and_runs_with_none(payload: str, passe
     check = workflow[start : workflow.index("done\n", start) + 4]
     result = subprocess.run(["bash", "-c", check], env={**os.environ, "PAYLOAD": payload}, capture_output=True)
     assert (result.returncode == 0) is passes
+
+
+@pytest.mark.parametrize(
+    ("suites", "passes"),
+    [
+        ("core dev heldout stretch-dev stretch-heldout", True),
+        ("stretch-dev", True),
+        ("   ", False),
+        ("core --output /tmp/elsewhere", False),
+        ("core,dev", False),
+    ],
+)
+def test_a_campaign_refuses_a_suite_outside_the_catalog(suites: str, passes: bool) -> None:
+    workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
+    start = workflow.index('read -ra chosen <<< "$SUITES"')
+    check = workflow[start : workflow.index("          done\n", start) + 15]
+    result = subprocess.run(["bash", "-c", check], env={**os.environ, "SUITES": suites}, capture_output=True)
+    assert (result.returncode == 0) is passes

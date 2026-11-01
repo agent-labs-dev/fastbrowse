@@ -126,6 +126,15 @@ jobs:
             local|cloud) ;;
             *) echo "::error::browser must be local or cloud, got '$BROWSER'"; exit 1 ;;
           esac
+          # Each word becomes a Parallax argument, so anything but a catalog suite stops here.
+          read -ra chosen <<< "$SUITES"
+          test "${#chosen[@]}" -gt 0 || { echo "::error::suites names no suite"; exit 1; }
+          for suite in "${chosen[@]}"; do
+            case "$suite" in
+              core|dev|heldout|stretch-dev|stretch-heldout) ;;
+              *) echo "::error::suites must be core, dev, heldout, stretch-dev or stretch-heldout, got '$suite'"; exit 1 ;;
+            esac
+          done
           for key in repeat budget; do
             # A workflow_dispatch has no payload, which reads as null here.
             jq -e --arg key "$key" '. // {} | has($key) | not' <<< "$PAYLOAD" > /dev/null && continue

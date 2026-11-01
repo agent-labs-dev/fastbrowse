@@ -68,7 +68,9 @@ every website or grader is free of bugs. Review unexpected outcomes before appro
 
 A minor release (`vX.Y.0`) dispatches `benchmark-campaign.yml` on its tag once it is published; a patch release
 does so only when its annotated tag message has the line `Benchmarks: run`, and anyone with write access can
-dispatch it by hand. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
+dispatch it by hand. An integration holding a token with `contents: write` starts one with a `repository_dispatch`
+through `client_payload`, which takes the same values as the manual inputs and is refused before any spend when a
+value is outside them or the build has no Evals dispatch. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
 which opens a pull request on agent-labs-dev/fastbrowse-site. The pull request carries the candidate byte for
 byte as `data/benchmark-<campaign>.json` and the site's group files under `data/benchmarks/`, written by
 
