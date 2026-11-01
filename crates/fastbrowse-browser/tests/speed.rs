@@ -23,7 +23,7 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{BrowserConnection, LocalChrome, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use safety_support::{
-    CdpProxy, Reply, cdp_proxy, eval_active, find, has, observe_until, one_at_a_time, serve_on, wait_until,
+    CdpProxy, Reply, cdp_proxy, eval_active, eval_value, find, has, observe_until, one_at_a_time, serve_on, wait_until,
 };
 use serde_json::json;
 use tokio::time::{sleep, timeout};
@@ -407,8 +407,12 @@ async fn test_a_frame_that_stops_answering_costs_one_short_deadline() {
     h.page.navigate(hung_frame_site(), None).await.expect("navigate");
     wait_until(|| async { !h.session.frame_sessions().is_empty() }, 5.0).await;
     observe_until(&h.page, "Sign in").await;
-    // The frame's renderer is busy from here on, as a stuck advertisement's is.
+    // The frame's renderer is busy from here on, as a stuck advertisement's is. The message is delivered later, so the
+    // read is timed only once the frame has stopped answering.
+    let (_, frame) = h.session.frame_sessions().into_iter().next().expect("the frame's session");
     eval_active(&h.session, "document.querySelector('iframe').contentWindow.postMessage(1, '*')").await;
+    let answers = || async { timeout(Duration::from_millis(250), eval_value(&h.session, &frame, "1")).await.is_ok() };
+    wait_until(|| async { !answers().await }, 5.0).await;
     let started = Instant::now();
     let observation = h.observe().await;
     let elapsed = started.elapsed().as_secs_f64();
