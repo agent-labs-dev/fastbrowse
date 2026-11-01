@@ -69,3 +69,22 @@ def test_every_file_a_rust_crate_embeds_rebuilds_the_binaries() -> None:
         ["git", "ls-files", "--", *_binaries_pathspecs()], capture_output=True, text=True, check=True
     ).stdout.splitlines()
     assert embedded <= set(covered), sorted(embedded - set(covered))
+
+
+@pytest.mark.parametrize(
+    ("payload", "passes"),
+    [
+        ("null", True),
+        ("{}", True),
+        ('{"repeat": "3", "budget": 50}', True),
+        ('{"repeat": 0}', False),
+        ('{"budget": ""}', False),
+        ('{"budget": 0}', False),
+    ],
+)
+def test_a_campaign_refuses_a_bad_payload_and_runs_with_none(payload: str, passes: bool) -> None:
+    workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
+    start = workflow.index("for key in repeat budget")
+    check = workflow[start : workflow.index("done\n", start) + 4]
+    result = subprocess.run(["bash", "-c", check], env={**os.environ, "PAYLOAD": payload}, capture_output=True)
+    assert (result.returncode == 0) is passes

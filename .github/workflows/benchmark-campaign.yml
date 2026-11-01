@@ -127,7 +127,8 @@ jobs:
             *) echo "::error::browser must be local or cloud, got '$BROWSER'"; exit 1 ;;
           esac
           for key in repeat budget; do
-            jq -e --arg key "$key" 'has($key) | not' <<< "$PAYLOAD" > /dev/null && continue
+            # A workflow_dispatch has no payload, which reads as null here.
+            jq -e --arg key "$key" '. // {} | has($key) | not' <<< "$PAYLOAD" > /dev/null && continue
             jq -e --arg key "$key" '.[$key] | tonumber? // 0 | . > 0' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload must be above 0"; exit 1; }
           done
