@@ -1445,6 +1445,15 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
     );
 }
 
+#[test]
+fn test_a_secret_the_agent_learns_is_redacted_from_a_trace_its_clients_write_to() {
+    let trace = Trace::collecting().redacting(Arc::default());
+    let agent = agent().with_redactor(trace.redactor().unwrap());
+    agent.redactor().register("password", "hunter2", None);
+    trace.event("http", || serde_json::Map::from_iter([("request".into(), json!({"text": "typed hunter2"}))]));
+    assert_eq!(trace.events()[0]["request"]["text"], "typed [secret:password]");
+}
+
 /// A run is replayed from its result's steps, the step events a host shows as it goes, and the trace file, and a step's
 /// builder or an event's author, in the loop or anywhere it hands its trace, that forgets to redact must not put a
 /// resolved secret into any of them.

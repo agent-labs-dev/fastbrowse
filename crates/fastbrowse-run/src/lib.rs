@@ -520,6 +520,9 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
         }
     }
     let http = options.http.take().unwrap_or_else(Http::hyper);
+    // The agent learns each secret, and its clients write the requests that may carry one, so they share a redactor.
+    let trace = http.trace.clone().redacting(Arc::default());
+    let http = http.with_trace(trace);
     // The providers this run calls, for an eval to keep beside its result. A caller's own clients are not described.
     if options.jev.is_none() && options.llm.is_none() {
         http.trace.event("route", || Map::from_iter([("providers".into(), Value::from(settings.providers()))]));
@@ -620,6 +623,7 @@ pub async fn run_task(task: &str, mut options: RunTask) -> Result<RunResult, Run
             }
         }
         let agent = Agent::new(page, jev.clone(), llm.clone())
+            .with_redactor(http.trace.redactor().unwrap_or_default())
             .with_config(config.clone())
             .with_secrets(options.secrets.clone())
             .with_events(captioned(options.on_event.clone(), &recording));
@@ -809,9 +813,11 @@ async fn fetched(
     let head_stop = head.stopper();
     let ledger = head.ledger.clone();
     let viewport_chars = usize::try_from(config.observation.viewport_text_chars).unwrap_or_default();
+    let redactor = http.trace.redactor().unwrap_or_default();
     let fetched = Arc::new(fetch::FetchedPage::new(http, origins, viewport_chars, options.check_access.clone()));
     let page: Arc<dyn Page> = fetched.clone();
     let agent = Agent::new(page, jev, llm)
+        .with_redactor(redactor)
         .with_config(config.clone())
         .with_secrets(options.secrets.clone())
         .with_events(options.on_event.clone());
