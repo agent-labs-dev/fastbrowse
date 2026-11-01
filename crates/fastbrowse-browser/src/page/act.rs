@@ -1267,12 +1267,29 @@ impl CdpPage {
             sent = timeout(secs(INPUT_REPLY_SECONDS), send) => match sent {
                 Ok(sent) => sent.map(drop),
                 Err(_) => {
-                    warn("an input event went unanswered; carrying on from what the page shows");
+                    self.report_unanswered().await;
                     Ok(())
                 }
             },
             () = self.session.wait_for_dialog() => Ok(()),
         }
+    }
+
+    /// What state the page was in, as booleans alone: a public log must not carry anything a page can write.
+    async fn report_unanswered(&self) {
+        let script =
+            "[document.visibilityState === 'visible', document.hasFocus(), document.readyState === 'complete']";
+        let started = Instant::now();
+        let seen = match self.session.active_session_id() {
+            Ok(id) => timeout(secs(INPUT_REPLY_SECONDS), self.evaluate(&id, script)).await,
+            Err(_) => return warn("an input event went unanswered with no active page"),
+        };
+        let page = match seen {
+            Ok(Ok(state)) => format!("visible, focused, loaded {state} after {:.1}s", started.elapsed().as_secs_f64()),
+            Ok(Err(error)) => format!("read failed ({})", error.kind()),
+            Err(_) => "did not answer a read either".to_owned(),
+        };
+        warn(&format!("an input event went unanswered; page: {page}"));
     }
 
     async fn focus(
