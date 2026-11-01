@@ -141,18 +141,6 @@ impl Agent {
                 let (control, name) = (control.id.clone(), name.to_string());
                 ahead.push(Ahead { operation, control, name, question });
             };
-            for operation in [Operation::Click, Operation::Enter] {
-                if !control.operations.contains(&operation) {
-                    continue;
-                }
-                let (irreversible, requested) = gate_questions(operation, control, None, &observation.controls);
-                if let Some(irreversible) = irreversible {
-                    add(operation, "irreversible", Question::Noul(irreversible));
-                }
-                if state.authorization.irreversible_actions {
-                    add(operation, "requested", Question::Noul(requested));
-                }
-            }
             if control.operations.contains(&Operation::Fill) && !is_password(control) {
                 let Value { task, label, group, sources, source_question, .. } = self.value(state, control);
                 if group.len() <= max {
@@ -362,17 +350,13 @@ impl Agent {
             questions.insert("requested".to_string(), Question::Noul(requested));
         }
         if !questions.is_empty() {
-            let asked_ahead = questions.keys().all(|key| matches!(decision.ahead.get(key), Some(Answer::Noul(_))));
-            let answers = if asked_ahead {
-                decision.ahead.clone()
-            } else {
-                state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-                // The control's label and form are already in the questions, so only the address goes with them.
-                let page = json!({"task": state.task, "page": {"url": observation.url, "title": observation.title}});
-                let evaluation = self.jev.evaluate(&page, &questions).await?;
-                state.ledger.record([evaluation.cost.clone()])?;
-                evaluation.answers
-            };
+            state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+            // Never asked beside the decision: the page's own text is what would argue a harmful action is harmless,
+            // and the control's label and form are already in the questions, so only the address goes with them.
+            let page = json!({"task": state.task, "page": {"url": observation.url, "title": observation.title}});
+            let evaluation = self.jev.evaluate(&page, &questions).await?;
+            state.ledger.record([evaluation.cost.clone()])?;
+            let answers = evaluation.answers;
             let noul = |key: &str| match answers.get(key) {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
                 _ => None,
