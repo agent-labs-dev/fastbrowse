@@ -1,13 +1,29 @@
 version: 2
+
+# Every ecosystem below runs weekly and waits a week before proposing a version. That window is where a
+# compromised release is usually pulled, so a week of nothing costs less than an incident, and CI still proves
+# the update on the pull request that carries it.
 updates:
+  # Cargo.lock is the widest dependency surface in the repository and was the one nothing updated: the workspace
+  # builds its crates and everything they pull in, so a stale patch here stays stale until someone thinks to look.
+  - package-ecosystem: cargo
+    directory: /
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+    groups:
+      rust: {patterns: ["*"]}
+
   - package-ecosystem: uv
     directory: /
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
     groups:
       python: {patterns: ["*"]}
+
   - package-ecosystem: npm
     directory: /
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
     groups:
       javascript-tools: {patterns: ["*"]}
     ignore:
@@ -15,8 +31,19 @@ updates:
       # lacks, such as fs.globSync and the global navigator. Raise this together with engines.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+
+  # The Java client is published to Maven Central, so Jackson and the Maven plugins are a shipped surface, not
+  # build furniture: a bump here reaches everyone who depends on the jar.
+  - package-ecosystem: maven
+    directory: /java
+    schedule: {interval: weekly}
+    cooldown: {default-days: 7}
+    groups:
+      java: {patterns: ["*"]}
+
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
+    cooldown: {default-days: 7}
     groups:
       actions: {patterns: ["*"]}
