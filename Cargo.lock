@@ -168,6 +168,7 @@ dependencies = [
  "fastbrowse-core",
  "futures-util",
  "httparse",
+ "libc",
  "ring",
  "rustls",
  "serde",
