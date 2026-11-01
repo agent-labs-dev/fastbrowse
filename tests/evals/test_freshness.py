@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from fastbrowse.evals import freshness
 
 
@@ -55,6 +57,53 @@ def test_an_immovable_case_is_named_with_its_reason_and_never_restamped():
     assert [finding.case for finding in also_refused] == [case]
     # Every other case moved, so the next check reports the one limit rather than a wall of stale tags.
     assert {finding.case for finding in freshness.check(updated, now) if finding.movable} == set()
+
+
+def test_an_immovable_case_with_no_entry_stays_untagged():
+    record = freshness.load()
+    cases = record["cases"]
+    assert isinstance(cases, dict)
+    case = sorted(cases)[0]
+    del cases[case]
+    record["immovable"] = {case: "no build measured it"}
+    updated, refused = freshness.resync(record)
+    stamped = updated["cases"]
+    assert isinstance(stamped, dict)
+    assert case not in stamped
+    assert [finding.case for finding in refused] == [case]
+
+
+def _book(monkeypatch, record: dict[str, object]) -> list[dict[str, object]]:
+    """Point the command at `record`, and return the list of what it saves."""
+    saved: list[dict[str, object]] = []
+    monkeypatch.setattr(freshness, "load", lambda: record)
+    monkeypatch.setattr(freshness, "save", saved.append)
+    return saved
+
+
+def test_the_immovable_flag_records_the_reason(monkeypatch):
+    saved = _book(monkeypatch, {"cases": {}})
+    case = sorted(freshness.cases())[0]
+    assert freshness.main(["--immovable", case, "provider reply is not pinned"]) == 0
+    assert saved[0]["immovable"] == {case: "provider reply is not pinned"}
+
+
+def test_the_immovable_flag_refuses_an_unknown_case(monkeypatch):
+    saved = _book(monkeypatch, {"cases": {}})
+    with pytest.raises(SystemExit):
+        freshness.main(["--immovable", "invented-case", "no reason"])
+    assert saved == []
+
+
+def test_the_resync_flag_says_it_relabels_and_counts_only_what_moved(monkeypatch, capsys):
+    record = freshness.load()
+    case = sorted(freshness.cases())[0]
+    record["immovable"] = {case: "provider reply is not pinned"}
+    saved = _book(monkeypatch, record)
+    assert freshness.main(["--resync"]) == 0
+    assert saved[0]["immovable"] == record["immovable"]
+    assert f"re-labelled {len(freshness.cases()) - 1} cases" in (out := capsys.readouterr().out)
+    assert "nothing was re-measured" in out
 
 
 def test_resync_drops_a_case_the_suites_no_longer_run():
