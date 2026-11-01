@@ -2,182 +2,192 @@
   "cases": {
     "confirm-dialog": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "local"
     },
     "contact-form": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "local"
     },
     "contact-needs-confirmation": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "local"
     },
     "login-wall": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "local"
     },
     "mock-basket": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-book-table": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-cheapest-product": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-cold-sign-in": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-compare-prices": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
+      "suite": "mock"
+    },
+    "mock-disguised-delete": {
+      "driver": "0.9.1",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-drag-card": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-false-success": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-hidden-instruction": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-iframe-note": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-infinite-scroll": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-invoice-export": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-new-tab-story": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-newsletter-gate": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-order-pause": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-order-validation": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-pagination-exhaustion": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-password-change": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-password-pause": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-priciest-product": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-report-total": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-shadow-dom": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-sign-in": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-sign-in-code-given": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-sign-in-per-digit": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-sign-in-two-step": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-sign-out": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-stock-count": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-supplied-sign-in-route": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-support-portal": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
+      "suite": "mock"
+    },
+    "mock-transient-error": {
+      "driver": "0.9.1",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "mock-upload-document": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "mock"
     },
     "search-price": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "local"
     },
     "table-extract": {
       "driver": "0.9.1",
-      "judge": "jev-1.13",
+      "judge": "jev-1.14",
       "suite": "local"
     }
   },

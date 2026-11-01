@@ -274,7 +274,7 @@ jobs:
           uv run --no-sync python -c "import fastbrowse, parallax"
       # The browser-harness arm's agent; the arm checks this exact version before each attempt.
       - name: Install the Codex CLI Browser Harness drives
-        if: ${{ inputs.refresh_competitors && matrix.key == 'head-to-head' }}
+        if: ${{ (inputs.refresh_competitors || github.event.client_payload.refresh_competitors) && matrix.key == 'head-to-head' }}
         run: npm install --global @openai/codex@0.163.0
       - name: Fetch the progress reporter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -370,10 +370,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: {path: ledgers, pattern: ledger-*, merge-multiple: true}
       - name: Fetch the official rows
-        if: ${{ inputs.official_runs != '' }}
+        if: ${{ (inputs.official_runs || github.event.client_payload.official_runs) != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          OFFICIAL_RUNS: ${{ inputs.official_runs }}
+          OFFICIAL_RUNS: ${{ inputs.official_runs || github.event.client_payload.official_runs }}
         run: |
           read -ra runs <<< "$OFFICIAL_RUNS"
           for run in "${runs[@]}"; do
@@ -413,7 +413,7 @@ jobs:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
-          REFRESH: ${{ inputs.refresh_competitors }}
+          REFRESH: ${{ inputs.refresh_competitors || github.event.client_payload.refresh_competitors }}
           RUN_ON: ${{ needs.resolve.outputs.run_on }}
         run: |
           mapfile -t official < <(find "$GITHUB_WORKSPACE/official-rows" -name '*.rows.json' 2> /dev/null | sort)
