@@ -284,6 +284,27 @@ def test_matched_regressions_block_publication(candidate, field, value):
         regressions(Candidate.model_validate(candidate), before)
 
 
+def _official(candidate: dict, repeats: int, failed: int = 0) -> Candidate:
+    """The BU Bench group alone at this many repeats, with the last `failed` repeats of its first task unfinished."""
+    group = copy.deepcopy(candidate["groups"][2])
+    template = group["rows"][0]
+    group["repeats"] = repeats
+    group["rows"] = [{**template, "task": t, "repeat": r} for t in group["task_ids"] for r in range(repeats)]
+    for row in group["rows"][repeats - failed : repeats]:
+        row.update(status="stuck", completed=False)
+    return Candidate.model_validate({**candidate, "schema_version": 5, "groups": [group]})
+
+
+def test_official_completion_is_compared_as_a_rate_across_repeat_counts(candidate):
+    # Two finishes out of three beat the baseline's one as a count, but are a lower rate than its one out of one.
+    with pytest.raises(ValueError, match="completion regression"):
+        regressions(_official(candidate, 3, failed=1), _official(candidate, 1))
+
+
+def test_official_completion_is_not_penalised_for_fewer_repeats(candidate):
+    regressions(_official(candidate, 1), _official(candidate, 3))
+
+
 def test_changed_protocol_cannot_silently_skip_regressions(candidate):
     before = Candidate.model_validate(copy.deepcopy(candidate))
     candidate["groups"][0]["limits"] = ["Different limits"]

@@ -477,7 +477,8 @@ def regressions(
             before = [r for r in old.rows if r.arm == arm and r.task == task]
             if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):
                 raise ValueError(f"source-score regression: {group.id}/{task}")
-            if sum(r.completed for r in now) < sum(r.completed for r in before):
+            # A rate, like the score above: the two runs need not have the same number of repeats.
+            if sum(r.completed for r in now) / len(now) < sum(r.completed for r in before) / len(before):
                 raise ValueError(f"completion regression: {group.id}/{task}")
             # Wall time moves with cloud load, so it is not compared; the calls a run made and its model
             # throughput are properties of the build. `dollars` is kept: it is a charge, not a duration.
