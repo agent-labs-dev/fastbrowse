@@ -1,7 +1,7 @@
 fastbrowse vendors this file unmodified from DuckDuckGo's autoconsent project.
 
 - Project: DuckDuckGo Autoconsent (https://github.com/duckduckgo/autoconsent)
-- Package: @duckduckgo/autoconsent, standalone build
+- Package: @duckduckgo/autoconsent 17.2.0, dist/autoconsent.standalone.js
 - License: MPL-2.0 (see LICENSE in this directory)
 - Status: vendored, unmodified
 
@@ -9,7 +9,7 @@ Integrity
 
 The tracked bundle must match this SHA-256 exactly:
 
-  cc50f2114cce0bdaf4f7da703cae4467a84d609d234f3ccb69c5ec0f071aca97
+  a4134586f3f7ccbb06183e1122d4d772e5d2a79794d1980f0715ff4144006935
 
 Verify after any re-sync:
 

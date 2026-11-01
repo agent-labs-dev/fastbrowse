@@ -104,7 +104,7 @@ jobs:
       - name: Install Chromium
         if: matrix.target == 'linux-arm64'
         run: |
-          npx --yes playwright@1.63.0 install --with-deps chromium
+          npx --yes playwright@1.64.1 install --with-deps chromium
           chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
           test -x "$chrome"
           echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
@@ -182,7 +182,7 @@ jobs:
       - name: Install Chromium
         if: matrix.target == 'linux-arm64'
         run: |
-          npx --yes playwright@1.63.0 install --with-deps chromium
+          npx --yes playwright@1.64.1 install --with-deps chromium
           chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
           test -x "$chrome"
           echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"

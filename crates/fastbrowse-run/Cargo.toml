@@ -14,7 +14,7 @@ fastbrowse-browser = { workspace = true, features = ["recording", "cursor"] }
 fastbrowse-clients = { workspace = true }
 fastbrowse-core = { workspace = true }
 # The WHATWG Encoding Standard's decoders, by the labels a response or a document names.
-encoding_rs = "0.8.42"
+encoding_rs = "0.8.44"
 # gzip and deflate bodies; miniz_oxide is pure Rust.
 flate2 = "1.1.10"
 # The WHATWG HTML tokenizer, which reads a fetched document's tags, raw text and character references as a browser does.

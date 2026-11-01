@@ -13,7 +13,7 @@ indexmap = { version = "2.14.2", features = ["serde"] }
 # float_roundtrip: the default parser can land a float one unit off, and a cost read one unit off is a different cost.
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 url = "2.5.8"
-log = "0.4.34"
+log = "0.4.35"
 tokio = { version = "1.54.1", features = ["rt", "time"] }
 # HTTP/1.1 only: Python builds its httpx client without `http2=True`, so it never negotiates h2 either.
 hyper = { version = "1.12.0", features = ["client", "http1"] }
