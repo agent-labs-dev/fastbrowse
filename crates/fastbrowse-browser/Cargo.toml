@@ -34,7 +34,7 @@ tokio-tungstenite = { version = "0.28", default-features = false, features = ["c
 webpki-roots = "1"
 
 [target.'cfg(unix)'.dependencies]
-# kill(2) and gethostname(2), already linked by tokio.
+# kill(2), already linked by tokio.
 libc = "0.2"
 
 [dev-dependencies]

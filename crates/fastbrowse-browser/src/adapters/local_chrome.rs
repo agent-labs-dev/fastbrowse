@@ -178,9 +178,16 @@ fn temp_path(kind: &str) -> PathBuf {
     std::env::temp_dir().join(format!("fastbrowse-{kind}-{}-{nanos}-{count}", std::process::id()))
 }
 
+/// This process's PID namespace, where the system names one. A pid means something only inside its namespace, and
+/// containers sharing `/tmp` each have their own.
+fn pid_namespace() -> Option<String> {
+    let link = std::fs::read_link("/proc/self/ns/pid").ok()?;
+    Some(link.to_str()?.strip_prefix("pid:[")?.strip_suffix(']')?.to_string())
+}
+
 /// A directory only this user can read, as `tempfile.TemporaryDirectory` makes: the profile holds cookies.
 fn temp_dir() -> std::io::Result<PathBuf> {
-    let path = temp_path("chrome");
+    let path = temp_path(&pid_namespace().map_or("chrome".to_string(), |id| format!("chrome-ns{id}")));
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
@@ -197,24 +204,11 @@ fn process_alive(pid: libc::pid_t) -> bool {
         && (unsafe { libc::kill(pid, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
 }
 
-/// This machine's name, as Chrome writes it into `SingletonLock`.
+/// Whether a run's profile has no live owner. Chrome's `SingletonLock` links to `hostname-pid`, so a Chrome that
+/// outlived its owner keeps the profile. A lock that does not parse is kept too. A profile with no lock died before
+/// Chrome took it.
 #[cfg(unix)]
-fn host_name() -> Option<String> {
-    let mut name = [0u8; 256];
-    // SAFETY: the buffer is valid for the length passed, and it stays zeroed past the name when the name fits.
-    let failed = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len() - 1) } != 0;
-    if failed {
-        return None;
-    }
-    let end = name.iter().position(|byte| *byte == 0)?;
-    String::from_utf8(name[..end].to_vec()).ok()
-}
-
-/// Whether a run's profile has no live owner. Chrome's `SingletonLock` links to `hostname-pid`, so a profile whose lock
-/// names another machine belongs to another PID namespace, such as a container sharing `/tmp`, where this machine's
-/// pids say nothing. A lock that does not parse is kept. A profile with no lock died before Chrome took it.
-#[cfg(unix)]
-fn orphaned(profile: &Path, owner: libc::pid_t, host: &str) -> bool {
+fn orphaned(profile: &Path, owner: libc::pid_t) -> bool {
     if process_alive(owner) {
         return false;
     }
@@ -222,24 +216,25 @@ fn orphaned(profile: &Path, owner: libc::pid_t, host: &str) -> bool {
         return true;
     };
     let chrome = lock.to_str().and_then(|lock| lock.rsplit_once('-'));
-    chrome.is_some_and(|(name, pid)| name == host && pid.parse().is_ok_and(|pid: libc::pid_t| !process_alive(pid)))
+    chrome.is_some_and(|(_, pid)| pid.parse().is_ok_and(|pid: libc::pid_t| !process_alive(pid)))
 }
 
 /// Throwaway profiles earlier processes left behind. `close` and `Drop` remove a run's own, but nothing runs when the
 /// process is killed, and each killed run left about 140MB: 262 of them filled a 16GB `/tmp`. A profile's name carries
-/// its owner's pid, so one whose owner and Chrome have both exited is removed.
+/// its PID namespace and its owner's pid, so only this namespace's are judged, by pids that mean something here. One
+/// is removed when its owner and its Chrome have both exited.
 #[cfg(unix)]
-fn sweep_orphaned_profiles(dir: &Path) {
-    let Some(host) = host_name() else { return };
+fn sweep_orphaned_profiles(dir: &Path, namespace: Option<&str>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let owner = name
-            .to_str()
-            .and_then(|name| name.strip_prefix("fastbrowse-chrome-"))
-            .and_then(|rest| rest.split('-').next())
-            .and_then(|pid| pid.parse::<libc::pid_t>().ok());
-        if owner.is_some_and(|owner| orphaned(&entry.path(), owner, &host)) {
+        let rest = name.to_str().and_then(|name| name.strip_prefix("fastbrowse-chrome-"));
+        let rest = match namespace {
+            Some(id) => rest.and_then(|rest| rest.strip_prefix("ns")?.strip_prefix(id)?.strip_prefix('-')),
+            None => rest,
+        };
+        let owner = rest.and_then(|rest| rest.split('-').next()?.parse::<libc::pid_t>().ok());
+        if owner.is_some_and(|owner| orphaned(&entry.path(), owner)) {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
@@ -248,7 +243,7 @@ fn sweep_orphaned_profiles(dir: &Path) {
 /// Run the sweep off the runtime: it can delete gigabytes, and no launch waits on it.
 #[cfg(unix)]
 fn sweep_behind(dir: PathBuf) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn_blocking(move || sweep_orphaned_profiles(&dir))
+    tokio::task::spawn_blocking(move || sweep_orphaned_profiles(&dir, pid_namespace().as_deref()))
 }
 
 /// Chrome's stderr log, as `tempfile.TemporaryFile`: unlinked at once where the system allows an open file to be,
@@ -516,7 +511,6 @@ fn tail(log: &mut File) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use super::*;
 
     /// The id of a process that has exited.
@@ -534,12 +528,21 @@ mod tests {
         dir
     }
 
+    /// A profile's folder as this process names it.
+    #[cfg(unix)]
+    fn profile_name(pid: impl std::fmt::Display, rest: &str) -> String {
+        match pid_namespace() {
+            Some(id) => format!("fastbrowse-chrome-ns{id}-{pid}-{rest}"),
+            None => format!("fastbrowse-chrome-{pid}-{rest}"),
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_profile_whose_process_has_exited_is_removed_off_the_runtime_and_a_live_ones_kept() {
         let dir = sweep_dir("owner");
-        let orphan = dir.join(format!("fastbrowse-chrome-{}-1-0", exited_pid()));
-        let live = dir.join(format!("fastbrowse-chrome-{}-1-0", std::process::id()));
+        let orphan = dir.join(profile_name(exited_pid(), "1-0"));
+        let live = dir.join(profile_name(std::process::id(), "1-0"));
         let other = dir.join("fastbrowse-chrome-test-1-0");
         for path in [&orphan, &live, &other] {
             std::fs::create_dir_all(path.join("Default")).unwrap();
@@ -551,23 +554,49 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_profile_locked_by_another_machine_or_a_live_chrome_is_kept() {
+    fn only_profiles_of_this_pid_namespace_are_swept() {
+        let dir = sweep_dir("namespace");
+        let dead = exited_pid();
+        let ours = dir.join(format!("fastbrowse-chrome-ns1-{dead}-1-0"));
+        let another = dir.join(format!("fastbrowse-chrome-ns2-{dead}-1-0"));
+        let unmarked = dir.join(format!("fastbrowse-chrome-{dead}-1-0"));
+        for path in [&ours, &another, &unmarked] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        sweep_orphaned_profiles(&dir, Some("1"));
+        assert!(!ours.exists() && another.exists() && unmarked.exists());
+        // Where the system names no namespace, the unmarked are this machine's, and a marked one is still left alone.
+        sweep_orphaned_profiles(&dir, None);
+        assert!(another.exists() && !unmarked.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_throwaway_profile_is_named_for_its_pid_namespace() {
+        let profile = temp_dir().unwrap();
+        let name = profile.file_name().unwrap().to_str().unwrap().to_string();
+        std::fs::remove_dir_all(&profile).unwrap();
+        let expected =
+            pid_namespace().map_or("fastbrowse-chrome-".to_string(), |id| format!("fastbrowse-chrome-ns{id}-"));
+        assert!(name.starts_with(&expected), "{name}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_with_a_live_chrome_or_an_unreadable_lock_is_kept() {
         let dir = sweep_dir("lock");
-        let host = host_name().unwrap();
         let dead = exited_pid();
         let locked = |name: &str, lock: String| {
-            let profile = dir.join(format!("fastbrowse-chrome-{dead}-{name}-0"));
+            let profile = dir.join(profile_name(dead, &format!("{name}-0")));
             std::fs::create_dir_all(&profile).unwrap();
             std::os::unix::fs::symlink(lock, profile.join("SingletonLock")).unwrap();
             profile
         };
-        // A pid that is dead here says nothing about the container that wrote this lock.
-        let elsewhere = locked("elsewhere", format!("a-container-{dead}"));
-        let running = locked("running", format!("{host}-{}", std::process::id()));
+        let running = locked("running", format!("a-host-{}", std::process::id()));
         let unreadable = locked("unreadable", "not a lock".to_string());
-        let stale = locked("stale", format!("{host}-{dead}"));
-        sweep_orphaned_profiles(&dir);
-        assert!(elsewhere.exists() && running.exists() && unreadable.exists() && !stale.exists());
+        let stale = locked("stale", format!("a-host-{dead}"));
+        sweep_orphaned_profiles(&dir, pid_namespace().as_deref());
+        assert!(running.exists() && unreadable.exists() && !stale.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
