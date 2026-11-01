@@ -193,9 +193,9 @@ in Markdown and in Python comments and docstrings. Commit messages and PR descri
 `docs/`, `skills/fastbrowse/`, `packages/sdk/README.md`, `.env.example` and the changelog entry. fastbrowse.ai
 builds its docs, skill and `llms` pages from these files and PyPI renders `README.md`, so a stale sentence here
 is stale there too. A doc found trailing the code is fixed on its own, not left for the next change.
-`scripts/docs_sync.py` catches a documented flag, setting, status, exit code or relative link the code lacks;
-whether a sentence is true is checked against the code with the
-[copywriting skill](https://github.com/cjber/skills/blob/main/copywriting/SKILL.md).
+`scripts/docs_sync.py` catches a documented flag, setting, status, exit code or relative link the code lacks,
+not whether a sentence is true. When you write or review prose, check each claim against the code, put the
+useful point first, and keep prerequisites, limits and recovery steps.
 
 **Agent instructions stay short.** `.sift/agents.py check` holds this file to 300 lines. Detail only some tasks
 need goes in `docs/agents/` behind a line here that says when to read it.
