@@ -114,12 +114,14 @@ def resync(
     """
     now = current() if now is None else now
     known = cases() if known is None else known
-    reasons = record.get("immovable") or {}
-    assert isinstance(reasons, dict)
+    reasons = record.get("immovable")
+    reasons = reasons if isinstance(reasons, dict) else {}
     refused = [finding for finding in check(record, now, known) if not finding.movable]
+    written = record.get("cases")
+    written = written if isinstance(written, dict) else {}
     entries: dict[str, dict[str, str]] = {}
     for case, suite in sorted(known.items()):
-        entry = (record.get("cases") or {}).get(case)
+        entry = written.get(case)
         if case in reasons and isinstance(entry, dict):
             entries[case] = {key: str(value) for key, value in entry.items()}
             continue
@@ -143,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
         case, reason = arguments.immovable
         if case not in cases():
             parser.error(f"{case} is not a case the suites run")
-        record.setdefault("immovable", {})[case] = reason  # type: ignore[index]
+        reasons = record.get("immovable")
+        if not isinstance(reasons, dict):
+            reasons = {}
+            record["immovable"] = reasons
+        reasons[case] = reason
         save(record)
         print(f"{case}: recorded as immovable, {reason}")
         return 0
