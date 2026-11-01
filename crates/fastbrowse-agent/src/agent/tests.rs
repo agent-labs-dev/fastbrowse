@@ -382,6 +382,10 @@ struct Unfetchable {
 }
 
 impl Page for Unfetchable {
+    fn over_http(&self) -> bool {
+        true
+    }
+
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()
     }
@@ -451,6 +455,20 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
     assert_eq!(result.status, Status::Blocked);
     assert_eq!(result.error.as_deref(), Some("the page renders its content with scripts"));
     assert!(result.steps.is_empty() && result.evidence.is_empty() && result.final_url.is_none());
+}
+
+#[tokio::test]
+async fn test_a_fill_on_a_fetched_page_goes_to_the_browser_before_asking_for_a_secret() {
+    let mut password = Control::new("pw", "textbox", "Token", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    let agent = Agent::new(
+        Arc::new(Unfetchable { opens: true }),
+        Arc::new(ScriptedJev::new(Vec::new())),
+        Arc::new(ScriptedLLM),
+    );
+    let page = observation(std::slice::from_ref(&password));
+    let flow = agent.action(&mut run_state(), &page, &code_decision(Operation::Fill, Some(password.clone()))).await;
+    assert!(matches!(flow, Err(super::state::Flow::Browser(BrowserError::NeedsBrowser(_)))), "{flow:?}");
 }
 
 #[tokio::test]

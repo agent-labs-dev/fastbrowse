@@ -194,6 +194,7 @@ def _run(client: Client, origin: str) -> None:
                 "task": TASK,
                 "start": f"{origin}/token.html",
                 "local": True,
+                "browser": True,
                 "secrets": [{"name": "token", "origins": [origin]}],
             },
         }
