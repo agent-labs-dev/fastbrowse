@@ -136,9 +136,10 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--fetch-first"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
+            Opt::flag("--no-cursor"),
         ],
         positional: Some("task"),
-        exclusive: vec![("--cloud", "--local")],
+        exclusive: vec![("--cloud", "--local"), ("--cursor", "--no-cursor")],
     }
 }
 
@@ -170,7 +171,17 @@ pub struct Args {
     pub fetch_first: bool,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
-    pub cursor: bool,
+    /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
+    pub cursor: Option<bool>,
+}
+
+/// The cursor a run was asked for: `--cursor` also brings the window forward, `--no-cursor` turns it off.
+pub(crate) fn cursor_choice(cursor: bool, no_cursor: bool) -> Option<bool> {
+    match (cursor, no_cursor) {
+        (true, _) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    }
 }
 
 fn int_value(value: &str) -> Result<(), String> {
@@ -217,7 +228,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         fetch: parsed.flag("--fetch"),
         fetch_first: parsed.flag("--fetch-first"),
         trace: text("--trace"),
-        cursor: parsed.flag("--cursor"),
+        cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
 }
 

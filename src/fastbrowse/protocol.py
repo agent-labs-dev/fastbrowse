@@ -146,9 +146,10 @@ class RunParams(Params):
     """The shape of `RunResult.data`, as JSON Schema draft 2020-12 with an object at its root."""
     downloads: Path | None = None
     record: Path | None = None
-    cursor: bool = False
-    """Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. It is skipped, with
-    the run unchanged, where the driver or an X11 display is missing or the window cannot be placed exactly."""
+    cursor: bool | None = None
+    """Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. Unset draws it wherever
+    it can be placed, true also brings the window to the front for it, false turns it off. It is skipped, with the
+    run unchanged, where the driver or an X11 display is missing or the window cannot be placed exactly."""
     local: bool = False
     """Local Chrome instead of a Browser Use Cloud browser."""
     chrome: LocalChrome | None = None

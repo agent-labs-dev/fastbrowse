@@ -189,7 +189,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("proxy_country", task.proxy_country.is_some()),
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
             ("record", task.record.is_some()),
-            ("cursor", task.cursor),
+            ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
         ]);
         if !browser.is_empty() {
@@ -523,7 +523,7 @@ async fn browser(
     http: &Http,
 ) -> Result<(BrowserConnection, Owned), Refused> {
     let key = host.browser_api_key.as_deref();
-    let foreground = task.foreground || task.cursor;
+    let foreground = task.foreground || task.cursor == Some(true);
     let handed = match (&task.cdp_url, task.cdp_port) {
         (Some(url), _) => Some(url.clone()),
         (None, Some(port)) => Some(resolve_cdp_port(port, "127.0.0.1", http).await?),
@@ -596,6 +596,9 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         None => Settings::load()?,
     };
     let http = host.http.take().unwrap_or_else(Http::hyper);
+    // The agent learns each secret, and its clients write the requests that may carry one, so they share a redactor.
+    let trace = http.trace.clone().redacting(Arc::default());
+    let http = http.with_trace(trace);
     // The providers this run calls, for an eval to keep beside its result. A caller's own clients are not described.
     if host.jev.is_none() && host.llm.is_none() {
         http.trace.event("route", || Map::from_iter([("providers".into(), Value::from(settings.providers()))]));
@@ -683,7 +686,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         session = Some(opened.clone());
         opened.open().await?;
         // A cloud or headless browser has no window on this machine to draw over.
-        let shown = task.cursor
+        let shown = task.cursor != Some(false)
             && host.browser_api_key.is_none()
             && is_loopback(&opened.connection().cdp_url)
             && (task.cdp_url.is_some() || task.cdp_port.is_some() || chrome.headed);
@@ -699,6 +702,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             }
         }
         let agent = Agent::new(page, jev.clone(), llm.clone())
+            .with_redactor(http.trace.redactor().unwrap_or_default())
             .with_config(config.clone())
             .with_secrets(host.secrets.clone())
             .with_events(captioned(host.on_event.clone(), &recording));
@@ -877,9 +881,11 @@ async fn fetched(
         HeadStart::begin(llm.clone(), &task.task, task.start.as_deref(), task.context.as_deref(), task.limits.clone());
     let head_stop = head.stopper();
     let ledger = head.ledger.clone();
+    let redactor = http.trace.redactor().unwrap_or_default();
     let fetched = Arc::new(fetch::FetchedPage::new(http, origins, host.check_access.clone()));
     let page: Arc<dyn Page> = fetched.clone();
     let agent = Agent::new(page, jev, llm)
+        .with_redactor(redactor)
         .with_config(config.clone())
         .with_secrets(host.secrets.clone())
         .with_events(host.on_event.clone());

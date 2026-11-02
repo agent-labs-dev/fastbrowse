@@ -54,6 +54,12 @@ class Config(Frozen):
     Off by default: it costs a screenshot round trip per step, which a caller with nowhere to put the image
     would pay for nothing. A step whose page is showing a resolved secret sends no frame.
     """
+    step_choices: bool = False
+    """Record on each step the controls Jev was offered and which it chose, to debug a run that picked wrong.
+
+    Off by default: a dense page offers 160 controls, and a caller that is not debugging a run would carry them
+    on every step for nothing. Labels are masked as everything Jev reads is.
+    """
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""
     max_download_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
