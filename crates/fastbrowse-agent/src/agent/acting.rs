@@ -10,7 +10,7 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password,
-    may_be_irreversible, requested_question, resolve_secret, sets_new_password, starts_download,
+    may_be_irreversible, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -357,8 +357,9 @@ impl Agent {
         if !questions.is_empty() {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
             // Never asked beside the decision: the page's own text is what would argue a harmful action is harmless,
-            // and the control's label and form are already in the questions, so only the address goes with them.
-            let page = json!({"task": state.task, "page": {"url": observation.url, "title": observation.title}});
+            // and the control's label and form are already in the questions. The title, path and query are the page's
+            // to write too, so only the origin goes with them.
+            let page = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
             let evaluation = self.jev.evaluate(&page, &questions).await?;
             state.ledger.record([evaluation.cost.clone()])?;
             let answers = evaluation.answers;
