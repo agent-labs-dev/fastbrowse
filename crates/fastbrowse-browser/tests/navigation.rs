@@ -316,6 +316,13 @@ async fn test_failed_navigation_is_a_recoverable_step_unreachable() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_failed_navigation_is_a_recoverable_step_browser() {
+    // A mistyped address is the caller's own: the failure says nothing about the site.
+    failed_navigation("net::ERR_NAME_NOT_RESOLVED", "ERR_NAME_NOT_RESOLVED").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failed_navigation_is_a_recoverable_step_certificate() {
+    // A chain the browser refuses is the site giving nothing, as a refused connection is.
     failed_navigation("net::ERR_CERT_AUTHORITY_INVALID", "ERR_CERT_AUTHORITY_INVALID").await;
 }
 

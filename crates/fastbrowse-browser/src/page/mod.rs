@@ -67,6 +67,16 @@ pub(crate) const HISTORY_REREADS: u32 = 2;
 pub(crate) const NAVIGATE_ATTEMPTS: u32 = 4;
 /// Doubled after each failed try.
 pub(crate) const NAVIGATE_RETRY_SECONDS: f64 = 1.0;
+/// Whether Chrome's error names the site or the connection to it giving nothing, rather than the address being wrong.
+///
+/// A certificate or TLS failure belongs here: bu2-128's portal served a chain the browser refuses
+/// (`ERR_CERT_AUTHORITY_INVALID`), which ended a run at its first page as `error`, as if fastbrowse had broken, where
+/// nothing the agent did could have changed it. A mistyped address gives `ERR_NAME_NOT_RESOLVED`, which stays a plain
+/// failure because the address is the caller's own.
+fn site_unreachable(name: &str) -> bool {
+    UNREACHABLE.contains(&name) || name.starts_with("CERT_") || name.starts_with("SSL_")
+}
+
 /// The error a document navigation ends with when its response turned out to be a download, not a page.
 const ABORTED: &str = "net::ERR_ABORTED";
 /// The site or the connection to it gave nothing: the-internet.herokuapp.com answered ERR_EMPTY_RESPONSE for a
@@ -1158,7 +1168,7 @@ impl CdpPage {
         if timed_out {
             return Err(BrowserError::NavigationTimeout(message));
         }
-        if failure.strip_prefix("net::ERR_").is_some_and(|name| UNREACHABLE.contains(&name)) {
+        if failure.strip_prefix("net::ERR_").is_some_and(site_unreachable) {
             return Err(BrowserError::SiteUnreachable(message));
         }
         Err(BrowserError::Failed(message))
@@ -1497,6 +1507,17 @@ mod tests {
         assert!(2240.0 * scale <= f64::from(JEV_IMAGE_SIDE));
         assert_eq!(shrunk["clip"]["width"], 1120.0);
         assert_eq!(shrunk["clip"]["y"], 40);
+    }
+
+    #[test]
+    fn a_certificate_or_tls_failure_is_the_site_giving_nothing() {
+        assert!(site_unreachable("CERT_AUTHORITY_INVALID"));
+        assert!(site_unreachable("CERT_DATE_INVALID"));
+        assert!(site_unreachable("SSL_PROTOCOL_ERROR"));
+        assert!(site_unreachable("CONNECTION_REFUSED"));
+        // A mistyped address, and every error that says nothing about the site, stay a plain failure.
+        assert!(!site_unreachable("NAME_NOT_RESOLVED"));
+        assert!(!site_unreachable("ABORTED"));
     }
 
     #[test]
