@@ -532,7 +532,7 @@ async def test_a_run_names_the_providers_it_calls_in_its_trace(monkeypatch: pyte
     assert result.status is not Status.COMPLETE
     assert providers(events) == (
         "Jev openrouter (no backup: an outage past its retries ends the run); "
-        "LLM google/gemini-3.8-flash via OpenRouter"
+        "LLM anthropic/claude-sonnet-5.5 via OpenRouter"
     )
     # A caller's own clients are theirs to describe.
     assert providers(own) is None

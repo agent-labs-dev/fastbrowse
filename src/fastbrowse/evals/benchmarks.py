@@ -589,6 +589,7 @@ def regressions(
                 continue
             if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):
                 raise ValueError(f"source-score regression: {group.id}/{task}")
+            # A rate, like the score above: the two runs need not have the same number of repeats.
             if sum(r.completed for r in now) / len(now) < sum(r.completed for r in before) / len(before):
                 raise ValueError(f"completion regression: {group.id}/{task}")
             moved = moves(f"{group.id}/{task}", "the published figures", _dumped(before), _dumped(now))
