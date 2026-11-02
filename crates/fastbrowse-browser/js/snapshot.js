@@ -314,11 +314,15 @@
     if (submit?.matches(':disabled')) return null;
     if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(c.type)).length > 1)
       return null;
+    // A page can make any of these properties return something other than text. Coursera's React app left an
+    // HTMLInputElement where a method string belongs and `JSON.stringify` threw on React's circular fiber, which ended
+    // the run as a browser error; a value that is not text is no more use to a caller than none.
+    const shown = v => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
     return JSON.stringify({
-      label: submit ? labelOf(submit) : labelOf(form),
-      method: submit?.getAttribute('formmethod') || form.method,
-      action: submit?.getAttribute('formaction') || form.action,
-      text: innerTextOf(form),
+      label: shown(submit ? labelOf(submit) : labelOf(form)),
+      method: shown(submit?.getAttribute('formmethod') || form.method),
+      action: shown(submit?.getAttribute('formaction') || form.action),
+      text: shown(innerTextOf(form)),
     });
   });
 
