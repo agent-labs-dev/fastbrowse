@@ -101,8 +101,8 @@ restart it without the flag, when you are done.
 
 ## Models
 
-The LLM defaults to `anthropic/claude-sonnet-5.5`, with `google/gemini-3.5-flash-lite` for
-proposing a direct address and typing field text.
+The LLM defaults to `deepseek/deepseek-v4.1-flash-1017`, for proposing a first address when no
+`start` is given and for writing an answer that must be composed from more than one fact.
 
 | Setting | Effect |
 |:--|:--|

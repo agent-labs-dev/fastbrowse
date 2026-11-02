@@ -61,10 +61,11 @@ Read [the eval workflow](agents/evals.md) before changing agent behavior or runn
 
 ## Default LLM measurements
 
-`DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` is `anthropic/claude-sonnet-5.5` for every purpose,
-at low reasoning. On the live fixture suite, the same build completed 110 of 111 runs on it and 86 of 95 on
-DeepSeek V4.1 Flash. `google/gemini-3.5-flash-lite` is two to three times faster a call but scored 8/12 live
-against 12/12.
+`DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` is `deepseek/deepseek-v4.1-flash-1017` for every
+purpose, with reasoning off. The LLM proposes a first address and composes answers; Jev makes every other call.
+On the local and mock suites, one run each on the same build and Jev, it passed 35 of 38 tasks, as
+`anthropic/claude-sonnet-5.5` did, at a tenth of Sonnet's LLM spend ($0.0018 against $0.0191) and a lower mean
+time per task (3.9s against 4.2s).
 
 Gemini 3.5 Flash Lite at low reasoning was also measured as a candidate default against DeepSeek V4.1 Flash
 1017 on the Sauce Demo checkout: one task, 3 repeats per arm, identical prompt and limits, local Chrome.
