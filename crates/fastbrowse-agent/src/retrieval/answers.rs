@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
-use fastbrowse_core::llm::{LLMClient, Message};
+use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
 use fastbrowse_core::models::{Citation, CostComponent, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::error::Result;
+use crate::error::{AgentError, Result};
 use crate::memory::{Notes, fact_id};
 use crate::support::generate;
 
@@ -111,7 +111,146 @@ impl Schema for AnswerDraft {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposeItem {
+    label: String,
+    text: String,
+    sources: Vec<String>,
+}
+
 const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something.\n\n# Trust\n";
+
+fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
+    [
+        Message::system(format!("{COMPOSER}{UNTRUSTED}")),
+        Message::user(format!("# Task\n{task}\n\n# Notes\n{}", written.join("\n"))),
+    ]
+}
+
+/// A byte count is a conservative token estimate for the UTF-8 JSON sent to a provider: a tokenizer cannot use more
+/// tokens than bytes. The schema and envelope are counted too, so a prompt that fits this bound leaves the provider's
+/// context window enough room for the request framing that is outside `Message`.
+fn estimated_context_bytes(messages: &[Message]) -> usize {
+    let schema = Typed::<AnswerDraft>::default();
+    let schema_json = schema.json_schema();
+    let envelope = json!({
+        "model": "",
+        "messages": messages,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": schema.name(), "schema": schema_json, "strict": true},
+        },
+    });
+    serde_json::to_vec(&envelope).expect("compose request is serializable").len()
+}
+
+fn context_limit(context: i64) -> Result<usize> {
+    usize::try_from(context).map_err(|_| AgentError::Llm(LLMError::Failed("compose context window is invalid".into())))
+}
+
+/// The bytes one note adds to the request: its line as the JSON string escapes it, and the newline joining it.
+fn line_bytes(label: &str, text: &str) -> usize {
+    serde_json::to_string(&format!("{label}: {text}\n")).map_or(0, |escaped| escaped.len() - 2)
+}
+
+/// Every note in reading order, in as few parts as fit `limit` with the request around them. A note too long for any
+/// part is cut at character boundaries into pieces that each fit, so nothing is dropped.
+fn pack_items(task: &str, items: &[ComposeItem], limit: usize) -> Result<Vec<Vec<ComposeItem>>> {
+    let room = limit.saturating_sub(estimated_context_bytes(&compose_messages(task, &[])));
+    let too_small = || AgentError::Llm(LLMError::Failed("compose context window cannot hold a note".into()));
+    let mut pieces = Vec::new();
+    for item in items {
+        let empty = line_bytes(&item.label, "");
+        let (mut piece, mut bytes) = (String::new(), empty);
+        for character in item.text.chars() {
+            // JSON escapes each character on its own, so a line's escaped length is the sum of its characters'.
+            let adds = line_bytes("", &character.to_string()) - line_bytes("", "");
+            if !piece.is_empty() && bytes + adds > room {
+                pieces.push(ComposeItem { text: std::mem::take(&mut piece), ..item.clone() });
+                bytes = empty;
+            }
+            piece.push(character);
+            bytes += adds;
+        }
+        if bytes > room {
+            return Err(too_small());
+        }
+        pieces.push(ComposeItem { text: piece, ..item.clone() });
+    }
+    let mut parts: Vec<Vec<ComposeItem>> = Vec::new();
+    let mut used = 0;
+    for piece in pieces {
+        let bytes = line_bytes(&piece.label, &piece.text);
+        if used + bytes > room && parts.last().is_some_and(|part| !part.is_empty()) {
+            parts.push(Vec::new());
+            used = 0;
+        }
+        if parts.is_empty() {
+            parts.push(Vec::new());
+        }
+        used += bytes;
+        parts.last_mut().expect("a part was pushed").push(piece);
+    }
+    Ok(parts)
+}
+
+async fn compose_part(
+    llm: &dyn LLMClient,
+    task: &str,
+    items: &[ComposeItem],
+    ledger: Option<&Ledger>,
+) -> Result<Vec<Claim>> {
+    let written: Vec<String> = items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect();
+    let messages = compose_messages(task, &written);
+    let draft = generate::<AnswerDraft>(llm, LLMPurpose::Compose, &messages, ledger).await?;
+    if let Some(ledger) = ledger {
+        ledger.record([draft.cost.clone()])?;
+    }
+    let claims = draft
+        .data
+        .claims
+        .into_iter()
+        .filter_map(|claim| {
+            let cited: Vec<String> = claim
+                .evidence_ids
+                .iter()
+                .filter_map(|id| items.iter().find(|item| item.label == *id))
+                .flat_map(|item| item.sources.iter().cloned())
+                .collect();
+            (!cited.is_empty()).then(|| Claim::new(&claim.text, cited))
+        })
+        .collect();
+    Ok(claims)
+}
+
+async fn compose_packed(
+    llm: &dyn LLMClient,
+    task: &str,
+    mut items: Vec<ComposeItem>,
+    limit: usize,
+    ledger: Option<&Ledger>,
+) -> Result<Vec<Claim>> {
+    let mut seen: HashSet<Vec<Claim>> = HashSet::new();
+    loop {
+        let parts = pack_items(task, &items, limit)?;
+        let mut claims = Vec::new();
+        for part in &parts {
+            claims.extend(compose_part(llm, task, part, ledger).await?);
+        }
+        if parts.len() == 1 || claims.len() <= 1 || !seen.insert(claims.clone()) {
+            return Ok(claims);
+        }
+        items = claims
+            .into_iter()
+            .enumerate()
+            .map(|(index, claim)| ComposeItem {
+                label: format!("c{index}"),
+                text: claim.text,
+                sources: claim.evidence_ids,
+            })
+            .collect();
+    }
+}
 
 /// The answer Jev said must be composed, written by the LLM from the notes. A claim citing nothing the notes hold is
 /// dropped: every claim stands on its quotes.
@@ -122,28 +261,30 @@ pub async fn compose(
     ledger: Option<&Ledger>,
 ) -> Result<ComposedAnswer> {
     let facts = notes.facts();
-    let labels: IndexMap<String, String> =
-        facts.iter().enumerate().map(|(index, fact)| (format!("e{index}"), fact_id(fact))).collect();
-    let written: Vec<String> =
-        labels.keys().zip(&facts).map(|(label, fact)| format!("{label}: {}", fact.text)).collect();
-    let messages = [
-        Message::system(format!("{COMPOSER}{UNTRUSTED}")),
-        Message::user(format!("# Task\n{task}\n\n# Notes\n{}", written.join("\n"))),
-    ];
-    let draft = generate::<AnswerDraft>(llm, LLMPurpose::Compose, &messages, ledger).await?;
-    if let Some(ledger) = ledger {
-        ledger.record([draft.cost.clone()])?;
+    let items = initial_items(&facts);
+    let written: Vec<String> = items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect();
+    let messages = compose_messages(task, &written);
+    let Some(context) = llm.context_tokens(LLMPurpose::Compose).await else {
+        return Ok(assemble_answer(&compose_part(llm, task, &items, ledger).await?, notes));
+    };
+    let limit = context_limit(context)?;
+    if estimated_context_bytes(&messages) <= limit {
+        return Ok(assemble_answer(&compose_part(llm, task, &items, ledger).await?, notes));
     }
-    let claims: Vec<Claim> = draft
-        .data
-        .claims
-        .into_iter()
-        .filter_map(|claim| {
-            let cited: Vec<String> = claim.evidence_ids.iter().filter_map(|id| labels.get(id).cloned()).collect();
-            (!cited.is_empty()).then(|| Claim::new(&claim.text, cited))
-        })
-        .collect();
+    let claims = compose_packed(llm, task, items, limit, ledger).await?;
     Ok(assemble_answer(&claims, notes))
+}
+
+fn initial_items(facts: &[&crate::memory::Fact]) -> Vec<ComposeItem> {
+    facts
+        .iter()
+        .enumerate()
+        .map(|(index, fact)| ComposeItem {
+            label: format!("e{index}"),
+            text: fact.text.clone(),
+            sources: vec![fact_id(fact)],
+        })
+        .collect()
 }
 
 const QUOTED: &str = "quote";
@@ -255,4 +396,122 @@ pub fn draft_answer(notes: &Notes) -> Option<ComposedAnswer> {
     let claims: Vec<Claim> =
         notes.supporting().into_iter().map(|(key, fact)| Claim::new(&fact.text, vec![key])).collect();
     (!claims.is_empty()).then(|| assemble_answer(&claims, notes))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use fastbrowse_core::BoxFuture;
+    use fastbrowse_core::llm::{Generation, LLMError, ResponseSchema};
+    use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Evidence, FactReader};
+
+    use super::*;
+    use crate::memory::Fact;
+
+    struct RecordingLlm {
+        context: Option<i64>,
+        calls: Mutex<Vec<Vec<Message>>>,
+    }
+
+    impl RecordingLlm {
+        fn new(context: Option<i64>) -> RecordingLlm {
+            RecordingLlm { context, calls: Mutex::new(Vec::new()) }
+        }
+
+        fn calls(&self) -> Vec<Vec<Message>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl LLMClient for RecordingLlm {
+        fn generate_value<'a>(
+            &'a self,
+            _: LLMPurpose,
+            messages: &'a [Message],
+            schema: &'a dyn ResponseSchema,
+            _: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+            self.calls.lock().unwrap().push(messages.to_vec());
+            let ids: Vec<String> = messages
+                .last()
+                .into_iter()
+                .flat_map(|message| message.content.lines())
+                .filter_map(|line| line.split_once(": ").map(|(id, _)| id.to_string()))
+                .filter(|id| id.starts_with('e') || id.starts_with('c'))
+                .collect();
+            Box::pin(async move {
+                let claims = ids.into_iter().map(|id| json!({"text": id, "evidence_ids": [id]})).collect::<Vec<_>>();
+                let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+                Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+            })
+        }
+
+        fn context_tokens(&self, _: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+            let context = self.context;
+            Box::pin(async move { context })
+        }
+    }
+
+    fn fact(index: usize, text: String) -> Fact {
+        let evidence: Evidence = serde_json::from_value(json!({
+            "source_id": format!("s{index}"),
+            "url": "https://example.test",
+            "frame_id": null,
+            "captured_at": "2026-01-01T00:00:00Z",
+            "capture_sha256": format!("sha{index}"),
+            "start": 0,
+            "end": text.len(),
+            "quote": text,
+        }))
+        .unwrap();
+        let quote = evidence.quote.clone();
+        Fact::read(&quote, evidence, FactReader::JevChoice)
+    }
+
+    #[tokio::test]
+    async fn compose_keeps_the_fitting_request_unchanged() {
+        let notes = Notes::new([fact(0, "A fact".into())]);
+        let unconstrained = RecordingLlm::new(None);
+        compose(&unconstrained, "Find it", &notes, None).await.unwrap();
+        let constrained = RecordingLlm::new(Some(i64::MAX));
+        compose(&constrained, "Find it", &notes, None).await.unwrap();
+        assert_eq!(unconstrained.calls(), constrained.calls());
+    }
+
+    #[tokio::test]
+    async fn compose_packs_all_notes_and_reduces_their_claims() {
+        let notes = Notes::new((0..4).map(|index| fact(index, format!("fact {index} {}", "x".repeat(100)))));
+        let facts = notes.facts();
+        let items = initial_items(&facts);
+        let limit = items
+            .iter()
+            .map(|item| {
+                let written = vec![format!("{}: {}", item.label, item.text)];
+                estimated_context_bytes(&compose_messages("Find it", &written))
+            })
+            .max()
+            .unwrap();
+        assert!(
+            estimated_context_bytes(&compose_messages(
+                "Find it",
+                &items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect::<Vec<_>>(),
+            )) > limit
+        );
+
+        let llm = RecordingLlm::new(Some(limit as i64));
+        let answer = compose(&llm, "Find it", &notes, None).await.unwrap();
+        let calls = llm.calls();
+        assert!(calls.len() > 1);
+        assert!(calls.iter().all(|messages| estimated_context_bytes(messages) <= limit));
+        let prompt_ids: HashSet<String> = calls
+            .iter()
+            .flat_map(|messages| messages[1].content.lines())
+            .filter_map(|line| line.split_once(": ").map(|(id, _)| id.to_string()))
+            .filter(|id| id.starts_with('e'))
+            .collect();
+        assert_eq!(prompt_ids, ["e0", "e1", "e2", "e3"].into_iter().map(String::from).collect());
+        let answer_ids: HashSet<String> = answer.claims.iter().flat_map(|claim| claim.evidence_ids.clone()).collect();
+        assert_eq!(answer_ids, notes.facts().iter().map(|fact| fact_id(fact)).collect());
+    }
 }

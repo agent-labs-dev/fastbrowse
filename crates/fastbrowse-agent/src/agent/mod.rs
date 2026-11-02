@@ -42,7 +42,7 @@ use state::{Flow, RunState};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposedAnswer, compose, marked_partial, partial_answer};
+use crate::retrieval::{ComposedAnswer, compose, draft_answer, marked_partial, partial_answer};
 use crate::verification::RecordSchema;
 
 /// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
@@ -428,6 +428,14 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
+        if state.is_some_and(|state| state.compose) {
+            // A failed compose call cannot promote context into an answer: only facts Jev marked as answering are safe
+            // to return, and an empty set must stay an answerless failure rather than become a raw evidence dump.
+            if let Some(answer) = draft_answer(notes) {
+                return self.answered(&answer, notes, state, ledger, status, error, budget);
+            }
+            return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
+        }
         if notes.facts().is_empty() {
             return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
         }
