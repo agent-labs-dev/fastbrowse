@@ -636,6 +636,9 @@ impl Agent {
             facts
                 .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
         }
+        if observation.controls.is_empty() {
+            facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
+        }
         let here = url::Url::parse(&observation.url).ok();
         let read_links: Vec<String> = observation
             .controls
