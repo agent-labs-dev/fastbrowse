@@ -387,7 +387,17 @@ fn test_blocks_match_the_recorded_blocks_of_every_fixture_page() {
         }
     }
     if update {
-        std::fs::write(&path, serde_json::to_string_pretty(&cases).unwrap() + "\n").unwrap();
+        // The committed file's own one-space indent, so a re-record shows only what changed. JSON escapes every newline
+        // inside a string, so each line's leading spaces are indentation alone.
+        let pretty = serde_json::to_string_pretty(&cases).unwrap();
+        let written: Vec<String> = pretty
+            .lines()
+            .map(|line| {
+                let text = line.trim_start_matches(' ');
+                format!("{}{text}", " ".repeat((line.len() - text.len()) / 2))
+            })
+            .collect();
+        std::fs::write(&path, written.join("\n") + "\n").unwrap();
         return;
     }
     assert!(differing.is_empty(), "{} of {} differ:\n{}", differing.len(), cases.len(), differing.join("\n"));

@@ -190,7 +190,7 @@
  {
   "name": "src/fastbrowse/evals/fixtures/cities.html",
   "url": "https://shop.example.com/a/page.html",
-  "html": "<!doctype html><html><head><title>French cities</title></head><body>\n<h1>Largest cities in France</h1>\n<table><thead><tr><th>City</th><th>Region</th><th>Population</th></tr></thead><tbody>\n<tr><td>Paris</td><td>\u00cele-de-France</td><td>2,102,650</td></tr>\n<tr><td>Marseille</td><td>Provence-Alpes-C\u00f4te d'Azur</td><td>873,076</td></tr>\n<tr><td>Lyon</td><td>Auvergne-Rh\u00f4ne-Alpes</td><td>522,250</td></tr>\n<tr><td>Toulouse</td><td>Occitanie</td><td>504,078</td></tr>\n</tbody></table></body></html>\n",
+  "html": "<!doctype html><html><head><title>French cities</title></head><body>\n<h1>Largest cities in France</h1>\n<table><thead><tr><th>City</th><th>Region</th><th>Population</th></tr></thead><tbody>\n<tr><td>Paris</td><td>Île-de-France</td><td>2,102,650</td></tr>\n<tr><td>Marseille</td><td>Provence-Alpes-Côte d'Azur</td><td>873,076</td></tr>\n<tr><td>Lyon</td><td>Auvergne-Rhône-Alpes</td><td>522,250</td></tr>\n<tr><td>Toulouse</td><td>Occitanie</td><td>504,078</td></tr>\n</tbody></table></body></html>\n",
   "title": "French cities",
   "blocks": [
    {
@@ -217,7 +217,7 @@
    },
    {
     "kind": "table",
-    "text": "| Paris | \u00cele-de-France | 2,102,650 |",
+    "text": "| Paris | Île-de-France | 2,102,650 |",
     "heading_path": [
      "Largest cities in France"
     ],
@@ -225,7 +225,7 @@
    },
    {
     "kind": "table",
-    "text": "| Marseille | Provence-Alpes-C\u00f4te d'Azur | 873,076 |",
+    "text": "| Marseille | Provence-Alpes-Côte d'Azur | 873,076 |",
     "heading_path": [
      "Largest cities in France"
     ],
@@ -233,7 +233,7 @@
    },
    {
     "kind": "table",
-    "text": "| Lyon | Auvergne-Rh\u00f4ne-Alpes | 522,250 |",
+    "text": "| Lyon | Auvergne-Rhône-Alpes | 522,250 |",
     "heading_path": [
      "Largest cities in France"
     ],
@@ -356,7 +356,7 @@
  {
   "name": "src/fastbrowse/evals/fixtures/results.html",
   "url": "https://shop.example.com/a/page.html",
-  "html": "<!doctype html><html><head><title>Results</title></head><body>\n<h1>Search results</h1>\n<p id=\"none\" hidden>No products match.</p>\n<ul id=\"list\"></ul>\n<script>\nconst items = [[\"Red Kettle\", \"\u00a329.00\"], [\"Blue Kettle\", \"\u00a334.50\"], [\"Steel Kettle\", \"\u00a341.99\"], [\"Blue Teapot\", \"\u00a318.25\"]];\nconst q = (new URLSearchParams(location.search).get(\"q\") || \"\").toLowerCase();\nconst hits = items.filter(([n]) => q && q.split(/\\s+/).every(w => n.toLowerCase().includes(w)));\nfor (const [n, p] of hits) { const li = document.createElement(\"li\"); li.innerHTML = `<a href=\"/product.html?name=${encodeURIComponent(n)}&price=${encodeURIComponent(p)}\">${n}</a>`; list.append(li); }\ndocument.getElementById(\"none\").hidden = hits.length > 0;\n</script></body></html>\n",
+  "html": "<!doctype html><html><head><title>Results</title></head><body>\n<h1>Search results</h1>\n<p id=\"none\" hidden>No products match.</p>\n<ul id=\"list\"></ul>\n<script>\nconst items = [[\"Red Kettle\", \"£29.00\"], [\"Blue Kettle\", \"£34.50\"], [\"Steel Kettle\", \"£41.99\"], [\"Blue Teapot\", \"£18.25\"]];\nconst q = (new URLSearchParams(location.search).get(\"q\") || \"\").toLowerCase();\nconst hits = items.filter(([n]) => q && q.split(/\\s+/).every(w => n.toLowerCase().includes(w)));\nfor (const [n, p] of hits) { const li = document.createElement(\"li\"); li.innerHTML = `<a href=\"/product.html?name=${encodeURIComponent(n)}&price=${encodeURIComponent(p)}\">${n}</a>`; list.append(li); }\ndocument.getElementById(\"none\").hidden = hits.length > 0;\n</script></body></html>\n",
   "title": "Results",
   "blocks": [
    {
@@ -370,7 +370,7 @@
  {
   "name": "src/fastbrowse/evals/fixtures/shop.html",
   "url": "https://shop.example.com/a/page.html",
-  "html": "<!doctype html><html><head><title>Kettle Shop</title></head><body>\n<h1>Kettle Shop</h1>\n<form action=\"/results.html\" method=\"get\" role=\"search\">\n  <label for=\"q\">Search products</label> <input id=\"q\" name=\"q\" type=\"search\">\n  <button type=\"submit\">Search</button>\n</form>\n<nav><a href=\"/about.html\">About us</a> \u00b7 <a href=\"/contact.html\">Contact</a></nav>\n</body></html>\n",
+  "html": "<!doctype html><html><head><title>Kettle Shop</title></head><body>\n<h1>Kettle Shop</h1>\n<form action=\"/results.html\" method=\"get\" role=\"search\">\n  <label for=\"q\">Search products</label> <input id=\"q\" name=\"q\" type=\"search\">\n  <button type=\"submit\">Search</button>\n</form>\n<nav><a href=\"/about.html\">About us</a> · <a href=\"/contact.html\">Contact</a></nav>\n</body></html>\n",
   "title": "Kettle Shop",
   "blocks": [
    {
@@ -397,7 +397,7 @@
    },
    {
     "kind": "paragraph",
-    "text": "\u00b7 Contact",
+    "text": "· Contact",
     "heading_path": [
      "Kettle Shop"
     ],
@@ -2692,7 +2692,7 @@
   "blocks": [
    {
     "kind": "paragraph",
-    "text": "\u00a9 2026 && \u00acit; \u2209 AB\ufffd\ufffd \u20ac &unknown;",
+    "text": "© 2026 && ¬it; ∉ AB�� € &unknown;",
     "heading_path": [],
     "href": null
    }
@@ -2774,13 +2774,19 @@
   "blocks": [
    {
     "kind": "table",
-    "text": "| a | bc |",
+    "text": "| a | b |",
     "heading_path": [],
     "href": null
    },
    {
     "kind": "table",
     "text": "| --- | --- |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| c |",
     "heading_path": [],
     "href": null
    },
@@ -2923,12 +2929,12 @@
  {
   "name": "whitespace",
   "url": "https://shop.example.com/a/page.html",
-  "html": "<p>  a \t b\r\n\n\n\n c \u00a0 d  </p>",
+  "html": "<p>  a \t b\r\n\n\n\n c   d  </p>",
   "title": "",
   "blocks": [
    {
     "kind": "paragraph",
-    "text": "a b\n\nc \u00a0 d",
+    "text": "a b\n\nc   d",
     "heading_path": [],
     "href": null
    }
@@ -3057,20 +3063,20 @@
  {
   "name": "unicode",
   "url": "https://shop.example.com/a/page.html",
-  "html": "<h1>Caf\u00e9 \u2615</h1><p>na\u00efve \u2014 \u201cquoted\u201d \ud835\udd18</p>",
+  "html": "<h1>Café ☕</h1><p>naïve — “quoted” 𝔘</p>",
   "title": "",
   "blocks": [
    {
     "kind": "heading",
-    "text": "Caf\u00e9 \u2615",
+    "text": "Café ☕",
     "heading_path": [],
     "href": null
    },
    {
     "kind": "paragraph",
-    "text": "na\u00efve \u2014 \u201cquoted\u201d \ud835\udd18",
+    "text": "naïve — “quoted” 𝔘",
     "heading_path": [
-     "Caf\u00e9 \u2615"
+     "Café ☕"
     ],
     "href": null
    }

@@ -281,11 +281,17 @@ impl<'a> Reader<'a> {
         }
         if tag == "table" {
             self.flush(None, None, false);
-            self.tables += 1;
-            if self.tables == 1 {
-                self.rows.clear();
-                self.header_row = None;
+            if self.tables > 0 {
+                // A table inside a cell lays out a page around its own rows, as Hacker News lists every story in one
+                // cell of its page table. Read flat, the whole list was one row; the rows so far end here, and the
+                // inner table's rows are rows.
+                self.close_cell();
+                self.close_row();
+                self.emit_table();
             }
+            self.tables += 1;
+            self.rows.clear();
+            self.header_row = None;
             return;
         }
         if self.tables > 0 {
@@ -356,11 +362,9 @@ impl<'a> Reader<'a> {
         }
         if tag == "table" && self.tables > 0 {
             self.close_cell();
+            self.close_row();
+            self.emit_table();
             self.tables -= 1;
-            if self.tables == 0 {
-                self.close_row();
-                self.emit_table();
-            }
             return;
         }
         if self.tables > 0 {
@@ -415,9 +419,6 @@ impl<'a> Reader<'a> {
     }
 
     fn table_start(&mut self, tag: &str, alt: &str) {
-        if self.tables > 1 {
-            return;
-        }
         if tag == "tr" {
             self.close_cell();
             self.close_row();
