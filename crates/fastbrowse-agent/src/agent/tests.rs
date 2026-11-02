@@ -24,7 +24,7 @@ use super::Agent;
 use super::driving::edit_progress;
 use super::helpers::{read_sources, unsent_fact};
 use super::state::Written;
-use super::state::{Flow, RunState};
+use super::state::{FailureCause, Flow, RunState, SiteFailure};
 use crate::memory::{Fact, Notes};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
@@ -1151,6 +1151,25 @@ async fn test_past_the_recovery_budget_the_run_ends_with_the_reason() {
     let withheld = super::recovery::withheld(&decision);
     let error = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
     assert!(matches!(error, Some(Flow::Stop(stop)) if stop.error.as_deref() == Some("nothing changed")));
+}
+
+#[tokio::test]
+async fn test_a_page_that_reports_a_failure_ends_as_it_even_when_a_value_is_missing() {
+    // USITC's DataWeb said "Http failure response for ...: 0 Unknown Error" on the page the task needed, and the run
+    // ended needs_input naming a control labelled "undefined" rather than the failure the page reported.
+    let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
+    let jev = Arc::new(Unsure(ScriptedJev::new(script), 0.1, Default::default()));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let apply = field("Apply");
+    let page = observation(&[apply.clone(), button("Next")]);
+    state.site_failure = Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0 });
+    state.missing.insert((page.url.clone(), "Apply".into(), None));
+    let decision = code_decision(Operation::Click, Some(apply));
+    let withheld = super::recovery::withheld(&decision);
+    let error = agent.recover(&mut state, &page, "nothing changed", Status::NeedsInput, withheld).await.err();
+    assert!(matches!(error, Some(Flow::Stop(ref stop)) if stop.status == Status::Unavailable), "{error:?}");
 }
 
 #[tokio::test]

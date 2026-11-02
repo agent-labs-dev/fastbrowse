@@ -100,6 +100,14 @@ impl Agent {
             self.downloads_forbidden(state).await?;
         }
         if state.recoveries > self.config.stall.max_recoveries {
+            // A page that reports the site failed ends as that failure, whatever the run was last unsure about: a
+            // field the task gives no value for, on a page whose own data requests failed, is not the caller's to
+            // supply. BU Bench bu2-196 was asked for a 2024 USITC report on a DataWeb page reading "Http failure
+            // response for ...: 0 Unknown Error", was asked for input on a control labelled "undefined", and ended
+            // needs_input as if a person could supply it.
+            if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.url == observation.url) {
+                return Err(failure.stop().into());
+            }
             if gives_up_as != Status::NeedsInput
                 && let Some(failure) = &state.site_failure
             {
