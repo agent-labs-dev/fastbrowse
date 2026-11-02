@@ -185,7 +185,7 @@ impl CdpPage {
         if self.session.pending_dialog().is_none() {
             let hit_test = action.operation.is_targeted();
             // The frame wait runs on the page's own timers, which a page can replace with ones that never fire; past
-            // this bound the point is measured again and the pointer move waits for its own frame.
+            // this bound the action is recorded as failed and the next loop turn observes the page again.
             let measured = if drawn {
                 match timeout(
                     secs(MEASURE_DRAWN_SECONDS),
@@ -196,8 +196,10 @@ impl CdpPage {
                     Ok(measured) => measured,
                     // The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
                     Err(_) => {
-                        return Err(BrowserError::PageUnresponsive(
-                            "page did not draw the measured layout before the deadline".into(),
+                        return Ok(result(
+                            StepOutcome::Failed,
+                            false,
+                            "page did not draw the measured layout before the deadline",
                         ));
                     }
                 }

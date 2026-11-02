@@ -16,7 +16,6 @@ use common::{
 };
 use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
-use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_browser::testing;
@@ -622,8 +621,9 @@ async fn test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation() {
     h.goto("/").await;
     let obs = h.observe().await;
     armed.store(true, Ordering::SeqCst);
-    let error = h.page.act(&click(find(&obs, "Shadow button")), &obs).await.expect_err("the page did not draw");
-    assert!(matches!(&error, BrowserError::PageUnresponsive(m) if m.contains("did not draw")), "{error:?}");
+    let result = h.page.act(&click(find(&obs, "Shadow button")), &obs).await.expect("the page did not draw");
+    assert_eq!(result.outcome, StepOutcome::Failed);
+    assert_eq!(result.detail.as_deref(), Some("page did not draw the measured layout before the deadline"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     h.close().await;
 }
