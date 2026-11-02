@@ -44,6 +44,9 @@ async fn test_llm_calls_are_traced_when_they_fail_or_are_cancelled() {
         _ = hanging.cancel.notified() => {}
     }
     assert_eq!(spans(&trace), [("llm:read".into(), "error".into()), ("llm:read".into(), "cancelled".into())]);
+    let events = trace.events();
+    let last = events.iter().rfind(|e| e["event"] == "http").unwrap();
+    assert_eq!((&last["error"], &last["request"]["messages"][0]["content"]), (&json!("cancelled"), &json!("Answer.")));
 }
 
 #[tokio::test(start_paused = true)]
@@ -74,4 +77,19 @@ async fn test_jev_calls_are_traced_when_they_fail_are_cancelled_or_answer_invali
     let expected =
         ["error", "error", "error", "cancelled", "ok"].map(|outcome| ("jev".to_string(), outcome.to_string()));
     assert_eq!(spans(&trace), expected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_model_call_leaves_its_request_and_reply_in_the_trace_without_its_key() {
+    let trace = Trace::collecting();
+    let content = json!({"answer": "yes"}).to_string();
+    let script = Script::new([reply(200, json!({"choices": [{"message": {"content": content}}], "note": "key"}))]);
+    let (client, schema) = (llm(&script, &trace), answer_model());
+    assert!(client.generate_value(LLMPurpose::Read, &[Message::user("Answer.")], &schema, 2000, None).await.is_ok());
+    let events = trace.events();
+    let http: Vec<&Value> = events.iter().filter(|e| e["event"] == "http").collect();
+    assert_eq!(http.len(), 1);
+    assert_eq!(http[0]["status"], 200);
+    assert_eq!(http[0]["request"]["messages"][0]["content"], "Answer.");
+    assert_eq!(http[0]["response"]["note"], "[api key]");
 }

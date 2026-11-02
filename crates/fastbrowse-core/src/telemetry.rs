@@ -225,8 +225,8 @@ static SINK: OnceLock<Sink> = OnceLock::new();
 ///
 /// The events say why a run went the way it did: each model call with its purpose, schema and timing, which reader
 /// answered a read and why, every check's scores, recoveries and their reasons. They carry ids, verdicts, redacted
-/// addresses, requirement texts and control labels, not page captures; treat the file as you would the task. With no
-/// destination the `FASTBROWSE_TRACE` environment variable is used, and an unset or empty one changes nothing.
+/// addresses, requirement texts and control labels, and the `http` events hold each model request and reply in full,
+/// page text and screenshots included, so treat the file as you would the pages. With no destination the `FASTBROWSE_TRACE` environment variable is used, and an unset or empty one changes nothing.
 pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
     let destination = match destination {
         Some(destination) => destination.to_string(),
@@ -256,7 +256,7 @@ fn write_line(sink: &Sink, record: &Map<String, Value>) {
 }
 
 /// Why a run went the way it did, one record per judgement, for evals to keep beside each result: ids, verdicts,
-/// scores and redacted addresses, never page text.
+/// scores and redacted addresses. The `http` events hold each model request and reply in full, page text included.
 ///
 /// Python collects these through a logger and a context variable, so runs that overlap keep separate traces. Here a
 /// run owns its `Trace` and hands it to what it calls; a disabled one builds nothing unless [`trace_to`] set a
@@ -283,6 +283,11 @@ impl Trace {
     /// This trace, redacting with `redactor` from now on.
     pub fn redacting(self, redactor: Arc<Mutex<Redactor>>) -> Trace {
         Trace { redactor: Some(redactor), ..self }
+    }
+
+    /// The secrets this trace redacts, for whatever else in the run holds them.
+    pub fn redactor(&self) -> Option<Arc<Mutex<Redactor>>> {
+        self.redactor.clone()
     }
 
     pub fn enabled(&self) -> bool {
