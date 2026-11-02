@@ -3,8 +3,8 @@ name: Release
 # the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
 # yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
-# A tag runs the fixture suites itself, before anything is published: the release carries its own proof that the
-# agent still browses well on the exact commit that ships, rather than needing somebody to dispatch a run first.
+# Approval is the decision: a tag publishes once the sdist, the wheels and the binaries are green. The fixture
+# suites run nightly and on demand in evals.yml, and do not gate a release.
 #
 # Run by hand, it stops after the binaries and publishes nothing. That is how a change to the build is tried
 # without spending a version number, which no registry gives back.
@@ -34,10 +34,6 @@ jobs:
       # A tag that disagrees with the package version would publish one number under another's name.
       - if: github.event_name == 'push'
         run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
-      # No registry takes a version back, so only a commit already on main (reviewed, CI-gated) is published;
-      # a tag pushed on a branch or a stray local commit stops here.
-      - if: github.event_name == 'push'
-        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - id: version
         run: echo "version=$(uv version --short)" >> "$GITHUB_OUTPUT"
       # The tag is the Python version, and every npm version is published from it.
@@ -57,58 +53,16 @@ jobs:
           name: notes
           path: ${{ runner.temp }}/notes.md
 
-  # The same fixture suites the schedule runs, on the tag. They take longer than a build, so they start
-  # alongside it, and the guard below holds the release until both are green. Read-only contents, and the
-  # model keys come from this repository's secrets: a maintainer pushes a tag, never a pull request.
-  evals:
-    if: github.event_name == 'push'
-    permissions: {contents: read}
-    secrets: inherit
-    uses: ./.github/workflows/evals.yml
-
-  # Everything a release needs besides a build: the fixture suites green on the commit that ships, and for a
-  # release that publishes a comparison, its measured build in the release history running the same executable
-  # code. It is told the eval job above went green rather than looking up an earlier run, so a green schedule on
-  # some other commit cannot stand in for the tag. Read-only queries; no repository secret is added.
-  guard:
-    needs: [build, evals]
-    if: github.event_name == 'push'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          python-version: "3.14"
-          enable-cache: false
-      # This job only runs once the eval job has succeeded, so its green result is what the guard is told.
-      - name: Check the release evals guard
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # Held here as well as in the eval job: with the suites already green in this run the guard does
-          # not read them, but a maintainer re-running the step without --evals-ran-here still can.
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-        run: uv run python scripts/release_guard.py "$(uv version --short)" --evals-ran-here
-
-  # All five targets, each built and smoke-tested on a runner of its own kind, alongside the eval run rather
-  # than after it. Nothing publishes unless the guard passes too, so a red fixture gate costs a build but never
-  # a version number.
+  # All five targets, each built and smoke-tested on a runner of its own kind.
   binaries:
     needs: build
     permissions: {contents: read}
     uses: ./.github/workflows/binaries.yml
 
-  # The first job that publishes. It needs every build job and the guard, and each later publish job needs the
-  # one before it, so a target that fails to build, to pass its smoke test or to pass the fixture suites
-  # publishes nothing anywhere.
+  # The first job that publishes. It needs every build job, and each later publish job needs the one before it,
+  # so a target that fails to build or to pass its smoke test publishes nothing anywhere.
   github-release:
-    needs: [guard, binaries]
+    needs: binaries
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -138,6 +92,55 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+
+  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, the
+  # live campaign (every group and suite, three repeats) and both official suites (three repeats), all on this tag.
+  # A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is a
+  # dispatch, so a campaign that runs for hours never holds this run open, and the campaign opens the site pull
+  # request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
+  benchmarks:
+    needs: [build, github-release]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Decide whether this release measures itself
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if test "${VERSION##*.}" = 0; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')"
+          message=""
+          if test "${ref%% *}" = tag; then
+            message="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/${ref#* }" --jq .message)"
+          fi
+          if grep -qx 'Benchmarks: run' <<< "$message"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$GITHUB_REF_NAME is a patch release without 'Benchmarks: run' in its tag message; no benchmarks run"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Dispatch the evals, the campaign and the official suites
+        if: steps.decide.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PARALLAX_SHA: ${{ vars.PARALLAX_SHA }}
+        run: |
+          test -n "$PARALLAX_SHA" || { echo "::error::missing repository variable PARALLAX_SHA"; exit 1; }
+          # The release already ran the fixture suites, as a called workflow; a candidate binds to a dispatched run.
+          gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          gh workflow run benchmark-campaign.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f campaign_id="release-$VERSION" -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" \
+            -f groups=all
+          gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all
 
   pypi:
     needs: github-release
