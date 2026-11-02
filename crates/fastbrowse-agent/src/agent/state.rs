@@ -32,6 +32,31 @@ impl Stop {
     }
 }
 
+/// What a fill or select has written into one document: the controls it has written to, and each control with the
+/// exact text or selection it received. A widget that redraws on every keystroke (a date picker's grid) changes the
+/// page while the text lands nowhere, so the pair is what tells a repeat write from a new one.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Written {
+    pub controls: HashSet<String>,
+    values: HashSet<String>,
+}
+
+impl Written {
+    /// One control with one value, kept as a single key because a document holds many of both.
+    fn key(control: &str, value: &str) -> String {
+        format!("{control}\u{0}{value}")
+    }
+
+    pub(crate) fn record(&mut self, control: &str, value: &str) {
+        self.controls.insert(control.to_string());
+        self.values.insert(Self::key(control, value));
+    }
+
+    pub(crate) fn holds(&self, control: &str, value: &str) -> bool {
+        self.values.contains(&Self::key(control, value))
+    }
+}
+
 /// The step cannot go on as Jev picked it: Jev is asked again, not the caller.
 #[derive(Debug, Clone)]
 pub(crate) struct Unsure {
@@ -181,9 +206,9 @@ pub(crate) struct RunState {
     /// next decision there.
     pub picked: Option<(String, Decision)>,
     pub unchanged: i64,
-    /// Controls a fill or select has written, by document, so only a field's first new value counts as progress by
+    /// What a fill or select has written, by document, so only a field's first new value counts as progress by
     /// itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes.
-    pub written: HashMap<String, HashSet<String>>,
+    pub written: HashMap<String, Written>,
     pub recoveries: i64,
     pub blank_opening_checked: bool,
     pub last_page: Option<(String, String)>,

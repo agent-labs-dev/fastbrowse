@@ -1,6 +1,5 @@
 //! The loop and its step: observe, judge what the last action did, decide, gate and act.
 
-use std::collections::HashSet;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
@@ -18,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Withheld, leave_out_idle, withheld};
-use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure};
+use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
 use crate::policy::{Decision, HistoryEntry, decide};
 use crate::retrieval::page_quotes;
@@ -492,8 +491,9 @@ impl Agent {
             if executed
                 && edit.is_some()
                 && let Some(target) = &decision.target
+                && let Some(held) = held_value(&action)
             {
-                written.insert(target.id.clone());
+                written.record(&target.id, &held);
             }
             let judged = match edit {
                 _ if !executed => Some(false),
@@ -927,18 +927,29 @@ fn renew(state: &mut RunState) {
 /// Rewriting the observed field value vetoes progress even when the page changes, and the first new value a field
 /// receives is progress even when the page does not: a page's fingerprint ignores field values, so a three-field
 /// checkout form counted three unchanged steps and tripped the stall recovery every run.
-pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &HashSet<String>) -> Option<bool> {
+pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Written) -> Option<bool> {
     if !matches!(decision.operation, Operation::Fill | Operation::Select) {
         return None;
     }
     let target = decision.target.as_ref()?;
-    let text = action.text.as_ref()?;
-    // A secret's value never leaves the page; only its length is observed, so that is what to compare.
-    let held = if action.secret { "\u{2022}".repeat(text.chars().count()) } else { text.clone() };
+    let held = held_value(action)?;
     if target.value.as_deref() == Some(held.as_str()) {
         return Some(false);
     }
-    if written.contains(&target.id) { None } else { Some(true) }
+    // A widget that redraws on every keystroke changes the page while the text lands nowhere, so the same text typed
+    // into the same field again is not progress whatever the page did: IDOS's date picker redrew on four writes of one
+    // date in bu2-075 and the run credited each one, until the recovery budget ran out on the date it needed.
+    if written.holds(&target.id, &held) {
+        return Some(false);
+    }
+    if written.controls.contains(&target.id) { None } else { Some(true) }
+}
+
+/// The value an action writes, as the page would show it. A secret's value never leaves the page, so only its length
+/// is observed.
+fn held_value(action: &Action) -> Option<String> {
+    let text = action.text.as_ref()?;
+    Some(if action.secret { "\u{2022}".repeat(text.chars().count()) } else { text.clone() })
 }
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {

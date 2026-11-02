@@ -1,7 +1,6 @@
 //! The loop's pure helpers and small state transitions. Whole runs, and the async methods that need a scripted page and models, are replayed in
 //! tests/agent.rs instead.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use fastbrowse_core::BoxFuture;
@@ -24,6 +23,7 @@ use serde_json::json;
 use super::Agent;
 use super::driving::edit_progress;
 use super::helpers::{read_sources, unsent_fact};
+use super::state::Written;
 use super::state::{Flow, RunState};
 use crate::memory::{Fact, Notes};
 use crate::policy::{Decision, HistoryEntry};
@@ -165,10 +165,6 @@ fn executed(operation: Option<Operation>, target: Option<&str>, page_changed: bo
     HistoryEntry::new(operation, target, StepOutcome::Executed, page_changed)
 }
 
-fn set(ids: &[&str]) -> HashSet<String> {
-    ids.iter().map(|id| id.to_string()).collect()
-}
-
 #[tokio::test]
 async fn test_the_next_observation_records_what_an_action_did() {
     let field_before = field("Search elsewhere");
@@ -207,7 +203,11 @@ fn edit(value: &str, holds: Option<&str>, secret: bool, operation: Operation) ->
 
 fn progress(value: &str, holds: Option<&str>, secret: bool, operation: Operation, written: &[&str]) -> Option<bool> {
     let (decision, action) = edit(value, holds, secret, operation);
-    edit_progress(&decision, &action, &set(written))
+    let mut seen = Written::default();
+    for control in written {
+        seen.controls.insert((*control).to_string());
+    }
+    edit_progress(&decision, &action, &seen)
 }
 
 #[test]
@@ -219,6 +219,19 @@ fn test_writing_a_value_a_field_already_holds_is_not_progress() {
     assert_eq!(progress("Ada", Some(""), false, Operation::Fill, &["f"]), None);
     // A corrected value is not vetoed, even though the field is not empty.
     assert_eq!(progress("Ada", Some("Adz"), false, Operation::Fill, &["f"]), None);
+}
+
+#[test]
+fn test_typing_the_same_value_into_a_field_that_redraws_is_not_progress() {
+    let mut seen = Written::default();
+    seen.record("f", "8.7.2027");
+    // A date picker redraws its grid on every keystroke, so the page changes while the text lands nowhere: the second
+    // write of that text is not a step toward the task.
+    let (decision, action) = edit("8.7.2027", Some("1.5.2027"), false, Operation::Fill);
+    assert_eq!(edit_progress(&decision, &action, &seen), Some(false));
+    // The same field with a different value is still judged by the page it lands on.
+    let (decision, action) = edit("9.7.2027", Some("1.5.2027"), false, Operation::Fill);
+    assert_eq!(edit_progress(&decision, &action, &seen), None);
 }
 
 #[test]
