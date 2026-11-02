@@ -197,12 +197,12 @@ fn form_passwords<'a>(controls: &'a [Control], control: &Control) -> Option<Vec<
 /// Whether a password field takes a replacement password, on the page's own structure rather than its wording.
 ///
 /// Only a form holding more than one password field sets one: the current password and a new one, or a new one and
-/// its confirmation. There `autocomplete` says which is which when the page marks it; a form that marks another field
-/// `current-password` leaves the rest new; and three unmarked fields are the current password, the new one and its
-/// confirmation. The only password field of a form takes the account's password whatever its `autocomplete` says:
-/// sign-in pages mark their one field `new-password` to keep browsers from filling it. None when the structure cannot
-/// tell, which must not be given the stored current password on a guess: two unmarked fields of a form, which may be a
-/// new password and its confirmation, and a field outside any form on a page with other password fields.
+/// its confirmation. There `autocomplete` says which is which when the page marks it, a form that marks another field
+/// `current-password` leaves the rest new, and otherwise the first takes the current password and the rest the new
+/// one: a change-password form far more often leaves its fields unmarked than a sign-up form does. The only password
+/// field of a form takes the account's password whatever its `autocomplete` says: sign-in pages mark their one field
+/// `new-password` to keep browsers from filling it. None when the structure cannot tell: a field outside any form on a
+/// page with other password fields, which must not be given the stored current password on a guess.
 pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> {
     let passwords = form_passwords(controls, field);
     if passwords.as_ref().is_some_and(|passwords| passwords.len() < 2) {
@@ -216,10 +216,7 @@ pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> 
     }
     match passwords {
         Some(passwords) if passwords.iter().any(|c| autocompletes(c, "current-password")) => Some(true),
-        Some(passwords) if passwords.len() > 2 && !passwords.iter().any(|c| autocompletes(c, "new-password")) => {
-            passwords.iter().position(|c| c.id == field.id).map(|at| at > 0)
-        }
-        Some(_) => None,
+        Some(passwords) => passwords.iter().position(|c| c.id == field.id).map(|at| at > 0),
         None => (!controls.iter().any(|c| is_password(c) && c.id != field.id)).then_some(false),
     }
 }
@@ -894,10 +891,9 @@ mod tests {
         assert_eq!(sets_new_password(std::slice::from_ref(&marked), &marked), Some(false));
         let (first, second) = (password("n", Some("f"), Some("new-password")), password("c", Some("f"), None));
         assert_eq!(sets_new_password(&[first.clone(), second.clone()], &first), Some(true));
-        // A new password and its confirmation look like a current and a new one until the page says which.
-        assert_eq!(sets_new_password(&[first.clone(), second.clone()], &second), None);
+        // A current and a new password, as change-password forms usually leave them: unmarked, in that order.
         let pair = [password("a", Some("f"), None), password("b", Some("f"), None)];
-        assert_eq!(sets_new_password(&pair, &pair[0]), None);
+        assert_eq!((sets_new_password(&pair, &pair[0]), sets_new_password(&pair, &pair[1])), (Some(false), Some(true)));
         let old = password("o", Some("f"), Some("current-password"));
         assert_eq!(sets_new_password(&[old.clone(), pair[0].clone()], &pair[0]), Some(true));
         let loose = [password("a", None, None), password("b", None, None)];
