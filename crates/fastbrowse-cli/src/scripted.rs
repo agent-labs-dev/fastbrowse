@@ -300,8 +300,8 @@ impl Transport for Noting {
 pub enum TestServer {
     /// `environment`: first writes the environment it was started with to FASTBROWSE_TEST_ENVIRONMENT_FILE.
     Environment,
-    /// `protocol_2`: answers `initialize` with a protocol version the SDK does not speak.
-    Protocol2,
+    /// `other_protocol`: answers `initialize` with the protocol version after this one, which no client speaks.
+    OtherProtocol,
     /// `stderr_line`: first writes one known line to stderr.
     StderrLine,
     /// `outlives_shutdown`: answers `shutdown`, then never exits, and shrugs off a polite signal.
@@ -313,7 +313,7 @@ pub enum TestServer {
 pub fn test_server() -> Option<TestServer> {
     match std::env::var("FASTBROWSE_TEST_SERVER").ok()?.as_str() {
         "environment" => Some(TestServer::Environment),
-        "protocol_2" => Some(TestServer::Protocol2),
+        "other_protocol" => Some(TestServer::OtherProtocol),
         "stderr_line" => Some(TestServer::StderrLine),
         "outlives_shutdown" => Some(TestServer::OutlivesShutdown),
         "scripted_run" => Some(TestServer::ScriptedRun(std::env::var("FASTBROWSE_TEST_RUN").unwrap_or_default())),
@@ -334,7 +334,7 @@ pub fn setup(run_task: Option<&str>, transport: Arc<dyn Transport>) -> (Arc<dyn 
                 let _ = std::fs::write(path, fastbrowse_core::py::json::dumps(&Value::Object(environment)));
             }
         }
-        Some(TestServer::Protocol2) => protocol = 2,
+        Some(TestServer::OtherProtocol) => protocol += 1,
         Some(TestServer::StderrLine) => eprintln!("a line the server wrote to stderr"),
         Some(TestServer::ScriptedRun(run)) => run_task = Some(format!("scripted_run:{run}")),
         Some(TestServer::OutlivesShutdown) | None => {}
