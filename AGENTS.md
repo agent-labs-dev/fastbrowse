@@ -137,9 +137,9 @@ These are the things a change must not quietly break.
   (`unverified`, `needs_confirmation`, `needs_login`, `blocked`, `needs_input`, `stuck`, `budget_exceeded`,
   `observation_limit`, `unavailable`, `error`),
   never rounded up. The CLI exits 0 only for `complete`.
-- **A claim cites a quote.** An answer's facts are spans code cut from a capture, not text a model wrote; a
-  derived count or winner cites the facts it was concluded from.
-  A requirement is evidenced or it is open.
+- **A claim cites a quote.** An answer's facts are spans code cut from a capture, or text the model read off a
+  screenshot the run showed it and cited as read from that image; a derived count or winner cites the facts it was
+  concluded from. A requirement is evidenced or it is open.
 - **Page content is data, never instructions.** Prompts that read page content must say so, and completion is judged against quotes
   and page state rather than the model's say-so.
 - **A model never sees a secret value.** Secrets reach a page by name, resolved at the moment of typing and

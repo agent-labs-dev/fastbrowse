@@ -342,6 +342,33 @@ impl Notes {
         true
     }
 
+    /// A value read from the page's pixels: its quote is the screenshot's own text, marked as not literal page text,
+    /// and its digest names the image a citation points at. A page drawn as a picture answers only this way.
+    pub fn add_image_read(&mut self, text: &str, url: &str, captured_at: DateTime, png: &[u8]) -> bool {
+        let source = crate::policy::screenshot_reference(png);
+        let evidence = Evidence {
+            source_id: source.clone(),
+            url: url.into(),
+            frame_id: None,
+            captured_at,
+            capture_sha256: source,
+            start: 0,
+            end: text::len(text) as i64,
+            quote: format!("read from the screenshot: {text}"),
+            complete_source: false,
+            control_context: None,
+            rendered_text: false,
+            heading_path: Vec::new(),
+        };
+        self.add(Fact {
+            answers: true,
+            text: text.into(),
+            evidence: Some(evidence),
+            basis: Vec::new(),
+            reader: FactReader::JevChoice,
+        })
+    }
+
     /// Whether the notes hold a fact standing as the task's answer.
     pub fn answered(&self) -> bool {
         !self.answering.is_empty()
@@ -620,6 +647,23 @@ mod tests {
 
     fn texts(notes: &Notes) -> Vec<String> {
         notes.supporting().into_iter().map(|(_, fact)| fact.text).collect()
+    }
+
+    #[test]
+    fn an_image_reading_cites_the_screenshot_it_was_read_from() {
+        // A drawn page's value is in its pixels, so the fact names the screenshot's digest and is marked as not
+        // literal page text; a citation built from it links the page instead of a text fragment.
+        let mut notes = Notes::default();
+        let at = DateTime::new(2026, 1, 1, 0, 0, 0).utc();
+        assert!(notes.add_image_read("premium 3.459", "https://example.test/map", at, b"a-png"));
+        assert!(notes.answered());
+        let fact = notes.facts()[0];
+        let evidence = fact.evidence.as_ref().expect("the screenshot is the evidence");
+        assert_eq!(evidence.url, "https://example.test/map");
+        assert_eq!(evidence.source_id, evidence.capture_sha256);
+        assert!(evidence.capture_sha256.starts_with("screenshot-"));
+        assert_eq!(evidence.quote, "read from the screenshot: premium 3.459");
+        assert!(!evidence.rendered_text);
     }
 
     #[test]

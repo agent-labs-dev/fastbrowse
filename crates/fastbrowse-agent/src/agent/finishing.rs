@@ -75,7 +75,7 @@ impl Agent {
         {
             return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
         }
-        let result = Box::pin(self.conclude(state, output_schema)).await?;
+        let result = Box::pin(self.conclude(state, observation, output_schema)).await?;
         let reached = match until {
             Some(until) => until(self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url)).await,
             None => true,
@@ -106,7 +106,28 @@ impl Agent {
         Ok(extract(&*self.jev, task, &capture, schema, &options).await?)
     }
 
-    pub(super) async fn conclude(&self, state: &mut RunState, output_schema: Option<&RecordSchema>) -> Step<RunResult> {
+    pub(super) async fn conclude(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        output_schema: Option<&RecordSchema>,
+    ) -> Step<RunResult> {
+        // A drawn page's answer is only in its pixels: the text layer cannot quote it, so the screenshot's own text is
+        // read into the notes before the answer is composed. The task's wording may allow saying the value is not
+        // visible, and a person looking at the same screen reads it off the image; without this the run reports
+        // nothing while the value is in view, which is what BU Bench bu2-120 did after reaching Street View.
+        if output_schema.is_none()
+            && observation.visual_content
+            && !state.notes.answered()
+            && let Some(png) = self.viewport().await?
+        {
+            let reading =
+                crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
+            state.ledger.record([reading.cost.clone()])?;
+            if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
+                state.notes.add_image_read(&text, &observation.url, observation.captured_at, &png);
+            }
+        }
         let mut evidence: Vec<Evidence> = state.notes.facts().iter().filter_map(|fact| fact.evidence.clone()).collect();
         let extraction = match output_schema {
             Some(schema) => {

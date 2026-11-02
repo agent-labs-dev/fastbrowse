@@ -8,6 +8,7 @@ mod answers;
 mod choices;
 mod chunks;
 mod fields;
+mod screenshot;
 pub(crate) mod text;
 
 pub use answers::{
@@ -20,6 +21,7 @@ pub use fields::{
     Annotation, Candidate, ScalarField, UnsupportedField, choose_candidate, copy_field, field_candidates,
     field_candidates_from_notes, field_question, merge_candidates,
 };
+pub(crate) use screenshot::read_image;
 
 #[cfg(test)]
 pub(crate) mod testing {
