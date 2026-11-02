@@ -93,6 +93,7 @@ impl Agent {
                 Some(picked) => picked,
                 None => {
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    context.screenshot = self.drawn_viewport(&observation).await?;
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
                     let redecided = state.redecided;
@@ -808,6 +809,16 @@ impl Agent {
             blocks,
             ..capture.clone()
         })
+    }
+
+    /// The viewport image a step's ask carries: a page whose content is drawn has none of it in the text, so the
+    /// screenshot is the page. BU Bench bu2-120 asked for a price shown in Street View and the run, offered only the
+    /// map's rotate arrows, turned them for 45 steps and never saw the imagery.
+    pub(super) async fn drawn_viewport(&self, observation: &Observation) -> Step<Option<Vec<u8>>> {
+        if !observation.visual_content {
+            return Ok(None);
+        }
+        self.viewport().await
     }
 
     /// The viewport for Jev, on a route that takes images and only within the sizes it accepts.

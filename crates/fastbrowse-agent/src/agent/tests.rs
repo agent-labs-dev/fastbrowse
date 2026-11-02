@@ -1250,6 +1250,28 @@ async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActR
 }
 
 #[tokio::test]
+async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
+    let page = Arc::new(Screenshots(Default::default(), false));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
+    // A map or a photograph has none of its content in the DOM: the screenshot is the page.
+    let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
+    assert_eq!(agent.drawn_viewport(&drawn).await.expect("the viewport"), Some(png(1280, 900)));
+    // A page whose content is its text is asked about as text, with no image cost.
+    let text = Observation { visual_content: false, ..observation(&[button("Next")]) };
+    assert_eq!(agent.drawn_viewport(&text).await.expect("no image"), None);
+}
+
+#[tokio::test]
+async fn test_a_route_that_takes_no_images_is_sent_none_even_on_a_drawn_page() {
+    let page = Arc::new(Screenshots(Default::default(), false));
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
+    let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
+    assert_eq!(agent.drawn_viewport(&drawn).await.expect("no image"), None);
+}
+
+#[tokio::test]
 async fn test_a_covered_control_jev_sees_is_clicked_at_the_centre_of_its_box() {
     let (clicked, page, jev) = click_where_seen(true, 0.9, false).await;
     assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Executed));
