@@ -556,13 +556,16 @@
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    // A line that is itself a repeated control's label ("Prev") reads the same in every repeat, so it names none:
-    // past it, a datepicker's first line is the month it shows. The label is cut out as whole words, since a day
-    // labelled "2" cut out of "October 2026" left "October 0 6".
+    // A line that is itself a control's label names no section: "Prev" reads the same in every repeat, and a
+    // calendar's day cells were named "31" and "7" after their neighbours in the same week row, so a picker that
+    // showed November was offered with contexts that pointed at other days. Past those, a datepicker's first line
+    // is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
+    // "October 2026" left "October 0 6".
+    const own = new Set(controls.map(c => c.label));
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line));
+      .filter(line => line && !own.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
