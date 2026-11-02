@@ -808,15 +808,35 @@
     });
   }
 
+  // The titles a scope's own content can be named by: none sealed in a card below the scope, and a header cell,
+  // caption or legend only in the element it heads. For anything outside the scope's child that holds the control,
+  // this is what `reaches` decides, so it is worked out once per scope rather than once per control.
+  const openTitles = memo(scope =>
+    titles(scope).filter(title => {
+      if (['th', 'caption', 'legend'].includes(title.localName) && title.parentElement !== scope) return false;
+      for (let e = title.parentElement; e !== scope; e = e.parentElement) if (isCard(e)) return false;
+      return true;
+    }),
+  );
   // A control's own label rarely says which section it belongs to when a page repeats a form or widget: unlike a
   // colliding label, a uniquely named one never reaches the loop above, so the nearest ancestor that names a section
   // is attached here on its own, without the twin-avoidance `contextOf` needs to keep a card from naming its neighbour.
+  // Each ancestor is asked only for titles outside the one below it, whose own were already turned down; a title
+  // inside the control is its own content, never the section it sits in.
   const nearestHeading = (element, label) => {
-    for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+    for (let inner = element, e = element.parentElement; e && e !== e.ownerDocument.body; inner = e, e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
       if (aria && aria !== label) return aria;
-      const section = sectionOf(e, element, label);
-      if (section) return section;
+      let first = '',
+        before = '';
+      for (const title of openTitles(e)) {
+        if (inner.contains(title)) continue;
+        const text = firstLine(innerTextOf(title));
+        if (!text || text === label) continue;
+        first ||= text;
+        if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
+      }
+      if (before || first) return before || first;
     }
     return '';
   };
