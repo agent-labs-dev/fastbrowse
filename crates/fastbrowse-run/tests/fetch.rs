@@ -388,8 +388,18 @@ fn test_blocks_match_the_recorded_blocks_of_every_fixture_page() {
     }
     if update {
         // The committed file's own one-space indent, so a re-record shows only what changed. JSON escapes every newline
-        // inside a string, so each line's leading spaces are indentation alone.
-        let pretty = serde_json::to_string_pretty(&cases).unwrap();
+        // inside a string, so each line's leading spaces are indentation alone. Every character beyond ASCII is escaped
+        // as the committed file has it.
+        let mut pretty = String::new();
+        for c in serde_json::to_string_pretty(&cases).unwrap().chars() {
+            if c.is_ascii() {
+                pretty.push(c);
+            } else {
+                for unit in c.encode_utf16(&mut [0; 2]) {
+                    pretty += &format!("\\u{unit:04x}");
+                }
+            }
+        }
         let written: Vec<String> = pretty
             .lines()
             .map(|line| {
