@@ -233,7 +233,7 @@ limit. It stops rather than guess.
 
 - The run opened no page: `the task names no page to start from, and none was given`.
 - A field needs a value the task never states. The run first tries to go on without it, then stops with
-  `'<field>' needs a value the task does not give`.
+  `'<field>' needs a value the task does not give`, followed by the reason it gave up.
 - The page asks for a file and the run has none: `the page asks for a file and none was provided`.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret
