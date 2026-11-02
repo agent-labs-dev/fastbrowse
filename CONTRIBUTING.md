@@ -59,14 +59,14 @@ npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk
 uv run actionlint
-uv run python .sift/agents.py check
-uv run python .sift/gate.py --base origin/main
+uv run python .sloppatrol/agents.py check
+uv run python .sloppatrol/gate.py --base origin/main
 just rust
 ```
 
 The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-checks and tests the SDK in
 `packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. Audit evidence commands and tool limits are in the
-[sift project skill](.agents/skills/sift-project/SKILL.md).
+[Sloppatrol project skill](.agents/skills/sloppatrol-project/SKILL.md).
 
 The protocol's messages are the types in `crates/fastbrowse-core/src/protocol.rs` and the models those use, and
 `protocol/schema.json` is their JSON Schema. After changing one, run
