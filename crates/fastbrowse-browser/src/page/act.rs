@@ -443,6 +443,8 @@ impl CdpPage {
                     return Ok((StepOutcome::Failed, Some("switch_tab requires tab_id".into())));
                 };
                 self.session.switch_tab(tab_id).await?;
+                // A tab a click opened can still be loading, and read now it showed a blank page with nothing to use.
+                self.await_document().await?;
                 Ok((StepOutcome::Executed, None))
             }
             Operation::Upload => self.upload(target, &action.files, point).await,

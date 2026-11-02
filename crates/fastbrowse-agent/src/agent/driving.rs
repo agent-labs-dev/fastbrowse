@@ -5,7 +5,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use fastbrowse_core::decision::{EVEN_ODDS, jev_takes_png};
-use fastbrowse_core::effects::{SETTING_ROLES, effect, state_key};
+use fastbrowse_core::effects::{Effect, SETTING_ROLES, effect, state_key};
 use fastbrowse_core::models::{
     Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepOutcome, StepResult, WallKind,
 };
@@ -475,10 +475,11 @@ impl Agent {
             }
             changed = result.page_changed;
             // A read takes in the whole page, so scrolling leaves it as read.
-            let scrolled = matches!(decision.operation, Operation::Scroll | Operation::ScrollUp);
+            // Showing another tab leaves the one it left as it was.
+            let stayed = matches!(decision.operation, Operation::Scroll | Operation::ScrollUp | Operation::SwitchTab);
             if executed
                 && changed
-                && !scrolled
+                && !stayed
                 && let Some(read) = state.read_documents.get_mut(&observation.document_key)
             {
                 *read = true;
@@ -686,7 +687,17 @@ impl Agent {
         }
         let Some(before) = state.acted_from.take() else { return };
         let Some(last) = state.history.last_mut() else { return };
-        let done = effect(&before, observation, None);
+        let done = if last.operation == Some(Operation::SwitchTab) {
+            // Another tab's controls were there all along: compared with the tab left, every one read as added.
+            Effect {
+                summary: format!("showed the tab at {}", observation.url),
+                set_something: false,
+                added: false,
+                changed: false,
+            }
+        } else {
+            effect(&before, observation, None)
+        };
         last.added = done.added;
         // A click can change the page after it reports nothing: one that came back stale because the page moved the
         // control away, or one that added only text. Either way what was read is out of date and the click worked.
