@@ -183,7 +183,9 @@ impl Cdp {
         let mut config = WebSocketConfig::default();
         config.max_message_size = Some(MAX_MESSAGE_BYTES);
         config.max_frame_size = Some(MAX_MESSAGE_BYTES);
-        let connecting = tokio_tungstenite::connect_async_with_config(url, Some(config), false);
+        // Nagle's algorithm holds a command written while an earlier one is unacknowledged, so the second and third
+        // of a burst sent together waited a whole round trip more: 210ms, not 105, to a cloud browser.
+        let connecting = tokio_tungstenite::connect_async_with_config(url, Some(config), true);
         let ws = match timeout(secs(OPEN_SECONDS), connecting).await {
             Ok(Ok((ws, _))) => ws,
             Ok(Err(error)) if unreachable(&error) => {
