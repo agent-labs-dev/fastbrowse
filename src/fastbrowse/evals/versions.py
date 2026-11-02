@@ -477,6 +477,9 @@ def _metrics(values: list[float]) -> MetricSummary:
     )
 
 
+_PUBLISHED_SUITE_ORDER = ("core", "dev", "heldout", "stretch-dev", "stretch-heldout")
+
+
 def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) -> ResultsSummary:
     """Release/suite pairs, newest first, without mixing task versions or inventing unpriced costs."""
     releases = published() if releases is None else releases
@@ -527,8 +530,9 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
             )
         previous.update(versions)
     # Newest release first, and within it the suites in their defined order, core first: a reader of the feed that
-    # takes its first entry gets the head-to-head, not whichever suite sorts last by name.
-    order = list(all_tasks()[0])
+    # takes its first entry gets the head-to-head, not whichever suite sorts last by name. The retired suites stay in
+    # the order: their rows are still in older releases, and a task moving to another suite must not reshuffle them.
+    order = [*_PUBLISHED_SUITE_ORDER, *(s for s in all_tasks()[0] if s not in _PUBLISHED_SUITE_ORDER)]
     rank = {suite: i for i, suite in enumerate(order)}
     result.sort(key=lambda r: (rank.get(r.suite, len(order)), r.suite, r.suite_version))
     result.sort(key=lambda r: _release_key(r.fastbrowse_version), reverse=True)
