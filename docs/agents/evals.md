@@ -77,7 +77,9 @@ Run local checks directly, with owned browsers and containers stopped on exit.
 Detailed runs and validation live in the private
 [fastbrowse-evals Langfuse project](https://us.cloud.langfuse.com/project/cmuwjxra401iyad0cymgswes5).
 Keep raw output in ignored `artifacts/evals/`, with private filesystem permissions. Git stores compact
-approved baselines and source identity receipts, not logs, recordings, decrypted tasks or credentials.
+approved baselines and source identity receipts, not logs, recordings, task answers or credentials. The task text
+itself is published in `src/fastbrowse/evals/public-tasks.json`, so a task that can be read is never the unseen
+measure: a private set does that job.
 
 Parallax exports the internal catalog into fastbrowse and checks it byte-for-byte. The fastbrowse publication
 gate requires the matching catalog digest, clean committed runner and agent builds, current task versions,
