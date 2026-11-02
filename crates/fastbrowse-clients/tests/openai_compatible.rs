@@ -455,7 +455,7 @@ async fn test_receipt_does_not_double_count_normal_provider_spend() {
 fn endpoints() -> Value {
     json!({"data": {"id": "writer", "endpoints": [
         {"context_length": 1000, "pricing": {"prompt": "0.000001", "completion": "0.000004", "request": "0"}},
-        {"context_length": 2000, "pricing": {"prompt": "0.000002", "completion": "0.000003", "image": "0.01", "discount": 0.5}},
+        {"context_length": 2000, "max_completion_tokens": 500, "pricing": {"prompt": "0.000002", "completion": "0.000003", "image": "0.01", "discount": 0.5}},
     ]}})
 }
 
@@ -490,7 +490,7 @@ async fn test_requests_without_a_response_are_bounded_so_a_capped_run_can_go_on(
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_the_context_window_is_the_largest_an_endpoint_lists_and_is_read_once() {
+async fn test_the_prompt_room_is_the_largest_window_less_its_listed_output_and_is_read_once() {
     let looked_up = Arc::new(Mutex::new(0));
     let count = looked_up.clone();
     let http = answering(move |_| {
@@ -498,8 +498,8 @@ async fn test_the_context_window_is_the_largest_an_endpoint_lists_and_is_read_on
         ok(Response::json(200, &endpoints()))
     });
     let llm = client(http, OPENROUTER, LLMPurpose::Start, "reader");
-    assert_eq!(llm.context_tokens(LLMPurpose::Start).await, Some(2000));
-    assert_eq!(llm.context_tokens(LLMPurpose::Start).await, Some(2000));
+    assert_eq!(llm.context_tokens(LLMPurpose::Start).await, Some(1500));
+    assert_eq!(llm.context_tokens(LLMPurpose::Start).await, Some(1500));
     assert_eq!(*looked_up.lock().unwrap(), 1);
     // A host that lists no windows is not asked.
     let script = Script::default();

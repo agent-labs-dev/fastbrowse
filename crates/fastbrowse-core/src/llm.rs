@@ -127,8 +127,9 @@ pub trait LLMClient: Send + Sync {
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>>;
 
-    /// The context window, in tokens, of the model that answers `purpose`, where its provider lists one. A prompt is
-    /// fitted to it; with none known, a prompt goes whole and the provider is the one to refuse it.
+    /// The tokens a prompt may hold for the model that answers `purpose`: its context window less the output it
+    /// reserves, where its provider lists them. A prompt is fitted to it; with none known, a prompt goes whole and the
+    /// provider is the one to refuse it.
     fn context_tokens(&self, _purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
         Box::pin(async { None })
     }

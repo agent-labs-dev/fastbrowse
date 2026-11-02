@@ -170,10 +170,12 @@ const BYOK_FEE: f64 = 0.05;
 /// key added later is read as per token, which can only raise the bound.
 const PER_REQUEST_PRICES: [&str; 2] = ["request", "web_search"];
 
-/// The context window, highest token price, per-request fees and per-image price across a model's endpoints.
+/// The context window, the room it leaves a prompt, highest token price, per-request fees and per-image price across a
+/// model's endpoints.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Ceiling {
     context: i64,
+    prompt: i64,
     per_token: f64,
     per_request: f64,
     per_image: f64,
@@ -190,10 +192,17 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
         Some(endpoints) if !endpoints.is_empty() => endpoints,
         _ => return Ok(None),
     };
-    let mut found = Ceiling { context: 0, per_token: 0.0, per_request: 0.0, per_image: 0.0 };
+    let mut found = Ceiling { context: 0, prompt: 0, per_token: 0.0, per_request: 0.0, per_image: 0.0 };
     for entry in endpoints {
         let endpoint = object_value(Some(entry))?;
-        found.context = found.context.max(token_count(endpoint.get("context_length"))?);
+        let context = token_count(endpoint.get("context_length"))?;
+        found.context = found.context.max(context);
+        // A request sets no output limit, so the endpoint holds its listed completion length back from the window.
+        let output = match endpoint.get("max_completion_tokens") {
+            None | Some(Value::Null) => 0,
+            listed => token_count(listed)?,
+        };
+        found.prompt = found.prompt.max(if output < context { context - output } else { context });
         let (mut token, mut request, mut image, mut peak) = (0.0_f64, 0.0, 0.0, 1.0_f64);
         for (key, value) in object_value(endpoint.get("pricing"))? {
             match key.as_str() {
@@ -886,7 +895,7 @@ impl fastbrowse_core::llm::LLMClient for OpenAICompatibleLLM {
     fn context_tokens(&self, purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
         Box::pin(async move {
             let model = self.models.get(&purpose)?;
-            self.listed_ceiling(model).await.map(|ceiling| ceiling.context)
+            self.listed_ceiling(model).await.map(|ceiling| ceiling.prompt)
         })
     }
 }
