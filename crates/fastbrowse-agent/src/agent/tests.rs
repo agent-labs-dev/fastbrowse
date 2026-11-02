@@ -1123,6 +1123,31 @@ async fn test_past_the_recovery_budget_the_run_ends_with_the_reason() {
 }
 
 #[tokio::test]
+async fn test_past_the_recovery_budget_a_field_left_unfilled_is_named_in_the_error() {
+    let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
+    let jev = Arc::new(Unsure(ScriptedJev::new(script), 0.1, Default::default()));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let apply = button("Apply");
+    let page = observation(&[apply.clone(), button("Next")]);
+    // The run offered this field to Jev, was told the task gives it no value, and went on without it.
+    state.missing.insert((page.url.clone(), "Apply".into(), None));
+    let decision = code_decision(Operation::Click, Some(apply));
+    let withheld = super::recovery::withheld(&decision);
+    let error = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
+    assert!(
+        matches!(
+            error,
+            Some(Flow::Stop(ref stop))
+                if stop.status == Status::NeedsInput
+                    && stop.error.as_deref() == Some("'Apply' needs a value the task does not give: nothing changed")
+        ),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_a_stall_is_answered_by_jev_even_when_it_is_unsure() {
     let (state, jev) = stalled_on_apply(0.3).await;
     let (_, picked) = state.picked.expect("Jev's pick is the next decision");

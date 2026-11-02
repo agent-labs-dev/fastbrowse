@@ -1,6 +1,8 @@
 //! The stall rule's other half: Jev is asked again, told what went wrong, with the action that moved nothing left out
 //! of its options, until the rule's budget runs out and the run ends.
 
+use std::collections::HashSet;
+
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::models::{Operation, Status};
 use fastbrowse_core::page::Observation;
@@ -43,6 +45,20 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
         }
     }
     context.problem = Some(problem);
+}
+
+/// The labels of the fields standing on this page that the task gave no value for, in page order.
+fn unfilled<'a>(observation: &'a Observation, missing: &HashSet<(String, String, Option<String>)>) -> Vec<&'a str> {
+    let mut labels: Vec<&str> = Vec::new();
+    for control in &observation.controls {
+        let omitted = missing
+            .iter()
+            .any(|(url, label, field)| *url == observation.url && control.label == *label && control.context == *field);
+        if omitted && !labels.contains(&control.label.as_str()) {
+            labels.push(&control.label);
+        }
+    }
+    labels
 }
 
 /// Leave the actions that moved nothing out of an ask on `offered`.
@@ -89,12 +105,18 @@ impl Agent {
             {
                 return Err(failure.stop().into());
             }
-            let without_value = observation.controls.iter().any(|control| {
-                state.missing.iter().any(|(url, label, field)| {
-                    *url == observation.url && control.label == *label && control.context == *field
-                })
-            });
-            let status = if without_value { Status::NeedsInput } else { gives_up_as };
+            // A run that ends needing a value names it: the stall's own reason names no field, so a caller told only
+            // "no_progress (3)" has nothing to supply before running the same task again.
+            let unfilled = unfilled(observation, &state.missing);
+            let status = if unfilled.is_empty() { gives_up_as } else { Status::NeedsInput };
+            let reason = match unfilled.as_slice() {
+                [] => reason,
+                [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
+                many => format!(
+                    "{} need a value the task does not give: {reason}",
+                    many.iter().map(|label| text::repr(label)).collect::<Vec<_>>().join(", ")
+                ),
+            };
             return Err(Stop::new(status, reason).into());
         }
         self.ask_jev_again(state, observation, &reason, withheld).await
