@@ -909,8 +909,8 @@ pub fn build_request(
         questions.insert(
             keys::BOT_CHECK.into(),
             noul(
-                "Does this page ask the visitor to pass an automated-traffic check?",
-                "The page is a CAPTCHA, a browser verification or a similar bot check.",
+                "Does this page ask the visitor to pass an automated-traffic check, or refuse this visitor access outright, such as Access Denied or Forbidden, without offering a way to sign in?",
+                "The page is a CAPTCHA, a browser verification, a similar bot check, or a refusal of access with no sign-in.",
                 "The page is a sign-in form or an ordinary page.",
             ),
         );
@@ -1272,8 +1272,8 @@ fn target_element(control: &Control, operation: Operation) -> Map<String, Value>
 /// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
 pub(crate) fn login_question() -> Question {
     noul(
-        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task asks to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in.",
-        "A sign-in, verification or access wall blocks the task and the task gives no way through it.",
+        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task asks to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in. A page that refuses access outright and offers no way to sign in is not a sign-in wall.",
+        "A sign-in or account verification wall blocks the task and the task gives no way through it.",
         "The task can progress without signing in, or the task supplies the credentials to sign in.",
     )
 }
