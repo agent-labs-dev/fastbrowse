@@ -202,6 +202,8 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("foreground", task.foreground),
             ("proxy_country", task.proxy_country.is_some()),
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
+            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
+            ("viewport", task.viewport.is_some()),
             ("record", task.record.is_some()),
             ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
