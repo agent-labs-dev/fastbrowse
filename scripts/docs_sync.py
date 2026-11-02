@@ -25,6 +25,7 @@ COPY = (
     "CONTRIBUTING.md",
     "SECURITY.md",
     "docs/benchmarks.md",
+    "docs/cli.md",
     "docs/data-sources.md",
     "docs/design.md",
     "docs/evals.md",
@@ -56,6 +57,14 @@ TROUBLE_HEADING = re.compile(r"^## ([a-z_]+) \(exit (\d+)\)", re.MULTILINE)
 STATUS_MEMBER = re.compile(r'^\s+([A-Z_]+) = "([a-z_]+)"', re.MULTILINE)
 EXIT_ENTRY = re.compile(r"Status::([A-Za-z]+) => (\d+),")
 CLI = "crates/fastbrowse-cli/src/cli.rs"
+# The files that declare what the shipped command line takes: the flags, parsed here rather than read as text.
+CLI_SURFACE = (
+    "crates/fastbrowse-cli/src/cli.rs",
+    "crates/fastbrowse-cli/src/argparse.rs",
+    "crates/fastbrowse-cli/src/entry.rs",
+    "crates/fastbrowse-cli/src/mcp/mod.rs",
+)
+STATUS_TABLE = "docs/cli.md"
 
 
 def read(path: Path) -> str:
@@ -121,7 +130,7 @@ def check_env(copy: dict[str, str], implementation: str) -> list[str]:
 
 
 def check_statuses(root: Path, copy: dict[str, str]) -> list[str]:
-    """The status table in the README and the troubleshooting headings name every status, with its exit code."""
+    """The status table in docs/cli.md and the troubleshooting headings name every status, with its exit code."""
     names = set(statuses(root).values())
     codes = exit_codes(root)
     problems = [
@@ -130,16 +139,16 @@ def check_statuses(root: Path, copy: dict[str, str]) -> list[str]:
         if member not in codes
     ]
 
-    readme = copy.get("README.md", "")
-    rows = {name: code for name, code in STATUS_ROW.findall(readme)}
+    reference = copy.get(STATUS_TABLE, "")
+    rows = {name: code for name, code in STATUS_ROW.findall(reference)}
     for member, name in statuses(root).items():
         if name not in rows:
-            problems.append(f"README.md: the status table has no row for `{name}`")
+            problems.append(f"{STATUS_TABLE}: the status table has no row for `{name}`")
         elif member in codes and rows[name] != codes[member]:
-            problems.append(f"README.md: `{name}` exits {rows[name]}, but the CLI exits {codes[member]}")
+            problems.append(f"{STATUS_TABLE}: `{name}` exits {rows[name]}, but the CLI exits {codes[member]}")
     for name in rows:
         if name not in names:
-            problems.append(f"README.md: the status table documents `{name}`, which is not a status")
+            problems.append(f"{STATUS_TABLE}: the status table documents `{name}`, which is not a status")
 
     headings = dict(TROUBLE_HEADING.findall(copy.get("docs/troubleshooting.md", "")))
     for member, name in statuses(root).items():
@@ -199,8 +208,18 @@ def media_references(sources: dict[str, str]) -> dict[str, list[str]]:
 
 def surface(root: Path) -> str:
     """A fingerprint of the user-visible command line: the flags, statuses and exit codes a recording shows."""
-    code = code_text(root)
-    parts = sorted(set(FLAG.findall(code)))
+    # Only the modules that build the command line `fastbrowse` ships. Every other `--flag` in the tree belongs to
+    # an internal tool (the eval harness, an audit runner), and counting one here failed a recording that still
+    # showed the same product whenever such a tool gained a switch.
+    # A checkout may not carry every one of them, and a missing file declares no flag.
+    parts = sorted(
+        {
+            flag
+            for name in CLI_SURFACE
+            if (root / name).is_file()
+            for flag in FLAG_DECLARATION.findall(read(root / name))
+        }
+    )
     parts += sorted(f"{member}={name}" for member, name in statuses(root).items())
     parts += sorted(f"{member}:{code}" for member, code in exit_codes(root).items())
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()

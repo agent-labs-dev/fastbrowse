@@ -22,6 +22,7 @@ export type {
   RunResult,
   SecretRef,
   Status,
+  StepChoice,
   StepEvent,
   StepFact,
   StepResult,

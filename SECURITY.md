@@ -35,6 +35,10 @@ one where:
 Out of scope: missing features, cosmetic problems, and the behavior of the sites the
 agent is told to browse.
 
+What a run reports is redacted on its way out, so the places a run is replayed from carry a secret's name in place of
+its value: each step in the result's `steps` and in the step events (`on_event`, `serve`'s events, which a host shows
+as the run goes), and every trace event (`--trace`, `FASTBROWSE_TRACE`). A typed secret is recorded as `<secret>`.
+
 Live JPEG frames (`on_frame`), MP4 recordings and PNG step frames are held back from the moment a secret is typed, and whenever the page is read showing one, until a reading shows none.
 A secret a click reveals (a "show password" toggle) can reach live frames until the next reading. An irreversible action is classified by Jev, so a missed
 classification is possible and belongs in a security report.
