@@ -153,12 +153,40 @@ impl HttpEvent<'_> {
         self.trace.event("http", || {
             let mut fields = Map::new();
             fields.insert("url".into(), self.url.into());
-            fields.insert("request".into(), self.body.clone());
+            fields.insert("request".into(), traced(self.body));
             fields.insert("began".into(), self.began.into());
             fields.insert("ended".into(), monotonic().into());
             outcome(&mut fields);
             fields
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::traced;
+
+    #[test]
+    fn an_image_sent_to_jev_is_kept_by_name_and_not_by_its_bytes() {
+        let body = json!({
+            "model": "jev-1.14",
+            "state": {"viewport_screenshot": "screenshot-abc"},
+            "assets": {"screenshot-abc": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo"}},
+        });
+        let traced = traced(&body);
+        assert_eq!(traced["assets"]["screenshot-abc"]["data_base64"], "<image>");
+        assert_eq!(traced["assets"]["screenshot-abc"]["type"], "image");
+        assert_eq!(traced["state"]["viewport_screenshot"], "screenshot-abc");
+        assert_eq!(traced["model"], "jev-1.14");
+    }
+
+    #[test]
+    fn an_images_data_url_is_kept_as_one_image() {
+        let body = json!({"messages": [{"content": [{"type": "image_url",
+            "image_url": {"url": "data:image/png;base64,iVBORw0KGgo"}}]}]});
+        assert_eq!(traced(&body)["messages"][0]["content"][0]["image_url"]["url"], "data:image/<image>");
     }
 }
 
@@ -169,6 +197,37 @@ impl Drop for HttpEvent<'_> {
                 fields.insert("error".into(), "cancelled".into());
             });
         }
+    }
+}
+
+/// The request body as the trace keeps it. An image is its own bulk and is already named by its pixels' digest, since a
+/// screenshot's asset name is `screenshot-<sha256>`, so the name stands in for the bytes: otherwise a run that sends a
+/// viewport screenshot on every step of a drawn page writes a 102 MB trace (BU Bench bu2-157, 51 steps), a record no
+/// tool can read.
+fn traced(body: &Value) -> Value {
+    let mut body = body.clone();
+    blank_images(&mut body);
+    body
+}
+
+/// A Jev image asset's `data_base64`, and a data URL's payload, replaced as the eval replay already replaces them.
+fn blank_images(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("image") && map.contains_key("data_base64") {
+                map.insert("data_base64".into(), Value::String("<image>".into()));
+            }
+            for item in map.values_mut() {
+                blank_images(item);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                blank_images(item);
+            }
+        }
+        Value::String(text) if text.starts_with("data:image/") => *text = "data:image/<image>".into(),
+        _ => {}
     }
 }
 
