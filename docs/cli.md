@@ -32,7 +32,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
-| `--trace FILE` | append each model call, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP |
+| `--trace FILE` | append each model call with its full request and reply, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
 | `--no-cursor` | don't draw the agent's cursor. By default it is drawn with [Cua Driver](https://github.com/trycua/cua) over a Chrome window that shows the run (`--foreground`, or an attached front tab; needs `cua-driver`, and X11 on Linux), and skipped anywhere else |
 | `--cursor` | also bring the window to the front, so the cursor is always drawn |

@@ -42,7 +42,8 @@ The run loop is [crates/fastbrowse-agent/src/agent](../../crates/fastbrowse-agen
 
 ## The Rust and Python seam
 
-Python sees a Rust value only as serde serializes it, so a field marked `#[serde(skip)]` never reaches Python or
-the JSON a caller reads. `RunResult.final_frame` is one: the final image travels beside the result, not in it,
-and was once lost because nothing tested that it crossed. A change to a type that crosses the binding or the
-protocol tests the value on the far side of the seam, not only in the crate that builds it.
+A Rust value crosses to Python as the JSON serde writes, so a field marked `#[serde(skip)]` is not in it and a
+caller of the protocol never sees it. `RunResult.final_frame` is one, and it reaches Python only because the
+binding hands the frame's bytes over beside the JSON and `native.run` puts them back on the result. A change to a
+type that crosses the binding or the protocol tests the value on the far side of the seam, not only in the crate
+that builds it.
