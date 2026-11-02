@@ -488,8 +488,9 @@ impl Agent {
             // operation, by the page state it lands on.
             let written = state.written.entry(observation.document_key.clone()).or_default();
             let edit = edit_progress(decision, &action, written);
+            // Every write is remembered, including one the page judged for itself: a second, different value on a
+            // control has to be recorded or the same text coming back later reads as new.
             if executed
-                && edit.is_some()
                 && let Some(target) = &decision.target
                 && let Some(held) = held_value(&action)
             {
@@ -936,10 +937,12 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
     if target.value.as_deref() == Some(held.as_str()) {
         return Some(false);
     }
-    // A widget that redraws on every keystroke changes the page while the text lands nowhere, so the same text typed
-    // into the same field again is not progress whatever the page did: IDOS's date picker redrew on four writes of one
-    // date in bu2-075 and the run credited each one, until the recovery budget ran out on the date it needed.
-    if written.holds(&target.id, &held) {
+    // A widget that redraws on every keystroke changes the page while the text lands nowhere: the field holds something
+    // else, and that exact text was written into it before. IDOS's date picker redrew on four writes of one date in
+    // bu2-075 and the run credited each one, until the recovery budget ran out on the date it needed. A field a form
+    // emptied is not this case: it holds nothing, and writing the value again is what fills it.
+    let kept_another = target.value.as_deref().is_some_and(|value| !value.is_empty());
+    if kept_another && written.holds(&target.id, &held) {
         return Some(false);
     }
     if written.controls.contains(&target.id) { None } else { Some(true) }

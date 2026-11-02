@@ -232,6 +232,24 @@ fn test_typing_the_same_value_into_a_field_that_redraws_is_not_progress() {
     // The same field with a different value is still judged by the page it lands on.
     let (decision, action) = edit("9.7.2027", Some("1.5.2027"), false, Operation::Fill);
     assert_eq!(edit_progress(&decision, &action, &seen), None);
+    // A field a form emptied holds nothing, so writing the value again is what fills it, not a repeat.
+    let (decision, action) = edit("8.7.2027", Some(""), false, Operation::Fill);
+    assert_eq!(edit_progress(&decision, &action, &seen), None);
+}
+
+#[test]
+fn test_a_second_value_on_the_same_field_is_remembered() {
+    // A, then B, then B again: only remembering the B that the page judged for itself makes the last one a repeat.
+    let mut seen = Written::default();
+    let mut step = |value: &str, holds: Option<&str>| {
+        let (decision, action) = edit(value, holds, false, Operation::Fill);
+        let judged = edit_progress(&decision, &action, &seen);
+        seen.record("f", value);
+        judged
+    };
+    assert_eq!(step("8.7.2027", None), Some(true));
+    assert_eq!(step("9.7.2027", Some("8.7.2027")), None);
+    assert_eq!(step("9.7.2027", Some("1.5.2027")), Some(false));
 }
 
 #[test]
