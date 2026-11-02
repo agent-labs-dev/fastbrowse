@@ -5,9 +5,8 @@ name: Evals
 # a schedule and on demand, and the job fails when a task regresses.
 #
 # `pull_request` is deliberately absent: a pull request must never be handed the model key. `workflow_dispatch`
-# needs write access to trigger, so it is a maintainer checking their own branch. `workflow_call` is how a tag
-# gets its own run: the release workflow calls this one, so publishing cannot depend on somebody remembering to
-# dispatch it first.
+# needs write access to trigger, so it is a maintainer checking their own branch. The suites do not gate a release:
+# approval is the decision, and a tag publishes on its build and smoke tests alone.
 on:
   workflow_dispatch:
     inputs:
@@ -18,17 +17,6 @@ on:
         default: "3"
       budget:
         description: Approved total model dollars, with no per-task step, time or call ceilings
-        required: false
-        default: ""
-  workflow_call:
-    inputs:
-      repeat:
-        description: Runs per task (at least 3)
-        type: string
-        default: "3"
-      budget:
-        description: Approved total model dollars, with no per-task step, time or call ceilings
-        type: string
         required: false
         default: ""
   schedule:
@@ -120,11 +108,6 @@ jobs:
           test -n "$LANGFUSE_SECRET_KEY" || missing+=(LANGFUSE_SECRET_KEY)
           if [ "${#missing[@]}" -eq 0 ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
-          elif [ "$GITHUB_EVENT_NAME" = "workflow_call" ]; then
-            # A tag release is handed this job by release.yml; a release whose evidence nobody can read is not
-            # the thing we ship, so the same missing pair that only warns on a schedule stops the release.
-            echo "the ${missing[*]} repository secret is not set, and a release publishes its run" >&2
-            exit 1
           else
             echo "::warning title=Eval tracking is off::the ${missing[*]} repository secret is not set, so this run is not published to Langfuse"
             echo "ready=false" >> "$GITHUB_OUTPUT"

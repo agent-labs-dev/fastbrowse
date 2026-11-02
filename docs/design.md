@@ -116,6 +116,9 @@ The same action taken a third time from the same page state does not count as a 
 `on_event` receives a `BrowserEvent` followed by `StepEvent` objects. Each step includes added facts,
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
 `Config(step_frames=True)` adds a PNG after each step unless a fresh observation shows a resolved secret.
+`Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
+out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too). The list is taken by the next step recorded, so
+when recovery or the LLM overrides an unsure decision, the step it records still shows what Jev had.
 
 `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after the async handler returns;
 there is no fixed frame rate, and only the latest pending frame is retained. Delivery runs separately from
@@ -125,8 +128,11 @@ a recording holds its last clean frame meanwhile.
 
 ## Cursor feedback
 
-`--cursor` (`run_task(cursor=True)`) shows where the agent is about to act, through the Cua Driver's synthetic
-cursor. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
+The run shows where the agent is about to act, through the Cua Driver's synthetic cursor, whenever its tab is on
+screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
+window to the front so it always can be, and `--no-cursor` (`cursor=False`) turns it off. A plain `--headed` run
+works in a background tab behind `about:blank`, so the default draws nothing there; nothing of the run is on
+screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
 retried. The page hook is in `CdpPage.act`, where the hit-tested point is known; a secret's field is never
 marked. `browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
 when the run ends, including on cancellation. The driver's `move_cursor` is sent in `window` scope only, so the
@@ -136,7 +142,16 @@ The page point becomes a screen point from what the page reports: `screenX/Y`, `
 `innerWidth/Height` and the zoom from `Page.getLayoutMetrics`. The top inset is `outerHeight - innerHeight * zoom`.
 The cursor is drawn only when exactly one driver window matches the page's reported frame (which also shows the
 two share a scale, so a scaled display is skipped), that window is in front of every other, the tab is visible and
-the point is inside the viewport. Otherwise it is hidden. Any driver failure turns the feature off for the run.
+the point is inside the viewport. Otherwise it is hidden. Once drawn it stays for the whole run, with the driver's
+idle fade off: a navigation, a scroll or a point outside the viewport leaves it at its last position, and a watcher
+hides it as soon as the tab stops showing, the frame can no longer be placed, or another window comes in front. Any
+driver failure turns the feature off for the run.
+
+The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
+one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the
+arrow landed on nothing, and a glide past the two-second call bound turned the feature off. The run asks
+`set_agent_cursor_motion` for a fixed 550 ms glide, which lands on each click about half a second after it, and
+waits up to six seconds for a move. Shorter glides land sooner but cross the screen in a few frames.
 
 Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
 0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The driver offers no click
