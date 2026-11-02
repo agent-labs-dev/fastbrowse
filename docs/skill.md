@@ -1,7 +1,7 @@
 # Use fastbrowse with your agent
 
 The [fastbrowse skill](../skills/fastbrowse/SKILL.md) lets an agent that supports Agent Skills delegate a website task to fastbrowse
-and interpret its status and citations. It prefers an existing local Chrome connection, then local Chrome.
+and interpret its status and citations. It prefers a separate headless local Chrome, and drives another browser only through a DevTools endpoint the user names.
 It uses an MCP server configured for that browser choice, or the CLI. Cloud browsing is available when requested or local browsing is unavailable.
 Agents without skill support can use the CLI or MCP server directly.
 Installing the skill installs instructions; the browser and model credentials still need configuration.
