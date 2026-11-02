@@ -414,7 +414,7 @@ impl Agent {
             return Err(Stop::new(
                 Status::NeedsInput,
                 format!(
-                    "{} is one of several password fields the page does not mark, so whether it takes the current password or a new one is unclear",
+                    "{} is one of several password fields outside a form, so whether it takes the current password or a new one is unclear",
                     text::repr(&target.label)
                 ),
             )
