@@ -109,7 +109,7 @@ async fn test_the_browser_is_closed_before_the_cancelled_reply_is_written() {
     client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
     closing(&browsing).await;
     // Still closing, and a handshake goes through, so the server is not merely slow to write.
-    client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    client.result("initialize", Some(json!({"protocol_version": 2}))).await;
     assert!(client.inbox.is_empty() && client.silent().await);
     browsing.let_close.send_replace(true);
     let reply = client.reply(run).await;
@@ -328,9 +328,9 @@ async fn test_cancelling_a_run_that_is_waiting_on_a_secret_ends_it_and_the_late_
     client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
     let reply = client.reply(run).await;
     client.send(json!({"jsonrpc": "2.0", "id": question["id"], "result": "hunter2-correct-horse"}));
-    let handshake = client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    let handshake = client.result("initialize", Some(json!({"protocol_version": 2}))).await;
     assert_eq!(reply["error"]["code"], CANCELLED);
     assert!(resolved.lock().unwrap().is_empty());
-    assert_eq!(handshake["protocol_version"], 1);
+    assert_eq!(handshake["protocol_version"], 2);
     assert!(client.inbox.is_empty());
 }

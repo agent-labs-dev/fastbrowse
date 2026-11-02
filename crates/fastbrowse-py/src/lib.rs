@@ -259,12 +259,13 @@ fn run_task(
         }));
     }
     if let Some(function) = page_ready {
-        let call: HostCall<(), ()> = host_call(event_loop.clone(), function, no_argument, nothing);
+        let (call, failure) = (host_call(event_loop.clone(), function, no_argument, nothing), failure.clone());
         run.page_ready = Some(Arc::new(move || {
-            let call = call.clone();
+            let (call, failure) = (call.clone(), failure.clone());
             Box::pin(async move {
-                // A raised callback stops the run through `Raised` on the Python side; there is no answer to carry.
-                let _ = call(()).await;
+                if call(()).await.is_err() {
+                    failure.fail();
+                }
             })
         }));
     }

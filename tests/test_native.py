@@ -197,6 +197,13 @@ async def test_an_exception_a_callback_raises_comes_out_of_run_task(monkeypatch:
         await run_task("t", cdp_url="ws://127.0.0.1:9/devtools/browser/x", on_event=on_event)
 
 
+@pytest.mark.usefixtures("rust_core")
+@pytest.mark.parametrize(("option", "value"), [("viewport", (800, 600)), ("cloud_timeout_minutes", 30)])
+async def test_fetch_refuses_an_option_that_shapes_a_browser(option: str, value: object) -> None:
+    with pytest.raises(ValueError, match=f"cannot be combined with {option}$"):
+        await run_task("t", start="https://example.com", fetch=True, **{option: value})  # ty: ignore[invalid-argument-type]
+
+
 PAGE = "<html><head><title>Releases</title></head><body><main><h1>httpx</h1>" + "<p>Version 0.28.1 is out.</p>" * 20
 PAGE += "</main></body></html>"
 

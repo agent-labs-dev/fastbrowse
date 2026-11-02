@@ -1783,7 +1783,7 @@
       "RUN_CANCEL": "run/cancel",
       "SHUTDOWN": "shutdown"
     },
-    "PROTOCOL_VERSION": 1,
+    "PROTOCOL_VERSION": 2,
     "ServerMethod": {
       "RUN_EVENT": "run/event",
       "RUN_FRAME": "run/frame",
