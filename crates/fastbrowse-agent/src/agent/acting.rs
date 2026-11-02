@@ -512,7 +512,7 @@ impl Agent {
             }
             return Err(Stop::new(Status::NeedsInput, format!("secret {name} is not available for {origin}")).into());
         };
-        self.seen().redactor.register(name, &value, Some(origin));
+        self.redactor().register(name, &value, Some(origin));
         Ok(value)
     }
 
@@ -1013,7 +1013,7 @@ impl Agent {
         // expanded over it, leaves nothing to preserve, and reading it again spends a model call on nothing.
         let capture = self.capture().await?;
         if !transaction_pending && covered(state, observation, &capture) {
-            self.event("read_not_owed", || Map::from_iter([("url".into(), self.redact(&observation.url).into())]));
+            self.event("read_not_owed", || Map::from_iter([("url".into(), observation.url.clone().into())]));
             state.owes_read = false;
             state.read_here = true;
             return Ok(false);

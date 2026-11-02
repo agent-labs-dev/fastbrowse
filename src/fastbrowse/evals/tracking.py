@@ -223,16 +223,18 @@ def _matches(observation: Mapping[str, Any], spec: Mapping[str, Any]) -> bool:
     return _run_id(observation) == spec["run_id"] and output == spec["output"]
 
 
-def _run_id(observation: Mapping[str, Any]) -> Any:
+def _run_id(observation: Mapping[str, Any]) -> str | None:
     """The run id this stored observation carries, from whichever metadata namespace the read path returned.
 
     The index answers with observation metadata; a trace read answers with the trace's. Both are written by
     the upload, so either one naming this run is the same evidence - and a row carrying neither is not ours.
+    Langfuse stores a string attribute that looks like a number as that number, so a run id of hex digits
+    that happen to be all decimal (`260814399035`) comes back as an integer and is compared as text.
     """
     for field in ("metadata", "traceMetadata"):
         metadata = observation.get(field)
         if isinstance(metadata, Mapping) and metadata.get("run_id") is not None:
-            return metadata["run_id"]
+            return str(metadata["run_id"])
     return None
 
 

@@ -80,12 +80,13 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `needs_confirmation` | Report the pending action and obtain any missing authorization. |
 | `needs_login` | Read `wall.kind`. For `one_time_code`, fetch the code the site sent (email or text) if you can and pass it as a secret scoped to `wall.origin`; otherwise, and for `password` or `sign_in`, ask the user to sign in or configure an origin-scoped secret. |
 | `needs_input` | Ask for the missing value or file described in the result. |
-| `blocked` | Report the bot check (`wall.kind` is `bot_check`); let the user resolve it in a browser they control. |
+| `blocked` | Report the bot check (`wall.kind` is `bot_check`); let the user resolve it in a browser they control. Headless `--local` Chrome meets bot checks more often than the user's own browser. |
 | `unverified` | Report what could not be verified and preserve partial evidence. |
 | `budget_exceeded` | Report the exhausted resource; respect the user's total budget across retries. |
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |
 | `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. A `stuck` answer that starts `Answer (unverified)` is cited but unconfirmed; present it as partial. |
 
-Retry only after a concrete change, such as corrected input, a completed sign-in, or a resolved provider outage.
+Retry only after a concrete change, such as corrected input, a completed sign-in, a resolved provider outage, or a
+site's transient error (a 5xx, a 429, a maintenance page) clearing.
 Before repeating a write, inspect whether it already happened to avoid sending or purchasing twice.
 CLI usage errors may have no JSON result. Check the error and `--help` rather than inventing a status or answer.

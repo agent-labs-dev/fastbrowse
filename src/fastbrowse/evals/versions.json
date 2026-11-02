@@ -1,7 +1,7 @@
 {
   "arxiv-open": {
-    "fingerprint": "a131701dc432663c",
-    "version": 9
+    "fingerprint": "3a326837057d2e2d",
+    "version": 10
   },
   "arxiv-title": {
     "fingerprint": "f7600f020d792b84",
@@ -16,16 +16,16 @@
     "version": 7
   },
   "confirm-dialog": {
-    "fingerprint": "2dbcd11d1ba132cd",
-    "version": 1
+    "version": 2,
+    "fingerprint": "00e92143f7d59844"
   },
   "contact-form": {
-    "fingerprint": "0e4218622251291f",
-    "version": 1
+    "version": 2,
+    "fingerprint": "e7c5c9ed8500cbdb"
   },
   "contact-needs-confirmation": {
-    "fingerprint": "2783fba8fe7d90d9",
-    "version": 1
+    "version": 2,
+    "fingerprint": "c3a88aaae3563fe8"
   },
   "countries-mongolia": {
     "fingerprint": "163d4fdbb56932e6",
@@ -48,8 +48,8 @@
     "version": 7
   },
   "flights-search": {
-    "fingerprint": "c6d39f65709fe56a",
-    "version": 9
+    "fingerprint": "b9ea58239f6759e4",
+    "version": 10
   },
   "frame-heading": {
     "fingerprint": "8bdeabb8809e521c",
@@ -60,16 +60,16 @@
     "version": 7
   },
   "github-open": {
-    "fingerprint": "eaab86b26f889379",
-    "version": 9
+    "fingerprint": "33e7c70dc50bbb42",
+    "version": 10
   },
   "google-flights": {
     "fingerprint": "c7e94e8328f84822",
     "version": 7
   },
   "hn-comments": {
-    "fingerprint": "2d000b7dcacd1b64",
-    "version": 9
+    "fingerprint": "f6c91acce5c9e722",
+    "version": 10
   },
   "hn-top": {
     "fingerprint": "22d226397996fdfe",
@@ -88,128 +88,128 @@
     "version": 7
   },
   "login-wall": {
-    "fingerprint": "851683583e9044a8",
-    "version": 1
+    "version": 2,
+    "fingerprint": "80994459072819b0"
   },
   "mock-basket": {
-    "fingerprint": "9e680aa4879188e7",
-    "version": 6
+    "version": 7,
+    "fingerprint": "ab012d5b1f445ee4"
   },
   "mock-book-table": {
-    "fingerprint": "1b43cb7724451dbc",
-    "version": 2
+    "version": 3,
+    "fingerprint": "4939321b1a576ab3"
   },
   "mock-cheapest-product": {
-    "fingerprint": "87d02a3f9aaae488",
-    "version": 5
+    "version": 6,
+    "fingerprint": "f6118f9b7aa38629"
   },
   "mock-cold-sign-in": {
-    "version": 1,
-    "fingerprint": "1497a2177a1b701a"
+    "version": 2,
+    "fingerprint": "0c9c50d50f42450d"
   },
   "mock-compare-prices": {
-    "fingerprint": "65b30d9b47fe8787",
-    "version": 5
+    "version": 6,
+    "fingerprint": "348c5f0ee7ed68bb"
   },
   "mock-drag-card": {
-    "version": 5,
-    "fingerprint": "473e5c76eaa1bb94"
+    "version": 6,
+    "fingerprint": "c79d07dd6d02c994"
   },
   "mock-false-success": {
-    "version": 2,
-    "fingerprint": "ffa38a1dfd5b7fb3"
+    "version": 3,
+    "fingerprint": "7844389d523ece74"
   },
   "mock-hidden-instruction": {
-    "version": 1,
-    "fingerprint": "2be26176544f7f2d"
+    "version": 2,
+    "fingerprint": "973d4f2235c45584"
   },
   "mock-iframe-note": {
-    "fingerprint": "3c914358b8c070fd",
-    "version": 5
+    "version": 6,
+    "fingerprint": "7397e69ae06e927d"
   },
   "mock-infinite-scroll": {
-    "version": 6,
-    "fingerprint": "4f6827e6186142db"
+    "version": 7,
+    "fingerprint": "4d5717a1dd26aedc"
   },
   "mock-invoice-export": {
-    "fingerprint": "830ba1f72eb5f8e4",
-    "version": 1
+    "version": 2,
+    "fingerprint": "f48fdc8222efa039"
   },
   "mock-new-tab-story": {
-    "fingerprint": "4296df1ade5ae8fa",
-    "version": 1
+    "version": 2,
+    "fingerprint": "c421368b5a3ada73"
   },
   "mock-newsletter-gate": {
-    "fingerprint": "11f1fe706bcdc311",
-    "version": 2
+    "version": 3,
+    "fingerprint": "671f989aa83e819b"
   },
   "mock-order-pause": {
-    "fingerprint": "998961b22074113f",
-    "version": 6
+    "version": 7,
+    "fingerprint": "f14487013dcc7396"
   },
   "mock-order-validation": {
-    "fingerprint": "aa67498388dbfe5f",
-    "version": 5
+    "version": 6,
+    "fingerprint": "902420e52f6bf2f8"
   },
   "mock-pagination-exhaustion": {
-    "fingerprint": "1d86550da11c2195",
-    "version": 5
+    "version": 6,
+    "fingerprint": "1aa5662ae1b12087"
   },
   "mock-password-change": {
-    "fingerprint": "68bb6290c0caf14b",
-    "version": 6
+    "version": 7,
+    "fingerprint": "19985ad058c1b968"
   },
   "mock-password-pause": {
-    "fingerprint": "1e74914c5a7c3ca4",
-    "version": 7
+    "version": 8,
+    "fingerprint": "f9e18a0fbc1b8952"
   },
   "mock-priciest-product": {
-    "fingerprint": "3f2a53c296aa01f9",
-    "version": 5
+    "version": 6,
+    "fingerprint": "9f929d154eb30195"
   },
   "mock-report-total": {
-    "fingerprint": "8ea316a8220b796b",
-    "version": 6
+    "version": 7,
+    "fingerprint": "d6075518af07bc7f"
   },
   "mock-shadow-dom": {
-    "fingerprint": "e5affc58f26f7841",
-    "version": 5
+    "version": 6,
+    "fingerprint": "f99389de488a874c"
   },
   "mock-sign-in": {
-    "fingerprint": "56cc7281e08a73f1",
-    "version": 5
+    "version": 6,
+    "fingerprint": "293fd57a8fb38d4f"
   },
   "mock-sign-in-code-given": {
-    "fingerprint": "22ce81d29fb9fd99",
-    "version": 5
+    "version": 6,
+    "fingerprint": "92496376fa224d7c"
   },
   "mock-sign-in-per-digit": {
-    "fingerprint": "d5a57de46f9d3405",
-    "version": 5
+    "version": 6,
+    "fingerprint": "2704c718b86b7827"
   },
   "mock-sign-in-two-step": {
-    "fingerprint": "5d4c860036993fe7",
-    "version": 5
+    "version": 6,
+    "fingerprint": "fcfcd78865630dc2"
   },
   "mock-sign-out": {
-    "version": 6,
-    "fingerprint": "ce63f4bfe981454a"
+    "version": 7,
+    "fingerprint": "334156249fa0626f"
   },
   "mock-stock-count": {
-    "fingerprint": "48ba4f4af3c609b5",
-    "version": 5
+    "version": 6,
+    "fingerprint": "6971215a3ecc381a"
   },
   "mock-supplied-sign-in-route": {
-    "version": 1,
-    "fingerprint": "0a325735f9462bce"
+    "version": 2,
+    "fingerprint": "8c27171db92d604b"
   },
   "mock-support-portal": {
-    "fingerprint": "ab1e2ffe0f149b0f",
-    "version": 5
+    "version": 6,
+    "fingerprint": "dbd3ea8be43a8c3b"
   },
   "mock-upload-document": {
-    "version": 1,
-    "fingerprint": "665f5e5f980ee352"
+    "version": 2,
+    "fingerprint": "57167eb6dd0ad2a2"
   },
   "new-tab-page": {
     "fingerprint": "a722b9e069c3635c",
@@ -236,8 +236,8 @@
     "version": 7
   },
   "pypi-open": {
-    "fingerprint": "85188f1a21157e8b",
-    "version": 9
+    "fingerprint": "13828902b22c1a70",
+    "version": 10
   },
   "pypi-structured": {
     "fingerprint": "6f2e9d6fdc17c9ef",
@@ -288,8 +288,8 @@
     "version": 6
   },
   "search-price": {
-    "fingerprint": "6446d6939ba93247",
-    "version": 1
+    "version": 2,
+    "fingerprint": "e2d17dd12dec1c01"
   },
   "stretch-books-nonfiction-five-star": {
     "fingerprint": "1fb42fae24121a93",
@@ -312,8 +312,8 @@
     "version": 8
   },
   "stretch-calendar-first-friday": {
-    "fingerprint": "a19f2c321120f96c",
-    "version": 9
+    "fingerprint": "75e358991a228a84",
+    "version": 10
   },
   "stretch-date-range-monday": {
     "fingerprint": "8e95c92bf66332fc",
@@ -336,8 +336,8 @@
     "version": 7
   },
   "table-extract": {
-    "fingerprint": "695205cb80b45f0a",
-    "version": 1
+    "version": 2,
+    "fingerprint": "8e0ef7ec329b92a8"
   },
   "table-largest-due": {
     "fingerprint": "6fb9021727b5cd63",
@@ -352,7 +352,7 @@
     "version": 7
   },
   "wiki-open": {
-    "fingerprint": "f030aaed28518af6",
-    "version": 9
+    "fingerprint": "9003e62b7ecaefce",
+    "version": 10
   }
 }

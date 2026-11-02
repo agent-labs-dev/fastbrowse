@@ -21,6 +21,8 @@ class CatalogTask(Closed):
     id: str
     category: Category
     arms: tuple[str, ...]
+    excluded: dict[str, Annotated[str, Field(min_length=1)]]
+    """Each head-to-head arm that does not run this task, with the reason it cannot."""
     expect: Status
     source_fingerprint: Annotated[str, Field(pattern=r"^[a-f0-9]{16}$")]
     task_version: Annotated[int, Field(ge=1)]
@@ -64,7 +66,7 @@ class Catalog(Closed):
         for task in tasks:
             if lock.get(task.id) != {"version": task.task_version, "fingerprint": task.source_fingerprint}:
                 raise ValueError("benchmark catalog differs from the imported task-version lock")
-            if any(arm not in self.arms for arm in task.arms):
+            if any(arm not in self.arms for arm in (*task.arms, *task.excluded)):
                 raise ValueError("unknown benchmark arm")
         return self
 
