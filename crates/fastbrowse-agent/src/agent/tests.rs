@@ -927,6 +927,53 @@ async fn test_a_choice_jev_was_not_offered_is_a_failed_decision_and_not_an_empty
     assert!(format!("{error:?}").contains("which was not offered"), "{error:?}");
 }
 
+/// Jev picking each question's answer by its key.
+struct Picks(&'static [(&'static str, &'static str)]);
+
+impl DecisionClient for Picks {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .keys()
+            .filter_map(|key| self.0.iter().find(|(asked, _)| asked == key).map(|(_, pick)| (key, pick)))
+            .map(|(key, pick)| {
+                let answer = ChoiceAnswer {
+                    kind: Default::default(),
+                    choice: (*pick).into(),
+                    probabilities: IndexMap::new(),
+                    confidence: 1.0,
+                };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_value_whose_end_is_picked_before_its_beginning_asks_for_the_end_again() {
+    // The words: Use 0, the 1, postcode 2, SW1A 3, 1AA 4. The end lands before the beginning, as Jev picked on a
+    // checkout that had rejected another postcode, and the field was then treated as one the task gives no value for.
+    let picks = Picks(&[("source", "task"), ("first", "3"), ("last", "1"), ("pick", "4")]);
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(picks), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Use the postcode SW1A 1AA".into();
+    let text = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Postcode"))
+        .await
+        .expect("a value");
+    assert_eq!(text, "SW1A 1AA");
+}
+
 #[tokio::test]
 async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
     let field = "Date Picker 2: 27/12/2026";

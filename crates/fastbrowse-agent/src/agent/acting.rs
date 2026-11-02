@@ -454,9 +454,9 @@ impl Agent {
             (_, first, last) => (first, last),
         };
         match (source.as_str(), first, last) {
-            (IN_TASK | IN_READ, Some(first), Some(last)) if first.index <= last.index => {
-                // The two ends are picked apart, and each can land on a different value the task gives: the end is
-                // asked again knowing where this value begins.
+            (IN_TASK | IN_READ, Some(first), Some(last)) => {
+                // The two ends are picked apart, and each can land on a different value the task gives, or cross: the
+                // end is asked again knowing where this value begins.
                 let last = if first.index == last.index {
                     last
                 } else {
@@ -467,7 +467,10 @@ impl Agent {
                         text::repr(&begins)
                     );
                     let picked = self.ask_choice(state, observation, &question, word_options(&task, &rest)).await?;
-                    group.iter().find(|word| word.index.to_string() == picked).unwrap_or(last)
+                    group
+                        .iter()
+                        .find(|word| word.index >= first.index && word.index.to_string() == picked)
+                        .unwrap_or(first)
                 };
                 Ok(task.chars().skip(first.start).take(last.end - first.start).collect())
             }
