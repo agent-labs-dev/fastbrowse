@@ -864,6 +864,30 @@ async fn test_page_exception_is_typed_and_does_not_echo_page_text() {
     h.close().await;
 }
 
+/// Zara's listing draws "VIEW 1 2" as focusable text whose click is a script listener: no role, no href, and no
+/// pointer cursor, so the run could not reach page 2 and answered with page 1's five products (BU Bench bu2-082).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_text_page_number_with_a_tabindex_is_offered_and_pressed() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<ul><li><span id=\\'p1\\' tabindex=\\'0\\'>1</span></li>' + \
+         '<li><span id=\\'p2\\' tabindex=\\'0\\'>2</span></li></ul>'; \
+         window.picked = ''; \
+         document.getElementById('p2').addEventListener('click', () => { window.picked = '2'; });",
+    )
+    .await;
+    let obs = h.observe().await;
+    let two = obs.controls.iter().find(|c| c.label == "2").expect("page 2 is offered");
+    assert!(two.operations.contains(&Operation::Click), "{:?}", two.operations);
+    let target = Action { target_id: Some(two.id.clone()), ..Action::new(Operation::Click) };
+    let result = h.page.act(&target, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "window.picked").await, json!("2"));
+    h.close().await;
+}
+
 /// Unassociated sibling labels left todo toggles absent from the choices offered to the policy.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_transparent_native_choices_keep_todo_context_and_change_only_state() {

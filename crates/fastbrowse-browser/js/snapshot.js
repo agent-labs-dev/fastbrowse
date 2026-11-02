@@ -261,6 +261,19 @@
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
     return starts && !e.parentElement?.closest(SELECTOR) && !e.querySelector(SELECTOR);
   });
+  // A pagination, a tab or a "read more" drawn as plain text carries no role, no href and often no pointer cursor:
+  // React attaches its listener without an attribute, and a page that builds `<span tabindex="0">2</span>` is
+  // pressable only through that tabindex. BU Bench bu2-082 could not reach page 2 of Zara's listing because the
+  // offered controls stopped at page 1. Only an element whose whole content is its own text counts, so a focusable
+  // scroll container or dialog is not offered as a button.
+  const focusableText = memo(e => {
+    if (e.getAttribute('tabindex') === null || Number(e.getAttribute('tabindex')) < 0) return null;
+    // An element already offered by its own tag, role or cursor needs nothing here.
+    if (e.matches(SELECTOR) || e.querySelector('*')) return null;
+    if (e.parentElement?.closest(SELECTOR) || e.querySelector(SELECTOR)) return null;
+    const text = (e.textContent || '').replace(/\s+/g, ' ').trim();
+    return text || null;
+  });
   // Types whose value is a calendar date, not free text: the field writer must produce the type's ISO shape
   // and the native value setter, not typed keystrokes, is what a picker widget actually commits.
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
@@ -287,6 +300,8 @@
     // element to act on. Name it generic rather than null so the control walk does not drop it before the
     // drag it offers can be seen.
     if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop')) return 'generic';
+    // A focusable element whose text is its whole content is pressed through the page's own listener, as a button is.
+    if (focusableText(e)) return 'button';
     return pressable(e) ? 'button' : null;
   };
 
@@ -338,7 +353,7 @@
     // A document observer cannot see mutations inside shadow roots or child documents.
     const listed = new Set(root.querySelectorAll(SELECTOR));
     for (const e of root.querySelectorAll('*')) {
-      if (listed.has(e) || pressable(e)) yield e;
+      if (listed.has(e) || pressable(e) || focusableText(e)) yield e;
       if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);
