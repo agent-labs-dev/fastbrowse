@@ -396,12 +396,14 @@
       if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`);
       if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
     }
-    // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence.
+    // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence. What it can
+    // say is kept as data in the one line: a sentence that pixels are not described was cut as a span and quoted as a
+    // fact, so a Street View run answered "Pixels are not described" 33 times over a task about what the view shows.
     for (const image of [...root.querySelectorAll('img')].filter(visible)) {
       // Loading changes without a page edit, so captures report presence rather than transient decode state.
       const metadata = { alt: image.getAttribute('alt') ?? null,
-        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')) };
-      push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}. Pixels are not described.`);
+        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false };
+      push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`);
     }
     // A link drawn only as an icon has no text, so its destination, the one thing it says, was nowhere a reader
     // could quote: asked for a release's download URL beside an icon-only download link, a run read every other

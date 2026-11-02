@@ -168,6 +168,24 @@ async fn test_capture_does_not_copy_inline_image_payload() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_image_line_names_the_image_and_not_what_it_cannot_show() {
+    // The absence sentence was cut as a span and quoted as a fact: a Street View run answered "Pixels are not
+    // described" 33 times over a task about what the view shows. The metadata is the quotable part.
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        r#"document.body.innerHTML = '<img alt="Chart of exports" src="https://example.test/a.png">';"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let line = capture.text.lines().find(|line| line.starts_with("Image element DOM metadata")).expect("an image line");
+    assert!(line.contains("\"alt\":\"Chart of exports\""), "{line}");
+    assert!(line.contains("\"pixels_described\":false"), "{line}");
+    assert!(!line.contains("Pixels are not described"), "{line}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_every_image_is_observed_and_decode_state_is_ignored() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
