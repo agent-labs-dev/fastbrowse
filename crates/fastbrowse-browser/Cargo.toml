@@ -33,5 +33,9 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 webpki-roots = "1.0.11"
 
+[target.'cfg(unix)'.dependencies]
+# kill(2), already linked by tokio.
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros"] }

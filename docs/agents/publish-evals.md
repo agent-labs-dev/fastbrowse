@@ -27,6 +27,23 @@ the changed writer through both readers.
 
 ## Schemas
 
+## What may be published
+
+- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
+  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
+- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
+  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
+  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
+
+## The candidate contract
+
+Three programs share the candidate's schema: Parallax's `parallax browser publish-candidate` writes it,
+`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
+(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
+the changed writer through both readers.
+
+## Schemas
+
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
 `stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
@@ -60,6 +77,8 @@ The official suites publish fastbrowse alone, beside the vendor's own published 
 positive repeat count: every task and repeat is one row with its upstream score kept as the upstream defines it, the
 group records the repeat count, and a task's figure is the mean of its repeats' scores.
 
+## Validation and approval
+
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
 catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
@@ -80,7 +99,9 @@ every website or grader is free of bugs. Review unexpected outcomes before appro
 
 A minor release (`vX.Y.0`) dispatches `benchmark-campaign.yml` on its tag once it is published; a patch release
 does so only when its annotated tag message has the line `Benchmarks: run`, and anyone with write access can
-dispatch it by hand. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
+dispatch it by hand. An integration holding a token with `contents: write` starts one with a `repository_dispatch`
+through `client_payload`, which takes the same values as the manual inputs and is refused before any spend when a
+value is outside them or the build has no Evals dispatch. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
 which opens a pull request on agent-labs-dev/fastbrowse-site. The pull request carries the candidate byte for
 byte as `data/benchmark-<campaign>.json` and the site's group files under `data/benchmarks/`, written by
 

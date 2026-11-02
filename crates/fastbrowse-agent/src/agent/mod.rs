@@ -283,6 +283,13 @@ impl Agent {
         self
     }
 
+    /// Keep the run's secrets in `redactor`, so a trace the run's clients write through is redacted too.
+    pub fn with_redactor(mut self, redactor: Arc<Mutex<Redactor>>) -> Agent {
+        self.trace = self.trace.redacting(Arc::clone(&redactor));
+        self.redactor = redactor;
+        self
+    }
+
     pub fn with_trace(mut self, trace: Trace) -> Agent {
         self.trace = trace.redacting(Arc::clone(&self.redactor));
         self
