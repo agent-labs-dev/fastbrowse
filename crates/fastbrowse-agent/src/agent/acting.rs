@@ -428,8 +428,15 @@ impl Agent {
         };
         let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
         if source == WRITTEN {
-            let written =
-                write_value(&*self.llm, &state.task, &label, &typed_into(state, target), Some(&state.ledger)).await?;
+            let written = write_value(
+                &*self.llm,
+                &state.task,
+                &label,
+                &typed_into(state, target),
+                &observation.today(),
+                Some(&state.ledger),
+            )
+            .await?;
             state.ledger.record([written.cost])?;
             return match written.data.value.filter(|value| !value.trim().is_empty()) {
                 Some(value) => Ok(value),
