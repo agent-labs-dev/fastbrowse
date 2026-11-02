@@ -9,7 +9,6 @@ mod host;
 use std::sync::Arc;
 
 use fastbrowse_cli::embed::{HostCall, HostResolve};
-use indexmap::IndexMap;
 use fastbrowse_clients::environment::Settings;
 use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::config::Config;
@@ -18,6 +17,7 @@ use fastbrowse_core::models::SecretRef;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Trace;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask};
+use indexmap::IndexMap;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCFunction, PyTuple};
