@@ -1,8 +1,8 @@
 # Contributing
 
 Thanks for looking at fastbrowse. Bug reports, eval failures and pull requests are all welcome. This page
-covers what a change needs to be merged; [AGENTS.md](AGENTS.md) has the architecture, invariants and house
-style in full.
+covers what a change needs to be merged; [AGENTS.md](AGENTS.md) has the standing rules, invariants and house
+style, and points to the architecture.
 
 fastbrowse is in beta. Interfaces change without deprecation, and a change that makes the agent simpler or
 more accurate beats one that keeps an old behaviour working.
@@ -23,7 +23,7 @@ uv run pre-commit install
 ```
 
 `uv run pre-commit install` rewrites `.git/hooks`, including the hooks Entire installs when you capture agent
-sessions: run `entire enable` after it if you use Entire ([AGENTS.md](AGENTS.md#agent-session-capture) has the
+sessions: run `entire enable` after it if you use Entire ([docs/agents/entire.md](docs/agents/entire.md) has the
 commands).
 
 `uv sync` builds the package's Rust core, `fastbrowse._native`, so it needs a Rust toolchain: install
@@ -137,5 +137,8 @@ versions they ran, with every physical attempt and its spend retained. See [docs
   checks appear.
 - We aim to reply to every issue and PR within a few days: to merge, to ask for specific changes, or to close
   it with the reason.
+
+A merged fix for a bug you reported, a feature you asked for, or code you wrote credits you by your GitHub
+handle, in the changelog entry for that change and in [CREDITS.md](CREDITS.md).
 
 By contributing you agree your work is released under the [MIT License](LICENSE).
