@@ -19,7 +19,8 @@ name: Official benchmarks
 # run's id, which is how a release publishes every group from one candidate. A failed run dispatches nothing.
 #
 # `smoke` finds bugs before a release: one repeat of 10 sampled tasks per suite, traces sent to Langfuse marked as
-# smoke, and no public rows or campaign dispatch, so it can never publish.
+# smoke, and no public rows or campaign dispatch, so it can never publish. `task_ids` runs only the named tasks, one
+# repeat each, as a smoke run does: pick the one suite they belong to.
 #
 # No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
 # approved `budget` only decides whether the next task may start (`start-gate-v1`).
@@ -99,6 +100,11 @@ on:
         required: true
         type: boolean
         default: false
+      task_ids:
+        description: Space-separated task ids of one suite to run alone, one repeat each, as a smoke run. Never publishable
+        required: false
+        type: string
+        default: ""
       campaign_id:
         description: When set, dispatch the benchmark campaign of this name with these rows once every job has passed
         required: false
@@ -114,7 +120,9 @@ concurrency:
 
 env:
   UV_PYTHON: "3.13"
-  REPEAT: ${{ inputs.smoke && '1' || inputs.repeat }}
+  # A run of named tasks is a smoke run: it finds bugs and never publishes.
+  SMOKE: ${{ inputs.smoke || inputs.task_ids != '' }}
+  REPEAT: ${{ (inputs.smoke || inputs.task_ids != '') && '1' || inputs.repeat }}
   BUDGET: ${{ inputs.budget }}
   WORKERS: ${{ inputs.concurrency }}
   # The upstream pins. BU Bench's task file ships inside its repository, encrypted, so its digest is the file at
@@ -390,12 +398,17 @@ jobs:
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           JUDGE: ${{ matrix.judge }}
+          TASK_IDS: ${{ inputs.task_ids }}
           DIGEST: ${{ env[format('{0}_DATASET_SHA256', matrix.prefix)] }}
           COMMIT: ${{ env[format('{0}_UPSTREAM_COMMIT', matrix.prefix)] }}
           DATASET: ${{ matrix.suite == 'bu-bench' && format('{0}/upstream/BU_Bench_V2.enc', github.workspace) || format('{0}/Online_Mind2Web.json', runner.temp) }}
         run: |
           cd parallax
           mapfile -t judge < <(jq -r '.[]' <<< "$JUDGE")
+          read -ra ids <<< "$TASK_IDS"
+          selection=()
+          for id in "${ids[@]}"; do selection+=(--task-id "$id"); done
+          if [ ${#ids[@]} -eq 0 ] && [ "$SMOKE" = true ]; then selection=(--sample 10); fi
           mkdir -p "$(dirname "$OUT")"
           uv run --no-sync parallax browser official "$SUITE" \
             --upstream-root "$GITHUB_WORKSPACE/upstream" \
@@ -405,7 +418,7 @@ jobs:
             --dataset-sha256 "$DIGEST" \
             "${judge[@]}" \
             --repeat "$REPEAT" \
-            ${{ inputs.smoke && '--sample 10' || '' }} \
+            "${selection[@]}" \
             --concurrency "$WORKERS" \
             --budget "$BUDGET" \
             --out "$OUT" \
@@ -426,9 +439,10 @@ jobs:
         run: |
           test -f "$OUT/manifest.json" || { echo "::warning::no run to track"; exit 0; }
           cd parallax
-          uv run --no-sync parallax browser track-official "$OUT" --push ${{ inputs.smoke && '--smoke' || '' }}
+          smoke=(); if [ "$SMOKE" = true ]; then smoke=(--smoke); fi
+          uv run --no-sync parallax browser track-official "$OUT" --push "${smoke[@]}"
       - name: Write the public rows
-        if: ${{ !inputs.smoke }}
+        if: ${{ env.SMOKE != 'true' }}
         # Refuses a run publication would refuse, here where the plaintext is, so the run still uploads below.
         env:
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
@@ -444,7 +458,7 @@ jobs:
             --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
             --out "$RUNNER_TEMP/$SUITE.rows.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !inputs.smoke }}
+        if: ${{ env.SMOKE != 'true' }}
         with:
           name: official-rows-${{ matrix.suite }}
           path: ${{ runner.temp }}/${{ matrix.suite }}.rows.json
@@ -468,7 +482,7 @@ jobs:
   campaign:
     name: Dispatch the campaign with these rows
     needs: official
-    if: ${{ inputs.campaign_id != '' && !inputs.smoke }}
+    if: ${{ inputs.campaign_id != '' && !inputs.smoke && inputs.task_ids == '' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {actions: write}
     steps:
