@@ -463,12 +463,19 @@ impl CdpPage {
     }
 
     /// Run `read`, and again on the next settled document each time a navigation destroys the one it read.
+    ///
+    /// A read that loses the race with a document still swapping can also throw from the page's own script rather than
+    /// from a destroyed context, and that is a race, not a page that cannot be read: BU Bench bu2-104 ended as an error
+    /// one read after a click on Coursera, and the same page read clean on the next run. One more read, on the settled
+    /// document, tells the two apart; a page whose script always throws still ends here, named as the script error it
+    /// is.
     async fn reread<T, F, Fut>(&self, read: F) -> Result<T, BrowserError>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = Result<T, BrowserError>>,
     {
         let mut rereads = 0;
+        let mut threw = false;
         loop {
             match read().await {
                 Err(BrowserError::ContextLost(lost)) => {
@@ -479,6 +486,7 @@ impl CdpPage {
                         )));
                     }
                 }
+                Err(BrowserError::Script) if !threw => threw = true,
                 other => return other,
             }
             rereads += 1;
