@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 
 use crate::models::{BudgetResource, BudgetStop, CostBreakdown, CostComponent, CostLine, Limits, Status};
 use crate::py::json::float_str;
+use crate::safety::Redactor;
 
 /// A limit as someone typed it: fixed-point, where `str` would print `1e-05` for a small one. This is
 /// `format(Decimal(repr(amount)), "f")`.
@@ -224,8 +225,8 @@ static SINK: OnceLock<Sink> = OnceLock::new();
 ///
 /// The events say why a run went the way it did: each model call with its purpose, schema and timing, which reader
 /// answered a read and why, every check's scores, recoveries and their reasons. They carry ids, verdicts, redacted
-/// addresses, requirement texts and control labels, not page captures; treat the file as you would the task. With no
-/// destination the `FASTBROWSE_TRACE` environment variable is used, and an unset or empty one changes nothing.
+/// addresses, requirement texts and control labels, and the `http` events hold each model request and reply in full,
+/// page text and screenshots included, so treat the file as you would the pages. With no destination the `FASTBROWSE_TRACE` environment variable is used, and an unset or empty one changes nothing.
 pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
     let destination = match destination {
         Some(destination) => destination.to_string(),
@@ -263,17 +264,30 @@ fn write_line(sink: &Sink, record: &Map<String, Value>) {
 #[derive(Debug, Clone, Default)]
 pub struct Trace {
     events: Option<Arc<Mutex<Vec<Value>>>>,
+    /// The run's secrets. Every clone of a run's trace shares them, so an event made anywhere in the run, by the loop,
+    /// a reader or a check, is redacted as it is written rather than wherever its fields were built.
+    redactor: Option<Arc<Mutex<Redactor>>>,
 }
 
 impl Trace {
     /// A trace that keeps nothing, as when DEBUG is off on `fastbrowse.trace`.
     pub fn disabled() -> Trace {
-        Trace { events: None }
+        Trace { events: None, redactor: None }
     }
 
     /// `traced()`: a trace that keeps every record made through it or a clone of it.
     pub fn collecting() -> Trace {
-        Trace { events: Some(Arc::new(Mutex::new(Vec::new()))) }
+        Trace { events: Some(Arc::new(Mutex::new(Vec::new()))), redactor: None }
+    }
+
+    /// This trace, redacting with `redactor` from now on.
+    pub fn redacting(self, redactor: Arc<Mutex<Redactor>>) -> Trace {
+        Trace { redactor: Some(redactor), ..self }
+    }
+
+    /// The secrets this trace redacts, for whatever else in the run holds them.
+    pub fn redactor(&self) -> Option<Arc<Mutex<Redactor>>> {
+        self.redactor.clone()
     }
 
     pub fn enabled(&self) -> bool {
@@ -289,6 +303,10 @@ impl Trace {
         let mut record = Map::new();
         record.insert("event".into(), event.into());
         record.extend(fields());
+        if let Some(redactor) = &self.redactor {
+            let redactor = redactor.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            record.values_mut().for_each(|value| redactor.redact_value(value));
+        }
         if let Some(sink) = sink {
             write_line(sink, &record);
         }

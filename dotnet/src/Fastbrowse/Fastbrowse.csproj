@@ -10,7 +10,7 @@
     <RootNamespace>Fastbrowse</RootNamespace>
 
     <PackageId>Fastbrowse</PackageId>
-    <Version>0.9.0</Version>
+    <Version>0.9.1</Version>
     <Authors>agent-labs-dev</Authors>
     <Description>A browser agent that picks instead of generating: cited answers, structured output, and credentials and authorization held in code.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
