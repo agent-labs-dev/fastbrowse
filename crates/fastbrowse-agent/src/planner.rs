@@ -378,7 +378,6 @@ pub fn settled_checks(plan: &Plan) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_planner.py.
     use std::sync::Mutex;
 
     use fastbrowse_core::BoxFuture;

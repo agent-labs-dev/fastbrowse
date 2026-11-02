@@ -545,7 +545,6 @@ mod tests {
         assert_eq!(step(&entry(None, None, None, None)), "- open -> executed");
     }
 
-    /// `_Jev` in tests/test_done_check.py: answers each question it is asked from a table of probabilities.
     /// Answers from a table, keeping the instructions of every question asked.
     struct TableJev(Vec<(&'static str, f64)>, std::sync::Mutex<IndexMap<String, String>>, std::sync::Mutex<Vec<Value>>);
 

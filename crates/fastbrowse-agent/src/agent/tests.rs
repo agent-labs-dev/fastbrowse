@@ -445,8 +445,6 @@ fn test_answer_evidence_tracks_promoted_context_without_turning_paraphrases_into
     assert!(notes.fact_requirements(&fact_id(&fact)).is_empty());
 }
 
-// tests/test_download_gate.py
-
 // -- The one stall rule and the one budget-renewal rule -------------------------------------------------------------
 
 const FILES: &str = "https://addons.example.test/project/files";
