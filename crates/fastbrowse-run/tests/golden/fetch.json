@@ -2769,7 +2769,7 @@
  {
   "name": "nested-table",
   "url": "https://shop.example.com/a/page.html",
-  "html": "<table><tr><th>a</th><td>b<table><tr><td>c</td></tr></table></td></tr><tr><td>x|y</td></tr></table>",
+  "html": "<table><tr><th>a</th><td>b<table><tr><td>c</td></tr></table>more</td></tr><tr><td>x|y</td></tr></table>",
   "title": "",
   "blocks": [
    {
@@ -2787,6 +2787,12 @@
    {
     "kind": "table",
     "text": "| c |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| more |",
     "heading_path": [],
     "href": null
    },

@@ -178,6 +178,8 @@ struct Reader<'a> {
     pre: usize,
     in_title: bool,
     tables: usize,
+    /// Per open nested table, whether it sat in an outer cell, which reopens when it ends.
+    outer_cells: Vec<bool>,
     rows: Vec<Vec<String>>,
     row: Option<Vec<String>>,
     cell: Option<String>,
@@ -204,6 +206,7 @@ impl<'a> Reader<'a> {
             pre: 0,
             in_title: false,
             tables: 0,
+            outer_cells: Vec::new(),
             rows: Vec::new(),
             row: None,
             cell: None,
@@ -285,6 +288,7 @@ impl<'a> Reader<'a> {
                 // A table inside a cell lays out a page around its own rows, as Hacker News lists every story in one
                 // cell of its page table. Read flat, the whole list was one row; the rows so far end here, and the
                 // inner table's rows are rows.
+                self.outer_cells.push(self.cell.is_some());
                 self.close_cell();
                 self.close_row();
                 self.emit_table();
@@ -365,6 +369,11 @@ impl<'a> Reader<'a> {
             self.close_row();
             self.emit_table();
             self.tables -= 1;
+            if self.outer_cells.pop() == Some(true) {
+                // The outer cell goes on after the inner table, and what it says next stays a cell of its own row.
+                self.cell = Some(String::new());
+                self.cell_header = false;
+            }
             return;
         }
         if self.tables > 0 {
