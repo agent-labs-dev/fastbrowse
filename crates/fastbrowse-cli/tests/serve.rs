@@ -135,7 +135,7 @@ fn test_the_error_codes_are_a_closed_set() {
 }
 
 const INITIALIZE: &[u8] =
-    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocol_version\":1}}\n";
+    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocol_version\":2}}\n";
 
 fn start(arguments: &[&str]) -> std::process::Child {
     Command::new(binary())
