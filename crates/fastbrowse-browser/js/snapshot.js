@@ -556,16 +556,20 @@
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    // A line that is itself a control's label names no section: "Prev" reads the same in every repeat, and a
-    // calendar's day cells were named "31" and "7" after their neighbours in the same week row, so a picker that
-    // showed November was offered with contexts that pointed at other days. Past those, a datepicker's first line
-    // is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
+    // A line that is another control of the same kind names that control, not the section: a calendar's day cells were
+    // named "31" and "7" after their neighbours in the same week row, so a picker showing November was offered with
+    // contexts that pointed at other days. A card's title keeps its line, since the control it names there is another
+    // kind (a link inside a checkbox's label names the item). Past a repeated control's label, a datepicker's first
+    // line is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
     // "October 2026" left "October 0 6".
-    const own = new Set(controls.map(c => c.label));
+    const mine = controls.find(c => registry.nodes.get(c.id) === element);
+    const peers = new Set(
+      controls.filter(c => c !== mine && c.role === mine?.role).map(c => c.label),
+    );
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !own.has(line));
+      .filter(line => line && !repeated.has(line) && !peers.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
