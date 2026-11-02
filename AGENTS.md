@@ -108,7 +108,8 @@ Entire links each commit made in an agent session to that session, locally only;
 ## Evals
 
 Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated
-against `dev` only**, and `heldout` is run before and after a round and never debugged. Read
+against `dev` only**, and `core` is run before and after a round. The held-out suite is gone: Parallax moved its
+tasks into `dev`, so any dev task may be one a fix was designed against. Read
 [docs/agents/evals.md](docs/agents/evals.md) before changing agent behaviour or a task, or spending on a paid
 run: it has the commands, keys, task versions, what to check before spending, the CI campaign gotchas and where
 evidence is kept.
