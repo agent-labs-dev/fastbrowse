@@ -167,6 +167,7 @@ impl ScriptedLLM {
         match purpose {
             LLMPurpose::Start => Some(json!({"url": null})),
             LLMPurpose::Compose => Some(json!({"claims": []})),
+            LLMPurpose::Fill => Some(json!({"value": null})),
         }
     }
 }

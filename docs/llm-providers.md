@@ -1,6 +1,6 @@
 # LLM providers
 
-The LLM proposes a first address when a run has no start page, and writes an answer that has to be composed from more than one fact. By default it goes to OpenRouter when `OPENROUTER_API_KEY` is set, otherwise to
+The LLM proposes a first address when a run has no start page, writes a field value the task asks for without stating it word for word, such as a search query, and writes an answer that has to be composed from more than one fact. By default it goes to OpenRouter when `OPENROUTER_API_KEY` is set, otherwise to
 the Vercel AI Gateway, and `FASTBROWSE_LLM_BASE_URL` points it at any other OpenAI-compatible chat completions
 endpoint instead. `FASTBROWSE_LLM_PROVIDER` names the provider outright and fills in the rest:
 

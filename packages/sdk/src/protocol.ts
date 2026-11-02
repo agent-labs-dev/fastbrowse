@@ -4,7 +4,7 @@
 export type ArtifactKind = 'download';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
-export type LLMPurpose = 'start' | 'compose';
+export type LLMPurpose = 'start' | 'compose' | 'fill';
 /**
  * Who chose a step: Jev, or a rule in code, such as the next page of a list.
  */

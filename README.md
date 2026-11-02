@@ -49,7 +49,7 @@ You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer it
 [OpenRouter](https://openrouter.ai/) key and a [Browser Use](https://browser-use.com/) key:
 
 ```sh
-export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages and composed answers
+export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages, written field values and composed answers
 export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```

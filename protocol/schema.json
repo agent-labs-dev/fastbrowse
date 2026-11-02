@@ -487,7 +487,8 @@
     "LLMPurpose": {
       "enum": [
         "start",
-        "compose"
+        "compose",
+        "fill"
       ],
       "title": "LLMPurpose",
       "type": "string"

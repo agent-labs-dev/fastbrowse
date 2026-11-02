@@ -375,6 +375,7 @@ str_enum! {
     pub enum LLMPurpose {
         Start = "start",
         Compose = "compose",
+        Fill = "fill",
     }
 }
 

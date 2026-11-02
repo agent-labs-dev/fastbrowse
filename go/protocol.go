@@ -171,6 +171,7 @@ type LLMPurpose string
 const (
 	LLMPurposeStart   LLMPurpose = "start"
 	LLMPurposeCompose LLMPurpose = "compose"
+	LLMPurposeFill    LLMPurpose = "fill"
 )
 
 type Limits struct {

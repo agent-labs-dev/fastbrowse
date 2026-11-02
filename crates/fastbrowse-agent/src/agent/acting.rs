@@ -22,12 +22,15 @@ use super::state::{Flow, RunState, Step, Stop, Unsure};
 use crate::policy::{Ahead, Decision};
 use crate::retrieval::text::{Word, words};
 use crate::verification::page_state;
+use crate::writing::write_value;
 
 /// The field's value is words of the task, which Jev marks.
 const IN_TASK: &str = "task";
 /// The field's value is words of what was read, which Jev marks. Offered with the task's words, a word read from the
 /// page was typed into every field of a form whose values the task gave.
 pub(super) const IN_READ: &str = "read";
+/// The task asks for the value without stating it word for word, as a search box's query, so the LLM writes it.
+const WRITTEN: &str = "write";
 /// Nothing given belongs in the field.
 const NO_VALUE: &str = "none";
 /// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
@@ -72,13 +75,7 @@ fn value_questions<'a>(
     source_question: String,
     sources: IndexMap<String, JsonValue>,
 ) -> Vec<Asked<'a>> {
-    let described = describe(target);
-    let tried: Vec<String> = state
-        .history
-        .iter()
-        .filter(|entry| entry.operation == Some(Operation::Fill) && entry.target.as_deref() == Some(&described))
-        .filter_map(|entry| entry.text.as_deref().map(text::repr))
-        .collect();
+    let tried = typed_into(state, target);
     let tried = if tried.is_empty() {
         String::new()
     } else {
@@ -96,6 +93,17 @@ fn value_questions<'a>(
         asked.push(("last", span("ends"), options));
     }
     asked
+}
+
+/// What was already typed into `target` this run, quoted.
+fn typed_into(state: &RunState, target: &Control) -> Vec<String> {
+    let described = describe(target);
+    state
+        .history
+        .iter()
+        .filter(|entry| entry.operation == Some(Operation::Fill) && entry.target.as_deref() == Some(&described))
+        .filter_map(|entry| entry.text.as_deref().map(text::repr))
+        .collect()
 }
 
 fn page_question(task: &str, question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
@@ -419,6 +427,15 @@ impl Agent {
             None => self.ask_choices(state, observation, asked).await?,
         };
         let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
+        if source == WRITTEN {
+            let written =
+                write_value(&*self.llm, &state.task, &label, &typed_into(state, target), Some(&state.ledger)).await?;
+            state.ledger.record([written.cost])?;
+            return match written.data.value.filter(|value| !value.trim().is_empty()) {
+                Some(value) => Ok(value),
+                None => Err(self.missing(state, observation, target)),
+            };
+        }
         if source == IN_READ {
             task = read;
             group = words(&task, target.max_length);
@@ -537,8 +554,14 @@ impl Agent {
         for name in &secrets {
             sources.insert(format!("secret:{name}"), format!("The stored secret named {name} (value hidden)").into());
         }
-        sources
-            .insert(IN_TASK.into(), "The task states this field's value, whole or as part of something longer.".into());
+        sources.insert(
+            IN_TASK.into(),
+            "The task states this field's value word for word, whole or as part of something longer.".into(),
+        );
+        sources.insert(
+            WRITTEN.into(),
+            "The task asks for a value it does not state word for word, such as a search query for what it looks for, so it is written from the task.".into(),
+        );
         if !read.is_empty() {
             sources
                 .insert(IN_READ.into(), format!("The task does not state it, and what was read does: {read}").into());

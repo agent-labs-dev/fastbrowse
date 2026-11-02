@@ -1,5 +1,5 @@
-//! The page to begin on, for a caller with a task and no page. This is the agent's one LLM call: it names an address
-//! from the task alone, which no page is there yet for Jev to choose from.
+//! The page to begin on, for a caller with a task and no page. It names an address from the task alone, which no page is
+//! there yet for Jev to choose from.
 
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::LLMPurpose;

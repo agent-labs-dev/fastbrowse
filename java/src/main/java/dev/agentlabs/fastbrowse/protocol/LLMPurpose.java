@@ -8,5 +8,7 @@ public enum LLMPurpose {
     @JsonProperty("start")
     START,
     @JsonProperty("compose")
-    COMPOSE
+    COMPOSE,
+    @JsonProperty("fill")
+    FILL
 }

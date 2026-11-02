@@ -185,6 +185,7 @@ class CostBasis(StrEnum):
 class LLMPurpose(StrEnum):
     START = "start"
     COMPOSE = "compose"
+    FILL = "fill"
 
 
 class CostLine(Frozen):

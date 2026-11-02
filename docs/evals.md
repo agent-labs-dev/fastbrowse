@@ -62,7 +62,7 @@ Read [the eval workflow](agents/evals.md) before changing agent behavior or runn
 ## Default LLM measurements
 
 `DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` is `deepseek/deepseek-v4.1-flash-1017` for every
-purpose, with reasoning off. The LLM proposes a first address and composes answers; Jev makes every other call.
+purpose, with reasoning off. The LLM proposes a first address, writes field values the task does not state word for word, and composes answers; Jev makes every other call.
 On the local and mock suites, one run each on the same build and Jev, it passed 35 of 38 tasks, as
 `anthropic/claude-sonnet-5.5` did, at a tenth of Sonnet's LLM spend ($0.0018 against $0.0191) and a lower mean
 time per task (3.9s against 4.2s).

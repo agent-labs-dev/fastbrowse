@@ -18,5 +18,6 @@ pub mod scripted;
 pub mod start;
 mod support;
 pub mod verification;
+pub mod writing;
 
 pub use error::AgentError;

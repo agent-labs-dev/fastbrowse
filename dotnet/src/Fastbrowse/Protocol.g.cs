@@ -256,6 +256,8 @@ public enum LLMPurpose
     Start,
     [JsonStringEnumMemberName("compose")]
     Compose,
+    [JsonStringEnumMemberName("fill")]
+    Fill,
 }
 
 public sealed record Limits
