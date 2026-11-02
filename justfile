@@ -26,6 +26,8 @@ rust:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo nextest run --workspace --no-fail-fast
     cargo test --workspace --doc
+    # A packaged crate keeps the workspace's version while its code changes; see the same step in ci.yml.
+    rm -rf target/debug/.fingerprint/fastbrowse-* "${CARGO_HOME:-$HOME/.cargo}"/registry/src/-*/fastbrowse*
     cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
     uv sync --all-extras
     uv run --no-sync pytest -q

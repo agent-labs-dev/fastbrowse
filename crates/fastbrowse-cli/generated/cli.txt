@@ -6,7 +6,7 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
                   [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
                   [--downloads DOWNLOADS] [--json] [--record FILE] [--fetch]
-                  [--fetch-first] [--trace FILE] [--cursor]
+                  [--fetch-first] [--trace FILE] [--cursor | --no-cursor]
                   task
 
 Run one browser task.
@@ -70,8 +70,11 @@ options:
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every
                         check's scores (also FASTBROWSE_TRACE)
-  --cursor              draw the agent's cursor over a visible Chrome with the
-                        Cua Driver (Linux X11; skipped where unsupported)
+  --cursor              bring the window to the front so the agent's cursor
+                        is always drawn
+  --no-cursor           do not draw the agent's cursor (by default it is
+                        drawn over a visible Chrome with the Cua Driver on
+                        Linux X11, and skipped where unsupported)
 
 Exit codes: 2 usage error; 0 complete; 1 error; 3 needs_confirmation; 4
 needs_login; 5 needs_input; 6 blocked; 7 budget_exceeded; 8 unavailable; 9

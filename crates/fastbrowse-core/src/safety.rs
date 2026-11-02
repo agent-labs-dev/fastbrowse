@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
+use serde_json::Value;
 use url::Url;
 
 use crate::BoxFuture;
@@ -464,8 +465,12 @@ impl Redactor {
     /// was ever typed there, and the site publishes its own host, so blanking it hides nothing and breaks the address.
     /// The value is still found everywhere else: in ordinary words, in the userinfo, path, query and fragment of every
     /// address, in any host it was not typed on, and where it runs across a host's edge.
+    ///
+    /// A value inside a `[secret:NAME]` marker this redactor wrote is left too, so redacting text twice changes nothing:
+    /// a value `token` named `api_token` otherwise turned `[secret:api_token]` into `[secret:api_[secret:api_token]]`.
     fn spans(&self, text: &str) -> Vec<(usize, usize, String)> {
         let hosts = if self.typed_on.is_empty() { Vec::new() } else { hosts(text) };
+        let markers = self.markers(text);
         let nowhere = HashSet::new();
         let mut found: Vec<(usize, usize, &str)> = Vec::new();
         for (value, name) in &self.values {
@@ -474,7 +479,9 @@ impl Redactor {
             while let Some(offset) = text[from..].find(value.as_str()) {
                 let at = from + offset;
                 let end = at + value.len();
-                if !hosts.iter().any(|(lo, hi, origin)| *lo <= at && end <= *hi && typed_on.contains(origin)) {
+                let published =
+                    hosts.iter().any(|(lo, hi, origin)| *lo <= at && end <= *hi && typed_on.contains(origin));
+                if !published && !markers.iter().any(|(lo, hi)| *lo <= at && end <= *hi) {
                     found.push((at, end, name));
                 }
                 // One character on, so overlapping occurrences are all found.
@@ -491,6 +498,28 @@ impl Redactor {
             }
         }
         merged
+    }
+
+    /// Where `redact` has already replaced a value in `text`, as byte ranges.
+    fn markers(&self, text: &str) -> Vec<(usize, usize)> {
+        let names: HashSet<&String> = self.values.values().collect();
+        names
+            .into_iter()
+            .flat_map(|name| {
+                let marker = format!("[secret:{name}]");
+                text.match_indices(&marker).map(|(at, _)| (at, at + marker.len())).collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Redact every string inside `value`, as a trace event is written out.
+    pub fn redact_value(&self, value: &mut Value) {
+        match value {
+            Value::String(text) => *text = self.redact(text),
+            Value::Array(items) => items.iter_mut().for_each(|item| self.redact_value(item)),
+            Value::Object(fields) => fields.values_mut().for_each(|item| self.redact_value(item)),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
     }
 }
 
@@ -594,6 +623,16 @@ mod tests {
             assert_eq!(redactor.redact(url), redacted, "{url}");
         }
         assert_eq!(redactor.redact("sign in as practice"), "sign in as [secret:username]");
+    }
+
+    #[test]
+    fn test_redacting_text_twice_leaves_the_first_pass_markers_alone() {
+        let mut redactor = Redactor::new();
+        redactor.register("api_token", "token", None);
+        let once = redactor.redact("sent token, then token");
+        assert_eq!(once, "sent [secret:api_token], then [secret:api_token]");
+        assert_eq!(redactor.redact(&once), once);
+        assert!(!redactor.reveals(&once));
     }
 
     #[test]
