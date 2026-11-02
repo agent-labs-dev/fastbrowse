@@ -1129,7 +1129,7 @@ async fn test_past_the_recovery_budget_a_field_left_unfilled_is_named_in_the_err
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.recoveries = agent.config.stall.max_recoveries;
-    let apply = button("Apply");
+    let apply = field("Apply");
     let page = observation(&[apply.clone(), button("Next")]);
     // The run offered this field to Jev, was told the task gives it no value, and went on without it.
     state.missing.insert((page.url.clone(), "Apply".into(), None));

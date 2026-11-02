@@ -50,7 +50,7 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
 /// The labels of the fields standing on this page that the task gave no value for, in page order.
 fn unfilled<'a>(observation: &'a Observation, missing: &HashSet<(String, String, Option<String>)>) -> Vec<&'a str> {
     let mut labels: Vec<&str> = Vec::new();
-    for control in &observation.controls {
+    for control in observation.controls.iter().filter(|control| control.operations.contains(&Operation::Fill)) {
         let omitted = missing
             .iter()
             .any(|(url, label, field)| *url == observation.url && control.label == *label && control.context == *field);
