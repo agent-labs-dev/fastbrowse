@@ -233,6 +233,9 @@ async fn test_hidden_tab_answers_with_no_idle_period() {
         .send("Target.createTarget", json!({"url": "about:blank", "background": false}), None)
         .await
         .expect("createTarget");
+    // A run keeps its tabs visible with focus emulation, which a tab loses only when that is off.
+    let active = h.session.active_session_id().expect("active session");
+    h.session.send("Emulation.setFocusEmulationEnabled", json!({"enabled": false}), Some(&active)).await.expect("off");
     let checked = async {
         assert_eq!(eval_active(&h.session, "document.hidden").await, json!(true));
         eval_active(&h.session, "document.body.setAttribute('data-state', 'new')").await;
