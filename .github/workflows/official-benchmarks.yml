@@ -149,7 +149,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0, persist-credentials: false}
       - name: Require the full comparison protocol
+        env:
+          SUITE_SET: ${{ inputs.suites }}
+          TASK_IDS: ${{ inputs.task_ids }}
         run: |
+          if [ -n "$TASK_IDS" ] && [ "$SUITE_SET" = all ]; then
+            echo "::error::task_ids name tasks of one suite; choose that suite, not all"
+            exit 1
+          fi
           for pair in "repeat:$REPEAT" "concurrency:$WORKERS"; do
             case "${pair#*:}" in
               ''|*[!0-9]*) echo "::error::${pair%%:*} must be an integer, got '${pair#*:}'"; exit 1 ;;
