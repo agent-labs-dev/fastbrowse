@@ -522,21 +522,27 @@ impl Agent {
         mut group: Vec<Word>,
     ) -> Step<Vec<Word>> {
         let max = self.jev.profile().max_choice_options;
-        // A task with more words than one choice can offer is narrowed first, over parts that overlap so a value
-        // across any cut stands whole in one of them.
+        if max < 3 {
+            return Err(fastbrowse_core::decision::DecisionError::Failed(
+                "value selection needs a provider supporting at least three choices".into(),
+            )
+            .into());
+        }
+        // Parts cover the whole source and overlap so a value across a cut remains whole. Reserving one choice
+        // for no value lets Jev refuse a source instead of being forced to pick unrelated words.
         while group.len() > max {
-            let step = (max / 2).max(1);
+            let step = group.len().div_ceil(max - 1);
+            let width = (2 * step).min(group.len() - 1);
             let parts: Vec<&[Word]> = group
                 .chunks(step)
                 .enumerate()
                 .map(|(n, _)| {
                     let from = n * step;
-                    &group[from..(from + 2 * step).min(group.len())]
+                    &group[from..(from + width).min(group.len())]
                 })
-                .take(max)
                 .collect();
             let chars: Vec<char> = task.chars().collect();
-            let criteria: IndexMap<String, JsonValue> = parts
+            let mut criteria: IndexMap<String, JsonValue> = parts
                 .iter()
                 .enumerate()
                 .map(|(n, part)| {
@@ -544,9 +550,15 @@ impl Agent {
                     (n.to_string(), JsonValue::from(shown))
                 })
                 .collect();
-            let question = format!("Which part of the task holds the value for {label}, if any does?");
+            criteria.insert(NO_VALUE.into(), JsonValue::from("None of these parts states the field's value."));
+            let question = format!("Which part of this source holds the value for {label}, if any does?");
             let picked = self.ask_choice(state, observation, &question, criteria).await?;
-            let chosen = picked.parse::<usize>().unwrap_or_default();
+            if picked == NO_VALUE {
+                return Ok(Vec::new());
+            }
+            let chosen = picked
+                .parse::<usize>()
+                .map_err(|_| fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into()))?;
             group = parts[chosen].to_vec();
         }
         Ok(group)

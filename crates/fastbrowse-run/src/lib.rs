@@ -560,6 +560,8 @@ fn reads_first(task: &RunTask) -> bool {
             || task.cdp_url.is_some()
             || task.cdp_port.is_some()
             || task.cloud_profile.is_some()
+            || task.proxy_country.is_some()
+            || !task.cloud_extensions.is_empty()
             || task.foreground
             || chrome.headed
             || chrome.profile.is_some())

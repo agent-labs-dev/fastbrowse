@@ -620,3 +620,33 @@ fn an_empty_task_is_refused_before_provider_or_browser_setup() {
         );
     }
 }
+
+#[tokio::test]
+async fn cloud_browser_options_do_not_fetch_from_the_hosts_network_first() {
+    for option in ["proxy_country", "cloud_extensions"] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let options = task(|o, h| {
+            o.start = Some("https://example.test/document".into());
+            if option == "proxy_country" {
+                o.proxy_country = Some("de".into());
+            } else {
+                o.cloud_extensions = vec!["extension-id".into()];
+            }
+            h.http =
+                Some(Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async {
+                        Ok(Response::new(200, "<p>The documented value is 34.</p>")
+                            .with_header("content-type", "text/html"))
+                    })
+                })));
+        });
+        let result = run(options).await;
+        assert_eq!(requests.load(Ordering::SeqCst), 0, "{option}: must not read through the host");
+        assert!(
+            matches!(result, Err(RunError::Configuration(ref error)) if error.contains("BROWSER_USE_API_KEY")),
+            "{result:?}"
+        );
+    }
+}

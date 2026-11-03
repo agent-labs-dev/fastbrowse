@@ -2516,3 +2516,79 @@ async fn test_an_unsent_form_stops_before_an_unneeded_image_read() {
     assert!(matches!(result, Err(Flow::Stop(ref stop)) if stop.status == Status::NeedsConfirmation), "{result:?}");
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+/// A field value at the end of a long source must remain a choice.
+struct TailValue(usize, usize);
+
+impl DecisionClient for TailValue {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let Question::Choice(question) = question else { panic!("expected a choice") };
+                assert!(question.criteria.len() <= self.1);
+                let choice = if key == "source" {
+                    "task".into()
+                } else if key == "first" || key == "last" {
+                    self.0.to_string()
+                } else {
+                    question
+                        .criteria
+                        .iter()
+                        .rev()
+                        .find(|(_, value)| value.as_str().is_some_and(|value| value.contains("TAIL_REFERENCE")))
+                        .map(|(key, _)| key.clone())
+                        .expect("the value is offered")
+                };
+                (
+                    key.clone(),
+                    Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice,
+                        probabilities: IndexMap::new(),
+                        confidence: 1.0,
+                    }),
+                )
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { max_choice_options: self.1, ..DecisionProfile::unknown() }
+    }
+}
+
+#[tokio::test]
+async fn test_a_field_value_beyond_the_first_choice_window_is_offered() {
+    for (position, max, count) in [(0, 26, 1001), (350, 26, 1001), (1000, 26, 1001), (0, 3, 9), (8, 3, 9)] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(TailValue(position, max)), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        let mut source = vec!["context"; count];
+        source[position] = "TAIL_REFERENCE";
+        state.task = source.join(" ");
+        let value = agent
+            .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Reference"))
+            .await
+            .expect("a value");
+        assert_eq!(value, "TAIL_REFERENCE");
+    }
+}
+
+#[tokio::test]
+async fn test_a_long_source_can_be_refused_without_typing_an_unrelated_value() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("none"))), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = vec!["context"; 1001].join(" ");
+    let error = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Reference"))
+        .await
+        .expect_err("no value");
+    assert!(format!("{error:?}").contains("NeedsInput"), "{error:?}");
+}

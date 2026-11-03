@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Field-value selection keeps every part of a long source available within the provider's choice limit. Jev can refuse a source that gives no value.
+
+- An explicit proxy country or cloud extension starts the cloud browser before reading a page, so those settings also apply to read-only tasks.
+
 - MCP timeouts retain the run through cancellation cleanup and return its receipt. Client cancellation still responds immediately while cooperative cleanup finishes.
 
 - A filled form that asks for confirmation stops before optional screenshot reading, so an image-provider failure cannot replace that ending.
