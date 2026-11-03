@@ -68,3 +68,9 @@ values stay in your process and are asked for as they are typed; `until`, a chec
 `onEvent` and `onFrame` to follow a run as it goes. `outputSchema` and `result.data()` are Jackson 3 `JsonNode`s,
 from `tools.jackson.databind`. The
 [project README](https://github.com/agent-labs-dev/fastbrowse) covers the statuses, citations and costs.
+
+`BrowserOptions` also takes `cloudExtensions` and `cloudTimeoutMinutes` for a cloud browser. A run reads pages over
+HTTP until the task needs a browser: `RunOptions.builder().fetch(true)` never starts one, and `browserFirst(true)`
+starts one from the first step (the protocol's `browser` field; `browser(...)` says which browser). The server refuses
+the two together. `allowedOrigins` limits the documents a run may open, read and control to those exact origins; it
+scopes documents, not the network, and a scoped run sends no frames and cannot `record`.

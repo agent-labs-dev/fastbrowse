@@ -131,7 +131,7 @@ func (c *Client) Run(ctx context.Context, task string, options RunOptions) (*Run
 	runID := newRunID()
 	params, err := runParams(runID, task, c.browser, options)
 	if err != nil {
-		return nil, fmt.Errorf("fastbrowse: the output schema could not be written: %w", err)
+		return nil, fmt.Errorf("fastbrowse: %w", err)
 	}
 	var cancelling sync.Once
 	cancel := func() {

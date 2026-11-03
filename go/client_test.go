@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -114,6 +115,62 @@ func TestARunsOwnBrowserReplacesTheClients(t *testing.T) {
 	_ = result.DecodeData(&echoed)
 	if _, sent := echoed.Params["cdp_port"]; sent || echoed.Params["local"] != true {
 		t.Fatalf("params: %v", echoed.Params)
+	}
+}
+
+// sent is the run request's params as the server read them, without its run_id.
+func sent(t *testing.T, client *Client, options RunOptions) map[string]any {
+	t.Helper()
+	var echoed struct {
+		Params map[string]any `json:"params"`
+	}
+	if err := run(t, client, "t", options).DecodeData(&echoed); err != nil {
+		t.Fatal(err)
+	}
+	delete(echoed.Params, "run_id")
+	return echoed.Params
+}
+
+func TestCloudBrowserAndRoutingOptionsReachTheServerUnderTheirWireNames(t *testing.T) {
+	extension := "0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30"
+	client := scripted(t, "echo", Options{
+		Browser: BrowserOptions{CloudExtensions: []string{extension}, CloudTimeoutMinutes: 90},
+	})
+	got := sent(t, client, RunOptions{BrowserFirst: true, AllowedOrigins: []string{"https://shop.example"}})
+	want := map[string]any{
+		"task": "t", "cloud_extensions": []any{extension}, "cloud_timeout_minutes": float64(90), "browser": true,
+		"allowed_origins": []any{"https://shop.example"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("params: got %v, want %v", got, want)
+	}
+
+	// A run's own browser replaces the Client's, cloud options with it, which is what lets this run fetch.
+	got = sent(t, client, RunOptions{Browser: &BrowserOptions{}, Fetch: true})
+	if want := map[string]any{"task": "t", "fetch": true}; !reflect.DeepEqual(got, want) {
+		t.Errorf("params: got %v, want %v", got, want)
+	}
+}
+
+func TestFetchAndBrowserFirstTogetherAreRefusedByTheServer(t *testing.T) {
+	client := scripted(t, "echo", Options{})
+	_, err := client.Run(context.Background(), "t", RunOptions{Fetch: true, BrowserFirst: true})
+	var refused *RPCError
+	if !errors.As(err, &refused) || refused.Code != ErrorCodeInvalidParams ||
+		!strings.Contains(refused.Message, "fetch never starts a browser and browser always does") {
+		t.Fatalf("err: %v", err)
+	}
+}
+
+func TestAnEmptyAllowedOriginsIsRefusedRatherThanSentAsUnscoped(t *testing.T) {
+	client := scripted(t, "echo", Options{})
+	_, err := client.Run(context.Background(), "t", RunOptions{AllowedOrigins: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "allowed_origins is empty") {
+		t.Fatalf("err: %v", err)
+	}
+	// The refusal is the client's, so the server is still free for the next run.
+	if result := run(t, client, "t", RunOptions{}); result.Status != StatusComplete {
+		t.Fatalf("status: %s", result.Status)
 	}
 }
 

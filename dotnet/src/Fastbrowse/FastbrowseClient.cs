@@ -309,6 +309,9 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Downloads = options.Downloads,
         Record = options.Record,
         Cursor = options.Cursor,
+        AllowedOrigins = options.AllowedOrigins,
+        Fetch = options.Fetch ? true : null,
+        Browser = options.BrowserFirst ? true : null,
         Local = browser.Local ? true : null,
         Chrome = browser.Chrome,
         CloudProfile = browser.CloudProfile,
@@ -319,6 +322,8 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Foreground = browser.Foreground ? true : null,
         ProxyCountry = browser.ProxyCountry,
         Viewport = browser.Viewport is var (width, height) ? new List<long> { width, height } : null,
+        CloudExtensions = browser.CloudExtensions,
+        CloudTimeoutMinutes = browser.CloudTimeoutMinutes,
     };
 
     /// <summary>

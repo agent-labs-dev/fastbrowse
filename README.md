@@ -183,14 +183,15 @@ async def main() -> None:
         print(await page.observe())
 ```
 
-**Access controls** that only the Python API offers:
+**Access controls:**
 
 - `allowed_origins=["https://app.example.com"]` limits the documents a run may read and control to those exact
   origins. Navigations, redirects, frames and popups elsewhere are refused before they are sent, so a sign-in
   that redirects through another origin needs it listed too. It scopes documents, not the network, and a scoped
-  run sends no live frames or screenshots and cannot record.
-- `check_access=` is an async callback awaited before the browser starts and before every read, navigation and
-  action. If it raises, the run ends with status `error` (`connect_cdp` raises `BrowserError`), naming only the
+  run sends no live frames or screenshots and cannot record. The JavaScript, Go, Java and .NET clients take it as
+  `allowedOrigins` or `AllowedOrigins`.
+- `check_access=`, which only the Python API offers, is an async callback awaited before the browser starts and
+  before every read, navigation and action. If it raises, the run ends with status `error` (`connect_cdp` raises `BrowserError`), naming only the
   exception's type.
 
 **Citations.** `result.citations` holds a `Citation` per numbered link in `result.answer`: `id`, `text`,

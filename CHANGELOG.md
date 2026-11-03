@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- JavaScript, Go, Java and .NET run options now reach the server for origin restrictions, HTTP-only and browser-first routing, cloud extensions and browser lifetime. Per-run browser defaults still replace or clear the client defaults. Go rejects an empty origin list rather than dropping the restriction during serialization.
+
 - Partial split-batch receipts are recorded once, including through failover and cancellation. Custom decision clients retain their returned partial costs.
 
 - Screenshot-selected clicks are refused when the viewport image changes while Jev chooses the coordinates.

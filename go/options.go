@@ -3,6 +3,8 @@ package fastbrowse
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 )
 
@@ -43,6 +45,11 @@ type BrowserOptions struct {
 	ProxyCountry string
 	// Viewport is the width and height of the page, in CSS pixels.
 	Viewport *[2]int
+	// CloudExtensions are up to three IDs of ready extensions on the Browser Use Cloud account, loaded into a cloud
+	// browser.
+	CloudExtensions []string
+	// CloudTimeoutMinutes is how long a cloud browser may live: 15 when it is zero, and the service allows up to 240.
+	CloudTimeoutMinutes int
 }
 
 // Attachment is a file a run may upload.
@@ -84,8 +91,18 @@ type RunOptions struct {
 	Record string
 	// Cursor is the agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: nil draws it
 	// wherever it can be placed, true also brings the window to the front for it, false turns it off.
-	Cursor  *bool
-	Secrets *Secrets
+	Cursor *bool
+	// AllowedOrigins are the only http(s)://host[:port] origins whose documents the run may open, read and control,
+	// each exact. A navigation, redirect, frame or popup elsewhere is refused before it is sent. It scopes documents,
+	// not the network, and a scoped run sends no frames and cannot Record. Nil is unscoped; an empty, non-nil list is
+	// refused, since it would allow nothing.
+	AllowedOrigins []string
+	// Fetch reads every page over HTTP and starts no browser, for a task that only reads.
+	Fetch bool
+	// BrowserFirst starts a browser from the first step, rather than reading over HTTP until the task needs one. It
+	// is the request's browser field; Browser says which browser that is.
+	BrowserFirst bool
+	Secrets      *Secrets
 	// Until is called with the address the run ended on. False keeps the run from StatusComplete, and an error
 	// ends it with StatusError.
 	Until func(ctx context.Context, url string) (bool, error)
@@ -121,6 +138,8 @@ func runParams(runID, task string, browser BrowserOptions, options RunOptions) (
 		Downloads:     optional(options.Downloads),
 		Record:        optional(options.Record),
 		Cursor:        options.Cursor,
+		Fetch:         options.Fetch,
+		Browser:       options.BrowserFirst,
 		Local:         browser.Local,
 		Chrome:        browser.Chrome,
 		CloudProfile:  optional(browser.CloudProfile),
@@ -137,6 +156,18 @@ func runParams(runID, task string, browser BrowserOptions, options RunOptions) (
 		port := int64(browser.CDPPort)
 		params.CDPPort = &port
 	}
+	params.CloudExtensions = browser.CloudExtensions
+	if browser.CloudTimeoutMinutes != 0 {
+		minutes := int64(browser.CloudTimeoutMinutes)
+		params.CloudTimeoutMinutes = &minutes
+	}
+	if options.AllowedOrigins != nil {
+		// The wire omits an empty list, which would turn a grant of nothing into an unscoped run.
+		if len(options.AllowedOrigins) == 0 {
+			return RunParams{}, errors.New("allowed_origins is empty: leave it nil for an unscoped run")
+		}
+		params.AllowedOrigins = options.AllowedOrigins
+	}
 	if browser.Viewport != nil {
 		params.Viewport = &[2]int64{int64(browser.Viewport[0]), int64(browser.Viewport[1])}
 	}
@@ -151,7 +182,7 @@ func runParams(runID, task string, browser BrowserOptions, options RunOptions) (
 	if options.OutputSchema != nil {
 		schema, err := json.Marshal(options.OutputSchema)
 		if err != nil {
-			return RunParams{}, err
+			return RunParams{}, fmt.Errorf("the output schema could not be written: %w", err)
 		}
 		params.OutputSchema = schema
 	}

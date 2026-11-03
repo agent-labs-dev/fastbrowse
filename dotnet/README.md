@@ -40,3 +40,9 @@ reported steps, known cost lines and finished recordings. A server-side cancella
 `ResolveSecret`, whose values stay in your process and are asked for as they are typed; `Until`, a check on the address
 a run ends on; and `OnEvent` and `OnFrame` to follow a run as it goes. The
 [project README](https://github.com/agent-labs-dev/fastbrowse) covers the statuses, citations and costs.
+
+`BrowserOptions` also takes `CloudExtensions` and `CloudTimeoutMinutes` for a cloud browser. A run reads pages over
+HTTP until the task needs a browser: `RunOptions.Fetch` never starts one, and `RunOptions.BrowserFirst` starts one
+from the first step (the protocol's `browser` field; `RunOptions.Browser` says which browser). The server refuses the
+two together. `RunOptions.AllowedOrigins` limits the documents a run may open, read and control to those exact
+origins; it scopes documents, not the network, and a scoped run sends no frames and cannot `Record`.

@@ -102,10 +102,61 @@ test('each option reaches the server under its wire name with its value intact',
 
     assert.deepEqual(await sent(fb, { cdpPort: 9222 }), { task: 'Add the kettle to the cart', cdp_port: 9222 });
 
-    assert.deepEqual(await sent(fb, { cloudProfile: 'signed-in', proxyCountry: 'de' }), {
+    const extension = '0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30';
+    assert.deepEqual(
+      await sent(fb, {
+        cloudProfile: 'signed-in',
+        proxyCountry: 'de',
+        cloudExtensions: [extension],
+        cloudTimeoutMinutes: 60,
+        browser: true,
+      }),
+      {
+        task: 'Add the kettle to the cart',
+        cloud_profile: 'signed-in',
+        proxy_country: 'de',
+        cloud_extensions: [extension],
+        cloud_timeout_minutes: 60,
+        browser: true,
+      },
+    );
+
+    assert.deepEqual(await sent(fb, { fetch: true, allowedOrigins: ['https://shop.example'] }), {
       task: 'Add the kettle to the cart',
-      cloud_profile: 'signed-in',
-      proxy_country: 'de',
+      fetch: true,
+      allowed_origins: ['https://shop.example'],
+    });
+  });
+});
+
+test('the server refuses fetch and browser together, so both reach it', async () => {
+  await withServer(scriptedRun('echo'), async fb => {
+    await assert.rejects(fb.run('Add the kettle to the cart', { fetch: true, browser: true }), (error: unknown) => {
+      assert.ok(error instanceof RpcError);
+      assert.equal(error.code, INVALID_PARAMS);
+      assert.match(error.message, /fetch never starts a browser and browser always does/);
+      return true;
+    });
+  });
+});
+
+test('cloud browser defaults given to start reach every run, and a per-run null takes them out', async () => {
+  const defaults = { cloudExtensions: ['0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30'], cloudTimeoutMinutes: 90 };
+  await withServer({ ...scriptedRun('echo'), ...defaults }, async fb => {
+    assert.deepEqual(await sent(fb, {}), {
+      task: 'Add the kettle to the cart',
+      cloud_extensions: defaults.cloudExtensions,
+      cloud_timeout_minutes: 90,
+    });
+    assert.deepEqual(await sent(fb, { cloudTimeoutMinutes: 30 }), {
+      task: 'Add the kettle to the cart',
+      cloud_extensions: defaults.cloudExtensions,
+      cloud_timeout_minutes: 30,
+    });
+    // An attached browser is refused beside cloud extensions, so the null is what lets this run attach.
+    assert.deepEqual(await sent(fb, { ...ownBrowser, cloudExtensions: null, cloudTimeoutMinutes: null }), {
+      task: 'Add the kettle to the cart',
+      cdp_url: ownBrowser.cdpUrl,
     });
   });
 });

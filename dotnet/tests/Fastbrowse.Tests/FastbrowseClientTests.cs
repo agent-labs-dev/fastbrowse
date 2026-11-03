@@ -111,6 +111,59 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
         Assert.True(parameters.GetProperty("local").GetBoolean());
     }
 
+    /// <summary>The names the request's params were sent with, besides its run_id.</summary>
+    private static string[] Sent(JsonElement parameters) =>
+        parameters.EnumerateObject().Select(each => each.Name).Where(name => name != "run_id").Order(StringComparer.Ordinal).ToArray();
+
+    private static string[] Strings(JsonElement array) => array.EnumerateArray().Select(each => each.GetString()!).ToArray();
+
+    [Fact]
+    public async Task CloudBrowserAndRoutingOptionsReachTheServerUnderTheirWireNames()
+    {
+        const string extension = "0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30";
+        var client = await Scripted("echo", new StartOptions
+        {
+            Browser = new BrowserOptions { CloudExtensions = [extension], CloudTimeoutMinutes = 90 },
+        });
+        RunResult result = await client.RunAsync("t", new RunOptions
+        {
+            BrowserFirst = true,
+            AllowedOrigins = ["https://shop.example"],
+        }, TestContext.Current.CancellationToken);
+        JsonElement parameters = result.Data!.Value.GetProperty("params");
+        Assert.Equal(new[] { "allowed_origins", "browser", "cloud_extensions", "cloud_timeout_minutes", "task" }, Sent(parameters));
+        Assert.Equal(new[] { extension }, Strings(parameters.GetProperty("cloud_extensions")));
+        Assert.Equal(90, parameters.GetProperty("cloud_timeout_minutes").GetInt32());
+        Assert.Equal(new[] { "https://shop.example" }, Strings(parameters.GetProperty("allowed_origins")));
+        Assert.True(parameters.GetProperty("browser").GetBoolean());
+
+        // A run's own browser replaces the client's, cloud options with it, which is what lets this run fetch.
+        RunResult fetched = await client.RunAsync("t", new RunOptions { Browser = new BrowserOptions(), Fetch = true }, TestContext.Current.CancellationToken);
+        JsonElement fetchedParameters = fetched.Data!.Value.GetProperty("params");
+        Assert.Equal(new[] { "fetch", "task" }, Sent(fetchedParameters));
+        Assert.True(fetchedParameters.GetProperty("fetch").GetBoolean());
+    }
+
+    [Fact]
+    public async Task FetchAndBrowserFirstTogetherAreRefusedByTheServer()
+    {
+        var client = await Scripted("echo");
+        var refused = await Assert.ThrowsAsync<RpcException>(() =>
+            client.RunAsync("t", new RunOptions { Fetch = true, BrowserFirst = true }, TestContext.Current.CancellationToken));
+        Assert.Equal(ProtocolConstants.ErrorInvalidParams, refused.Code);
+        Assert.Contains("fetch never starts a browser and browser always does", refused.Message);
+    }
+
+    [Fact]
+    public async Task AnEmptyAllowedOriginsReachesTheServerAndIsRefusedRatherThanUnscoped()
+    {
+        var client = await Scripted("echo");
+        var refused = await Assert.ThrowsAsync<RpcException>(() =>
+            client.RunAsync("t", new RunOptions { AllowedOrigins = [] }, TestContext.Current.CancellationToken));
+        Assert.Equal(ProtocolConstants.ErrorInvalidParams, refused.Code);
+        Assert.Contains("allowed_origins is empty", refused.Message);
+    }
+
     [Fact]
     public async Task EventsArriveInTheOrderTheRunProducedThem()
     {

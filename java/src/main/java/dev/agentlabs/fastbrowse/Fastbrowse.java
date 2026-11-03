@@ -371,6 +371,9 @@ public final class Fastbrowse implements AutoCloseable {
                 .downloads(options.downloads())
                 .record(options.record())
                 .cursor(options.cursor())
+                .allowedOrigins(options.allowedOrigins())
+                .fetch(options.fetch() ? true : null)
+                .browser(options.browserFirst() ? true : null)
                 .local(browser.local() ? true : null)
                 .chrome(browser.chrome())
                 .cloudProfile(browser.cloudProfile())
@@ -381,6 +384,8 @@ public final class Fastbrowse implements AutoCloseable {
                 .foreground(browser.foreground() ? true : null)
                 .proxyCountry(browser.proxyCountry())
                 .viewport(viewport)
+                .cloudExtensions(browser.cloudExtensions())
+                .cloudTimeoutMinutes(browser.cloudTimeoutMinutes() == null ? null : (long) browser.cloudTimeoutMinutes())
                 .build();
     }
 

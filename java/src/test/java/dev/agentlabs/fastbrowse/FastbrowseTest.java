@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import dev.agentlabs.fastbrowse.protocol.CancellationReceipt;
 import dev.agentlabs.fastbrowse.protocol.CostBasis;
 import dev.agentlabs.fastbrowse.protocol.CostLine;
@@ -129,6 +130,52 @@ class FastbrowseTest {
         JsonNode params = result.data().path("params");
         assertFalse(params.has("cdp_port"));
         assertTrue(params.path("local").asBoolean());
+    }
+
+    @Test
+    void cloudBrowserAndRoutingOptionsReachTheServerUnderTheirWireNames() throws Exception {
+        String extension = "0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30";
+        Fastbrowse fastbrowse = scripted("echo", StartOptions.builder()
+                .browser(BrowserOptions.builder().cloudExtensions(List.of(extension)).cloudTimeoutMinutes(90).build()));
+        JsonNode params = fastbrowse.run("t", RunOptions.builder()
+                .browserFirst(true)
+                .allowedOrigins(List.of("https://shop.example"))
+                .build()).join().data().path("params");
+        assertEquals(JSON.readTree("""
+                {"task": "t", "cloud_extensions": ["%s"], "cloud_timeout_minutes": 90,
+                 "allowed_origins": ["https://shop.example"], "browser": true}
+                """.formatted(extension)), withoutRunId(params));
+
+        // A run's own browser replaces the client's, cloud options with it, which is what lets this run fetch.
+        JsonNode fetched = fastbrowse.run("t", RunOptions.builder()
+                .browser(BrowserOptions.CLOUD)
+                .fetch(true)
+                .build()).join().data().path("params");
+        assertEquals(JSON.readTree("{\"task\": \"t\", \"fetch\": true}"), withoutRunId(fetched));
+    }
+
+    private static JsonNode withoutRunId(JsonNode params) {
+        ObjectNode copy = (ObjectNode) params.deepCopy();
+        copy.remove("run_id");
+        return copy;
+    }
+
+    @Test
+    void fetchAndBrowserFirstTogetherAreRefusedByTheServer() {
+        CompletionException refused = assertThrows(CompletionException.class, () -> scripted("echo")
+                .run("t", RunOptions.builder().fetch(true).browserFirst(true).build()).join());
+        RpcException error = assertInstanceOf(RpcException.class, refused.getCause());
+        assertEquals(Protocol.ERROR_INVALID_PARAMS, error.code());
+        assertTrue(error.getMessage().contains("fetch never starts a browser and browser always does"), error.getMessage());
+    }
+
+    @Test
+    void anEmptyAllowedOriginsReachesTheServerAndIsRefusedRatherThanUnscoped() {
+        CompletionException refused = assertThrows(CompletionException.class, () -> scripted("echo")
+                .run("t", RunOptions.builder().allowedOrigins(List.of()).build()).join());
+        RpcException error = assertInstanceOf(RpcException.class, refused.getCause());
+        assertEquals(Protocol.ERROR_INVALID_PARAMS, error.code());
+        assertTrue(error.getMessage().contains("allowed_origins is empty"), error.getMessage());
     }
 
     @Test
