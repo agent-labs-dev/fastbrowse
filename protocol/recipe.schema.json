@@ -38,6 +38,7 @@
         "start": {
           "anyOf": [
             {
+              "pattern": "^[\\u0000-\\u0020]*[hH][tT][tT][pP][sS]?:",
               "type": "string"
             },
             {
@@ -603,6 +604,7 @@
         {
           "anyOf": [
             {
+              "pattern": "^[\\u0000-\\u0020]*[hH][tT][tT][pP][sS]?:",
               "type": "string"
             },
             {

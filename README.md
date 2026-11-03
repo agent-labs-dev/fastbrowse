@@ -179,7 +179,7 @@ Naming the same file for both arguments saves the healed sequence after another 
 Recipes can contain personal information from ordinary fields; stored secrets are kept only by name.
 `fastbrowse.recipes.validate_recipe()` checks recipe JSON with the same Rust parser as the file loader;
 `recipe_schema()` exports its JSON Schema for client validation.
-`record=Path("run.mp4")` writes captioned and plain videos with an action cursor, and needs ffmpeg.
+`record=Path("run.mp4")` writes captioned and plain videos, and needs ffmpeg. The action cursor also needs ffprobe; if frame dimensions cannot be read, the cursor is omitted with a warning.
 
 **Your own script on the page.** `connect_cdp()` hands you the attached page without the agent:
 

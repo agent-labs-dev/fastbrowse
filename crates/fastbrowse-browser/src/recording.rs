@@ -359,12 +359,21 @@ impl Recording {
         let _ = tokio::fs::write(&subtitles, srt.join("\n")).await;
         let marks = self.pointer_marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let cursor = self.scratch.join("cursor.ass");
-        let cursor_present = !marks.is_empty();
-        if cursor_present {
-            let dimensions = self.frame_dimensions().await.unwrap_or((1280, 720));
-            let ass = cursor_ass(&marks, origin, self.card_at.unwrap_or_else(Instant::now), dimensions.0, dimensions.1);
-            let _ = tokio::fs::write(&cursor, ass).await;
-        }
+        let cursor_present = if marks.is_empty() {
+            false
+        } else if let Some((width, height)) = self.frame_dimensions().await {
+            let ass = cursor_ass(&marks, origin, self.card_at.unwrap_or_else(Instant::now), width, height);
+            match tokio::fs::write(&cursor, ass).await {
+                Ok(()) => true,
+                Err(error) => {
+                    warn(&format!("could not write the recording cursor: {error}"));
+                    false
+                }
+            }
+        } else {
+            warn("could not read the recording dimensions, so the cursor is omitted");
+            false
+        };
         // BorderStyle 3 draws a box behind the text, coloured by OutlineColour (alpha first, 00 opaque).
         let style = "Fontsize=10,BorderStyle=3,Outline=6,Shadow=0,OutlineColour=&H50000000,MarginV=16,Alignment=2";
         // libass cannot open an empty subtitle file. The filter names it relative to ffmpeg's working directory: an
@@ -397,7 +406,9 @@ impl Recording {
     }
 
     async fn frame_dimensions(&self) -> Option<(u32, u32)> {
-        let result = Command::new(self.ffmpeg_path.with_file_name("ffprobe"))
+        let sibling = self.ffmpeg_path.with_file_name(format!("ffprobe{}", std::env::consts::EXE_SUFFIX));
+        let probe = if sibling.is_file() { sibling } else { PathBuf::from(which("ffprobe")?) };
+        let result = Command::new(probe)
             .args([
                 "-v",
                 "error",
@@ -412,9 +423,13 @@ impl Recording {
             .output()
             .await
             .ok()?;
+        if !result.status.success() {
+            return None;
+        }
         let text = String::from_utf8(result.stdout).ok()?;
         let (width, height) = text.trim().split_once('x')?;
-        Some((width.parse().ok()?, height.parse().ok()?))
+        let (width, height) = (width.parse().ok()?, height.parse().ok()?);
+        (width > 0 && height > 0).then_some((width, height))
     }
 
     /// Write both videos into scratch through `burn` on the captioned one; return ffmpeg's error, if any.

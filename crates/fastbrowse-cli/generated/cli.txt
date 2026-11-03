@@ -5,7 +5,8 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--proxy-country CC] [--viewport WIDTHxHEIGHT] [--authorize]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
                   [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
-                  [--downloads DOWNLOADS] [--json] [--record FILE] [--recipe FILE] [--save-recipe FILE] [--fetch]
+                  [--downloads DOWNLOADS] [--json] [--record FILE]
+                  [--recipe FILE] [--save-recipe FILE] [--fetch]
                   [--browser] [--trace FILE] [--cursor | --no-cursor]
                   task
 

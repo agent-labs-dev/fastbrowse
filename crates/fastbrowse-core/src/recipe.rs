@@ -144,7 +144,11 @@ impl Schema for Recipe {
             vec![
                 Field::required("version", Ty::Literal(vec![RECIPE_VERSION.into()])),
                 Field::required("task", Ty::Str),
-                Field::default("start", Ty::optional(Ty::Str), serde_json::Value::Null),
+                Field::default(
+                    "start",
+                    Ty::optional(Ty::Str.constrained("pattern", r"^[\u0000-\u0020]*[hH][tT][tT][pP][sS]?:")),
+                    serde_json::Value::Null,
+                ),
                 Field::required("steps", Ty::list(RecipeStep::ty())),
             ],
         )

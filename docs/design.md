@@ -223,6 +223,7 @@ works in a background tab behind `about:blank`, so the default draws nothing the
 screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
 retried. The page hook is in `CdpPage.act`, where the hit-tested point is known; a secret's field is never
 marked. MP4 recordings draw a timed cursor at those points, with a glide between actions and a pulse on clicks.
+The recording uses ffprobe to read its frame dimensions. If that fails, it omits the cursor with a warning.
 `browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
 when the run ends, including on cancellation. The driver's `move_cursor` is sent in `window` scope only, so the
 real pointer and focus never move.
