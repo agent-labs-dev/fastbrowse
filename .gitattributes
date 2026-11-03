@@ -1,0 +1,2 @@
+# PDF offsets and stream lengths refer to bytes, so checkout must preserve them.
+*.pdf -text
