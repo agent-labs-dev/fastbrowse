@@ -71,7 +71,9 @@ def latest(package: str) -> str:
 
 def publish(path: Path, version: str) -> Attempt:
     """Publish one directory, then believe the registry rather than npm's exit code."""
-    result = run("npm", "publish", str(path), "--access", "public", "--tag", "latest")
+    # An absolute path, or npm reads a relative one as a GitHub repository and hands it to git, which fails
+    # with `code 128` before npm has looked at the package: the SDK is `packages/sdk`, not a repo URL.
+    result = run("npm", "publish", str(path.resolve()), "--access", "public", "--tag", "latest")
     output = f"{result.stdout}\n{result.stderr}".strip()
     return Attempt(result.returncode == 0, output)
 
