@@ -123,10 +123,16 @@ impl Agent {
             return Ok(());
         }
         let Some(png) = self.viewport().await? else { return Ok(()) };
+        let image = crate::policy::screenshot_reference(&png);
+        if state.unanswered_images.contains(&image) {
+            return Ok(());
+        }
         let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
         state.ledger.record([reading.cost.clone()])?;
         if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
             state.notes.add_image_read(&text, &observation.url, observation.captured_at, &png);
+        } else {
+            state.unanswered_images.insert(image);
         }
         Ok(())
     }

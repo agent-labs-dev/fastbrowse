@@ -41,6 +41,9 @@ another route. A run whose stall budget runs out on such a failure ends `unavail
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
+A successful screenshot reading that finds no answer is reused for identical pixels within one run.
+A changed screenshot is read again; failed model calls are not cached.
+
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred.

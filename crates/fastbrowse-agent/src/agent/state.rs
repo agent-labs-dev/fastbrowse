@@ -235,6 +235,8 @@ pub(crate) struct RunState {
     pub downloads_forbidden: Option<bool>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<(String, String), bool>,
+    /// Screenshots that a successful image read found held no answer for this run's task.
+    pub unanswered_images: HashSet<String>,
     /// The page the last action changed, until the next observation shows it is still the page in view.
     pub changed_page: Option<(String, String)>,
     /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
@@ -380,6 +382,7 @@ impl RunState {
             acted_from: None,
             downloads_forbidden: None,
             read_documents: HashMap::new(),
+            unanswered_images: HashSet::new(),
             changed_page: None,
             page_failed: false,
             compose: false,

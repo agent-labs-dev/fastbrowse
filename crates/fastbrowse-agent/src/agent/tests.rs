@@ -1156,7 +1156,7 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
 /// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it, and that has moved on from
 /// the observation asked about when its flag is set.
 #[derive(Default)]
-struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>, bool);
+struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>, bool, std::sync::Mutex<Option<Vec<u8>>>);
 
 /// A PNG's signature and header, which is all of it the image limits read.
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -1199,7 +1199,8 @@ impl Page for Screenshots {
     }
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
-        Box::pin(async { Ok(png(1280, 900)) })
+        let image = self.2.lock().unwrap().clone().unwrap_or_else(|| png(1280, 900));
+        Box::pin(async move { Ok(image) })
     }
 
     fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
@@ -1262,6 +1263,64 @@ impl LLMClient for ImageLLM {
             Ok(Generation { data, cost })
         })
     }
+}
+
+/// A screenshot read with no answer, counted independently from captures and recovery decisions.
+#[derive(Default)]
+struct EmptyImageLLM(std::sync::atomic::AtomicUsize, bool);
+
+impl LLMClient for EmptyImageLLM {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        assert_eq!(purpose, LLMPurpose::Compose);
+        assert_eq!(schema.name(), "ImageReading");
+        assert_eq!(messages.iter().map(|message| message.images.len()).sum::<usize>(), 1);
+        let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            if self.1 && call == 0 {
+                return Err(LLMError::Failed("temporary image read failure".into()));
+            }
+            let data = schema.validate_json("{\"text\":null}").map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_a_null_image_read_is_not_repeated_for_identical_pixels_in_one_run() {
+    let llm = Arc::new(EmptyImageLLM::default());
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let screenshots = Arc::new(Screenshots::default());
+    let agent = Agent::new(screenshots.clone(), jev, llm.clone());
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    let mut state = run_state();
+    agent.read_drawn_page(&mut state, &page).await.expect("first read");
+    agent.read_drawn_page(&mut state, &page).await.expect("unchanged pixels");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!state.notes.answered());
+    *screenshots.2.lock().unwrap() = Some(png(1281, 900));
+    agent.read_drawn_page(&mut state, &page).await.expect("changed pixels");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+    agent.read_drawn_page(&mut run_state(), &page).await.expect("a separate run");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn test_a_failed_image_read_can_be_retried_for_identical_pixels() {
+    let llm = Arc::new(EmptyImageLLM(Default::default(), true));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    let mut state = run_state();
+    assert!(agent.read_drawn_page(&mut state, &page).await.is_err());
+    agent.read_drawn_page(&mut state, &page).await.expect("retry after failure");
+    agent.read_drawn_page(&mut state, &page).await.expect("successful empty read is cached");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 /// The scripted Jev, its every choice held at `confidence`, and the states it was shown.
@@ -1448,7 +1507,7 @@ impl DecisionClient for Seeing {
 }
 
 async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
-    let page = Arc::new(Screenshots(Default::default(), moved));
+    let page = Arc::new(Screenshots(Default::default(), moved, Default::default()));
     let jev = Arc::new(Seeing { images, shown, asked: Default::default() });
     let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -1460,7 +1519,7 @@ async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActR
 
 #[tokio::test]
 async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
-    let page = Arc::new(Screenshots(Default::default(), false));
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default()));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     // A map or a photograph has none of its content in the DOM: the screenshot is the page.
@@ -1473,7 +1532,7 @@ async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
 
 #[tokio::test]
 async fn test_a_route_that_takes_no_images_is_sent_none_even_on_a_drawn_page() {
-    let page = Arc::new(Screenshots(Default::default(), false));
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default()));
     let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };

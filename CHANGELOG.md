@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Finishing and recovery reuse a successful empty screenshot reading within the same run when the pixels have not changed. A failed read remains eligible for retry.
+
 - Browser observations mark fields invalid when native form constraints fail, including custom validity errors. Fields barred from native validation do not inherit those flags.
 
 - Headings in sibling content sections, navigation, forms and dialogs no longer name controls elsewhere in the page. Updating an unrelated panel does not change those controls' context.
