@@ -100,6 +100,15 @@ pub const GUARD_HOLDS_JS: &str = concat!(
     "return !!e?.isConnected && !!r.guardKey && r.guardKey(e) === guard; })",
 );
 
+/// Leave a field without pressing anything, and only the field that was chosen: it must still be the node the guard
+/// names and still hold its root's focus, checked in the same renderer task as the blur. A field that lost focus since
+/// is left alone, since moving focus elsewhere could activate whatever took it.
+pub const BLUR_JS: &str = concat!(
+    "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); ",
+    "if (!e?.isConnected || !r.guardKey || r.guardKey(e) !== guard) return null; ",
+    "if (e.getRootNode().activeElement !== e) return false; e.blur(); return true; })",
+);
+
 /// Keys go to the focused control whatever is drawn over it, so a control a band still covers is pressed from the
 /// keyboard, as a keyboard user would press it, and nothing in the band is ever touched. The key is the one the
 /// control's own semantics answer to; a control that names none is not pressed.

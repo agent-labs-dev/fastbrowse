@@ -3,6 +3,7 @@
   {
    "autocomplete": null,
    "context": "Product 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -23,6 +24,7 @@
   {
    "autocomplete": null,
    "context": "Product 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -43,6 +45,7 @@
   {
    "autocomplete": null,
    "context": "Product 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -64,6 +67,7 @@
   {
    "autocomplete": null,
    "context": "Product 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -84,6 +88,7 @@
   {
    "autocomplete": null,
    "context": "Product 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -104,6 +109,7 @@
   {
    "autocomplete": null,
    "context": "Product 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -125,6 +131,7 @@
   {
    "autocomplete": null,
    "context": "Product 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -145,6 +152,7 @@
   {
    "autocomplete": null,
    "context": "Product 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -165,6 +173,7 @@
   {
    "autocomplete": null,
    "context": "Product 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -186,6 +195,7 @@
   {
    "autocomplete": null,
    "context": "Product 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -206,6 +216,7 @@
   {
    "autocomplete": null,
    "context": "Product 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -226,6 +237,7 @@
   {
    "autocomplete": null,
    "context": "Product 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -307,6 +319,7 @@
   {
    "autocomplete": null,
    "context": "Product 4",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -328,6 +341,7 @@
   {
    "autocomplete": null,
    "context": "Product 5",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -349,6 +363,7 @@
   {
    "autocomplete": null,
    "context": "Product 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -370,6 +385,7 @@
   {
    "autocomplete": null,
    "context": "Product 7",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -391,6 +407,7 @@
   {
    "autocomplete": null,
    "context": "Product 4",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -411,6 +428,7 @@
   {
    "autocomplete": null,
    "context": "Product 4",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -431,6 +449,7 @@
   {
    "autocomplete": null,
    "context": "Product 5",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -451,6 +470,7 @@
   {
    "autocomplete": null,
    "context": "Product 5",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -471,6 +491,7 @@
   {
    "autocomplete": null,
    "context": "Product 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -491,6 +512,7 @@
   {
    "autocomplete": null,
    "context": "Product 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -511,6 +533,7 @@
   {
    "autocomplete": null,
    "context": "Product 7",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -531,6 +554,7 @@
   {
    "autocomplete": null,
    "context": "Product 7",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,

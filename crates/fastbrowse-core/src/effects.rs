@@ -3,6 +3,7 @@
 use indexmap::IndexMap;
 use serde_json::json;
 
+use crate::models::Operation;
 use crate::page::{Control, Observation};
 use crate::py::{json::dumps, sha256_hex, text};
 
@@ -20,12 +21,27 @@ pub struct Effect {
     pub changed: bool,
 }
 
+/// Whether a field can be left: an editable control the browser reports holds keyboard focus. Focus a browser never
+/// reported is not guessed, and a control's own operation list is not trusted to say it.
+pub fn leavable(control: &Control) -> bool {
+    control.focused == Some(true) && control.operations.contains(&Operation::Fill)
+}
+
 /// Identify a page state by what can be done on it, ignoring text that changes on its own (clocks, ads).
+///
+/// A field that can be left is marked, since leaving it is an operation the state offers; every other control keys as
+/// it did before focus was observed, so a page whose focus was never reported keeps its state.
 pub fn state_key(observation: &Observation) -> String {
     let mut controls: Vec<String> = observation
         .controls
         .iter()
-        .map(|c| dumps(&json!([c.role, c.label, c.context, c.value, c.checked, c.selected, c.expanded])))
+        .map(|c| {
+            let mut key = json!([c.role, c.label, c.context, c.value, c.checked, c.selected, c.expanded]);
+            if leavable(c) {
+                key.as_array_mut().expect("an array").push(true.into());
+            }
+            dumps(&key)
+        })
         .collect();
     controls.sort();
     sha256_hex(dumps(&json!([observation.url, controls])).as_bytes())
@@ -134,6 +150,16 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
                 // A menu opening or closing is not a value set.
                 setting = setting || name != "expanded";
             }
+        }
+        // Focus is told where both readings know it and the control is a field leaving is offered for. Entering or
+        // leaving a field is what happened, so it is told and counts as a change, but it sets no value. A reading that
+        // never reported focus invents no transition.
+        if let (Some(a), Some(b)) = (was.focused, now.focused)
+            && a != b
+            && now.operations.contains(&Operation::Fill)
+        {
+            let name = short(&Shown::Text(was.label.clone()));
+            changes.push(format!("{name} focused: {} -> {}", Shown::Flag(a).str(), Shown::Flag(b).str()));
         }
     }
     if !changes.is_empty() {
@@ -305,6 +331,42 @@ mod tests {
         let done = effect(&form, &refused, None);
         assert_eq!(done.summary, "only the page text changed");
         assert!(!done.set_something);
+    }
+
+    fn field(focused: Option<bool>) -> Control {
+        let mut c = Control::new("ref", "textbox", "Reference", [Operation::Fill, Operation::Enter]);
+        c.value = Some("Alpha-17".into());
+        c.focused = focused;
+        c
+    }
+
+    #[test]
+    fn test_leaving_a_field_is_told_and_is_a_new_state_but_sets_nothing() {
+        let typing = observation(vec![field(Some(true))]);
+        let left = observation(vec![field(Some(false))]);
+        let done = effect(&typing, &left, None);
+        assert_eq!(done.summary, "changed Reference focused: True -> False");
+        assert!(done.changed && !done.set_something);
+        let entered = effect(&left, &typing, None);
+        assert_eq!(entered.summary, "changed Reference focused: False -> True");
+        assert!(!entered.set_something);
+        assert_ne!(state_key(&typing), state_key(&left));
+    }
+
+    #[test]
+    fn test_focus_a_reading_never_reported_is_no_transition() {
+        let unknown = observation(vec![field(None)]);
+        for known in [Some(false), Some(true)] {
+            let known = observation(vec![field(known)]);
+            assert_eq!(effect(&unknown, &known, None).summary, "nothing visible changed");
+            assert_eq!(effect(&known, &unknown, None).summary, "nothing visible changed");
+        }
+        // An unfocused field offers nothing an unknown one does not, so the page state is the same one.
+        assert_eq!(state_key(&unknown), state_key(&observation(vec![field(Some(false))])));
+        // A button's focus offers no way to leave it, and is not told.
+        let button = |focused| Control { focused, ..control("go", "Go", "button") };
+        let done = effect(&observation(vec![button(Some(false))]), &observation(vec![button(Some(true))]), None);
+        assert_eq!(done.summary, "nothing visible changed");
     }
 
     #[test]

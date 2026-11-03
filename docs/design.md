@@ -41,6 +41,13 @@ another route. A run whose stall budget runs out on such a failure ends `unavail
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
+A browser observation reports each control's `focused` state. A custom page may leave it unknown.
+Jev can choose `blur` for an editable field observed as focused, leaving that field without pressing
+another control or submitting its form. The field must still be the same node and hold focus when the
+action runs. A replacement field is not retried. Page change and blur handlers run as they do when the
+field is left; their observed effects reach the next decision. A focus change counts as a changed page
+state, but does not by itself prove a value was set or accepted.
+
 ## Reading and citations
 
 READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task

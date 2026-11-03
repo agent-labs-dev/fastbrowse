@@ -3,6 +3,7 @@
   {
    "autocomplete": null,
    "context": "1 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -22,6 +23,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -44,6 +46,7 @@
   {
    "autocomplete": null,
    "context": "2 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -63,6 +66,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -85,6 +89,7 @@
   {
    "autocomplete": null,
    "context": "3 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -104,6 +109,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -126,6 +132,7 @@
   {
    "autocomplete": null,
    "context": "4 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -145,6 +152,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -167,6 +175,7 @@
   {
    "autocomplete": null,
    "context": "5 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -186,6 +195,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -208,6 +218,7 @@
   {
    "autocomplete": null,
    "context": "6 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -227,6 +238,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -248,6 +260,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -269,6 +282,7 @@
   {
    "autocomplete": null,
    "context": "1 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -288,6 +302,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -309,6 +324,7 @@
   {
    "autocomplete": null,
    "context": "2 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -328,6 +344,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -349,6 +366,7 @@
   {
    "autocomplete": null,
    "context": "3 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -368,6 +386,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -389,6 +408,7 @@
   {
    "autocomplete": null,
    "context": "4 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -408,6 +428,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -429,6 +450,7 @@
   {
    "autocomplete": null,
    "context": "5 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -448,6 +470,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",
@@ -469,6 +492,7 @@
   {
    "autocomplete": null,
    "context": "6 of 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": "root/14",

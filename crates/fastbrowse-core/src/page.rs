@@ -78,6 +78,9 @@ pub struct Control {
     /// Current value; masked for sensitive fields.
     #[serde(default)]
     pub value: Option<String>,
+    /// Whether this control owns keyboard focus in its document, when the browser reports it.
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
     #[serde(default)]
     pub href: Option<String>,
     #[serde(default)]
@@ -132,6 +135,7 @@ impl Control {
             context: None,
             operations: operations.into_iter().collect(),
             value: None,
+            focused: None,
             href: None,
             options: Vec::new(),
             input_type: None,

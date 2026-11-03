@@ -122,6 +122,7 @@ struct SnapshotControl {
     context: Option<String>,
     operations: Vec<Operation>,
     value: Option<String>,
+    focused: Option<bool>,
     href: Option<String>,
     #[serde(default)]
     options: Vec<String>,
@@ -376,6 +377,7 @@ fn control_from_raw(
         offscreen: c.offscreen,
         required: c.required,
         invalid: c.invalid,
+        focused: c.focused,
         next_page: c.next_page,
         download: c.download,
     }

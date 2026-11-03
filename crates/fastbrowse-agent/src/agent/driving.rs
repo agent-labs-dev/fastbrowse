@@ -490,6 +490,9 @@ impl Agent {
             let judged = match edit {
                 _ if !executed => Some(false),
                 Some(edited) => Some(edited),
+                // The fingerprint reads neither field values nor focus, so a field left reported no change even when
+                // its change handler rewrote it. The page state it lands on judges it, as for a page change.
+                None if decision.operation == Operation::Blur => None,
                 None => (!changed).then_some(false),
             };
             if edit == Some(false) && executed {
@@ -609,8 +612,9 @@ impl Agent {
         observation: &Observation,
         target: &Control,
     ) -> Step<Option<ActResult>> {
-        // A drag's authorization covers both ends; a source twin cannot authorize a changed destination.
-        if action.operation == Operation::Drag {
+        // A drag's authorization covers both ends; a source twin cannot authorize a changed destination. A blur leaves
+        // the field that was focused when Jev chose it; a redrawn twin is another field, and leaving it is not that.
+        if matches!(action.operation, Operation::Drag | Operation::Blur) {
             return Ok(None);
         }
         let fresh = self.observe().await?;
@@ -626,7 +630,14 @@ impl Agent {
             .controls
             .iter()
             .filter(|control| {
-                Control { id: target.id.clone(), offscreen: target.offscreen, ..(*control).clone() } == *target
+                // A replacement field need not inherit focus. Ordinary actions verify and acquire their own target;
+                // Blur, which must leave the original focused node, is excluded before this comparison.
+                Control {
+                    id: target.id.clone(),
+                    offscreen: target.offscreen,
+                    focused: target.focused,
+                    ..(*control).clone()
+                } == *target
             })
             .collect();
         if twins.len() != 1 {

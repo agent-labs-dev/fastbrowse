@@ -13,6 +13,8 @@ public enum Operation {
     DRAG,
     @JsonProperty("fill")
     FILL,
+    @JsonProperty("blur")
+    BLUR,
     @JsonProperty("select")
     SELECT,
     @JsonProperty("enter")

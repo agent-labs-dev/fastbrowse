@@ -345,6 +345,8 @@ public enum Operation
     Drag,
     [JsonStringEnumMemberName("fill")]
     Fill,
+    [JsonStringEnumMemberName("blur")]
+    Blur,
     [JsonStringEnumMemberName("select")]
     Select,
     [JsonStringEnumMemberName("enter")]

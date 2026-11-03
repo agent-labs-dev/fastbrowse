@@ -52,6 +52,29 @@ async fn test_a_dialog_a_fill_opens_does_not_hang_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_dialog_opened_by_leaving_a_field_can_be_answered() {
+    let Some(h) = harness().await else { return };
+    form(&h, "document.getElementById('name').onchange = () => alert('Check the name')").await;
+    let before = h.observe().await;
+    h.page.act(&fill(find(&before, "Name"), "Ada"), &before).await.unwrap();
+    let typed = h.observe().await;
+    let returned = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.page.act(&action(Operation::Blur, find(&typed, "Name")), &typed),
+    )
+    .await;
+    let pending = h.session.pending_dialog().is_some();
+    if pending {
+        h.page.act(&Action { accept_dialog: Some(true), ..Action::new(Operation::Dialog) }, &typed).await.unwrap();
+    }
+    let observed = h.observe().await;
+    h.close().await;
+    assert!(returned.is_ok(), "blur must return while its validation dialog is pending");
+    assert!(pending, "the validation dialog remains for the next decision");
+    assert_eq!(find(&observed, "Name").value.as_deref(), Some("Ada"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_input_can_announce_suggestions_after_typing() {
     let Some(h) = harness().await else { return };
     form(
@@ -244,4 +267,85 @@ async fn test_visible_label_uploads_to_hidden_file_input() {
         assert_eq!(out["result"]["value"], json!("provided bytes"));
         h.close().await;
     }
+}
+
+/// A Reference field whose first change replaces what was typed, and a Review button that submits nothing. Counts
+/// submissions, Review presses and the blur events each field receives.
+async fn replacing_form(h: &Harness) {
+    h.goto("/dispatch.html").await;
+    let html = "<form><label>Reference<input id=reference></label><label>Email<input id=email></label>\
+                <button type=button id=review>Review</button></form>";
+    let script = "window.seen = {submitted: 0, reviewed: 0, blurs: {reference: 0, email: 0}}; \
+                  const form = document.querySelector('form'); \
+                  form.onsubmit = event => { event.preventDefault(); seen.submitted += 1; }; \
+                  document.getElementById('review').onclick = () => { seen.reviewed += 1; }; \
+                  for (const id of ['reference', 'email']) \
+                  document.getElementById(id).addEventListener('blur', () => { seen.blurs[id] += 1; }); \
+                  let first = true; \
+                  document.getElementById('reference').onchange = event => { \
+                  if (first) { first = false; event.target.value = 'Beta42'; } };";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}; {script}", serde_json::to_string(html).unwrap()))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_leaving_a_field_runs_its_change_handler_and_submits_nothing() {
+    let Some(h) = harness().await else { return };
+    replacing_form(&h).await;
+    let before = h.observe().await;
+    assert_eq!(find(&before, "Reference").focused, Some(false));
+    let mut expected = ["Beta42", "Alpha-17"].into_iter();
+    let mut observation = before;
+    for _ in 0..2 {
+        let reference = find(&observation, "Reference");
+        assert_eq!(
+            h.page.act(&fill(reference, "Alpha-17"), &observation).await.unwrap().outcome,
+            StepOutcome::Executed
+        );
+        let typed = h.observe().await;
+        let reference = find(&typed, "Reference");
+        assert_eq!((reference.value.as_deref(), reference.focused), (Some("Alpha-17"), Some(true)));
+        let left = h.page.act(&action(Operation::Blur, reference), &typed).await.unwrap();
+        assert_eq!(left.outcome, StepOutcome::Executed);
+        observation = h.observe().await;
+        let reference = find(&observation, "Reference");
+        assert_eq!((reference.value.as_deref(), reference.focused), (expected.next(), Some(false)));
+    }
+    let seen = eval_active(&h.page, "seen").await;
+    assert_eq!(seen, json!({"submitted": 0, "reviewed": 0, "blurs": {"reference": 2, "email": 0}}));
+    assert_eq!(eval_active(&h.page, "document.activeElement === document.body").await, json!(true));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_blur_leaves_alone_a_field_that_lost_focus_or_was_replaced() {
+    let Some(h) = harness().await else { return };
+    replacing_form(&h).await;
+    let before = h.observe().await;
+    h.page.act(&fill(find(&before, "Email"), "ada@example.test"), &before).await.unwrap();
+    let typed = h.observe().await;
+    let email = find(&typed, "Email");
+    assert_eq!(email.focused, Some(true));
+
+    // Focus moved on since Jev chose: the field it chose is not left, and the one now focused is not touched.
+    eval_active(&h.page, "document.getElementById('reference').focus()").await;
+    let moved = h.page.act(&action(Operation::Blur, email), &typed).await.unwrap();
+    assert_eq!(moved.outcome, StepOutcome::Failed);
+    assert_eq!(eval_active(&h.page, "document.activeElement.id").await, json!("reference"));
+    assert_eq!(eval_active(&h.page, "seen.blurs.reference").await, json!(0));
+
+    // The field was redrawn as a twin that holds focus: the twin is another field and is not left either.
+    let focused = h.observe().await;
+    let reference = find(&focused, "Reference");
+    assert_eq!(reference.focused, Some(true));
+    eval_active(
+        &h.page,
+        "const old = document.getElementById('reference'), twin = old.cloneNode(); \
+         old.replaceWith(twin); twin.focus(); window.twin = twin",
+    )
+    .await;
+    let replaced = h.page.act(&action(Operation::Blur, reference), &focused).await.unwrap();
+    assert_eq!(replaced.outcome, StepOutcome::Stale);
+    assert_eq!(eval_active(&h.page, "document.activeElement === window.twin").await, json!(true));
+    h.close().await;
 }

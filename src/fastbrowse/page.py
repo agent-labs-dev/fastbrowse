@@ -30,6 +30,8 @@ class Control(Frozen):
     operations: frozenset[Operation]
     value: str | None = None
     """Current value; masked for sensitive fields."""
+    focused: bool | None = Field(default=None, exclude_if=lambda focused: focused is None)
+    """Whether this control owns keyboard focus in its document, when the browser reports it."""
     href: str | None = None
     options: tuple[str, ...] = ()
     input_type: str | None = None

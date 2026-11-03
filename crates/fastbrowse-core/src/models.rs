@@ -61,6 +61,7 @@ str_enum! {
         Hover = "hover",
         Drag = "drag",
         Fill = "fill",
+        Blur = "blur",
         Select = "select",
         Enter = "enter",
         Escape = "escape",
@@ -78,12 +79,14 @@ str_enum! {
 
 pub const SCROLLING: [Operation; 2] = [Operation::Scroll, Operation::ScrollUp];
 
-/// Operations aimed at one observed control, which is hit-tested before input reaches it.
-pub const TARGETED: [Operation; 7] = [
+/// Operations aimed at one observed control. All but a blur are hit-tested before input reaches it: a blur sends no
+/// input, so a band drawn over the field does not stop it.
+pub const TARGETED: [Operation; 8] = [
     Operation::Click,
     Operation::Hover,
     Operation::Drag,
     Operation::Fill,
+    Operation::Blur,
     Operation::Select,
     Operation::Enter,
     Operation::Upload,

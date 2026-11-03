@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
 use super::scripts::{
-    ACTIVATION_KEY_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS, LEAVE_SUGGESTING_FIELD_JS,
-    OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
+    ACTIVATION_KEY_JS, BLUR_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS,
+    LEAVE_SUGGESTING_FIELD_JS, OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::secs;
@@ -183,7 +183,7 @@ impl CdpPage {
         let pointer_first = matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover);
         let mut drawn = pointer_first && target.as_ref().is_some_and(|t| t.0 == active);
         if self.session.pending_dialog().is_none() {
-            let hit_test = action.operation.is_targeted();
+            let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
             // The frame wait runs on the page's own timers, which a page can replace with ones that never fire; past
             // this bound the action is recorded as failed and the next loop turn observes the page again.
             let measured = if drawn {
@@ -418,6 +418,10 @@ impl CdpPage {
             }
             Operation::Click => self.click(target, point, drawn).await,
             Operation::Hover => self.hover(target, point, drawn).await,
+            Operation::Blur => {
+                // Leaving a field can open validation dialogs before its synchronous handlers return.
+                self.until_dialog(self.blur(target)).await.unwrap_or(Ok((StepOutcome::Executed, None)))
+            }
             Operation::Fill => {
                 let secret_origin = action.secret_origin.as_deref();
                 let filled =
@@ -679,6 +683,22 @@ impl CdpPage {
                 Ok((StepOutcome::Executed, None))
             }
         }
+    }
+
+    /// Move focus out of the field the run chose, so the page does what it does when that field is left: a change
+    /// handler that rewrites or rejects the value runs now rather than when something else is next pressed.
+    async fn blur(&self, target: Option<&Target>) -> Result<Outcome, BrowserError> {
+        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("blur requires a target".into()))) };
+        let script = format!("({BLUR_JS})({}, {})", target.2, py_json(&json!(target.3)));
+        // A change handler can move the page, and that move is the run's doing though no input event was sent.
+        let result = self.session.input_window(&target.0, self.evaluate(&target.0, &script)).await?;
+        Ok(match result {
+            Value::Bool(true) => (StepOutcome::Executed, None),
+            Value::Bool(false) => {
+                (StepOutcome::Failed, Some("the field no longer had keyboard focus, so nothing was done".into()))
+            }
+            _ => (StepOutcome::Stale, Some("control changed since observation".into())),
+        })
     }
 
     /// Give a menu, picker or dialog the click opens time to arrive before the page is observed.

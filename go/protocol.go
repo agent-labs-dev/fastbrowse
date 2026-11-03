@@ -228,6 +228,7 @@ const (
 	OperationHover     Operation = "hover"
 	OperationDrag      Operation = "drag"
 	OperationFill      Operation = "fill"
+	OperationBlur      Operation = "blur"
 	OperationSelect    Operation = "select"
 	OperationEnter     Operation = "enter"
 	OperationEscape    Operation = "escape"

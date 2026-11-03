@@ -469,6 +469,9 @@
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
+      // The root's own active element, so a field inside a shadow root reads as focused where the document names
+      // only its host.
+      focused: e.getRootNode().activeElement === e,
       input_type: source.type || null,
       input_name: source.getAttribute('name') || null,
       max_length: source.maxLength > 0 ? source.maxLength : null,

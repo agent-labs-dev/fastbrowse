@@ -74,6 +74,7 @@ class Operation(StrEnum):
     HOVER = "hover"
     DRAG = "drag"
     FILL = "fill"
+    BLUR = "blur"
     SELECT = "select"
     ENTER = "enter"
     ESCAPE = "escape"

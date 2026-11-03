@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Jev can leave a focused editable field with `blur`, without pressing another control, so it can observe the page's field-leaving validation. Observations expose optional `Control.focused`, and the operation enum adds `blur`; strict clients must update before reading these new fields and steps. A changed focus is reported without claiming a value was accepted.
+
 - Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.
 
 - A cancelled run preserves the steps it reported, known charges and finished recordings in a cancellation receipt. It remains an error with no success status or answer, and unpriced charges remain unknown. Failed cloud browser starts retain their known cost. Rust callers now match `RunError::Cancelled(receipt)` instead of the unit variant.

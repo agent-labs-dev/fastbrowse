@@ -14,6 +14,7 @@ use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images, NoulAnswer, NoulQuestion,
     Question,
 };
+use fastbrowse_core::effects::leavable;
 use fastbrowse_core::models::{CostComponent, CostLine, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link};
@@ -75,6 +76,9 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
         Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
+        Operation::Blur => {
+            "Move keyboard focus out of the focused editable field without activating or submitting anything, so the page runs what it does when a field is left."
+        }
         Operation::Select => "Select a value in an observed dropdown.",
         Operation::Enter => "Press Enter in a text field to submit or search for what it already contains.",
         Operation::Upload => "Attach one of the task's files to a file input.",
@@ -189,6 +193,9 @@ pub struct StepContext {
     /// Page operations not offered this time, because the problem is that they changed nothing.
     #[serde(default)]
     pub withheld: Vec<Operation>,
+    /// Derived actions have no entry in a control's operation list to remove during recovery.
+    #[serde(skip)]
+    pub withheld_targets: Vec<(Operation, String)>,
     /// Fields the task gives no value for: filling one ends the run needing input.
     #[serde(default)]
     pub no_value_fields: Vec<String>,
@@ -234,6 +241,7 @@ impl StepContext {
             omitted_actions: 0,
             problem: None,
             withheld: Vec::new(),
+            withheld_targets: Vec::new(),
             no_value_fields: Vec::new(),
             page_facts: Vec::new(),
             reload: None,
@@ -751,11 +759,21 @@ async fn shortlist(
     Ok(Some((kept(low), paid, used)))
 }
 
-fn index_controls(controls: &[Control]) -> IndexMap<Operation, Vec<Control>> {
+/// The controls each operation can target. Leaving a field is offered from what the browser reports, never from a
+/// control's own list.
+fn index_controls(controls: &[Control], context: &StepContext) -> IndexMap<Operation, Vec<Control>> {
     let mut indexed: IndexMap<Operation, Vec<Control>> = IndexMap::new();
     for control in controls {
-        for operation in &control.operations {
+        for operation in control.operations.iter().filter(|operation| **operation != Operation::Blur) {
             indexed.entry(*operation).or_default().push(control.clone());
+        }
+        if leavable(control)
+            && !context
+                .withheld_targets
+                .iter()
+                .any(|(operation, id)| *operation == Operation::Blur && id == &control.id)
+        {
+            indexed.entry(Operation::Blur).or_default().push(control.clone());
         }
     }
     indexed
@@ -779,6 +797,7 @@ fn offered_operations(
             Operation::Click
             | Operation::Hover
             | Operation::Fill
+            | Operation::Blur
             | Operation::Select
             | Operation::Enter
             | Operation::Drag => indexed.contains_key(operation),
@@ -806,7 +825,7 @@ pub fn build_request(
     config: &Config,
     max_options: usize,
 ) -> Request {
-    let indexed = index_controls(controls);
+    let indexed = index_controls(controls, context);
     // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls
     // has no form to lose, and a run asked again because it is stuck may need to start over.
     let mut urls = navigation_urls(
@@ -1194,6 +1213,7 @@ pub fn element(control: &Control) -> Map<String, Value> {
     let optional = [
         ("context", control.context.clone().map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
+        ("focused", control.focused.map(Value::from)),
         ("href", control.href.clone().map(Value::from)),
         ("next_page", pager_link(control).then_some(true.into())),
         ("checked", control.checked.map(Value::from)),
@@ -1454,6 +1474,65 @@ mod tests {
             confidence: 0.4,
         };
         assert_ne!(destination_pick(&controls, &answer), "item");
+    }
+
+    fn field(id: &str, focused: Option<bool>) -> Control {
+        Control { focused, ..Control::new(id, "textbox", id, [Operation::Fill, Operation::Enter]) }
+    }
+
+    #[test]
+    fn test_only_a_focused_editable_field_can_be_left() {
+        let focused_button = Control { focused: Some(true), ..button(1) };
+        // A control naming the operation itself is not trusted to hold focus the browser never reported.
+        let custom = Control::new("custom", "textbox", "custom", [Operation::Fill, Operation::Blur]);
+        let controls = vec![
+            field("left", Some(false)),
+            field("unknown", None),
+            field("typing", Some(true)),
+            focused_button,
+            custom,
+        ];
+        let page = observation(controls.clone());
+        let request = build_request(&page, &controls, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(
+            operation.criteria["blur"],
+            json!(
+                "Move keyboard focus out of the focused editable field without activating or submitting anything, so the page runs what it does when a field is left."
+            )
+        );
+        let Question::Choice(target) = &request.questions["blur_target"] else { panic!("a choice") };
+        assert_eq!(target.criteria.keys().collect::<Vec<_>>(), ["typing"]);
+        assert_eq!(target.criteria["typing"]["focused"], json!(true));
+
+        for unfocused in [vec![field("left", Some(false))], vec![field("unknown", None)], vec![button(1)]] {
+            let page = observation(unfocused.clone());
+            let request =
+                build_request(&page, &unfocused, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+            let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+            assert!(!operation.criteria.contains_key("blur"));
+            assert!(!request.questions.contains_key("blur_target"));
+        }
+    }
+
+    #[test]
+    fn test_jev_picks_the_focused_field_to_leave() {
+        let jev = fake(&[("operation", "blur"), ("blur_target", "typing")], "");
+        let page = observation(vec![field("left", Some(false)), field("typing", Some(true))]);
+        let context = StepContext::new("leave the field");
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!((decision.operation, decision.target.map(|t| t.id)), (Operation::Blur, Some("typing".into())));
+    }
+
+    #[test]
+    fn test_the_decision_sees_both_focused_and_blurred_controls() {
+        let mut control = field("reference", None);
+        assert!(!element(&control).contains_key("focused"));
+        for focused in [true, false] {
+            control.focused = Some(focused);
+            assert_eq!(element(&control)["focused"], json!(focused));
+        }
     }
 
     #[test]

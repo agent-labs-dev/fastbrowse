@@ -686,6 +686,7 @@
         "hover",
         "drag",
         "fill",
+        "blur",
         "select",
         "enter",
         "escape",

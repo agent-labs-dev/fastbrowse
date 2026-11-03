@@ -1809,3 +1809,153 @@ fn test_a_synthesis_read_reports_the_source_material_it_kept() {
         "Read this content. The notes hold source material for an answer that still needs composing."
     );
 }
+
+/// A Reference field a blur leaves. Chrome's page fingerprint reads neither field values nor focus, so the browser
+/// reports that the blur changed nothing, as this page does.
+struct LeavingPage {
+    expected: Operation,
+    now: std::sync::Mutex<Observation>,
+    left: Observation,
+}
+
+impl Page for LeavingPage {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let now = self.now.lock().unwrap().clone();
+        Box::pin(async move { Ok(now) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("leaving a field does not navigate")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("leaving a field does not capture")
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        assert_eq!(action.operation, self.expected);
+        *self.now.lock().unwrap() = self.left.clone();
+        Box::pin(async {
+            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(std::future::pending())
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        unreachable!("leaving a field takes no screenshot")
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("leaving a field does not ask the address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        unreachable!("leaving a field does not ask the status")
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+fn reference(value: &str, focused: bool) -> Observation {
+    let mut control = Control::new("reference", "textbox", "Reference", [Operation::Fill, Operation::Enter]);
+    control.value = Some(value.into());
+    control.focused = Some(focused);
+    observation(&[control])
+}
+
+/// Leave the typed Reference field from `typing`, the way the loop does: settle, step, then observe and note.
+async fn leave(seen: &[Observation], typing: Observation) -> RunState {
+    let page = LeavingPage {
+        expected: Operation::Blur,
+        now: std::sync::Mutex::new(typing.clone()),
+        left: reference("Alpha-17", false),
+    };
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    for earlier in seen {
+        agent.settle(&mut state, earlier).await.expect("settled");
+    }
+    let observation = agent.observe().await.expect("observed");
+    agent.settle(&mut state, &observation).await.expect("settled");
+    let target = observation.controls[0].clone();
+    agent.step(&mut state, &observation, &code_decision(Operation::Blur, Some(target))).await.expect("stepped");
+    let landed = agent.observe().await.expect("observed");
+    agent.note_effect(&mut state, &landed);
+    agent.settle(&mut state, &landed).await.expect("settled");
+    state
+}
+
+#[tokio::test]
+async fn test_leaving_a_field_that_keeps_its_value_is_told_and_is_progress() {
+    // The second leave: the first one replaced the value, the repair typed it again, and this one keeps it.
+    let state = leave(&[reference("Beta42", false)], reference("Alpha-17", true)).await;
+    let left = state.history.last().expect("the blur");
+    assert_eq!(left.effect.as_deref(), Some("changed Reference focused: True -> False"));
+    assert_eq!(left.setting, None);
+    assert_eq!(state.unchanged, 0);
+}
+
+#[tokio::test]
+async fn test_leaving_a_field_for_a_state_seen_with_nothing_read_since_is_no_progress() {
+    let state = leave(&[reference("Alpha-17", false)], reference("Alpha-17", true)).await;
+    assert_eq!(state.unchanged, 1);
+}
+
+#[test]
+fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
+    let mut offered = reference("Alpha-17", true);
+    let mut other = offered.controls[0].clone();
+    other.id = "other".into();
+    other.label = "Other".into();
+    offered.controls.push(other);
+    let mut context = crate::policy::StepContext::new("leave the field");
+    super::recovery::withhold(
+        &mut offered,
+        &mut context,
+        "nothing changed",
+        Some((Operation::Blur, Some("Reference".into()))),
+    );
+    let request = crate::policy::build_request(&offered, &offered.controls, &context, &Default::default(), 64);
+    let Question::Choice(targets) = &request.questions["blur_target"] else { panic!("a choice") };
+    assert_eq!(targets.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["other"]);
+    assert_eq!(offered.controls[0].focused, Some(true));
+    assert!(offered.controls[0].operations.contains(&Operation::Fill));
+    assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
+}
+
+#[tokio::test]
+async fn test_focus_changes_do_not_block_an_ordinary_twin_retry() {
+    let mut before = reference("Alpha-17", true);
+    before.document_key = "document".into();
+    before.controls[0].retarget_key = Some("same semantics".into());
+    let target = before.controls[0].clone();
+    let mut fresh = before.clone();
+    fresh.controls[0].id = "replacement".into();
+    fresh.controls[0].focused = Some(false);
+    let page = LeavingPage { expected: Operation::Fill, now: std::sync::Mutex::new(fresh.clone()), left: fresh };
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let action =
+        Action { target_id: Some(target.id.clone()), text: Some("Alpha-17".into()), ..Action::new(Operation::Fill) };
+    let result = agent.act_on_twin(&action, &before, &target).await.expect("a retry");
+    assert_eq!(result.map(|r| r.outcome), Some(StepOutcome::Executed));
+    assert!(agent.act_on_twin(&Action::new(Operation::Blur), &before, &target).await.expect("no blur retry").is_none());
+}

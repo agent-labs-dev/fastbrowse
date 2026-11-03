@@ -262,8 +262,8 @@ impl Agent {
                 Ok(Action { accept_dialog: Some(accept), ..Action::new(Operation::Dialog) })
             }
             Operation::SwitchTab => Ok(Action { tab_id: decision.tab_id.clone(), ..Action::new(Operation::SwitchTab) }),
-            Operation::Hover => {
-                Ok(Action { target_id: Some(require(target)?.id.clone()), ..Action::new(Operation::Hover) })
+            Operation::Hover | Operation::Blur => {
+                Ok(Action { target_id: Some(require(target)?.id.clone()), ..Action::new(decision.operation) })
             }
             Operation::Escape | Operation::Scroll | Operation::ScrollUp | Operation::Back => {
                 Ok(Action::new(decision.operation))

@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use fastbrowse_core::effects::state_key;
+use fastbrowse_core::effects::{leavable, state_key};
 use fastbrowse_core::models::{Operation, Status};
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::py::text;
@@ -29,6 +29,10 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
         match &label {
             Some(label) => {
                 for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
+                    if operation == Operation::Blur && leavable(control) {
+                        context.withheld_targets.push((operation, control.id.clone()));
+                        left_out = true;
+                    }
                     left_out |= control.operations.remove(&operation);
                 }
                 offered.controls.retain(|control| !control.operations.is_empty());

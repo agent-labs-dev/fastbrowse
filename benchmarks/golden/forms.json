@@ -3,6 +3,7 @@
   {
    "autocomplete": "name",
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -26,6 +27,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -48,6 +50,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -70,6 +73,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -95,6 +99,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -115,6 +120,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -137,6 +143,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -157,6 +164,7 @@
   {
    "autocomplete": null,
    "context": "Filter 0",
+   "focused": false,
    "form_id": "10",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -179,6 +187,7 @@
   {
    "autocomplete": null,
    "context": "Filter 0",
+   "focused": false,
    "form_id": "10",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -201,6 +210,7 @@
   {
    "autocomplete": null,
    "context": "Filter 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -221,6 +231,7 @@
   {
    "autocomplete": "name",
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -244,6 +255,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -266,6 +278,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -288,6 +301,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -313,6 +327,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -333,6 +348,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -355,6 +371,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -375,6 +392,7 @@
   {
    "autocomplete": null,
    "context": "Filter 1",
+   "focused": false,
    "form_id": "22",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -397,6 +415,7 @@
   {
    "autocomplete": null,
    "context": "Filter 1",
+   "focused": false,
    "form_id": "22",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -419,6 +438,7 @@
   {
    "autocomplete": null,
    "context": "Filter 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -439,6 +459,7 @@
   {
    "autocomplete": "name",
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -462,6 +483,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -484,6 +506,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -506,6 +529,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -531,6 +555,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -551,6 +576,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -573,6 +599,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -593,6 +620,7 @@
   {
    "autocomplete": null,
    "context": "Filter 2",
+   "focused": false,
    "form_id": "34",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -615,6 +643,7 @@
   {
    "autocomplete": null,
    "context": "Filter 2",
+   "focused": false,
    "form_id": "34",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -637,6 +666,7 @@
   {
    "autocomplete": null,
    "context": "Filter 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -657,6 +687,7 @@
   {
    "autocomplete": "name",
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -680,6 +711,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -702,6 +734,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -724,6 +757,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -749,6 +783,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -769,6 +804,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -791,6 +827,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -811,6 +848,7 @@
   {
    "autocomplete": null,
    "context": "Filter 3",
+   "focused": false,
    "form_id": "46",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -833,6 +871,7 @@
   {
    "autocomplete": null,
    "context": "Filter 3",
+   "focused": false,
    "form_id": "46",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -855,6 +894,7 @@
   {
    "autocomplete": null,
    "context": "Filter 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,

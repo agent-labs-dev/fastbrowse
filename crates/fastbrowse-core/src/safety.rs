@@ -29,10 +29,12 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
         // the page to describe.
         Operation::Enter => true,
         // A dialog's accept and a caller's address are asked about where they are handled; the rest change nothing
-        // off the page.
+        // off the page. A blur is classified as the fill it follows is: both run only the page's own field handlers,
+        // and the page text cannot say which of those handlers sends something.
         Operation::Navigate
         | Operation::Hover
         | Operation::Fill
+        | Operation::Blur
         | Operation::Select
         | Operation::Escape
         | Operation::Scroll
