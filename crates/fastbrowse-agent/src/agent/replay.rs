@@ -166,8 +166,29 @@ pub(crate) fn step_of(
     source: Option<RecipeText>,
     reveals: impl Fn(&str) -> bool,
 ) -> Option<RecipeStep> {
+    if reveals(page_url) {
+        return None;
+    }
     let page = RecipePage::of(page_url)?;
     let target = decision.target.as_ref();
+    let saved_target = target.map(|target| RecipeTarget::of(target, page_url));
+    if saved_target.as_ref().is_some_and(|target| {
+        [
+            Some(target.role.as_str()),
+            Some(target.label.as_str()),
+            target.context.as_deref(),
+            target.href.as_deref(),
+            target.input_type.as_deref(),
+            target.input_name.as_deref(),
+            target.frame_origin.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(&reveals)
+    }) {
+        // A masked target cannot match on replay, so the agent must choose this step live instead.
+        return None;
+    }
     let mut replay = decision.operation != Operation::Select;
     let text = match decision.operation {
         Operation::Fill => match source {
@@ -196,7 +217,7 @@ pub(crate) fn step_of(
     Some(RecipeStep {
         operation: decision.operation,
         page,
-        target: target.map(|t| RecipeTarget::of(t, page_url)),
+        target: saved_target,
         text,
         option,
         read_first: decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS),
@@ -317,6 +338,35 @@ mod tests {
         let action =
             Action { target_id: Some(target.id), text: Some(text.into()), secret, ..Action::new(Operation::Fill) };
         (decision, action)
+    }
+
+    #[test]
+    fn a_recipe_omits_steps_whose_page_or_target_reveals_a_secret() {
+        let reveals = |text: &str| text.contains("hunter2");
+        let action = Action::new(Operation::Click);
+        let decision = code_decision(Operation::Click, Some(button("b", "Continue")));
+        for url in [
+            "https://hunter2.test/",
+            "https://shop.test/hunter2",
+            "https://shop.test/?value=hunter2",
+            "https://shop.test/#hunter2",
+        ] {
+            assert!(step_of(url, &decision, &action, None, reveals).is_none(), "{url}");
+        }
+        for field in 0..7 {
+            let mut target = button("b", "Continue");
+            match field {
+                0 => target.role = "hunter2".into(),
+                1 => target.label = "Signed in as hunter2".into(),
+                2 => target.context = Some("hunter2".into()),
+                3 => target.href = Some("/next?value=hunter2".into()),
+                4 => target.input_type = Some("hunter2".into()),
+                5 => target.input_name = Some("hunter2".into()),
+                _ => target.frame_origin = Some("https://hunter2.test".into()),
+            }
+            let decision = code_decision(Operation::Click, Some(target));
+            assert!(step_of(URL, &decision, &action, None, reveals).is_none(), "field {field}");
+        }
     }
 
     #[test]
