@@ -2,7 +2,7 @@
 
 use crate::page::CdpPage;
 
-/// The snapshot script, called with a mode (`'snapshot'`, `'fingerprint'`).
+/// The snapshot script, called with a mode (`'snapshot'`, `'glance'`, `'fingerprint'`).
 pub fn page_js(page: &CdpPage) -> &str {
     &page.page_js
 }

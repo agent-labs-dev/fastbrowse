@@ -472,6 +472,12 @@ pub trait Page: Send + Sync {
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>>;
 
+    /// A fresh reading for screenshot safety, without replacing action guards or consuming pending notices.
+    /// Implementations whose observations bind actions or drain notices must override this default.
+    fn glance(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        self.observe()
+    }
+
     /// Whether the current URL or document differs, without indexing the page's controls again.
     fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>>;
 

@@ -1154,6 +1154,11 @@ impl Page for Screenshots {
         unreachable!("recovery does not observe")
     }
 
+    fn glance(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let now = Observation { viewport_text: "a newly displayed private-token".into(), ..observation(&[]) };
+        Box::pin(async move { Ok(now) })
+    }
+
     fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
         let moved = self.1;
         Box::pin(async move { Ok(moved) })
@@ -1202,6 +1207,14 @@ impl Page for Screenshots {
     fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
         Box::pin(async { true })
     }
+}
+
+#[tokio::test]
+async fn test_a_frame_checks_for_a_secret_with_a_fresh_glance() {
+    let agent =
+        Agent::new(Arc::new(Screenshots::default()), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    agent.redactor().register("credential", "private-token", None);
+    assert!(agent.frame().await.expect("frame check").is_none());
 }
 
 /// A composer that reads a value off the attached screenshot, so a drawn page's read can be followed.

@@ -473,7 +473,12 @@ impl CdpPage {
     // -- observe / capture ----------------------------------------------------------------------------------
 
     pub async fn observe(&self) -> Result<Observation, BrowserError> {
-        self.reread(|| self.observe_once(0)).await
+        self.reread(|| self.observe_once(0, true)).await
+    }
+
+    /// The current page for a screenshot's secret check, without changing the observation an action refers to.
+    pub async fn glance(&self) -> Result<Observation, BrowserError> {
+        self.reread(|| self.observe_once(0, false)).await
     }
 
     /// Run `read`, and again on the next settled document each time a navigation destroys the one it read.
@@ -522,23 +527,23 @@ impl CdpPage {
         }
     }
 
-    fn observe_once(&self, attempt: u32) -> BoxFuture<'_, Result<Observation, BrowserError>> {
+    fn observe_once(&self, attempt: u32, bind: bool) -> BoxFuture<'_, Result<Observation, BrowserError>> {
         Box::pin(async move {
             self.session.assert_clear().await?;
             if let Some(dialog) = self.session.pending_dialog() {
                 // A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
-                return Ok(self.dialog_observation(dialog));
+                return Ok(self.dialog_observation(dialog, bind));
             }
             // A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             // evaluate until the 120s command deadline.
             let read = async {
                 let history = async { Ok::<_, BrowserError>(self.history().await) };
-                tokio::try_join!(history, self.snapshot_all_frames(), self.document_response())
+                tokio::try_join!(history, self.snapshot_all_frames(bind), self.document_response())
             };
             let Some(read) = self.until_dialog(read).await else {
                 return match self.session.pending_dialog() {
-                    Some(dialog) => Ok(self.dialog_observation(dialog)),
-                    None => self.observe_once(attempt).await,
+                    Some(dialog) => Ok(self.dialog_observation(dialog, bind)),
+                    None => self.observe_once(attempt, bind).await,
                 };
             };
             let ((can_go_back, mut history_entry, entry_url), (frames, inaccessible), document) = read?;
@@ -550,7 +555,7 @@ impl CdpPage {
                 && search_address(entry_url) != search_address(&main.raw.url)
             {
                 if attempt < HISTORY_REREADS {
-                    return self.observe_once(attempt + 1).await;
+                    return self.observe_once(attempt + 1, bind).await;
                 }
                 history_entry = None;
             }
@@ -570,7 +575,9 @@ impl CdpPage {
             }
 
             let page_key = combine_page_keys(frames.iter().map(|(_, f)| f.raw.page_key.clone()).collect());
-            self.set_last(ObservedState { page_key: page_key.clone(), controls: control_state, labels });
+            if bind {
+                self.set_last(ObservedState { page_key: page_key.clone(), controls: control_state, labels });
+            }
 
             let title = main.map(|m| m.raw.title.clone()).unwrap_or_default();
             let url = match main {
@@ -579,25 +586,27 @@ impl CdpPage {
             };
             let mut viewport_text = main.map(|m| m.raw.viewport_text.clone()).unwrap_or_default();
             let mut notices = String::new();
-            for download in self.session.pending_download_texts() {
-                notices.push_str(&format!(
-                    "\n\n[Downloaded file: {} from {}]\n{}",
-                    download.name, download.url, download.text
-                ));
-            }
-            for refused in self.session.pending_download_refusals() {
-                let why = match refused.reason {
-                    Refusal::TooLarge { size_bytes, limit_bytes } => format!(
-                        "The file is {} and this run keeps downloads up to {}",
-                        bytes_of(size_bytes),
-                        bytes_of(limit_bytes)
-                    ),
-                    Refusal::Failed => "The browser could not hand over or store the file".to_owned(),
-                };
-                notices.push_str(&format!(
-                    "\n\n[Download not kept: {} from {}] {why}; nothing was saved.",
-                    refused.name, refused.url,
-                ));
+            if bind {
+                for download in self.session.pending_download_texts() {
+                    notices.push_str(&format!(
+                        "\n\n[Downloaded file: {} from {}]\n{}",
+                        download.name, download.url, download.text
+                    ));
+                }
+                for refused in self.session.pending_download_refusals() {
+                    let why = match refused.reason {
+                        Refusal::TooLarge { size_bytes, limit_bytes } => format!(
+                            "The file is {} and this run keeps downloads up to {}",
+                            bytes_of(size_bytes),
+                            bytes_of(limit_bytes)
+                        ),
+                        Refusal::Failed => "The browser could not hand over or store the file".to_owned(),
+                    };
+                    notices.push_str(&format!(
+                        "\n\n[Download not kept: {} from {}] {why}; nothing was saved.",
+                        refused.name, refused.url,
+                    ));
+                }
             }
             viewport_text.push_str(&notices);
             let response_status = match main {
@@ -664,11 +673,13 @@ impl CdpPage {
         (skipped != current && same_http_origin(&skipped, current)).then_some(BackTarget::Skipped(skipped))
     }
 
-    fn dialog_observation(&self, dialog: Dialog) -> Observation {
+    fn dialog_observation(&self, dialog: Dialog, bind: bool) -> Observation {
         let tabs = self.session.tabs();
         let active = tabs.iter().find(|t| t.active);
         let page_key = format!("dialog:{}", dialog.kind);
-        self.set_last(ObservedState { page_key: page_key.clone(), ..ObservedState::default() });
+        if bind {
+            self.set_last(ObservedState { page_key: page_key.clone(), ..ObservedState::default() });
+        }
         Observation {
             url: active.map(|t| t.url.clone()).unwrap_or_default(),
             title: active.map(|t| t.title.clone()).unwrap_or_default(),
@@ -688,8 +699,12 @@ impl CdpPage {
         }
     }
 
-    async fn snapshot_all_frames(&self) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
-        let script = format!("{}('snapshot')", self.page_js);
+    async fn snapshot_all_frames(
+        &self,
+        bind: bool,
+    ) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
+        let mode = if bind { "snapshot" } else { "glance" };
+        let script = format!("{}('{mode}')", self.page_js);
         let result = self.read_frames::<Snapshot>(&script).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
@@ -1392,6 +1407,10 @@ impl Page for CdpPage {
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         Box::pin(async move { seam(CdpPage::observe(self).await) })
+    }
+
+    fn glance(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        Box::pin(async move { seam(CdpPage::glance(self).await) })
     }
 
     fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {

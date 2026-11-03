@@ -939,7 +939,7 @@ impl Agent {
     /// The check is made against a fresh reading of the page rather than the last observation, which was taken before
     /// the action ran, and the action may be the one that put the secret there.
     pub(super) async fn frame(&self) -> Step<Option<Vec<u8>>> {
-        let now = self.trace.phase("frame", self.page.observe()).await?;
+        let now = self.trace.phase("frame", self.page.glance()).await?;
         if self.reveals(&now) {
             return Ok(None);
         }

@@ -451,6 +451,8 @@ async fn test_a_click_that_downloads_is_a_page_change_not_a_dead_click() {
     let result = act(&h.page, click(find(&obs, "Orders report")), &obs).await;
     assert_eq!(result.outcome, StepOutcome::Executed);
     assert!(result.page_changed, "a click that downloaded a file moved the run, not the page");
+    let glance = h.page.glance().await.expect("glance after download");
+    assert!(!glance.viewport_text.contains("139.79"), "a frame check leaves the download notice pending");
     let landed = h.observe().await;
     assert!(landed.viewport_text.contains("139.79"));
     h.close().await;

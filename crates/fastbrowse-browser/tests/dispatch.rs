@@ -18,6 +18,41 @@ use fastbrowse_core::page::Action;
 use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_screenshot_glance_preserves_action_guards() {
+    for change_target in [false, true] {
+        let Some(h) = harness().await else { return };
+        h.goto("/dispatch.html").await;
+        let before = h.observe().await;
+        let target = find(&before, "One way").clone();
+        eval_active(
+            &h.page,
+            if change_target {
+                "document.querySelector('#target').textContent = 'Another choice'"
+            } else {
+                "document.title = 'A new clock reading'"
+            },
+        )
+        .await;
+        let fresh = h.page.glance().await.expect("glance");
+        assert_ne!(before.page_key, fresh.page_key);
+        assert_eq!(
+            h.page.redrawn(&before, 0.0, Some(&target.id)).await.expect("redraw check"),
+            change_target,
+            "a glance must preserve the redraw baseline"
+        );
+        let scroll = h.page.act(&Action::new(Operation::Scroll), &before).await.expect("scroll");
+        assert_ne!(scroll.outcome, StepOutcome::Stale, "{scroll:?}");
+        let result = h.page.act(&action(Operation::Click, &target), &before).await.expect("act");
+        assert_eq!(
+            result.outcome,
+            if change_target { StepOutcome::Stale } else { StepOutcome::Executed },
+            "{result:?}"
+        );
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_click_uses_an_exposed_point_but_never_passes_through_a_cover() {
     // Flight rows had a covered centre even when another part of the same control was exposed.
     for nested in ["document", "shadow", "iframe"] {

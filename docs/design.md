@@ -129,7 +129,8 @@ step's page facts, so Jev reloads it when the status can clear, goes back or pic
 
 `on_event` receives a `BrowserEvent` followed by `StepEvent` objects. Each step includes added facts,
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
-`Config(step_frames=True)` adds a PNG after each step unless a fresh observation shows a resolved secret.
+`Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret.
+This safety reading preserves the pending action's guards and leaves download notices for the next decision.
 `Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
 out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too).
 

@@ -459,7 +459,7 @@
     }
 
     const id = identity(e);
-    registry.controls.add(e);
+    if (mode !== 'glance') registry.controls.add(e);
     const named = labelOf(e);
     if (!named) unnamed.add(id);
     const base = {
@@ -799,23 +799,25 @@
   }
 
   // A revealed caption needs its actual container association, not merely the most recent action.
-  registry.hoverContexts = new WeakMap();
-  // Hover targets are often every card of one list, so the sibling list is taken once per parent.
-  const siblingsOf = memo(parent => [...(parent?.children || [])]);
-  for (const c of controls) {
-    if (!c.operations.includes('hover')) continue;
-    const element = registry.nodes.get(c.id);
-    registry.hoverContexts.set(element, {
-      control: {
-        role: c.role, label: c.label,
-        context: /^\d+ of \d+$/.test(c.context || '') ? c.context : null,
-      },
-      labelAttributes: [element.getAttribute('role'), element.getAttribute('aria-label'),
-        element.getAttribute('title'), element.querySelector('img[alt]')?.getAttribute('alt') || null],
-      text: innerTextOf(element),
-      parent: element.parentNode,
-      siblings: siblingsOf(element.parentNode),
-    });
+  if (mode !== 'glance') {
+    registry.hoverContexts = new WeakMap();
+    // Hover targets are often every card of one list, so the sibling list is taken once per parent.
+    const siblingsOf = memo(parent => [...(parent?.children || [])]);
+    for (const c of controls) {
+      if (!c.operations.includes('hover')) continue;
+      const element = registry.nodes.get(c.id);
+      registry.hoverContexts.set(element, {
+        control: {
+          role: c.role, label: c.label,
+          context: /^\d+ of \d+$/.test(c.context || '') ? c.context : null,
+        },
+        labelAttributes: [element.getAttribute('role'), element.getAttribute('aria-label'),
+          element.getAttribute('title'), element.querySelector('img[alt]')?.getAttribute('alt') || null],
+        text: innerTextOf(element),
+        parent: element.parentNode,
+        siblings: siblingsOf(element.parentNode),
+      });
+    }
   }
 
   // The titles a scope's own content can be named by: none sealed in a card below the scope, and a header cell,
@@ -990,7 +992,7 @@
     retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
   }
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
-  registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
+  if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
     .map(e => [identity(e), reveal(e), e.checked, e.selectedIndex, e.disabled, e.readOnly]);
