@@ -612,6 +612,16 @@ enum ToolFailure {
     },
 }
 
+impl From<RunError> for ToolFailure {
+    fn from(error: RunError) -> Self {
+        match error {
+            RunError::Cancelled(receipt) => Self::Cancelled(receipt),
+            RunError::AfterSpending { error, receipt } => Self::Failed { message: error.to_string(), receipt },
+            error => Self::Tool(error.to_string()),
+        }
+    }
+}
+
 impl From<String> for ToolFailure {
     fn from(message: String) -> ToolFailure {
         ToolFailure::Tool(message)
@@ -939,8 +949,7 @@ impl McpServer {
                         .await
                     {
                         Ok(Ok(outcome)) => Ok(outcome),
-                        Ok(Err(RunError::Cancelled(receipt))) => return Err(ToolFailure::Cancelled(receipt)),
-                        Ok(Err(error)) => return Err(error.to_string().into()),
+                        Ok(Err(error)) => return Err(error.into()),
                         Err(_) => {
                             let seconds = json::float(limits.max_seconds.unwrap_or_default(), Floats::Repr);
                             return Err(format!("the run overran max_seconds={seconds} and was abandoned").into());
@@ -951,11 +960,7 @@ impl McpServer {
         };
         let result = match outcome {
             Ok(result) => result,
-            Err(RunError::Cancelled(receipt)) => return Err(ToolFailure::Cancelled(receipt)),
-            Err(RunError::AfterSpending { error, receipt }) => {
-                return Err(ToolFailure::Failed { message: error.to_string(), receipt });
-            }
-            Err(error) => return Err(error.to_string().into()),
+            Err(error) => return Err(error.into()),
         };
         let live_url = live_url.lock().unwrap_or_else(|p| p.into_inner()).clone();
         Ok(browse_result(&result, live_url.as_deref(), config))

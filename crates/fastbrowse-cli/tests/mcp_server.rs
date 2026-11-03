@@ -725,3 +725,29 @@ async fn an_assembly_error_keeps_its_receipt_beside_the_tool_error() {
     let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/receipt"].clone());
     assert_eq!(kept, receipt);
 }
+
+#[tokio::test]
+async fn a_deadline_keeps_an_assembly_error_receipt_returned_during_cleanup() {
+    let receipt = CancellationReceipt {
+        steps: vec![step(0)],
+        cost: answered(Status::Complete).cost,
+        recordings: vec![PathBuf::from("run.mp4")],
+    };
+    let spent = receipt.clone();
+    let failed = runner(move |args: Call| {
+        let receipt = spent.clone();
+        async move {
+            args.host.cancel.tripped().await;
+            Err(RunError::AfterSpending {
+                error: Box::new(RunError::Recording("recording failed during cleanup".into())),
+                receipt,
+            })
+        }
+    });
+    let config = ServerConfig { grace_seconds: 1.0, ..ServerConfig::default() };
+    let (result, _) = Client::new(config, failed).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
+    assert_eq!(result["isError"], true);
+    assert!(text(&result).contains("recording failed during cleanup"));
+    let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/receipt"].clone());
+    assert_eq!(kept, receipt);
+}
