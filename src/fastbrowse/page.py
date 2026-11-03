@@ -47,7 +47,7 @@ class Control(Frozen):
     required: bool | None = None
     """A field the page marks required (`required` or `aria-required`)."""
     invalid: bool | None = None
-    """A field the page marks invalid (`aria-invalid`)."""
+    """A field marked invalid by ARIA or a failed native constraint, without implying submission."""
     next_page: bool | None = None
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None

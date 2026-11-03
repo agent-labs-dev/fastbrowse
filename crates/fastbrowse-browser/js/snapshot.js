@@ -497,7 +497,9 @@
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
     if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
-    if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true')) base.invalid = true;
+    // Native validation can refuse a form without adding any ARIA attribute or page text.
+    if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') ||
+      (source.willValidate === true && source.validity?.valid === false)) base.invalid = true;
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);

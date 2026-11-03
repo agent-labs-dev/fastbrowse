@@ -1350,6 +1350,38 @@ async fn test_an_unrelated_sibling_heading_does_not_name_a_unique_control() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_form_constraints_mark_invalid_controls() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        concat!(
+            "document.body.innerHTML = '<form id=f><label>Email<input id=email type=email required value=a@example.test></label>",
+            "<label>Last name<input id=last required value=Tester></label>",
+            "<label>Read only<input id=readonly required readonly></label><button>Submit</button></form>'",
+        ),
+    )
+    .await;
+    let before = h.observe().await;
+    assert_eq!(find(&before, "Email").invalid, None);
+    assert_eq!(find(&before, "Last name").invalid, None);
+    eval_active(
+        &h,
+        "document.getElementById('email').setCustomValidity('Use a valid email'); \
+         document.getElementById('last').value = ''; document.getElementById('readonly').setCustomValidity('Not editable'); document.getElementById('f').requestSubmit()",
+    )
+    .await;
+    let validity = eval_active(&h, "[email.validity.valid, last.validity.valid, email.validationMessage, document.getElementById('readonly').willValidate, document.getElementById('readonly').validity.valid]").await;
+    assert_eq!(validity, json!([false, false, "Use a valid email", false, false]));
+    let after = h.observe().await;
+    assert_eq!(find(&after, "Email").invalid, Some(true));
+    assert_eq!(find(&after, "Last name").invalid, Some(true));
+    assert_eq!(find(&after, "Read only").invalid, None);
+    h.close().await;
+}
+
 /// A post's heading ("Data Entry Form") named a date picker's Submit, and the verifier read the wrong form.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_first_heading() {
@@ -1849,7 +1881,7 @@ async fn test_fields_carry_what_the_page_says_about_them() {
     h.page.evaluate(&session_id, &script).await.expect("evaluate");
     let observed = h.observe().await;
     let marks = |label: &str| (find(&observed, label).required, find(&observed, label).invalid);
-    assert_eq!(marks("First"), (Some(true), None));
+    assert_eq!(marks("First"), (Some(true), Some(true)));
     assert_eq!(marks("Last"), (Some(true), Some(true)));
     assert_eq!(marks("Zip"), (None, None));
     h.close().await;

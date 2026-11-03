@@ -110,7 +110,7 @@ pub struct Control {
     /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub required: Option<bool>,
-    /// A field the page marks invalid (`aria-invalid`).
+    /// A field marked invalid by ARIA or a failed native constraint, without implying submission.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub invalid: Option<bool>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
