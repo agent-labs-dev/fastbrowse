@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Fetch-only runs can finish with cited text when step frames are enabled. A fetched document has no screenshot, so optional frames are skipped.
+
 - A composed answer keeps only claims Jev judges supported by their cited quotes, including which record each value belongs to. A claim with no support or no judgment is withheld, and the answer ends `unverified` rather than `complete`.
 
 - A read that adds evidence renews recovery even when it happens before an action. Reading the same evidence again does not renew it.

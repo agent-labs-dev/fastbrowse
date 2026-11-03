@@ -412,7 +412,9 @@ impl Page for FetchedPage {
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         Box::pin(async move {
             self.gate().await?;
-            Err(self.needs_browser("a browserless run renders no pixels, so it has no screenshot to take".into()))
+            Err(BrowserError::ScreenshotsUnavailable(
+                "a browserless run renders no pixels, so it has no screenshot to take".into(),
+            ))
         })
     }
 

@@ -47,6 +47,7 @@ that adds no new source quote counts toward the stall rule like any other step t
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
 offered as what it has. A step only a browser can take starts one on the same page, and the run carries on with
 what it knows. `fetch` forbids the browser, and `browser` starts one from the first step.
+Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step. A page number drawn as text rather than a link or a button is offered

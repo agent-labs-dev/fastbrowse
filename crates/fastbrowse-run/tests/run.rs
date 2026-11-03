@@ -245,6 +245,32 @@ fn shell_and_no_devtools() -> Http {
 }
 
 #[tokio::test]
+async fn test_a_fetch_only_answer_survives_optional_step_frames() {
+    let options = task(|o, h| {
+        o.fetch = true;
+        o.start = Some("https://docs.example.test/value".into());
+        h.http = Some(Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            Box::pin(async {
+                Ok(Response::new(200, "<p>The documented value is 34.</p>").with_header("content-type", "text/html"))
+            })
+        })));
+        h.jev = Some(Arc::new(fastbrowse_agent::scripted::ScriptedJev::new(vec![fastbrowse_agent::scripted::Step {
+            operation: fastbrowse_core::models::Operation::Read,
+            label: String::new(),
+            pick: None,
+        }])));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.config = Some(fastbrowse_core::config::Config { step_frames: true, ..Default::default() });
+        h.on_event = Some(Arc::new(|_| Box::pin(async {})));
+    });
+    let result = run(options).await.unwrap();
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    assert!(result.answer.as_deref().unwrap().contains("34"));
+    assert!(!result.citations.is_empty());
+    assert!(result.error.is_none());
+}
+
+#[tokio::test]
 async fn test_a_run_goes_to_the_browser_when_the_read_needs_one() {
     let read = |change: fn(&mut RunTask)| {
         task(move |o, h| {

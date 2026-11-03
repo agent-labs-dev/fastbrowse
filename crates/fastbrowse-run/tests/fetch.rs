@@ -173,6 +173,15 @@ async fn test_a_redirect_inside_the_grant_is_followed() {
 }
 
 #[tokio::test]
+async fn test_a_fetched_page_has_no_pixels_without_requiring_a_browser() {
+    let page = FetchedPage::new(html(PAGE), None, None);
+    page.navigate("https://shop.example.com/orders", None).await.unwrap();
+    let error = page.screenshot().await.unwrap_err();
+    assert!(matches!(&error, BrowserError::ScreenshotsUnavailable(_)), "{error}");
+    assert!(!page.needed_browser());
+}
+
+#[tokio::test]
 async fn test_a_fetched_page_reads_and_follows_links_but_cannot_act() {
     let page = FetchedPage::new(html(PAGE), None, None);
     page.navigate("https://shop.example.com/orders", None).await.expect("navigate");
@@ -189,7 +198,10 @@ async fn test_a_fetched_page_reads_and_follows_links_but_cannot_act() {
     let error = page.act(&action, &observation).await.unwrap_err();
     assert!(matches!(&error, BrowserError::NeedsBrowser(message) if message.contains("only follow links")), "{error}");
     let error = page.screenshot().await.unwrap_err();
-    assert!(matches!(&error, BrowserError::NeedsBrowser(message) if message.contains("no pixels")), "{error}");
+    assert!(
+        matches!(&error, BrowserError::ScreenshotsUnavailable(message) if message.contains("no pixels")),
+        "{error}"
+    );
 }
 
 #[tokio::test]
