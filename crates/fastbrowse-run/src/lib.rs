@@ -734,7 +734,6 @@ pub async fn run_task(mut task: RunTask, mut host: Host) -> Result<RunResult, Ru
             "the recipe task differs from this task; record a new recipe for changed instructions".into(),
         ));
     }
-    task.start = recipe_start(task.start.as_deref(), recipe.as_ref());
     let recipe_sink = host.recipe_sink.clone().or_else(|| task.save_recipe.is_some().then(RecipeSink::default));
     if task.fetch && host.browser_api_key.is_some() {
         return Err(RunError::Invalid("fetch starts no browser, so it cannot be combined with browser_api_key".into()));
@@ -830,6 +829,7 @@ pub async fn run_task(mut task: RunTask, mut host: Host) -> Result<RunResult, Ru
             on_event(Event::Browser(event)).await;
         }
         let attach = connection.attach;
+        task.start = recipe_start(task.start.as_deref(), recipe.as_ref(), attach);
         let opened = BrowserSession::new(
             connection,
             sink(task.downloads.as_deref(), &scratch)?,
@@ -981,8 +981,12 @@ fn finish(
     Ok(result)
 }
 
-fn recipe_start(explicit: Option<&str>, recipe: Option<&fastbrowse_core::recipe::Recipe>) -> Option<String> {
-    explicit.map(str::to_owned).or_else(|| recipe.and_then(|recipe| recipe.start.clone()))
+fn recipe_start(
+    explicit: Option<&str>,
+    recipe: Option<&fastbrowse_core::recipe::Recipe>,
+    attach: bool,
+) -> Option<String> {
+    explicit.map(str::to_owned).or_else(|| (!attach).then(|| recipe.and_then(|recipe| recipe.start.clone())).flatten())
 }
 
 /// `limits` less what a fetched attempt spent, for the browser run that follows it, or the limit the attempt used up.
@@ -1157,12 +1161,17 @@ mod tests {
             start: Some("https://saved.example/".into()),
             steps: vec![],
         };
-        assert_eq!(recipe_start(None, Some(&recipe)).as_deref(), Some("https://saved.example/"));
+        assert_eq!(recipe_start(None, Some(&recipe), false).as_deref(), Some("https://saved.example/"));
         assert_eq!(
-            recipe_start(Some("https://explicit.example/"), Some(&recipe)).as_deref(),
+            recipe_start(Some("https://explicit.example/"), Some(&recipe), false).as_deref(),
             Some("https://explicit.example/")
         );
-        assert_eq!(recipe_start(None, None), None);
+        assert_eq!(recipe_start(None, None, false), None);
+        assert_eq!(recipe_start(None, Some(&recipe), true), None);
+        assert_eq!(
+            recipe_start(Some("https://explicit.example/"), Some(&recipe), true).as_deref(),
+            Some("https://explicit.example/")
+        );
     }
 
     /// A stand-in Browser Use Cloud that creates a browser at `$0.01` so far, with a DevTools address that never

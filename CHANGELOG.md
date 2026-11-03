@@ -99,20 +99,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - **Local runs can set their CSS viewport.** `--viewport WIDTHxHEIGHT` applies reversible desktop viewport emulation before the first observation on an owned local Chrome; handed browsers reject it and cloud runs keep their existing screen-size behaviour.
 - Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.
-- Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.
-- Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.
-- Local Chrome startup errors preserve the complete diagnostic, so a crash stack cannot hide the cause.
-- Local Chrome startup errors preserve the complete diagnostic, so a crash stack cannot hide the cause.
 - Local Chrome startup errors preserve the complete diagnostic, so a crash stack cannot hide the cause.
 - Cancelled Jev image requests retain a documented request-cost bound instead of counting base64 as text tokens. Budget admission uses the same bound; answered requests keep their reported usage.
 - Jev cost receipts identify action selection, authorization, relevance, reads, verification and visual location separately from LLM planning, composing and filling.
 - Recipe replay counts a fill as reused only when its saved value can be used on the live field. Missing values and fields whose sensitivity changed keep live attribution.
 
-- Jev cost receipts identify action selection, authorization, relevance, reads, verification and visual location separately from LLM planning, composing and filling.
 
-- Cancelled Jev image requests retain a documented request-cost bound instead of counting base64 as text tokens. Budget admission uses the same bound; answered requests keep their reported usage.
 
-- Local Chrome startup errors preserve the complete diagnostic, so a crash stack cannot hide the cause.
 
 - A blank document after navigation waits on its loading events before it reaches Jev or renews recovery. Only the untouched opening page may be reloaded.
 
@@ -122,9 +115,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Jev can leave a focused editable field with `blur`, without pressing another control, so it can observe the page's field-leaving validation. Observations expose optional `Control.focused`, and the operation enum adds `blur`; strict clients must update before reading these new fields and steps. A changed focus is reported without claiming a value was accepted.
 
-- Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.
 
-- A cancelled run preserves the steps it reported, known charges and finished recordings in a cancellation receipt. It remains an error with no success status or answer, and unpriced charges remain unknown. Failed cloud browser starts retain their known cost. Rust callers now match `RunError::Cancelled(receipt)` instead of the unit variant.
+- A cancelled run preserves the steps it reported, known charges and finished recordings in a cancellation receipt. It remains an error with no success status or answer, and unpriced charges remain unknown. Python cancellation retains the receipt even when Rust finished before its result was delivered. Failed cloud browser starts retain their known cost. Rust callers now match `RunError::Cancelled(receipt)` instead of the unit variant.
+- Recipe replay preserves an attached tab's current page unless the caller supplies a start URL.
 
 - A copied field value is chosen from complete source spans. The end selection shows the text each choice would type, so surrounding task instructions can be excluded.
 
