@@ -5,6 +5,8 @@ Every flag, browser option, model setting and exit status of the `fastbrowse` co
 [README](../README.md#try-it) has the first run; [troubleshooting](troubleshooting.md) takes each status
 from cause to next step.
 
+A task must contain non-whitespace text. Empty tasks are refused before model or browser setup.
+
 ## Flags
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`

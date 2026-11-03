@@ -379,6 +379,7 @@ str_enum! {
     pub enum LLMPurpose {
         Start = "start",
         Compose = "compose",
+        ImageRead = "image_read",
         Fill = "fill",
     }
 }

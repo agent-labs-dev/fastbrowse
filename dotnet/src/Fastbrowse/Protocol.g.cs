@@ -278,6 +278,8 @@ public enum LLMPurpose
     Start,
     [JsonStringEnumMemberName("compose")]
     Compose,
+    [JsonStringEnumMemberName("image_read")]
+    ImageRead,
     [JsonStringEnumMemberName("fill")]
     Fill,
 }

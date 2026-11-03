@@ -860,9 +860,7 @@ impl Agent {
         })
     }
 
-    /// The viewport image a step's ask carries: a page whose content is drawn has none of it in the text, so the
-    /// screenshot is the page. BU Bench bu2-120 asked for a price shown in Street View and the run, offered only the
-    /// map's rotate arrows, turned them for 45 steps and never saw the imagery.
+    /// A drawn page's controls do not describe its imagery, so a step's question carries the viewport too.
     pub(super) async fn drawn_viewport(&self, observation: &Observation) -> Step<Option<Vec<u8>>> {
         if !observation.visual_content {
             return Ok(None);
@@ -882,6 +880,11 @@ impl Agent {
     /// page itself.
     pub(super) async fn screenshots(&self) -> Step<Vec<Vec<u8>>> {
         if self.seen().secret_on_screen {
+            return Ok(Vec::new());
+        }
+        // A delayed page update can reveal a secret after the decision's observation.
+        let now = self.trace.phase("screenshot", self.page.glance()).await?;
+        if self.reveals(&now) {
             return Ok(Vec::new());
         }
         match self.trace.phase("screenshot", self.page.screenshot()).await {
@@ -992,10 +995,8 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
     if target.value.as_deref() == Some(held.as_str()) {
         return Some(false);
     }
-    // A widget that redraws on every keystroke changes the page while the text lands nowhere: the field holds something
-    // else, and that exact text was written into it before. IDOS's date picker redrew on four writes of one date in
-    // bu2-075 and the run credited each one, until the recovery budget ran out on the date it needed. A field a form
-    // emptied is not this case: it holds nothing, and writing the value again is what fills it.
+    // A widget can redraw while rejecting repeated text, so a page change alone does not prove the value was set.
+    // A field the form emptied can still receive the same text again.
     let kept_another = target.value.as_deref().is_some_and(|value| !value.is_empty());
     if kept_another && written.holds(&target.id, &held) {
         return Some(false);

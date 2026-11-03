@@ -530,6 +530,7 @@
       "enum": [
         "start",
         "compose",
+        "image_read",
         "fill"
       ],
       "title": "LLMPurpose",

@@ -42,8 +42,13 @@ An editable search field can be filled directly, including when focusing it open
 focusing the field does not enter a query.
 
 Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_choice`.
+The LLM screenshot reader records `image_read` calls separately from answer composition. Jev image limits apply
+to Jev questions; the LLM reader uses its own client, which must refuse unsupported image input explicitly.
 A successful screenshot reading that finds no answer is reused for identical pixels within one run.
 A changed screenshot is read again; failed model calls are not cached.
+Model screenshots check fresh page text for resolved secrets before capture. Image readings mask resolved
+secret values before they enter notes and evidence. A filled form that requires confirmation stops before
+optional image reading.
 
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
@@ -230,7 +235,8 @@ awake, without which a screenshot of an idle page waits seconds for a frame; it 
 frame, on a session of its own so that live frames and recordings cannot replace it. Measured on Chrome 155 in
 a headed window beside a focused window of another program: none of the session's commands moved focus.
 
-New popup pages pause until Fetch can capture their first response, including an inline PDF. Renderer setup
+New popup pages pause until Fetch can capture their first response, including an inline PDF, and scoped sessions
+install service-worker bypass before that first request. Renderer setup
 follows resuming the page because a paused popup may have no renderer yet. A page outside the run's ownership
 is resumed and detached.
 

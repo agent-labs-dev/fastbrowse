@@ -202,6 +202,7 @@ class CostBasis(StrEnum):
 class LLMPurpose(StrEnum):
     START = "start"
     COMPOSE = "compose"
+    IMAGE_READ = "image_read"
     FILL = "fill"
 
 

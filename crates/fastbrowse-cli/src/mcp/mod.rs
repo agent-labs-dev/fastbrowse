@@ -492,8 +492,9 @@ pub fn configure(
         }
     }
     let chrome = options::chrome(settings, args.headed, args.profile.as_deref(), None);
-    // Every call runs with these, so they are checked once, as a call's own arguments would be.
+    // No task exists at startup; this validation-only task checks the browser options shared by every call.
     let operator = RunTask {
+        task: "Validate server browser options.".into(),
         local: args.local,
         chrome: Some(chrome.clone()),
         cloud_profile: args.cloud_profile.clone(),

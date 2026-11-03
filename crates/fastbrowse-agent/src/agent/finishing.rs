@@ -62,6 +62,12 @@ impl Agent {
         {
             return Err(failure.stop().into());
         }
+        // A form filled and left unsent is an ending of its own when that is where the task said to stop and ask.
+        if let Some(unsent) = unsent_fact(&state.history, observation)
+            && self.stops_to_confirm(state, observation).await?
+        {
+            return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
+        }
         // A drawn page's answer may be only in its pixels, so it is read before the run treats "nothing read" as a
         // step short of the answer. Without this the run recovers on a page whose answer is in the image it shows.
         if output_schema.is_none() {
@@ -73,12 +79,6 @@ impl Agent {
             let reason = "Nothing read so far answers the task, so it is not done.";
             self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
             return Ok(None);
-        }
-        // A form filled and left unsent is an ending of its own when that is where the task said to stop and ask.
-        if let Some(unsent) = unsent_fact(&state.history, observation)
-            && self.stops_to_confirm(state, observation).await?
-        {
-            return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
         }
         let result = Box::pin(self.conclude(state, observation, output_schema)).await?;
         let reached = match until {
@@ -122,7 +122,8 @@ impl Agent {
         if state.page_failed || !observation.visual_content || state.notes.answered() {
             return Ok(());
         }
-        let Some(png) = self.viewport().await? else { return Ok(()) };
+        // Jev's image profile constrains its own questions; this image goes to the LLM reader instead.
+        let Some(png) = self.screenshots().await?.into_iter().next() else { return Ok(()) };
         let image = crate::policy::screenshot_reference(&png);
         if state.unanswered_images.contains(&image) {
             return Ok(());
@@ -130,7 +131,7 @@ impl Agent {
         let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
         state.ledger.record([reading.cost.clone()])?;
         if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
-            state.notes.add_image_read(&text, &observation.url, observation.captured_at, &png);
+            state.notes.add_image_read(&self.mask(&text), &observation.url, observation.captured_at, &png);
         } else {
             state.unanswered_images.insert(image);
         }

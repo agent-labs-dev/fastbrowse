@@ -183,9 +183,10 @@ type InitializeResult struct {
 type LLMPurpose string
 
 const (
-	LLMPurposeStart   LLMPurpose = "start"
-	LLMPurposeCompose LLMPurpose = "compose"
-	LLMPurposeFill    LLMPurpose = "fill"
+	LLMPurposeStart     LLMPurpose = "start"
+	LLMPurposeCompose   LLMPurpose = "compose"
+	LLMPurposeImageRead LLMPurpose = "image_read"
+	LLMPurposeFill      LLMPurpose = "fill"
 )
 
 type Limits struct {

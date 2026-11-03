@@ -9,6 +9,8 @@ public enum LLMPurpose {
     START,
     @JsonProperty("compose")
     COMPOSE,
+    @JsonProperty("image_read")
+    IMAGE_READ,
     @JsonProperty("fill")
     FILL
 }

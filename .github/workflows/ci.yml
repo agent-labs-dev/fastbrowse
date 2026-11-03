@@ -3,9 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
-  # The checks are also runnable by hand: a push does not always create a pull_request run (2026-11-02, this branch,
-  # four pushes in a row created none while jev-review's pull_request_target fired every time), and a head with no run
-  # cannot be called green.
+  # Manual dispatch lets a head without an automatic pull-request run receive the required checks.
   workflow_dispatch:
 permissions: {}
 jobs:

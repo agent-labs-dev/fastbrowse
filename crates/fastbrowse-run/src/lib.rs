@@ -183,6 +183,9 @@ pub fn check(task: &RunTask) -> Result<(), RunError> {
 
 fn checked(task: &RunTask) -> Result<Checked, RunError> {
     let refuse = |message: String| Err(RunError::Invalid(message));
+    if task.task.trim().is_empty() {
+        return refuse("task must not be empty".into());
+    }
     let given = |pairs: &[(&'static str, bool)]| -> Vec<&'static str> {
         pairs.iter().filter(|(_, on)| *on).map(|(name, _)| *name).collect()
     };

@@ -11,6 +11,16 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A filled form that asks for confirmation stops before optional screenshot reading, so an image-provider failure cannot replace that ending.
+
+- Model screenshots check fresh page text for resolved secrets before capture. Image readings mask secret values before becoming notes or evidence.
+
+- Scoped popups bypass service workers before their first request, so an existing worker cannot replace an allowed destination with a refused redirect.
+
+- Empty and whitespace-only tasks are refused before model or browser setup.
+
+- Screenshot reading has its own `image_read` cost purpose and runs independently of Jev's image-input profile. Secret and scoped-screenshot restrictions still apply.
+
 - Screenshot facts identify the LLM image reader as `llm_image`, while facts selected by Jev keep `jev_choice`. Screenshot quotes and source digests are unchanged.
 
 - Finishing and recovery reuse a successful empty screenshot reading within the same run when the pixels have not changed. A failed read remains eligible for retry.

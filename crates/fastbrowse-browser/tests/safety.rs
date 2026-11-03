@@ -725,6 +725,42 @@ async fn test_a_service_worker_cannot_answer_a_navigation_past_the_gate() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_service_worker_cannot_answer_a_popups_first_navigation() {
+    let _turn = turn().await;
+    let Some(connection) = chrome() else { return };
+    let sites = origin_sites();
+    let foreign = format!("{}/page?{SECRET_QUERY}", sites.foreign("127.0.0.1"));
+    let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
+    s.page.navigate(&format!("{}/sw", sites.granted), None).await.expect("navigate");
+    let active = s.session.active_session_id().expect("active");
+    s.session
+        .send(
+            "Runtime.evaluate",
+            json!({"expression": "navigator.serviceWorker.ready.then(() => true)", "awaitPromise": true}),
+            Some(&active),
+        )
+        .await
+        .expect("worker ready");
+    let url = format!("{}/swtarget?to={}", sites.granted, quote(&foreign));
+    s.session
+        .send(
+            "Runtime.evaluate",
+            json!({"expression": format!("window.open({})", json!(url)), "userGesture": true}),
+            Some(&active),
+        )
+        .await
+        .expect("window.open");
+    settle().await;
+    let urls: Vec<String> = s.session.tabs().into_iter().map(|t| t.url).collect();
+    let denials = s.session.denials();
+    let hits = sites.hits();
+    s.close().await;
+    assert_eq!(hits, Vec::<String>::new(), "foreign requests: {hits:?}");
+    assert_eq!(denials, 0, "worker redirected the initial popup navigation: {urls:?}");
+    assert!(urls.iter().any(|url| url.starts_with(&format!("{}/swtarget", sites.granted))), "{urls:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_scoped_run_delivers_no_live_frames() {
     let _turn = turn().await;
     let Some(connection) = chrome() else { return };

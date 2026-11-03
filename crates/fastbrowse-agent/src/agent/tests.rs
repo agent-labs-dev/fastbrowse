@@ -1252,7 +1252,7 @@ impl LLMClient for ImageLLM {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let reply = match purpose {
-                LLMPurpose::Compose => json!({"text": "premium 3.459 per gallon"}),
+                LLMPurpose::ImageRead => json!({"text": "premium 3.459 per gallon"}),
                 _ => json!(null),
             };
             let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
@@ -1277,7 +1277,7 @@ impl LLMClient for EmptyImageLLM {
         schema: &'a dyn ResponseSchema,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
-        assert_eq!(purpose, LLMPurpose::Compose);
+        assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
         assert_eq!(schema.name(), "ImageReading");
         assert_eq!(messages.iter().map(|message| message.images.len()).sum::<usize>(), 1);
         let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2457,4 +2457,64 @@ async fn an_executed_action_without_a_page_change_keeps_covered_actions_withheld
     take(&agent, &mut state, Operation::Escape, None).await;
     let (offered, problem, _) = next_ask(&agent, &state).await;
     assert!(!offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
+}
+
+#[tokio::test]
+async fn test_the_llm_image_reader_does_not_require_decision_model_images() {
+    let llm = Arc::new(EmptyImageLLM::default());
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    agent.read_drawn_page(&mut run_state(), &page).await.expect("LLM image reading");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_the_llm_image_reader_withholds_a_screenshot_while_a_secret_shows() {
+    let llm = Arc::new(EmptyImageLLM::default());
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
+    agent.seen().secret_on_screen = true;
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    agent.read_drawn_page(&mut run_state(), &page).await.expect("secret withheld");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_the_llm_image_reader_checks_for_a_secret_with_a_fresh_glance() {
+    let llm = Arc::new(EmptyImageLLM::default());
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
+    agent.redactor().register("credential", "private-token", None);
+    assert!(!agent.seen().secret_on_screen);
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    agent.read_drawn_page(&mut run_state(), &page).await.expect("fresh secret withheld");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_image_read_text_is_masked_before_becoming_evidence() {
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ImageLLM));
+    agent.redactor().register("credential", "3.459", None);
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    let mut state = run_state();
+    agent.read_drawn_page(&mut state, &page).await.expect("masked image reading");
+    let notes = format!("{:?}", state.notes.facts());
+    assert!(!notes.contains("3.459"), "image facts must withhold resolved secrets");
+}
+
+#[tokio::test]
+async fn test_an_unsent_form_stops_before_an_unneeded_image_read() {
+    let llm = Arc::new(EmptyImageLLM(Default::default(), true));
+    let agent = Agent::new(Arc::new(Screenshots::default()), Arc::new(Answers(Some("confirm"))), llm.clone());
+    let page = Observation { visual_content: true, ..observation(&[holding("Reference", "REF-1")]) };
+    let capture = capture(&[(BlockKind::Paragraph, "The form is ready")]);
+    let mut state = run_state();
+    state.notes = Notes::new([Fact::read("The form is ready", block_evidence(&capture, "s0"), FactReader::JevChoice)]);
+    state.read_documents.insert(super::state::read_key(&page), false);
+    state.history.push(typed_into("Reference"));
+    let result = agent.finish(&mut state, &page, None, None).await;
+    assert!(matches!(result, Err(Flow::Stop(ref stop)) if stop.status == Status::NeedsConfirmation), "{result:?}");
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

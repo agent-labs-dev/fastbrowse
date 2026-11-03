@@ -46,7 +46,7 @@ pub async fn read_image(
         Message::user(format!("# Task\n{task}\n\n# Screenshot\nThe page's viewport screenshot is attached."));
     user.images.push(Bytes(png));
     let messages = [Message::system(format!("{READ_INSTRUCTIONS}{UNTRUSTED}")), user];
-    Ok(generate::<ImageReading>(llm, LLMPurpose::Compose, &messages, ledger).await?)
+    Ok(generate::<ImageReading>(llm, LLMPurpose::ImageRead, &messages, ledger).await?)
 }
 
 #[cfg(test)]

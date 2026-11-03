@@ -1034,8 +1034,12 @@ impl BrowserSession {
         }
         let s = Some(session_id);
         // A new popup has no renderer until it resumes, so renderer setup waits forever if it precedes this. Fetch
-        // is enabled first so the initial request meets any scope gate and its response can be captured.
+        // and service-worker bypass are enabled first so the initial request meets the scope gate and its response
+        // can be captured.
         self.send("Fetch.enable", json!({"patterns": patterns}), s).await?;
+        if scoped {
+            self.bypass_service_workers(session_id, true).await?;
+        }
         self.send("Runtime.runIfWaitingForDebugger", json!({}), s).await?;
         let mut commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>> = vec![];
         for domain in ENABLE_DOMAINS {
@@ -1069,9 +1073,6 @@ impl BrowserSession {
                 .await
                 .map(drop)
             }));
-        }
-        if scoped {
-            commands.push(Box::pin(self.bypass_service_workers(session_id, true)));
         }
         // Track parsing and hydration before the first post-navigation read, so an already quiet document does not
         // pay another full window just to install its observer.

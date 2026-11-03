@@ -241,13 +241,23 @@ fn only_a_named_local_or_handed_browser_leaves_the_cloud() {
 
 #[test]
 fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
-    let local = RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() };
+    let local = RunTask { task: "read the page".into(), local: true, viewport: Some((640, 480)), ..RunTask::default() };
     assert!(fastbrowse_run::check(&local).is_ok());
-    let handed = RunTask { cdp_port: Some(9222), viewport: Some((640, 480)), ..RunTask::default() };
+    let handed = RunTask {
+        task: "read the page".into(),
+        cdp_port: Some(9222),
+        viewport: Some((640, 480)),
+        ..RunTask::default()
+    };
     let error = fastbrowse_run::check(&handed).unwrap_err().to_string();
     assert!(error.contains("viewport"), "{error}");
-    let error =
-        fastbrowse_run::check(&RunTask { viewport: Some((0, 480)), ..RunTask::default() }).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&RunTask {
+        task: "read the page".into(),
+        viewport: Some((0, 480)),
+        ..RunTask::default()
+    })
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("greater than zero"), "{error}");
 }
 
@@ -255,12 +265,12 @@ fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
 async fn a_viewport_rejects_open_browser_before_invoking_the_callback() {
     let calls = Arc::new(AtomicUsize::new(0));
     let callback_calls = calls.clone();
-    let (_, mut host) = task(|o, _| o.viewport = Some((640, 480)));
+    let (task, mut host) = task(|o, _| o.viewport = Some((640, 480)));
     host.open_browser = Some(Arc::new(move || {
         callback_calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Err("callback must not run".to_string()) })
     }));
-    let error = run_task(RunTask { viewport: Some((640, 480)), ..RunTask::default() }, host).await.unwrap_err();
+    let error = run_task(task, host).await.unwrap_err();
     assert!(matches!(error, RunError::Invalid(message) if message.contains("viewport")));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
@@ -597,4 +607,16 @@ async fn a_run_cancelled_while_its_browser_opens_keeps_what_the_fetched_read_spe
     let receipt = cancelled(running.await.unwrap());
     assert!(billed(&receipt) > 0, "the fetched read's spend was lost: {:?}", receipt.cost);
     assert!(receipt.recordings.is_empty());
+}
+
+#[test]
+fn an_empty_task_is_refused_before_provider_or_browser_setup() {
+    for text in ["", " ", "\n\t"] {
+        let (task, _) = task(|task, _| task.task = text.into());
+        let result = fastbrowse_run::check(&task);
+        assert!(
+            matches!(result, Err(RunError::Invalid(ref message)) if message == "task must not be empty"),
+            "{result:?}"
+        );
+    }
 }
