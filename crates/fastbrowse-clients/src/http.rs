@@ -83,6 +83,11 @@ impl Response {
         header(&self.headers, name)
     }
 
+    /// Replace the request credential in provider text before it reaches traces or errors.
+    pub(crate) fn scrub(&self, text: &str) -> String {
+        scrub(text, &self.credential)
+    }
+
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }
@@ -96,6 +101,10 @@ impl Response {
     pub fn json_value(&self) -> Option<Value> {
         serde_json::from_slice(&self.body).ok()
     }
+}
+
+pub(crate) fn scrub(text: &str, credential: &str) -> String {
+    if credential.is_empty() { text.to_string() } else { text.replace(credential, "[api key]") }
 }
 
 fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -286,8 +295,7 @@ impl Http {
             Ok(response) => {
                 fields.insert("status".into(), response.status.into());
                 let text = response.text();
-                let text =
-                    if response.credential.is_empty() { text } else { text.replace(&response.credential, "[api key]") };
+                let text = response.scrub(&text);
                 fields.insert("response".into(), serde_json::from_str(&text).unwrap_or(Value::String(text)));
             }
             Err(error) => {

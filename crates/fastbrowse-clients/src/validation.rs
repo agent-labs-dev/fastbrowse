@@ -121,11 +121,7 @@ pub fn json_object(response: &Response) -> Result<Map<String, Value>, String> {
 ///
 /// Some providers echo the rejected key back in an authentication error, and error text is logged.
 pub fn body_excerpt(response: &Response) -> String {
-    text::prefix(&scrubbed(response, &response.text()), 400).to_string()
-}
-
-fn scrubbed(response: &Response, text: &str) -> String {
-    if response.credential.is_empty() { text.to_string() } else { text.replace(&response.credential, "[api key]") }
+    text::prefix(&response.scrub(&response.text()), 400).to_string()
 }
 
 fn field<'a>(value: Option<&'a Value>, keys: &[&str]) -> Option<&'a Value> {
@@ -157,21 +153,21 @@ pub fn describe(response: &Response) -> String {
         field(body.as_ref(), &["providerMetadata", "gateway", "routing", "resolvedProvider"]).and_then(Value::as_str);
     // Scrubbed before it is cut: a cut through an echoed key leaves a fragment no exact replacement matches.
     let mut text = format!("HTTP {}{}: ", response.status, kind.map(|kind| format!(" {kind}")).unwrap_or_default());
-    text += text::prefix(&scrubbed(response, message), 300);
+    text += text::prefix(&response.scrub(message), 300);
     if let Some(upstream) = upstream {
         text += &format!(" (via {upstream})");
     }
     if let Some(reason) = wrapped_reason(body.as_ref())
         && reason != message
     {
-        text += &format!("; the provider said: {}", text::prefix(&scrubbed(response, reason), 200));
+        text += &format!("; the provider said: {}", text::prefix(&response.scrub(reason), 200));
     }
-    scrubbed(response, &text)
+    response.scrub(&text)
 }
 
 pub fn response_error(response: &Response, detail: &str) -> DecisionError {
     // `detail` can quote the body, as a validation error's input does.
-    DecisionError::Failed(format!("{}; {}", text::prefix(&scrubbed(response, detail), 300), describe(response)))
+    DecisionError::Failed(format!("{}; {}", text::prefix(&response.scrub(detail), 300), describe(response)))
 }
 
 /// About 22s in all. With 6s, a Jev 503 ended 5 of 311 eval runs, and each time the next run, started 0 to 15s later,

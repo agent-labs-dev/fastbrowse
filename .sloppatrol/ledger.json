@@ -4969,10 +4969,10 @@
       "what": "Credential scrubbing is written three times: OpenAICompatibleLLM::scrubbed (openai_compatible.rs:484-486), validation::scrubbed (validation.rs:127-129) and inline in Http::post_json (http.rs:224), each with its own \"[api key]\" literal; canonical home is one helper beside Response::credential in http.rs",
       "why": "Same rule (empty key means no-op, else replace every occurrence with \"[api key]\"). Only difference: the LLM copy reads self.api_key while the other two read response.credential, which Http::send fills from the same header; that difference is accidental. A change to the redaction (marker text, also scrubbing a trimmed or url-encoded key) has to be repeated in all three.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The same credential replacement rule appears independently in openai_compatible.rs, validation.rs, and http.rs, with no constraint requiring separate helpers; the copies can drift if redaction changes.",
+      "status": "fixed",
+      "reason": "Fixed: http::scrub is the single literal credential replacement implementation. Response delegates with its request credential; OpenAI-compatible completion validation supplies its own API key. Scrubbing remains before excerpting and empty credentials remain a no-op. All 66 provider and validation tests and strict Clippy pass.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: whether two copies share one contract needs judgment"
     },
     {
@@ -5423,10 +5423,10 @@
       "what": "The Answer union is restated three ways: the Answer enum and by_type (decision.rs:146-153, four tags incl. box), the literal_tag types (54-57), and Evaluation::ty's Tagged variant list (338-344), which has drifted: it omits BoxAnswer, added later by 96cfeb36/7bbaac91. The enum plus literal tags are canonical.",
       "why": "Evaluation::ty is reached only from crates/fastbrowse-core/tests/golden.rs:107 (frozen Python schema), so production is unaffected today, but the schema no longer describes what Evaluation deserializes (a box answer). by_type also hardcodes the tag literals and the 'expected tags' message instead of ChoiceTag::VALUE etc., so a fifth answer kind needs four separate edits. Fix is either drop Evaluation's Schema impl from production code or make it list box; which depends on whether the golden case should change.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "Not edited: Needs a call on the frozen schema: listing box in Evaluation::ty changes the golden Evaluation schema case, and removing the Schema impl changes public API of a published crate that golden.rs uses. The item itself leaves this open, so neither fix is behaviour-preserving within the closed set.. Verifier: `Answer` deserializes `BoxAnswer`, but `Evaluation::ty()` emits a tagged schema containing only choice, noul and score; `by_type` also duplicates the tag set. The production schema can therefore contradict the accepted evaluation shape.",
+      "status": "fixed",
+      "reason": "Fixed in 381136da: Python question and answer unions include Box, and the Rust Evaluation schema includes bounded optional-confidence BoxAnswer. Public Python adapter roundtrip and actual Rust validate_typed acceptance/rejection tests pass; canonical schema goldens agree. No production caller of Evaluation::ty was identified.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: whether two copies share one contract needs judgment"
     },
     {

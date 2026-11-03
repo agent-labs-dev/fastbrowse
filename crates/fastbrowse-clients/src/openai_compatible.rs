@@ -15,7 +15,7 @@ use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
 use crate::anthropic::{self, ANTHROPIC_VERSION};
-use crate::http::{Http, Response};
+use crate::http::{Http, Response, scrub};
 use crate::validation::{
     Attempts, LLM_ATTEMPT_SECONDS, RetryStop, Usage, body_excerpt, describe, dollars, errors_json, json_invalid,
     json_object, object_value, post_with_retry, retryable, token_count, with_discarded,
@@ -489,10 +489,6 @@ impl OpenAICompatibleLLM {
         }
     }
 
-    fn scrubbed(&self, text: &str) -> String {
-        if self.api_key.is_empty() { text.to_string() } else { text.replace(&self.api_key, "[api key]") }
-    }
-
     fn host(&self) -> Option<String> {
         url::Url::parse(&self.base_url).ok().and_then(|url| url.host_str().map(str::to_string))
     }
@@ -766,7 +762,7 @@ impl OpenAICompatibleLLM {
                 Err(error) => {
                     return Err(LLMError::Failed(format!(
                         "Invalid completion envelope: {}",
-                        text::prefix(&self.scrubbed(&error), 400)
+                        text::prefix(&scrub(&error, &self.api_key), 400)
                     )));
                 }
             };
@@ -801,7 +797,7 @@ impl OpenAICompatibleLLM {
             };
             // Paths and reasons are enough to repair the schema. A path is the model's own key, which can be anything
             // it read, so it is scrubbed too.
-            let detail = self.scrubbed(&detail);
+            let detail = scrub(&detail, &self.api_key);
             if ends_mid_json {
                 // fastbrowse sets no output cap, so a reply ending mid-JSON was cut off by the model or provider.
                 if attempt == 0 {
