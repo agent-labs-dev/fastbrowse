@@ -677,3 +677,57 @@ async fn an_explicit_browser_run_opens_the_supplied_browser_before_reading() {
     assert_eq!(result.status, Status::Error);
     assert!(result.error.as_deref().unwrap().contains("supplied browser was requested"));
 }
+
+#[tokio::test]
+async fn settings_local_profile_or_headed_route_to_browser_before_http() {
+    for variable in ["FASTBROWSE_PROFILE", "FASTBROWSE_HEADED"] {
+        let value = if variable.ends_with("PROFILE") { "/tmp/kept-profile" } else { "true" };
+        let (mut task, mut host) = task(|_, _| {});
+        host.settings = Some(Settings::from_sources(&[(variable, value)], None).unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let seen = requests.clone();
+        host.http =
+            Some(Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                seen.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Ok(Response::new(200, b"<p>fetched</p>".to_vec()).with_header("content-type", "text/html"))
+                })
+            })));
+        let opens = Arc::new(AtomicUsize::new(0));
+        let opened = opens.clone();
+        host.open_browser = Some(Arc::new(move || {
+            opened.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err("browser callback reached".into()) })
+        }));
+        let result = run_task(task, host).await.unwrap();
+        assert_eq!(opens.load(Ordering::SeqCst), 1, "{variable}");
+        assert_eq!(requests.load(Ordering::SeqCst), 0, "{variable}");
+        assert!(result.error.as_deref().unwrap_or_default().contains("browser callback reached"), "{result:?}");
+
+        task = RunTask {
+            fetch: true,
+            start: Some("https://docs.example.test/value".into()),
+            ..RunTask { task: "read the page".into(), ..RunTask::default() }
+        };
+        let fetch_requests = Arc::new(AtomicUsize::new(0));
+        let fetch_seen = fetch_requests.clone();
+        let mut fetch_host = Host {
+            jev: Some(Arc::new(Silent)),
+            llm: Some(Arc::new(Silent)),
+            settings: Some(Settings::from_sources(&[(variable, value)], None).unwrap()),
+            http: Some(Http::new(Arc::new(
+                move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                    fetch_seen.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async {
+                        Ok(Response::new(200, b"<p>fetched</p>".to_vec()).with_header("content-type", "text/html"))
+                    })
+                },
+            ))),
+            ..Host::default()
+        };
+        fetch_host.open_browser = Some(Arc::new(|| Box::pin(async { Err("must not open".into()) })));
+        let result = run_task(task, fetch_host).await.unwrap();
+        assert_eq!(result.status, Status::Error, "{variable}: expected scripted clients to stop after fetch");
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1, "{variable}: explicit fetch must use HTTP");
+    }
+}

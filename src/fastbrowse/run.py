@@ -181,7 +181,8 @@ async def run_task(
     Without `fetch`, a run reads the same way until the page refuses something only a browser can do, then runs the
     task again on the browser the other options describe, spending what the attempt left of `limits`, with the
     attempt's calls listed first in its cost. `browser` starts the browser from the first step, as do `record`,
-    `attach`, `target_match`, `cdp_url`, `cdp_port`, a signed-in profile, a headed window and `foreground`.
+    `attach`, `target_match`, `cdp_url`, `cdp_port`, `proxy_country`, `cloud_extensions`, a signed-in profile,
+    a headed window and `foreground`. A profile or headed window from settings also starts the browser first.
 
     `open_browser` is the caller's own browser, opened only if the run needs one: it returns the address of a tab in
     front to drive, and the caller closes it after the run. `page_ready` is awaited once the browser's first page

@@ -550,8 +550,7 @@ fn refused(message: &str) -> Refused {
 /// Whether a run reads over HTTP before any browser starts. A browser it was told to use, or anything that only has a
 /// meaning from the first step in a browser (a recording, an attached window, a signed-in profile, a window to watch),
 /// goes straight to it.
-fn reads_first(task: &RunTask) -> bool {
-    let chrome = task.chrome.clone().unwrap_or_default();
+fn reads_first(task: &RunTask, chrome: &LocalChrome) -> bool {
     task.fetch
         || !(task.browser
             || task.record.is_some()
@@ -714,10 +713,11 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         None => Arc::from(settings.llm(&http)?),
     };
     let mut fetch_spent: Vec<CostLine> = Vec::new();
+    let chrome = task.chrome.clone().unwrap_or_else(|| settings.local_chrome());
     let mut limits = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
-    if reads_first(&task) {
+    if reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
         let clients = (jev.clone(), llm.clone());
@@ -738,7 +738,6 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         fetch_spent = read.result.cost.lines;
         resume = read.resume;
     }
-    let chrome = task.chrome.clone().unwrap_or_else(|| settings.local_chrome());
     // A `chrome` argument names local Chrome; with no browser named at all the run takes the cloud one.
     if host.browser_api_key.is_none()
         && host.open_browser.is_none()

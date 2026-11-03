@@ -74,6 +74,7 @@ impl Agent {
         // Coordinates belong to the pixels Jev saw; scrolling and layout can change without semantic guards changing.
         let Some(current) = self.viewport().await? else { return Ok(None) };
         if current != png {
+            self.event("covered_box_changed", Map::new);
             return Ok(None);
         }
         let (x, y) = found.edges.centre();

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A Chrome profile or headed window selected through settings starts the browser before any HTTP read, just as an explicit Chrome option does. Explicit HTTP-only runs still use HTTP.
+
 - JavaScript, Go, Java and .NET run options now reach the server for origin restrictions, HTTP-only and browser-first routing, cloud extensions and browser lifetime. Per-run browser defaults still replace or clear the client defaults. Go rejects an empty origin list rather than dropping the restriction during serialization.
 
 - Partial split-batch receipts are recorded once, including through failover and cancellation. Custom decision clients retain their returned partial costs.
