@@ -19,6 +19,7 @@ use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{self, Redactor, downloads_question, irreversible_question};
 use fastbrowse_core::schema::{Schema, Ty, json_schema, strict_schema};
 use fastbrowse_core::telemetry::dollars;
+use fastbrowse_core::validation::validate_typed;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -125,6 +126,19 @@ fn every_schema_is_the_one_pydantic_writes() {
         };
         assert_eq!(strict, text_of(case, "strict"), "strict schema of {name}");
     }
+}
+
+#[test]
+fn evaluation_validation_accepts_and_rejects_box_answers() {
+    let valid = r#"{"model":"jev","answers":{"target":{"type":"box","box":{"top":0.1,"bottom":0.3,"left":0.2,"right":0.4},"confidence":null}},"input_tokens":1,"cost":{"component":"jev","basis":"metered","dollars":0.01}}"#;
+    let parsed = validate_typed::<Evaluation>(valid).expect("valid box answer");
+    assert!(
+        matches!(&parsed.answers["target"], fastbrowse_core::decision::Answer::Box(answer) if answer.edges.right == 0.4 && answer.confidence.is_none())
+    );
+    let invalid = valid.replace("\"right\":0.4", "\"right\":\"bad\"");
+    assert!(validate_typed::<Evaluation>(&invalid).is_err(), "invalid box edge must be rejected");
+    let invalid_confidence = valid.replace("\"confidence\":null", "\"confidence\":1.1");
+    assert!(validate_typed::<Evaluation>(&invalid_confidence).is_err(), "confidence above one must be rejected");
 }
 
 fn fixtures() -> (Observation, Capture) {

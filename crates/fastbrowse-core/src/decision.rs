@@ -339,11 +339,30 @@ impl Schema for Evaluation {
             ],
         )
         .ty();
+        let edges = ModelTy::frozen(
+            "Edges",
+            vec![
+                Field::required("top", Ty::Float),
+                Field::required("bottom", Ty::Float),
+                Field::required("left", Ty::Float),
+                Field::required("right", Ty::Float),
+            ],
+        )
+        .ty();
+        let boxed = ModelTy::frozen(
+            "BoxAnswer",
+            vec![
+                Field::default("type", BoxTag::ty(), "box"),
+                Field::required("box", edges),
+                Field::default("confidence", Ty::optional(Ty::Float.le(1).ge(0)), Value::Null),
+            ],
+        )
+        .ty();
         let answer = Ty::Alias(
             "Answer",
             Box::new(Ty::Tagged {
                 property: "type",
-                variants: vec![("choice", choice), ("noul", noul), ("score", score)],
+                variants: vec![("choice", choice), ("noul", noul), ("score", score), ("box", boxed)],
             }),
         );
         ModelTy::frozen(

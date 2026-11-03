@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Python Jev clients accept the box questions and answers used by the Rust browser agent. Python and Rust schemas agree on optional box confidence, including its bounds.
+
 - Configuration and recording startup failures retain the work and charges already incurred. Python keeps the original exception class with a typed receipt; JSON-RPC, MCP and CLI error responses preserve the same accounting without an answer or success status.
 
 - A Chrome profile or headed window selected through settings starts the browser before any HTTP read, just as an explicit Chrome option does. Explicit HTTP-only runs still use HTTP.
