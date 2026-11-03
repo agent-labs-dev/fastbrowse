@@ -138,19 +138,19 @@ test('a per-run option left undefined leaves the default from start in place', a
 });
 
 test('a per-run null takes a default from start out of that run, and the next run has it again', async () => {
-  const defaults = { cdpPort: 9222, attach: true, viewport: [800, 600] as [number, number] };
+  const defaults = { cdpPort: 9222, attach: true, targetMatch: 'Checkout' };
   await withServer({ ...scriptedRun('echo'), ...defaults }, async fb => {
     // The server refuses `cdp_port` beside `cdp_url`, so without the null this run could not name its own browser.
     assert.deepEqual(await sent(fb, { cdpPort: null, attach: null, ...ownBrowser }), {
       task: 'Add the kettle to the cart',
       cdp_url: ownBrowser.cdpUrl,
-      viewport: [800, 600],
+      target_match: 'Checkout',
     });
     assert.deepEqual(await sent(fb, {}), {
       task: 'Add the kettle to the cart',
       cdp_port: 9222,
       attach: true,
-      viewport: [800, 600],
+      target_match: 'Checkout',
     });
   });
 });
