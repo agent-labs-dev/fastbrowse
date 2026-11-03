@@ -41,6 +41,7 @@ another route. A run whose stall budget runs out on such a failure ends `unavail
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
+Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_choice`.
 A successful screenshot reading that finds no answer is reused for identical pixels within one run.
 A changed screenshot is read again; failed model calls are not cached.
 

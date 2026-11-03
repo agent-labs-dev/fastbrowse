@@ -487,7 +487,8 @@
     },
     "FactReader": {
       "enum": [
-        "jev_choice"
+        "jev_choice",
+        "llm_image"
       ],
       "title": "FactReader",
       "type": "string"

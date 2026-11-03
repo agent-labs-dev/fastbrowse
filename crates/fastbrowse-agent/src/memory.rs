@@ -365,7 +365,7 @@ impl Notes {
             text: text.into(),
             evidence: Some(evidence),
             basis: Vec::new(),
-            reader: FactReader::JevChoice,
+            reader: FactReader::LlmImage,
         })
     }
 
@@ -658,6 +658,7 @@ mod tests {
         assert!(notes.add_image_read("premium 3.459", "https://example.test/map", at, b"a-png"));
         assert!(notes.answered());
         let fact = notes.facts()[0];
+        assert_eq!(serde_json::to_value(fact.reader).unwrap(), "llm_image");
         let evidence = fact.evidence.as_ref().expect("the screenshot is the evidence");
         assert_eq!(evidence.url, "https://example.test/map");
         assert_eq!(evidence.source_id, evidence.capture_sha256);

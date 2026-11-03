@@ -246,6 +246,8 @@ public enum FactReader
 {
     [JsonStringEnumMemberName("jev_choice")]
     JevChoice,
+    [JsonStringEnumMemberName("llm_image")]
+    LlmImage,
 }
 
 /// <summary>

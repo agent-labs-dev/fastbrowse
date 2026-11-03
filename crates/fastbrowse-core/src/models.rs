@@ -239,6 +239,7 @@ impl Schema for Citation {
 str_enum! {
     pub enum FactReader {
         JevChoice = "jev_choice",
+        LlmImage = "llm_image",
     }
 }
 

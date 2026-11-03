@@ -25,7 +25,7 @@ export type Operation =
  */
 export type Decider = 'jev' | 'code';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
-export type FactReader = 'jev_choice';
+export type FactReader = 'jev_choice' | 'llm_image';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type LLMPurpose = 'start' | 'compose' | 'fill';

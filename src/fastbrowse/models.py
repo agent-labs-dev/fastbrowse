@@ -140,6 +140,7 @@ class Citation(Frozen):
 
 class FactReader(StrEnum):
     JEV_CHOICE = "jev_choice"
+    LLM_IMAGE = "llm_image"
 
 
 class StepFact(Frozen):
