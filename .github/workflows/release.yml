@@ -206,26 +206,16 @@ jobs:
       - run: npm --prefix packages/sdk run build
       # npm packs a licence file found beside the manifest.
       - run: cp LICENSE packages/sdk/
-      # A version already on npm is passed over, so a run that stopped partway can be run again: npm refuses
-      # to publish a version twice, and the job would otherwise stop at the first package that went through.
-      - name: Publish the platform packages
+      # Every package is attempted even when one is refused, the SDK goes last and only once its five platform
+      # packages are on npm, and every `latest` dist-tag is read back at the end. 0.9.1 stopped at the third
+      # package on a transparency-log conflict, so the SDK never published and `latest` stayed on 0.9.0 for
+      # four days while the job that failed had already failed.
+      - name: Publish the platform packages and the SDK
         run: |
-          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
-            if npm view "@fastbrowse/$target@$VERSION" version > /dev/null 2>&1; then
-              echo "@fastbrowse/$target $VERSION is already published"
-            else
-              npm publish "$RUNNER_TEMP/npm/$target"
-            fi
-          done
-      # Last: it depends on the five above at this exact version.
-      - name: Publish the SDK
-        run: |
-          if npm view "fastbrowse@$VERSION" version > /dev/null 2>&1; then
-            echo "fastbrowse $VERSION is already published"
-          else
-            # With `./`, or npm reads the argument as a GitHub repository.
-            npm publish ./packages/sdk --access public
-          fi
+          uv run --no-project python scripts/npm_publish.py \
+            --version "$VERSION" \
+            --platforms "$RUNNER_TEMP/npm" \
+            --sdk packages/sdk
 
   # The Rust crates, by trusted publishing as npm is: crates.io accepts this job's OIDC identity for each crate and
   # hands back a token that is revoked when the job ends. A crate depends on the others at this exact version, so
