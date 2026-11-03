@@ -212,17 +212,22 @@ impl Agent {
         let mut slot: Option<RunState> = None;
         let resume = options.resume.take();
         let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
-            let body = Box::pin(self.body(task, &options, resume, &ledger, &mut slot));
+            let running = async {
+                match self.body(task, &options, resume, &ledger, &mut slot).await {
+                    Ok(result) => (result, true, false),
+                    Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
+                        (blocked_without_browser(message), false, true)
+                    }
+                    Err(flow) => (self.stopped(flow, slot.as_mut(), &ledger).await, false, false),
+                }
+            };
+            // Reporting can await providers too, so the same deadline must cover the stop path.
             let outcome = match deadline {
-                Some(deadline) => tokio::time::timeout_at(deadline.into(), body).await.ok(),
-                None => Some(body.await),
+                Some(deadline) => tokio::time::timeout_at(deadline.into(), running).await.ok(),
+                None => Some(running.await),
             };
             let ended = match outcome {
-                Some(Ok(result)) => (result, true, false),
-                Some(Err(Flow::Browser(BrowserError::NeedsBrowser(message)))) => {
-                    (blocked_without_browser(message), false, true)
-                }
-                Some(Err(flow)) => (self.stopped(flow, slot.as_mut(), &ledger).await, false, false),
+                Some(ended) => ended,
                 None => {
                     let limit = ledger.limits.max_seconds.unwrap_or_default();
                     let notes = slot.as_ref().map(|state| state.notes.clone()).unwrap_or_default();

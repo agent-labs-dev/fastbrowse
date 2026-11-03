@@ -790,7 +790,7 @@ impl Page for FinishPage {
     }
 
     fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
-        unreachable!("the finish-path test does not navigate")
+        Box::pin(async { Ok(()) })
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
@@ -1796,6 +1796,49 @@ async fn test_a_step_limited_composing_run_reports_what_it_read() {
     assert!(!result.evidence.is_empty());
     assert_eq!(ledger.state().llm_calls, 1);
     assert_eq!(ledger.check(0.0).unwrap_err().budget.resource, fastbrowse_core::models::BudgetResource::Steps);
+}
+
+struct StalledCompose;
+
+impl LLMClient for StalledCompose {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        _: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            ledger.unwrap().reserve(CostComponent::Llm, 0.0, 1)?;
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_partial_composition_obeys_the_run_deadline() {
+    let agent =
+        Agent::new(Arc::new(FinishPage(observation(&[]))), Arc::new(ComposeSupport(true)), Arc::new(StalledCompose));
+    let ledger = Arc::new(Ledger::new(Limits { max_steps: Some(1), max_seconds: Some(0.05), ..Limits::default() }));
+    ledger.state().steps = 1;
+    let mut state = run_state();
+    state.compose = true;
+    let page = capture(&[(BlockKind::Paragraph, "Record A: 99")]);
+    state.notes.add(Fact::read("Record A: 99", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let options = super::RunOptions {
+        ledger: Some(ledger.clone()),
+        resume: Some(super::Resume { state, url: "https://example.test/".into() }),
+        ..Default::default()
+    };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), agent.run("Read the record", options))
+        .await
+        .expect("partial composition must stop at the run deadline")
+        .unwrap();
+    assert_eq!(ledger.state().llm_calls, 1);
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Seconds);
+    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
+    assert!(!result.evidence.is_empty());
 }
 
 #[test]
