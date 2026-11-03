@@ -482,23 +482,23 @@ pub async fn verdict(
             IndexMap::from([
                 (
                     QUOTED.to_string(),
-                    "The notes already state the answer: repeating the notes that hold it, after comparing them where the task picks a winner, is enough.".into(),
+                    "Repeating every selected note as written answers only the items the task asks to be told, with no unrelated text. No extraction, rewording or calculation is needed; selecting the winner is enough when the task asks for one.".into(),
                 ),
                 (
                     "work".to_string(),
-                    "The answer needs a number worked out, by counting or adding up, or sentences no note states.".into(),
+                    "The answer needs extraction from broader notes, rewording, calculation, or sentences no note states.".into(),
                 ),
             ]),
         )),
     )]);
     for (index, fact) in written.iter().enumerate() {
         let instructions = format!(
-            "{UNTRUSTED}\nIs note {index} ({}) part of what `task` asks to be told? For a task picking a winner, only the winner's notes are; for a value the task names, only the notes stating it. Labels, navigation, column headings and other items are not.",
+            "{UNTRUSTED}\nIs note {index} ({}) an entire answer or requested value that can be repeated as written, without unrelated text? A note that merely contains a requested value among unrelated text needs extraction instead. For a task picking a winner, only the winner's notes qualify. Labels, navigation and column headings do not answer the task.",
             text::repr(fact)
         );
         let question = NoulQuestion::new(
             instructions,
-            Some("This note states the answer or a value of it."),
+            Some("This entire note is an answer or requested value, ready to repeat as written."),
             Some("It does not."),
         );
         questions.insert(format!("note{index}"), Question::Noul(question));
@@ -727,6 +727,19 @@ mod tests {
         .unwrap();
         let quote = evidence.quote.clone();
         Fact::read(&quote, evidence, FactReader::JevChoice)
+    }
+
+    #[tokio::test]
+    async fn verbatim_answers_require_whole_notes_to_answer_only_the_requested_items() {
+        let notes = Notes::new([fact(0, "Navigation. Item A costs 12. Unrelated company history.".into())]);
+        let jev = Support::new(true);
+        assert!(verdict(&jev, "Report Item A's price", &notes, None).await.unwrap().is_none());
+        let asked = jev.asked.lock().unwrap();
+        let Question::Choice(whole) = &asked[0]["whole"] else { panic!("verbatim answer is a choice") };
+        assert!(whole.criteria[QUOTED].as_str().unwrap().contains("every selected note as written"));
+        let Question::Noul(note) = &asked[0]["note0"] else { panic!("note reuse is yes-or-no") };
+        assert!(note.instructions.contains("an entire answer or requested value"));
+        assert!(note.instructions.contains("unrelated text"));
     }
 
     #[tokio::test]

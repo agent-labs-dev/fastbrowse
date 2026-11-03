@@ -88,6 +88,9 @@ writes page text. A span Jev picks becomes a fact, and identical values from the
 with all their source contexts. When Jev says the answer must be composed, every candidate is kept as a fact and the
 answer is written once, when the run ends.
 
+Jev selects verbatim answers only when every selected note can be repeated as written without unrelated text.
+A value embedded in a broader note needs extraction through the composer and its support check.
+
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.

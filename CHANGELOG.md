@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Verbatim answers repeat only notes that answer the request without unrelated text. Values embedded in broader notes go through composition and citation checks.
+
 - Optional-object schema aliases preserve literal property names containing double underscores, including names that collide with a flattened nested field.
 
 - MCP requests stop sending notifications before their response, while cancelled runs continue cleanup.
