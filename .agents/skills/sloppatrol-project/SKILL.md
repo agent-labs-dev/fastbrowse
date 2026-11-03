@@ -1,6 +1,6 @@
 ---
-name: sift-project
-description: "Quality gate, audit evidence, live roots and cleanup boundaries for fastbrowse. Load before sift audits."
+name: sloppatrol-project
+description: "Quality gate, audit evidence, live roots and cleanup boundaries for fastbrowse. Load before Sloppatrol audits."
 ---
 
 # fastbrowse audit guidance
@@ -28,16 +28,16 @@ npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk
 uv run actionlint
-uv run python .sift/agents.py check
-uv run python .sift/gate.py --base origin/main
+uv run python .sloppatrol/agents.py check
+uv run python .sloppatrol/gate.py --base origin/main
 just rust
 ```
 
 Every command must exit 0. Node.js 22+ is needed only for development. CI retains the required `check`
-status, which depends on the Python matrix, secret scan, sift job and SDK job, and on the five binary builds
-when a change touches what is built. The sift job uses the PR base
+status, which depends on the Python matrix, secret scan, project-rules job and SDK job, and on the five binary builds
+when a change touches what is built. The project-rules job uses the PR base
 rather than main for its changed-file rules. No ast-grep dependency is needed while there are no rules.
-The vendored sift helpers are version 0.3.0; do not rewrite their source locally.
+The vendored Sloppatrol helpers are version 0.1.0; `sloppatrol init --refresh` updates them. Do not rewrite their source locally.
 
 ## Evidence
 
@@ -45,7 +45,7 @@ These commands produce candidates, not blocking verdicts. Run them from the repo
 
 ```sh
 uvx vulture==2.16 src tests scripts --min-confidence 80 --sort-by-size
-npx --yes jscpd@4.0.8 --silent --reporters json --output .sift/runs/evidence/jscpd src/fastbrowse/*.py src/fastbrowse/evals/*.py src/fastbrowse/audit/*.py scripts tests
+npx --yes jscpd@4.0.8 --silent --reporters json --output .sloppatrol/runs/evidence/jscpd src/fastbrowse/*.py src/fastbrowse/evals/*.py src/fastbrowse/audit/*.py scripts tests
 uvx zizmor==1.30.1 --offline .github/workflows
 npx --yes markdownlint-cli2@0.23.3 README.md AGENTS.md CONTRIBUTING.md SECURITY.md 'docs/*.md'
 npx --yes -p typescript@7.0.2 tsc --allowJs --checkJs --noEmit --target es2022 --lib es2022,dom,dom.iterable crates/fastbrowse-browser/js/capture.js crates/fastbrowse-browser/js/snapshot.js
@@ -113,7 +113,7 @@ See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prereq
 | tests/browser/sites/, benchmarks/sites/, evals/fixtures/, audit/fixtures/, bench/cassettes/ | fixture |
 | benchmarks/golden/ | generated |
 | docs/results/, src/fastbrowse/evals/versions.json, packaging/aur/.SRCINFO | generated |
-| crates/fastbrowse-browser/js/autoconsent/, .sift/gate.py, .sift/agents.py | vendor |
+| crates/fastbrowse-browser/js/autoconsent/, .sloppatrol/gate.py, .sloppatrol/agents.py | vendor |
 | .github/, packaging/, tool manifests and lockfiles | config |
 | Markdown and .agents/skills/ | docs |
 
@@ -159,6 +159,6 @@ Detailed runs remain in private Langfuse. See `docs/agents/evals.md` before chan
 
 Existing Ruff rules cover Python style and correctness. Biome lists its JavaScript correctness rules explicitly.
 Tests already enforce eval fingerprints, generated results, provider contracts, status semantics and safety behavior.
-The changelog check, no_slop and Vale own release entries and prose. Do not duplicate those in sift rules.
+The changelog check, no_slop and Vale own release entries and prose. Do not duplicate those in project rules.
 No ast-grep or script rules have been added: whether a model reads a capped value needs judgment. The project
-lenses `.sift/lenses/arbitrary-caps.md` and `.sift/lenses/model-second-guessing.md` cover the shapes above.
+lenses `.sloppatrol/lenses/arbitrary-caps.md` and `.sloppatrol/lenses/model-second-guessing.md` cover the shapes above.

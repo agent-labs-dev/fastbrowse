@@ -70,7 +70,7 @@ bench = ["pytest-codspeed>=5.0.3,<6"]
 line-length = 120
 target-version = "py313"
 # Keep vendored helpers byte-for-byte identical to upstream.
-extend-exclude = [".sift/gate.py", ".sift/agents.py"]
+extend-exclude = [".sloppatrol/gate.py", ".sloppatrol/agents.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC"]
