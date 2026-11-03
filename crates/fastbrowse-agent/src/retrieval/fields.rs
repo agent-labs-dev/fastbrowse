@@ -4,6 +4,7 @@ use fastbrowse_core::decision::{Answer, ChoiceAnswer, ChoiceQuestion, DecisionCl
 use fastbrowse_core::models::{CostComponent, Evidence};
 use fastbrowse_core::output_schema::{OutputField, OutputType};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
+use fastbrowse_core::py::datetime::days_in_month;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::float_str;
 use fastbrowse_core::py::text;
@@ -247,14 +248,7 @@ fn iso_date(raw: &str) -> Option<String> {
     }
     let mut parts = raw.split('-').map(|part| part.parse::<i32>().ok());
     let (year, month, day) = (parts.next()??, parts.next()??, parts.next()??);
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let days = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return None,
-    };
+    let days = i32::from(days_in_month(year, u8::try_from(month).ok()?)?);
     (year >= 1 && (1..=days).contains(&day)).then(|| raw.to_string())
 }
 
@@ -592,5 +586,30 @@ pub fn copy_field(answer: &ChoiceAnswer, candidates: &[Candidate]) -> Option<(Sc
     match matches.as_slice() {
         [only] => Some((only.value.clone(), only.evidence.clone())),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod calendar_tests {
+    use super::iso_date;
+    use fastbrowse_core::py::datetime::DateTime;
+
+    #[test]
+    fn extracted_dates_share_calendar_rules_without_accepting_datetime_inputs() {
+        for (value, extracted, datetime) in [
+            ("1900-02-29", false, false),
+            ("2000-02-29", true, true),
+            ("2024-02-29", true, true),
+            ("2100-02-29", false, false),
+            ("2024-04-31", false, false),
+            ("2024-00-01", false, false),
+            ("2024-13-01", false, false),
+            ("2024-01-00", false, false),
+            ("0000-02-29", false, true),
+            ("2024-02-29T12:00:00", false, true),
+        ] {
+            assert_eq!(iso_date(value).is_some(), extracted, "extracted {value}");
+            assert_eq!(DateTime::parse_str(value).is_ok(), datetime, "datetime {value}");
+        }
     }
 }

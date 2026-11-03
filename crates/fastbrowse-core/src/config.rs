@@ -1,5 +1,4 @@
-//! Tunable policy. Defaults are starting points to be recalibrated from recorded
-//! decision packets.
+//! Run configuration and decision thresholds.
 
 use serde::{Deserialize, Serialize};
 

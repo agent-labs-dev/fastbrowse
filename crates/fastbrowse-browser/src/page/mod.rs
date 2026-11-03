@@ -1,4 +1,4 @@
-//! `CdpPage`: the `Page` seam on a `BrowserSession`. `browser/page.py`.
+//! `CdpPage`: the `Page` seam on a `BrowserSession`.
 //!
 //! Freshness (page_key plus a per-element guard), hit-test-before-input (covered detection), scroll-into-view for
 //! offscreen targets and password masking are ported from jev-ultrafast (MIT):
@@ -40,11 +40,8 @@ use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
 pub(crate) const SETTLE_SECONDS: f64 = 5.0;
-/// How many times one reading of the page starts again after the document it was reading was replaced. A
-/// self-clearing bot check such as PyPI's "Client Challenge" runs its script and then replaces itself with the page,
-/// and an observation in flight across that swap failed with CDP -32000 and ended the run as an error. This bounds
-/// only how often one read follows a document that keeps replacing itself, each try waiting for the next one to
-/// settle; it is not a limit on the agent, whose steps, time and spend are counted elsewhere and untouched here.
+/// A document can replace itself while its snapshot is being read. Restart that read after the replacement settles,
+/// and report failure if replacement continues. Run steps, time and spend are counted separately.
 pub(crate) const REREADS: u32 = 10;
 /// How long one child frame's page script may take before the read goes on without it. A child frame that stops
 /// answering (an advertisement's renderer stuck in a loop) left every observation waiting out the whole CDP command
@@ -63,20 +60,15 @@ pub(crate) const SCREENSHOT_WAIT_SECONDS: f64 = 1.0;
 pub(crate) const SCREENSHOT_STALL_SECONDS: f64 = 5.0;
 /// Times an observation is read again when its history entry and its snapshot name different addresses.
 pub(crate) const HISTORY_REREADS: u32 = 2;
-/// Two tries a second apart were not enough behind a cloud browser's proxy: in three 0.5.8 evals of about 300 runs,
-/// a first page failed both, once on a certificate error, twice timing out connecting and once never becoming ready,
-/// each while the site answered the harness and Browser Use's agent reloaded its way through. Each try waits twice as
-/// long as the one before for the page to become ready: a try restarts the load, so a page whose scripts take longer
-/// than one wait, as DTE Energy's took 35 s each behind the proxy, was otherwise never ready on any try.
+/// A proxy connection can fail transiently, and a slow page needs longer to become ready after a retry. Each try
+/// doubles its readiness wait so restarting the load does not repeatedly interrupt the same slow scripts.
 pub(crate) const NAVIGATE_ATTEMPTS: u32 = 4;
 /// Doubled after each failed try.
 pub(crate) const NAVIGATE_RETRY_SECONDS: f64 = 1.0;
 /// Whether Chrome's error names the site or the connection to it giving nothing, rather than the address being wrong.
 ///
-/// A certificate or TLS failure belongs here: bu2-128's portal served a chain the browser refuses
-/// (`ERR_CERT_AUTHORITY_INVALID`), which ended a run at its first page as `error`, as if fastbrowse had broken, where
-/// nothing the agent did could have changed it. A mistyped address gives `ERR_NAME_NOT_RESOLVED`, which stays a plain
-/// failure because the address is the caller's own.
+/// A certificate or TLS failure belongs here because the agent cannot repair the site's connection. A mistyped
+/// address gives `ERR_NAME_NOT_RESOLVED`, which stays a plain failure because the address is the caller's own.
 fn site_unreachable(name: &str) -> bool {
     UNREACHABLE.contains(&name) || name.starts_with("CERT_") || name.starts_with("SSL_")
 }

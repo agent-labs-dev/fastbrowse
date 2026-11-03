@@ -42,7 +42,7 @@ gitleaks detect --source . --no-banner --redact
 - Markdownlint's initial scan reported 1,077 issues, including line length and table layout. Vale remains the prose gate.
 - JavaScript type checking initially reported 156 issues, including DOM narrowing, implicit parameters and
   the injected window registry. It is evidence until those annotations can be added separately.
-- Gitleaks is pinned to 8.28.0 in CI. No secret or detector baseline is installed.
+- Gitleaks is pinned to 8.28.0 in CI. The repository ships `.gitleaks.toml` and `.gitleaksignore`; use their existing fixture exclusions when classifying findings.
 
 ## Live roots
 

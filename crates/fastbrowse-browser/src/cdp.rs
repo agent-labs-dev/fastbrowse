@@ -120,8 +120,7 @@ struct Inner {
     answered: AtomicBool,
     /// Commands that outlived `CDP_COMMAND_SECONDS`, by the session they addressed. A cloud browser's connection
     /// carries every target the run attached, third-party frames and workers included, and one of those hanging says
-    /// nothing about the tab the run drives: on The Pi Hut a frame's `Page.addScriptToEvaluateOnNewDocument` met its
-    /// deadline twice and every command to the answering main tab was refused.
+    /// nothing about the tab the run drives. A child target's deadline must not prevent commands to an answering tab.
     deadlines: Mutex<HashMap<String, u32>>,
     pong: AtomicBool,
 }
