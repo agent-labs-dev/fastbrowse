@@ -1351,6 +1351,26 @@ async fn test_an_unrelated_sibling_heading_does_not_name_a_unique_control() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_pointer_styled_anchor_without_href_is_offered_and_clicked() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<p id=status>idle</p><a class=btn style=cursor:pointer>More</a>'; document.querySelector('a').addEventListener('click', () => document.getElementById('status').textContent = 'clicked')",
+    )
+    .await;
+    let observation = h.observe().await;
+    let more = find(&observation, "More");
+    assert_eq!(more.role, "button");
+    assert!(more.operations.contains(&Operation::Click));
+    let result = act(&h.page, click(more), &observation).await;
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("clicked"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_native_form_constraints_mark_invalid_controls() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
