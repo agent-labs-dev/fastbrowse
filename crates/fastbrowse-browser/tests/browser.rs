@@ -1311,6 +1311,45 @@ async fn test_a_uniquely_named_date_field_still_gets_its_section_heading() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unrelated_sibling_heading_does_not_name_a_unique_control() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    for panel in [
+        "aside",
+        "section",
+        "nav",
+        "main",
+        "form",
+        "fieldset",
+        "dialog open",
+        "search",
+        "div role=region",
+        "div role=complementary",
+        "div role=navigation",
+        "div role=main",
+        "div role=form",
+        "div role=dialog",
+        "div role=alertdialog",
+        "div role=search",
+        "div role=group",
+    ] {
+        let tag = panel.split_whitespace().next().unwrap();
+        let html = format!(
+            "<div id=app><{panel}><h2>Weather</h2><span>100 mi</span></{tag}>\
+             <main><label for=q>Search</label><input id=q></main></div>"
+        );
+        eval_active(&h, &format!("document.body.innerHTML = {}", json!(html))).await;
+        let obs = observe_until(&h.page, "Search").await;
+        assert_eq!(find(&obs, "Search").context.as_deref(), None, "{panel}");
+        eval_active(&h, "document.querySelector('h2').textContent = 'Updated weather'").await;
+        let updated = h.observe().await;
+        assert_eq!(find(&updated, "Search").context, find(&obs, "Search").context, "{panel}");
+    }
+    h.close().await;
+}
+
 /// A post's heading ("Data Entry Form") named a date picker's Submit, and the verifier read the wrong form.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_first_heading() {

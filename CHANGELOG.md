@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Headings in sibling content sections, navigation, forms and dialogs no longer name controls elsewhere in the page. Updating an unrelated panel does not change those controls' context.
+
 - Benchmark fixture sites use ephemeral loopback ports, while replay keeps recorded model answers tied to the live fixture origin. An unrelated socket can no longer prevent a replay from starting.
 
 - Covered actions are offered again after a performed action changes the page. Focus changes during a refused click no longer count as that click working, and stale actions remain available on the next page state. Recovery states whether the browser performed an action without claiming that the last action changed nothing.

@@ -546,13 +546,17 @@
       [...(e.parentElement?.children || [])].some(
         s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
       )));
+  // A landmark or section owns its headings. A weather panel beside a search form must not name the search
+  // field just because both sit in the same app shell.
+  const isolatesTitle = memo(e =>
+    isCard(e) || e.matches('aside,nav,main,section,form,fieldset,dialog,search,[role="group"],[role="search"],[role="alertdialog"],[role="complementary"],[role="navigation"],[role="main"],[role="region"],[role="form"],[role="dialog"]'));
   // A table's header cell names its own row, a caption its own table and a legend its own fieldset, never what sits
   // outside them: a form's "Customer name" was named after the "Pizza Size" fieldset below it, and a jQuery UI
   // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same. A title inside
   // a card names that card alone: a list's "More" button was named after the last product shown above it.
   const reaches = (title, element) => {
     if (['th', 'caption', 'legend'].includes(title.localName) && !title.parentElement.contains(element)) return false;
-    for (let e = title.parentElement; e && !e.contains(element); e = e.parentElement) if (isCard(e)) return false;
+    for (let e = title.parentElement; e && !e.contains(element); e = e.parentElement) if (isolatesTitle(e)) return false;
     return true;
   };
   // The title nearest before the element names its section; the scope's first title is the fallback, and the
@@ -826,7 +830,7 @@
   const openTitles = memo(scope =>
     titles(scope).filter(title => {
       if (['th', 'caption', 'legend'].includes(title.localName) && title.parentElement !== scope) return false;
-      for (let e = title.parentElement; e !== scope; e = e.parentElement) if (isCard(e)) return false;
+      for (let e = title.parentElement; e !== scope; e = e.parentElement) if (isolatesTitle(e)) return false;
       return true;
     }),
   );
