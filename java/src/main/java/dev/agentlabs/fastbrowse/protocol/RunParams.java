@@ -47,6 +47,10 @@ public record RunParams(
     @JsonProperty("fetch") Boolean fetch,
     @JsonProperty("browser") Boolean browser) {
 
+    public RunParams(String runId, List<SecretRef> secrets, Boolean frames, Boolean until, String task, String start, String context, Map<String, String> inputs, List<RunAttachment> attachments, Limits limits, Authorization authorization, JsonNode outputSchema, String downloads, String record, Boolean cursor, Boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl, Long cdpPort, Boolean attach, String targetMatch, Boolean foreground, String proxyCountry, List<Long> viewport, List<String> cloudExtensions, Long cloudTimeoutMinutes, List<String> allowedOrigins, Boolean fetch, Boolean browser) {
+        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, null, null, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser);
+    }
+
     /** A builder for a {@code RunParams}, every field unset. */
     public static Builder builder() {
         return new Builder();

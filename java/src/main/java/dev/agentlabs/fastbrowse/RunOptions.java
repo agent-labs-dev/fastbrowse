@@ -62,6 +62,28 @@ public record RunOptions(
         Consumer<Event> onEvent,
         Consumer<byte[]> onFrame) {
 
+    /** Keeps source compatibility with clients created before recipe recording was added. */
+    public RunOptions(
+            BrowserOptions browser,
+            String start,
+            String context,
+            Map<String, String> inputs,
+            List<Attachment> attachments,
+            Limits limits,
+            Authorization authorization,
+            JsonNode outputSchema,
+            String downloads,
+            String record,
+            Boolean cursor,
+            List<SecretRef> secrets,
+            SecretResolver resolver,
+            Predicate<String> until,
+            Consumer<Event> onEvent,
+            Consumer<byte[]> onFrame) {
+        this(browser, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record,
+                null, null, cursor, secrets, resolver, until, onEvent, onFrame);
+    }
+
     public static RunOptions defaults() {
         return builder().build();
     }

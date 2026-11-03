@@ -378,4 +378,12 @@ class FastbrowseTest {
         assertEquals(12.5, JSON.treeToValue(result.data(), Found.class).price());
         assertNotNull(result.cost());
     }
+
+    @Test
+    void legacyRunOptionsConstructorStillBuilds() {
+        RunOptions options = new RunOptions(null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null);
+        assertNull(options.recipe());
+        assertNull(options.saveRecipe());
+    }
 }

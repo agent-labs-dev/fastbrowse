@@ -683,6 +683,43 @@ async fn test_a_credential_field_its_secret_cannot_fill_stops_needs_login_not_ne
     );
 }
 
+#[tokio::test]
+async fn an_ordinary_masked_username_replays_named_input_without_password_policy() {
+    let mut username = Control::new("user", "textbox", "Username", [Operation::Fill]);
+    username.sensitive = true;
+    username.frame_origin = Some("https://b.test".into());
+    let url = "https://b.test/login";
+    let recipe = fastbrowse_core::recipe::Recipe {
+        version: fastbrowse_core::recipe::RECIPE_VERSION,
+        task: "use the supplied username".into(),
+        start: None,
+        steps: vec![fastbrowse_core::recipe::RecipeStep {
+            operation: Operation::Fill,
+            page: fastbrowse_core::recipe::RecipePage::of(url).unwrap(),
+            target: Some(fastbrowse_core::recipe::RecipeTarget::of(&username, url)),
+            text: Some(fastbrowse_core::recipe::RecipeText::Input("username".into())),
+            option: None,
+            read_first: false,
+            replay: true,
+        }],
+    };
+    let mut current_password = Control::new("current", "textbox", "Current password", [Operation::Fill]);
+    current_password.input_type = Some("password".into());
+    let mut new_password = Control::new("new", "textbox", "New password", [Operation::Fill]);
+    new_password.input_type = Some("password".into());
+    let agent = agent();
+    let controls = [username.clone(), current_password, new_password];
+    let page = at(url, &controls);
+    agent.seen().raw = Some(page.clone());
+    let mut state = run_state();
+    state.inputs.insert("username".into(), "ada@example.test".into());
+    state.replay = Some(super::replay::Replay::new(recipe));
+    let decision = state.replay.as_mut().unwrap().decision(url, &controls).unwrap();
+    let value = agent.text(&mut state, &page, &decision, &username).await.unwrap();
+    assert_eq!(value, "ada@example.test");
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Input("username".into())));
+}
+
 #[test]
 fn test_a_secret_the_agent_learns_is_redacted_from_a_trace_its_clients_write_to() {
     let trace = Trace::collecting().redacting(Arc::default());

@@ -189,7 +189,7 @@ pub(crate) fn step_of(
         // A masked target cannot match on replay, so the agent must choose this step live instead.
         return None;
     }
-    let mut replay = decision.operation != Operation::Select;
+    let mut replay = fastbrowse_core::recipe::REPLAYABLE.contains(&decision.operation);
     let text = match decision.operation {
         Operation::Fill => match source {
             Some(RecipeText::Live) => {
@@ -223,6 +223,47 @@ pub(crate) fn step_of(
         read_first: decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS),
         replay,
     })
+}
+
+/// Remove steps that became sensitive after they were recorded. A secret can be learned later in a run, so
+/// checking only when each action is appended leaves earlier literal text and page metadata exposed.
+pub(crate) fn safe_steps(steps: Vec<RecipeStep>, reveals: impl Fn(&str) -> bool) -> Vec<RecipeStep> {
+    steps
+        .into_iter()
+        .filter(|step| {
+            let page_values = [
+                step.page.origin.as_str(),
+                step.page.path.as_str(),
+                step.page.query.as_deref().unwrap_or_default(),
+                step.page.fragment.as_deref().unwrap_or_default(),
+            ];
+            if page_values.into_iter().any(&reveals) {
+                return false;
+            }
+            if step.target.as_ref().is_some_and(|target| {
+                [
+                    target.role.as_str(),
+                    target.label.as_str(),
+                    target.context.as_deref().unwrap_or_default(),
+                    target.href.as_deref().unwrap_or_default(),
+                    target.input_type.as_deref().unwrap_or_default(),
+                    target.input_name.as_deref().unwrap_or_default(),
+                    target.frame_origin.as_deref().unwrap_or_default(),
+                ]
+                .into_iter()
+                .any(&reveals)
+            }) {
+                return false;
+            }
+            if step.option.as_deref().is_some_and(&reveals) {
+                return false;
+            }
+            match step.text.as_ref() {
+                Some(RecipeText::Literal(value)) => !reveals(value),
+                _ => true,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -367,6 +408,17 @@ mod tests {
             let decision = code_decision(Operation::Click, Some(target));
             assert!(step_of(URL, &decision, &action, None, reveals).is_none(), "field {field}");
         }
+    }
+
+    #[test]
+    fn steps_recorded_before_a_secret_is_learned_are_filtered_at_save() {
+        let action = Action::new(Operation::Click);
+        let decision = code_decision(Operation::Click, Some(button("b", "Continue")));
+        let step = step_of(URL, &decision, &action, None, |_| false).unwrap();
+        let kept = safe_steps(vec![step.clone()], |_| false);
+        assert_eq!(kept, vec![step.clone()]);
+        let removed = safe_steps(vec![step], |text| text.contains("shop"));
+        assert!(removed.is_empty());
     }
 
     #[test]

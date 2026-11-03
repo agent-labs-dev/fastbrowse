@@ -98,6 +98,22 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Covered actions are offered again after a performed action changes the page. Focus changes during a refused click no longer count as that click working, and stale actions remain available on the next page state. Recovery states whether the browser performed an action without claiming that the last action changed nothing.
 
 - **Local runs can set their CSS viewport.** `--viewport WIDTHxHEIGHT` applies reversible desktop viewport emulation before the first observation on an owned local Chrome; handed browsers reject it and cloud runs keep their existing screen-size behaviour.
+- Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.
+
+- A cancelled run preserves the steps it reported, known charges and finished recordings in a cancellation receipt. It remains an error with no success status or answer, and unpriced charges remain unknown. Failed cloud browser starts retain their known cost. Rust callers now match `RunError::Cancelled(receipt)` instead of the unit variant.
+
+- A copied field value is chosen from complete source spans. The end selection shows the text each choice would type, so surrounding task instructions can be excluded.
+
+- Focusable menu triggers remain available when their label is wrapped in child elements and their links are hidden. Their label uses visible text; a container holding visible controls leaves actions to those controls.
+
+- A composed table is checked one cell at a time against its cited quotes. A row is withheld when any cell changes a value or reports a field unavailable despite its quote stating that field.
+
+- Fetch-only runs can finish with cited text when step frames are enabled. A fetched document has no screenshot, so optional frames are skipped.
+
+- A composed answer keeps only claims Jev judges supported by their cited quotes, including which record each value belongs to. A claim with no support or no judgment is withheld, and the answer ends `unverified` rather than `complete`.
+
+- A read that adds evidence renews recovery even when it happens before an action. Reading the same evidence again does not renew it.
+
 - **A synthesis read reports the source material it kept.** After collecting notes for a composed answer, the next decision was told that nothing answered the task. The read now distinguishes source material awaiting composition from an empty read, leaving Jev to judge whether the task is done.
 - **A PDF opened in a new tab is captured before its viewer loads.** Popup adoption waited until after the first response, losing the document text even though direct navigation read it. New pages now wait for download capture before starting; unrelated tabs are resumed and left alone.
 - **A step-limited run can report the notes it collected.** A task needing a composed answer returned no answer when its browser steps ran out. Final reporting now uses those notes while keeping the original budget status and enforcing the remaining dollar, time and model-call limits.

@@ -103,7 +103,7 @@ impl Recording {
         Self::start_with_marks(session, path, Arc::new(Mutex::new(Vec::new()))).await
     }
 
-    /// `__aenter__`: start ffmpeg and the cast, and begin writing frames.
+    /// start ffmpeg and the cast, and begin writing frames.
     pub async fn start_with_marks(
         session: BrowserSession,
         path: &Path,
@@ -248,7 +248,7 @@ impl Recording {
         Ok(())
     }
 
-    /// `__aexit__`: stop the ticker, close the lossless pass and encode both videos.
+    /// stop the ticker, close the lossless pass and encode both videos.
     pub async fn finish(mut self) -> Vec<PathBuf> {
         if let Some(ticker) = self.ticker.take() {
             ticker.abort();

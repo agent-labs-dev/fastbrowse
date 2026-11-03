@@ -267,7 +267,7 @@ impl Agent {
                     version: fastbrowse_core::recipe::RECIPE_VERSION,
                     task: self.redact(&state.task),
                     start: state.started_url.as_deref().map(|url| self.redact(url)),
-                    steps: state.recipe_log.clone(),
+                    steps: replay::safe_steps(state.recipe_log.clone(), |text| self.reveals_text(text)),
                 };
                 let (replayed, fell_back) =
                     state.replay.as_ref().map_or((0, 0), |replay| (replay.replayed, replay.fell_back));

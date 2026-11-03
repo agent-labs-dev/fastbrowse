@@ -430,7 +430,7 @@ impl Agent {
                     state.text_source = Some(RecipeText::Literal(text.clone()));
                     return Ok(text);
                 }
-                RecipeText::Input(name) if !target.sensitive && !is_password(target) => {
+                RecipeText::Input(name) if !is_password(target) => {
                     let value = state
                         .inputs
                         .get(&name)
@@ -439,7 +439,7 @@ impl Agent {
                     state.text_source = Some(RecipeText::Input(name));
                     return Ok(value);
                 }
-                RecipeText::Secret(name) if !target.sensitive && !is_password(target) => {
+                RecipeText::Secret(name) if !is_password(target) => {
                     let value = self
                         .secret(&name, &origin, target.sensitive || asks_for_credentials(&self.raw_target(target)))
                         .await?;
@@ -449,7 +449,7 @@ impl Agent {
                 RecipeText::Literal(_) | RecipeText::Input(_) | RecipeText::Secret(_) | RecipeText::Live => {}
             }
         }
-        if target.sensitive || is_password(target) {
+        if is_password(target) {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
