@@ -15,7 +15,7 @@ pub struct Effect {
     pub summary: String,
     /// The address, or a surviving control's label, value, checked or selected state, changed.
     pub set_something: bool,
-    /// The page stayed and gained something, losing no control.
+    /// The page stayed and its content or controls changed beyond focus, losing no control.
     pub added: bool,
     /// Something a person would see differs: a control, the address or the text in the viewport.
     pub changed: bool,
@@ -119,6 +119,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         parts.push(format!("HTTP {status}: destination did not load successfully"));
     }
     let mut changes = Vec::new();
+    let mut content_changed = before.viewport_text != after.viewport_text;
     let mut setting = false;
     // A picker can open as an overlay with its own copy of the field, so the field the choice fills is a different
     // element before and after. A control unmatched by id is compared with the one earlier control sharing its role
@@ -145,6 +146,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         for (name, a, b) in attributes {
             let differs = if name == "label" { plain(&was.label) != plain(&now.label) } else { a != b };
             if differs {
+                content_changed = true;
                 changes.push(format!(
                     "{} {name}: {} -> {}",
                     short(&Shown::Text(was.label.clone())),
@@ -194,7 +196,12 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     } else {
         "nothing visible changed".to_string()
     };
-    Effect { summary, set_something: navigated || setting, added: stayed_whole && changed, changed }
+    Effect {
+        summary,
+        set_something: navigated || setting,
+        added: stayed_whole && (content_changed || !shown.is_empty()),
+        changed,
+    }
 }
 
 #[cfg(test)]
@@ -366,6 +373,20 @@ mod tests {
         let done = effect(&form, &refused, None);
         assert_eq!(done.summary, "only the page text changed");
         assert!(!done.set_something);
+        assert!(done.added, "text-only changes remain observable without claiming added records");
+    }
+
+    #[test]
+    fn text_only_appended_rows_remain_observable() {
+        let before = Observation {
+            viewport_text: "Record A".into(),
+            ..observation(vec![Control::new("m", "button", "More", [Operation::Click])])
+        };
+        let after = Observation { viewport_text: "Record A\nRecord B".into(), ..before.clone() };
+        let done = effect(&before, &after, before.controls.first());
+        assert!(done.changed);
+        assert!(done.added);
+        assert_eq!(done.summary, "only the page text changed");
     }
 
     fn field(focused: Option<bool>) -> Control {
@@ -382,6 +403,7 @@ mod tests {
         let done = effect(&typing, &left, None);
         assert_eq!(done.summary, "changed Reference focused: True -> False");
         assert!(done.changed && !done.set_something);
+        assert!(!done.added, "leaving a field adds no controls or records");
         let entered = effect(&left, &typing, None);
         assert_eq!(entered.summary, "changed Reference focused: False -> True");
         assert!(!entered.set_something);

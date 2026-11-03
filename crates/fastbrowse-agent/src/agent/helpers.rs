@@ -157,13 +157,13 @@ pub(crate) fn empty_fields_fact(
     })
 }
 
-/// The control that just added to this page and stays offered, which may hold more of what it added.
-pub(crate) fn more_behind_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
+/// Observed page changes since a click attempt, without inferring causality or whether a list is complete.
+pub(crate) fn page_change_fact(history: &[HistoryEntry], observation: &Observation) -> Option<String> {
     let last = history.last().filter(|entry| entry.added && entry.operation == Some(Operation::Click))?;
     let target = last.target.as_ref()?;
     observation.controls.iter().any(|control| describe(control) == *target).then(|| {
         format!(
-            "Clicking {target} added records to this page and it is still offered, so the page has not run out of records to add: the list is not whole yet."
+            "Since the last attempt to click {target}, page text or controls changed without removing earlier controls. {target} is still offered."
         )
     })
 }

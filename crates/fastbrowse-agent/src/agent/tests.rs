@@ -1696,15 +1696,15 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
 }
 
 #[test]
-fn test_a_control_that_added_and_stays_may_hold_more() {
+fn test_a_control_still_offered_after_a_page_change_is_reported() {
     let click = |added| {
         let entry = HistoryEntry::new(Some(Operation::Click), Some("More"), StepOutcome::Executed, true);
         vec![HistoryEntry { added, ..entry }]
     };
     let page = |label: &str| observation(&[Control::new("1", "button", label, [Operation::Click])]);
-    assert!(super::helpers::more_behind_fact(&click(true), &page("More")).is_some());
-    assert!(super::helpers::more_behind_fact(&click(true), &page("Other")).is_none());
-    assert!(super::helpers::more_behind_fact(&click(false), &page("More")).is_none());
+    assert!(super::helpers::page_change_fact(&click(true), &page("More")).is_some());
+    assert!(super::helpers::page_change_fact(&click(true), &page("Other")).is_none());
+    assert!(super::helpers::page_change_fact(&click(false), &page("More")).is_none());
 }
 
 #[tokio::test]
@@ -2161,4 +2161,22 @@ async fn a_tab_switch_is_not_reported_as_navigation_from_the_other_tab() {
     agent.note_effect(&mut state, &destination);
     assert!(state.navigation_from.is_none());
     assert!(agent.navigation_fact(&state, &destination).is_none());
+}
+
+#[test]
+fn newly_shown_controls_do_not_establish_that_a_list_has_more_records() {
+    let more = button("More");
+    let page = observation(&[more]);
+    let history = vec![HistoryEntry { added: true, ..executed(Some(Operation::Click), Some("More"), true) }];
+    let fact = super::helpers::page_change_fact(&history, &page).unwrap();
+    assert!(fact.contains("controls"));
+    assert!(!fact.contains("records"));
+    assert!(!fact.contains("not whole"));
+    let stale = vec![HistoryEntry {
+        added: true,
+        ..HistoryEntry::new(Some(Operation::Click), Some("More"), StepOutcome::Stale, false)
+    }];
+    let fact = super::helpers::page_change_fact(&stale, &page).unwrap();
+    assert!(fact.starts_with("Since the last attempt to click"));
+    assert!(!fact.contains("Clicking"));
 }

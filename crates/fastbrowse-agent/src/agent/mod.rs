@@ -739,7 +739,7 @@ impl Agent {
             facts.extend(helpers::empty_fields_fact(&state.missing, observation));
         }
         if state.compose {
-            facts.extend(helpers::more_behind_fact(&state.history, observation));
+            facts.extend(helpers::page_change_fact(&state.history, observation));
         }
         if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.transient()) {
             let stood = state.steps.len().saturating_sub(failure.since);

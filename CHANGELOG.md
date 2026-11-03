@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A focus change is no longer reported as added records. Changes to text or controls are stated as observations after a click attempt, leaving Jev to judge whether a list is complete.
+
 - Answer composition stops when its claims no longer pack into fewer requests or fewer bytes. Supported claims keep their sources, and a normal finish reports `unverified` when composition stops short. Claims that keep shrinking can continue until they fit one request.
 
 - Composed claims are judged for scope: quotes about some records support those records, and a source population counter does not establish how many records the answer reports.
