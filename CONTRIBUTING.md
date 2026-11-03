@@ -97,18 +97,21 @@ not have.
 Unit tests cannot tell whether the agent still browses well, so a change to prompts, choices, recovery or
 verification needs eval results in the PR, in this order:
 
-1. Run `heldout` on `main` before changing anything. That is the baseline.
+1. Run `core` on `main` before changing anything. That is the baseline.
 2. Make and iterate on the change against `dev` only.
-3. Run `heldout` again on the finished change, and never tune against it.
+3. Run `core` again on the finished change, and never tune against it.
+
+The held-out suite this used to name is gone: Parallax moved its tasks into `dev`, so a dev task may be one the
+fix was designed against. Say so in the PR when that is true.
 
 Run these commands in the maintainer's Parallax checkout:
 
 ```sh
-uv run --extra browser parallax browser internal --arms fastbrowse --suite heldout --repeat 3
+uv run --extra browser parallax browser internal --arms fastbrowse --suite core --repeat 3
 uv run --extra browser parallax browser internal --arms fastbrowse --suite dev --repeat 3
 ```
 
-Paste the pass counts, time and cost from the final `dev` run and both `heldout` runs. A handful of runs on one site shows the change can
+Paste the pass counts, time and cost from the final `dev` run and both `core` runs. A handful of runs on one site shows the change can
 help; the suites show it does not hurt elsewhere.
 
 The agent must work on any site, so a rule written for one site, such as matching a label only Google uses,

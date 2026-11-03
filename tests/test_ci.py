@@ -112,8 +112,10 @@ def test_a_campaign_refuses_an_empty_choice_rather_than_widening(payload: str, p
 @pytest.mark.parametrize(
     ("suites", "passes"),
     [
-        ("core dev heldout stretch-dev stretch-heldout", True),
+        ("core dev stretch-dev", True),
         ("stretch-dev", True),
+        # A suite the catalog no longer carries, because Parallax moved its tasks into dev.
+        ("core dev heldout", False),
         ("   ", False),
         ("core --output /tmp/elsewhere", False),
         ("core,dev", False),

@@ -5,8 +5,8 @@
   "owner": "parallax",
   "task_sources": {
     "live_tasks.py": "9cb99d627c4904ee7f04de261f9059f922a54ea23294a4ca79db60b657187095",
-    "more_tasks.py": "cb0a279736659a2adf88fe59b04c5efac2087d1455ce4fe5af162258fb3d2d89",
-    "versions.json": "82a6b25754de4c5354a55603f2eba161bb1cfdc6dd59b138c773f9d76d86f4fb"
+    "more_tasks.py": "f43e02efe748c01c4016759977aaf5a0a53c747ca6a59f84f4c4091f4adf3eec",
+    "versions.json": "d7bdea4f91ab700f1776c13fe430e99c9b605b04969cc344f1628eb6c0d604a0"
   },
   "suites": {
     "core": [
@@ -371,8 +371,8 @@
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
-        "source_fingerprint": "cbcaaadaf64d8a3c",
-        "task_version": 7
+        "source_fingerprint": "be67d8997edf43d1",
+        "task_version": 8
       },
       {
         "id": "oscars-2012",
@@ -558,11 +558,9 @@
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
-        "source_fingerprint": "7018897e7b8edfc2",
-        "task_version": 3
-      }
-    ],
-    "heldout": [
+        "source_fingerprint": "a6aa6cb6d7857d88",
+        "task_version": 4
+      },
       {
         "id": "books-mystery-cheapest",
         "category": "lookup",
@@ -594,8 +592,8 @@
           "jev-ultrafast": "graded on an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
         },
         "expect": "complete",
-        "source_fingerprint": "ad2d7a24c3174568",
-        "task_version": 7
+        "source_fingerprint": "462317a71c4a2366",
+        "task_version": 8
       },
       {
         "id": "quotes-js-page2",
@@ -853,9 +851,7 @@
         "expect": "complete",
         "source_fingerprint": "fb98974ee75f2c0d",
         "task_version": 3
-      }
-    ],
-    "stretch-heldout": [
+      },
       {
         "id": "stretch-bstack-apple-samsung",
         "category": "widget",

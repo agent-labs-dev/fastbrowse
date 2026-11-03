@@ -15,12 +15,10 @@ from typing import Any
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "registry_parity.py"
 TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64")
-PACKAGES = ("fastbrowse",) + tuple(f"@fastbrowse/{target}" for target in TARGETS)
+PACKAGES = ("fastbrowse", *(f"@fastbrowse/{target}" for target in TARGETS))
 
 
-def _registry(
-    pypi: str, npm: dict[str, str], *, missing: tuple[str, ...] = ()
-) -> dict[str, Any]:
+def _registry(pypi: str, npm: dict[str, str], *, missing: tuple[str, ...] = ()) -> dict[str, Any]:
     """The paths a registry pair answers on, as the two registries answer them."""
     routes: dict[str, Any] = {"/pypi/fastbrowse/json": {"info": {"version": pypi}}}
     for package, version in npm.items():
@@ -33,7 +31,7 @@ def _registry(
 
 def _serve(routes: dict[str, Any]) -> tuple[str, HTTPServer]:
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 - the name http.server calls
+        def do_GET(self) -> None:
             body = routes.get(self.path)
             if body is None:
                 self.send_error(404)

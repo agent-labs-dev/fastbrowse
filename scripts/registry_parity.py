@@ -24,7 +24,7 @@ import urllib.request
 
 # The five platform packages, and the SDK that depends on them at the same version.
 TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64")
-NPM_PACKAGES = ("fastbrowse",) + tuple(f"@fastbrowse/{target}" for target in TARGETS)
+NPM_PACKAGES = ("fastbrowse", *(f"@fastbrowse/{target}" for target in TARGETS))
 
 PYPI = "https://pypi.org/pypi/fastbrowse/json"
 NPM = "https://registry.npmjs.org"
@@ -34,9 +34,7 @@ USER_AGENT = "fastbrowse registry parity (github.com/agent-labs-dev/fastbrowse)"
 
 def _get_json(url: str) -> object:
     """The JSON a registry serves, or the error that stopped us reading it."""
-    request = urllib.request.Request(
-        url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}
-    )
+    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         return json.load(response)
 
@@ -60,9 +58,7 @@ def npm_latest(npm_url: str, package: str) -> str:
     return version
 
 
-def differences(
-    version: str | None, *, pypi_url: str = PYPI, npm_url: str = NPM
-) -> list[str]:
+def differences(version: str | None, *, pypi_url: str = PYPI, npm_url: str = NPM) -> list[str]:
     """Every place the registries disagree, one line each. Empty when they agree."""
     try:
         published = pypi_latest(pypi_url)
@@ -110,9 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    print(
-        f"PyPI and {len(NPM_PACKAGES)} npm packages all name {arguments.version or pypi_latest(arguments.pypi_url)}"
-    )
+    print(f"PyPI and {len(NPM_PACKAGES)} npm packages all name {arguments.version or pypi_latest(arguments.pypi_url)}")
     return 0
 
 
