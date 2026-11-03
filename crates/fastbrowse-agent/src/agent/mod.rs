@@ -623,7 +623,7 @@ impl Agent {
 
     /// This page was read and no action has changed it since.
     pub(super) fn page_read(state: &RunState, observation: &Observation) -> bool {
-        !observation.document_key.is_empty() && state.read_documents.get(&observation.document_key) == Some(&false)
+        !observation.document_key.is_empty() && state.read_documents.get(&state::read_key(observation)) == Some(&false)
     }
 
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
@@ -653,7 +653,7 @@ impl Agent {
             facts.push(format!("These links lead to pages already read: {}.", read_links.join(", ")));
         }
         let document = &observation.document_key;
-        let read = state.read_documents.get(document).copied();
+        let read = state.read_documents.get(&state::read_key(observation)).copied();
         if !document.is_empty() && read == Some(true) {
             facts.push(
                 "This page changed after it was last read, so the notes taken from it predate the change.".into(),

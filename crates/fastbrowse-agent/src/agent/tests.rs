@@ -194,6 +194,21 @@ async fn test_what_the_browser_saw_an_action_do_stays_beside_the_page_change() {
     );
 }
 
+#[tokio::test]
+async fn test_a_link_that_redirected_still_leads_to_the_page_it_read() {
+    let card = Control { href: Some("/p/tee".into()), ..Control::new("card", "link", "TEE", [Operation::Click]) };
+    // One document routes from the results to the product, as a single-page app does.
+    let results = Observation { document_key: "app".into(), ..at("https://shop.test/search", &[card]) };
+    let product = Observation { document_key: "app".into(), ..at("https://shop.test/p/tee?v=9", &[]) };
+    let mut state = run_state();
+    state.acted_from = Some(results.clone());
+    state.followed = Some("https://shop.test/p/tee".into());
+    state.history.push(executed(Some(Operation::Click), Some("TEE"), true));
+    agent().note_effect(&mut state, &product);
+    state.mark_read(&product);
+    assert!(Agent::page_facts(&state, &results).contains(&"These links lead to pages already read: 'TEE'.".into()));
+}
+
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
 fn edit(value: &str, holds: Option<&str>, secret: bool, operation: Operation) -> (Decision, Action) {
     let target = Control { value: holds.map(String::from), ..Control::new("f", "textbox", "Name", [Operation::Fill]) };
@@ -1490,18 +1505,36 @@ fn test_a_control_that_added_and_stays_may_hold_more() {
 }
 
 #[tokio::test]
+async fn test_a_route_left_and_returned_to_in_one_document_stays_read() {
+    let results = Observation { document_key: "app".into(), ..at("https://shop.test/search", &[]) };
+    let product = Observation { document_key: "app".into(), ..at("https://shop.test/p/tee", &[]) };
+    let mut state = run_state();
+    state.mark_read(&results);
+    state.changed_page = Some(super::state::read_key(&results));
+    state.acted_from = Some(results.clone());
+    state.history.push(executed(Some(Operation::Back), None, true));
+    agent().note_effect(&mut state, &product);
+    assert!(!Agent::page_read(&state, &product));
+    assert!(Agent::page_read(&state, &results));
+    state.changed_page = Some(super::state::read_key(&results));
+    state.acted_from = Some(results.clone());
+    agent().note_effect(&mut state, &results);
+    assert!(Agent::page_facts(&state, &results).iter().any(|fact| fact.starts_with("This page changed after")));
+}
+
+#[tokio::test]
 async fn test_a_stale_click_on_a_page_that_moved_leaves_the_read_out_of_date() {
     let before = observation(&[button("More")]);
     let after = observation(&[]);
     let agent = agent();
     let mut state = run_state();
-    state.read_documents.insert(before.document_key.clone(), false);
+    state.read_documents.insert(super::state::read_key(&before), false);
     state.history.push(HistoryEntry::new(Some(Operation::Click), Some("More"), StepOutcome::Stale, false));
     state.idle.push(Some((Operation::Click, Some("More".into()))));
     state.acted_from = Some(before.clone());
     agent.note_effect(&mut state, &after);
     assert!(state.idle.is_empty());
-    assert_eq!(state.read_documents.get(&after.document_key), Some(&true));
+    assert_eq!(state.read_documents.get(&super::state::read_key(&after)), Some(&true));
 }
 
 #[test]

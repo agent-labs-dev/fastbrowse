@@ -23,9 +23,7 @@ impl Agent {
             return Ok(false);
         }
         // This content is read now, so the notes hold what the page shows.
-        state.read_documents.insert(observation.document_key.clone(), false);
-        state.read_pages.insert(observation.page_key.clone());
-        state.read_urls.insert(observation.url.clone());
+        state.mark_read(observation);
         let mut capture = capture;
         if text::strip(&capture.text).is_empty() {
             // An empty page may still be rendering; only new content warrants a read.

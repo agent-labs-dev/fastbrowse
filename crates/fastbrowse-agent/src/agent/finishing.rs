@@ -49,7 +49,7 @@ impl Agent {
         }
         // Jev can say DONE on what it never read, or on a page its last action changed, and an answer comes only from
         // what it read.
-        let unread = state.read_documents.get(&observation.document_key) != Some(&false);
+        let unread = state.read_documents.get(&super::state::read_key(observation)) != Some(&false);
         if output_schema.is_none()
             && (state.notes.facts().is_empty() || (!observation.document_key.is_empty() && unread))
         {

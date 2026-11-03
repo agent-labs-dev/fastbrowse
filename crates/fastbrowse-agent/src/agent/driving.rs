@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Withheld, leave_out_idle, withheld};
-use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written};
+use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
 use crate::policy::{Decision, HistoryEntry, decide};
 use crate::retrieval::page_quotes;
@@ -477,13 +477,7 @@ impl Agent {
             // A read takes in the whole page, so scrolling leaves it as read.
             // Showing another tab leaves the one it left as it was.
             let stayed = matches!(decision.operation, Operation::Scroll | Operation::ScrollUp | Operation::SwitchTab);
-            if executed
-                && changed
-                && !stayed
-                && let Some(read) = state.read_documents.get_mut(&observation.document_key)
-            {
-                *read = true;
-            }
+            state.changed_page = (executed && changed && !stayed).then(|| read_key(observation));
             // A value edit answers "was this progress" itself, and its answer beats `changed`: the popup a fill draws
             // IS a page change, so `changed` alone kept crediting the identical re-fill. `changed` decides every other
             // operation, by the page state it lands on.
@@ -513,6 +507,12 @@ impl Agent {
                 )));
             }
             state.acted_from = Some(observation.clone());
+            state.followed = decision
+                .target
+                .as_ref()
+                .filter(|_| executed && action.operation == Operation::Click)
+                .and_then(|target| url::Url::parse(&observation.url).ok()?.join(target.href.as_deref()?).ok())
+                .map(String::from);
             if executed
                 && let Some(target) = &decision.target
                 && SETTING_ROLES.contains(&target.role.as_str())
@@ -522,6 +522,7 @@ impl Agent {
                 let landed = self.observe().await?;
                 let done = effect(observation, &landed, Some(target));
                 state.acted_from = None;
+                state.settle_change(&landed);
                 setting = done.set_something;
                 effect_now = Some(done.summary);
             }
@@ -688,6 +689,13 @@ impl Agent {
             }
         }
         let Some(before) = state.acted_from.take() else { return };
+        state.settle_change(observation);
+        let landed = read_key(observation);
+        if let Some(href) = state.followed.take()
+            && landed != read_key(&before)
+        {
+            state.arrived_by = Some((landed, href));
+        }
         let Some(last) = state.history.last_mut() else { return };
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.
@@ -706,7 +714,7 @@ impl Agent {
         if done.changed && last.operation == Some(Operation::Click) {
             let clicked = Some((Operation::Click, last.target.clone()));
             state.idle.retain(|action| *action != clicked);
-            if let Some(read) = state.read_documents.get_mut(&observation.document_key) {
+            if let Some(read) = state.read_documents.get_mut(&read_key(observation)) {
                 *read = true;
             }
         }

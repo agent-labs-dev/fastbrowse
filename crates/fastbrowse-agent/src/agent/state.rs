@@ -226,8 +226,10 @@ pub(crate) struct RunState {
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
-    /// Documents read, by key, each with whether an action changed it since it was last read.
-    pub read_documents: HashMap<String, bool>,
+    /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
+    pub read_documents: HashMap<(String, String), bool>,
+    /// The page the last action changed, until the next observation shows it is still the page in view.
+    pub changed_page: Option<(String, String)>,
     /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
     pub page_failed: bool,
     /// Jev said a read's answer must be composed, so the run ends on the LLM's writing of the notes.
@@ -245,6 +247,11 @@ pub(crate) struct RunState {
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
     pub read_urls: HashSet<String>,
+    /// The address of the link the last click followed, until the next observation shows where it landed.
+    pub followed: Option<String>,
+    /// The page a followed link landed on, by `read_key`, with that link's address. A site can redirect a link to
+    /// another address, and the link still leads to that page once it is read.
+    pub arrived_by: Option<((String, String), String)>,
     /// The initial address, retained even when an HTTP failure removes it from completion evidence.
     pub started_url: Option<String>,
     pub caller_start: Option<String>,
@@ -275,6 +282,30 @@ impl RunState {
         notes
     }
 
+    /// An action changed the page it was taken on. Leaving that page leaves what was read of it as it was: going back
+    /// shows it again, not a change to it.
+    pub fn settle_change(&mut self, landed: &Observation) {
+        if let Some(page) = self.changed_page.take()
+            && page == read_key(landed)
+            && let Some(read) = self.read_documents.get_mut(&page)
+        {
+            *read = true;
+        }
+    }
+
+    /// The page is read now, so the notes hold what it shows, and every link known to lead to it leads to a read page.
+    pub fn mark_read(&mut self, observation: &Observation) {
+        let page = read_key(observation);
+        if let Some((landed, href)) = &self.arrived_by
+            && *landed == page
+        {
+            self.read_urls.insert(href.clone());
+        }
+        self.read_documents.insert(page, false);
+        self.read_pages.insert(observation.page_key.clone());
+        self.read_urls.insert(observation.url.clone());
+    }
+
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,
@@ -283,6 +314,8 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            followed: None,
+            changed_page: None,
             unchanged: 0,
             committing: false,
             redecided: false,
@@ -327,6 +360,7 @@ impl RunState {
             acted_from: None,
             downloads_forbidden: None,
             read_documents: HashMap::new(),
+            changed_page: None,
             page_failed: false,
             compose: false,
             read_whole: Vec::new(),
@@ -335,6 +369,8 @@ impl RunState {
             committing: false,
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
+            followed: None,
+            arrived_by: None,
             started_url: None,
             caller_start: None,
             start_landing_url: None,
@@ -344,4 +380,10 @@ impl RunState {
             missing: HashSet::new(),
         }
     }
+}
+
+/// What a read is filed under: the document, and its address within it. A single-page app routes between addresses
+/// in one document, and each address shows its own page.
+pub(crate) fn read_key(observation: &Observation) -> (String, String) {
+    (observation.document_key.clone(), observation.url.clone())
 }
