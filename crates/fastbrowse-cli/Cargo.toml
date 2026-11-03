@@ -23,7 +23,7 @@ fastbrowse-clients = { workspace = true }
 fastbrowse-agent = { workspace = true }
 fastbrowse-run = { workspace = true }
 indexmap = { version = "2.14.2", features = ["serde"] }
-log = "0.4.34"
+log = "0.4.35"
 serde = { version = "1.0.229", features = ["derive"] }
 # float_roundtrip: a cost read one unit off is written back as another number.
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
