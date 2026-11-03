@@ -2012,19 +2012,25 @@ async fn navigation_context_keeps_the_observed_source_without_claiming_a_back_de
         offscreen_text: "The public inventory needs no account.".into(),
         ..at("https://shop.test/", &[button("Public inventory"), button("Account query")])
     };
+    let mut password = field("Password");
+    password.input_type = Some("password".into());
+    password.frame_origin = Some("https://shop.test".into());
     let destination =
-        Observation { document_key: "login-document".into(), ..at("https://shop.test/login", &[field("Password")]) };
+        Observation { document_key: "login-document".into(), ..at("https://shop.test/login", &[password]) };
     let mut state = run_state();
     state.login_readings.insert(super::state::read_key(&source), 0.12);
     state.acted_from = Some(source);
     state.history.push(executed(Some(Operation::Click), Some("Account query"), true));
     agent.note_effect(&mut state, &destination);
-    let facts = agent.context(&state, &destination, Vec::new(), true, false).unwrap().page_facts;
-    let context =
-        facts.iter().find(|fact| fact.starts_with("The latest navigation")).expect("navigation source missing");
-    assert!(context.contains("Public inventory") && context.contains("The public inventory needs no account."));
-    assert!(context.contains("\"login_required_probability\":0.12"));
-    assert!(context.contains("their current state is unknown"));
+    for check_login in [true, false] {
+        let facts = agent.context(&state, &destination, Vec::new(), check_login, false).unwrap().page_facts;
+        assert_eq!(facts[0], "No stored secrets are available for this page's origin.");
+        let context =
+            facts.iter().find(|fact| fact.starts_with("The latest navigation")).expect("navigation source missing");
+        assert!(context.contains("Public inventory") && context.contains("The public inventory needs no account."));
+        assert!(context.contains("\"login_required_probability\":0.12"));
+        assert!(context.contains("their current state is unknown"));
+    }
     assert!(
         !agent
             .context(&state, &at("https://shop.test/other", &[]), Vec::new(), true, false)
@@ -2033,6 +2039,73 @@ async fn navigation_context_keeps_the_observed_source_without_claiming_a_back_de
             .iter()
             .any(|fact| fact.starts_with("The latest navigation"))
     );
+}
+
+#[test]
+fn credential_availability_is_explicit_in_every_decision() {
+    let agent = agent();
+    let state = run_state();
+    for credential in [false, true] {
+        for available in [false, true] {
+            for check_login in [false, true] {
+                let mut control = field("Account field");
+                control.input_type = Some(if credential { "password" } else { "text" }.into());
+                control.frame_origin = Some("https://shop.test".into());
+                let page = at("https://shop.test/login", &[control]);
+                let secrets = if available { vec!["password".into()] } else { Vec::new() };
+                let context = agent.context(&state, &page, secrets.clone(), check_login, false).unwrap();
+                assert_eq!(context.secrets, secrets);
+                assert_eq!(
+                    context
+                        .page_facts
+                        .iter()
+                        .any(|fact| fact == "No stored secrets are available for this page's origin."),
+                    credential && !available,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn credential_availability_uses_the_fields_origin() {
+    for available in [false, true] {
+        let engine = agent()
+            .with_secrets(available.then(|| Arc::new(Unresolved) as Arc<dyn fastbrowse_core::models::SecretResolver>));
+        let mut password = field("Password");
+        password.input_type = Some("password".into());
+        password.frame_origin = Some("https://b.test".into());
+        let page = at("https://shop.test/", &[password]);
+        for parent_secrets in [Vec::new(), vec!["parent_password".into()]] {
+            let context = engine.context(&run_state(), &page, parent_secrets, false, false).unwrap();
+            assert_eq!(
+                context
+                    .page_facts
+                    .iter()
+                    .any(|fact| fact == "No stored secrets are available for credential fields at https://b.test."),
+                !available,
+            );
+            assert!(
+                !context
+                    .page_facts
+                    .iter()
+                    .any(|fact| fact == "No stored secrets are available for this page's origin.")
+            );
+        }
+    }
+}
+
+#[test]
+fn credential_origin_facts_mask_values_from_the_raw_field() {
+    let engine = agent();
+    engine.redactor().register("password", "private-token", None);
+    let mut password = field("Password");
+    password.input_type = Some("password".into());
+    password.frame_origin = Some("https://private-token.test".into());
+    let page = at("https://shop.test/", &[password]);
+    let context = engine.context(&run_state(), &page, Vec::new(), false, false).unwrap();
+    assert!(context.page_facts.iter().any(|fact| fact.starts_with("No stored secrets")));
+    assert!(!context.page_facts.join(" ").contains("private-token"));
 }
 
 #[tokio::test]

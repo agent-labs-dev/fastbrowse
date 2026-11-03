@@ -32,7 +32,9 @@ use fastbrowse_core::models::{
     Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall, WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
-use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
+use fastbrowse_core::safety::{
+    CredentialField, Redactor, asks_for_credentials, credential_field, origin_of, secret_allowed, wall_kind,
+};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -600,7 +602,26 @@ impl Agent {
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
         let mut page_facts = Self::page_facts(state, observation);
-        if check_login && let Some(source) = self.navigation_fact(state, observation) {
+        let page_origin = origin_of(&observation.url);
+        let credential_origins: BTreeSet<_> = observation
+            .controls
+            .iter()
+            .filter(|control| asks_for_credentials(control))
+            .map(|control| self.target_origin(control))
+            .collect();
+        for origin in credential_origins {
+            let available =
+                if origin == page_origin { !secrets.is_empty() } else { !self.secret_names(&origin).is_empty() };
+            if !available {
+                page_facts.push(if origin == page_origin {
+                    "No stored secrets are available for this page's origin.".into()
+                } else {
+                    format!("No stored secrets are available for credential fields at {}.", self.mask(&origin))
+                });
+            }
+        }
+        // Historical text is fitted from the end, before the current credential availability fact.
+        if let Some(source) = self.navigation_fact(state, observation) {
             page_facts.push(source);
         }
         Ok(StepContext {

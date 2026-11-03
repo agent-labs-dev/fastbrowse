@@ -652,7 +652,7 @@ impl Agent {
         }
     }
 
-    fn target_origin(&self, target: &Control) -> String {
+    pub(super) fn target_origin(&self, target: &Control) -> String {
         self.raw_target(target).frame_origin.unwrap_or_else(|| "null".into())
     }
 

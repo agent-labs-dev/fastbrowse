@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Decisions retain observed navigation context after a failed fill or redraw and receive a fact when a credential field's origin has no stored secrets.
+
 - Partial answer composition obeys the run's time limit, including a provider call that stalls after browsing stops.
 
 - A sign-in judgment receives the source page of the latest navigation and its earlier sign-in reading, so Jev can weigh observed alternatives before reporting that the task requires login. The source is a past observation, not a promise about where Back leads.

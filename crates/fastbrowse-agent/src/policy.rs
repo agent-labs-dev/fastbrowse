@@ -1635,7 +1635,10 @@ mod tests {
         let jev = fake(&[("operation", "click")], "");
         let mut context = StepContext::new("press button 3");
         context.check_login = true;
-        context.page_facts = vec![format!("Previously observed source: {}", "catalogue data ".repeat(5000))];
+        context.page_facts = vec![
+            "No stored secrets are available for this page's origin.".into(),
+            format!("Previously observed source: {}", "catalogue data ".repeat(5000)),
+        ];
         let mut page = observation((0..3).map(button).collect());
         page.viewport_text = "Current account sign-in page".into();
         let decision = block_on(decide(&jev, &page, &context, &tight(), None, None, &Trace::disabled())).unwrap();
@@ -1643,6 +1646,7 @@ mod tests {
         let states = jev.states.lock().unwrap();
         assert_eq!(states[0]["page"]["text"], "Current account sign-in page");
         assert!(states[0]["page_facts"].to_string().contains("Jev's input limit"));
+        assert_eq!(states[0]["page_facts"][0], "No stored secrets are available for this page's origin.");
         assert_eq!(states[0]["elements"].as_array().unwrap().len(), 3);
     }
 
