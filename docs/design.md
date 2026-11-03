@@ -203,9 +203,9 @@ ordinary task text as a literal. Values taken from page evidence, values written
 contain personal information from ordinary fields, so keep them private like the task that produced them. A step whose page address or control metadata reveals a resolved secret is omitted and decided live on replay.
 If the task or start URL contains a resolved secret, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
 
-Reading, answering and the check for `complete` always run live. A recipe is not evidence that the present task
-has succeeded. After a mismatch, live actions can advance the saved sequence; repeated mismatches leave the rest
-to the agent. A recipe save failure is written to server stderr without losing the completed run's result. SDK responses do not carry that warning; callers that require the file should check it exists on the server.
+Reading, answering and the check for `complete` always run live. Replay searches the remaining saved steps without
+an arbitrary lookahead or miss cutoff, so a non-replayable step does not discard later reusable actions. A recipe is not evidence that the present task
+has succeeded. After a mismatch, actions decided live can advance the saved sequence. A recipe save failure is written to server stderr without losing the completed run's result. SDK responses do not carry that warning; callers that require the file should check it exists on the server.
 
 The public Python `fastbrowse.recipes.validate_recipe()` accepts a JSON string, UTF-8 bytes or a dictionary
 and returns the normalized recipe, including defaults. Unsupported versions and invalid fields raise

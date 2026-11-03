@@ -18,11 +18,28 @@ use serde_json::{Map, Value, json};
 use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
+
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
 use crate::policy::{Decision, HistoryEntry, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
+
+fn recipe_step(
+    decision: &Decision,
+    raw: &Observation,
+    action: &Action,
+    source: Option<fastbrowse_core::recipe::RecipeText>,
+    reveals: impl Fn(&str) -> bool,
+) -> Option<fastbrowse_core::recipe::RecipeStep> {
+    let mut recorded = decision.clone();
+    if let Some(target) = &decision.target
+        && let Some(raw_target) = raw.controls.iter().find(|control| control.id == target.id)
+    {
+        recorded.target = Some(raw_target.clone());
+    }
+    super::replay::step_of(&raw.url, &recorded, action, source, reveals)
+}
 
 /// What `unless_redrawn` came back with.
 pub(super) enum Watched<T> {
@@ -486,8 +503,7 @@ impl Agent {
             let source = state.text_source.take();
             if executed
                 && super::replay::recorded(decision.operation)
-                && let Some(step) =
-                    super::replay::step_of(&observation.url, decision, &action, source, |text| self.reveals_text(text))
+                && let Some(step) = recipe_step(decision, &raw, &action, source, |text| self.reveals_text(text))
             {
                 state.recipe_log.push(step);
             }
@@ -1054,5 +1070,54 @@ fn judge_site(state: &mut RunState, observation: &Observation, decision: &Decisi
         }
     } else if reported {
         state.site_failure = None;
+    }
+}
+
+#[cfg(test)]
+mod recipe_tests {
+    use super::*;
+    use fastbrowse_core::recipe::RecipeText;
+    use fastbrowse_core::safety::Redactor;
+
+    #[test]
+    fn recipe_recording_omits_raw_secret_metadata_after_model_masking() {
+        let mut redactor = Redactor::new();
+        redactor.register("account", "hunter2", Some("https://shop.test"));
+        for (url, label) in
+            [("https://shop.test/?account=hunter2", "Continue"), ("https://shop.test/", "Continue as hunter2")]
+        {
+            let target = Control::new("next", "button", label, [Operation::Click]);
+            let raw: Observation = serde_json::from_value(json!({
+                "url": url, "title": "t", "page_key": "k", "captured_at": "2026-09-26T20:00:00Z",
+                "controls": [target.dump()], "viewport_text": "", "tabs": [],
+            }))
+            .unwrap();
+            let masked = Control { label: redactor.mask(label), ..target };
+            let decision = super::super::helpers::code_decision(Operation::Click, Some(masked));
+            let action = Action::new(Operation::Click);
+            assert!(
+                super::super::replay::step_of(&redactor.mask(url), &decision, &action, None, |text| redactor
+                    .reveals(text))
+                .is_some()
+            );
+            assert!(recipe_step(&decision, &raw, &action, None, |text| redactor.reveals(text)).is_none());
+        }
+    }
+
+    #[test]
+    fn recipe_recording_keeps_named_secret_fill_on_an_ordinary_field() {
+        let mut redactor = Redactor::new();
+        redactor.register("account", "hunter2", Some("https://shop.test"));
+        let target = Control::new("account", "textbox", "Account", [Operation::Fill]);
+        let raw: Observation = serde_json::from_value(json!({
+            "url": "https://shop.test/", "title": "t", "page_key": "k", "captured_at": "2026-09-26T20:00:00Z",
+            "controls": [target.dump()], "viewport_text": "", "tabs": [],
+        }))
+        .unwrap();
+        let decision = super::super::helpers::code_decision(Operation::Fill, Some(target));
+        let action = Action { text: Some("hunter2".into()), secret: true, ..Action::new(Operation::Fill) };
+        let source = RecipeText::Secret("account".into());
+        let step = recipe_step(&decision, &raw, &action, Some(source.clone()), |text| redactor.reveals(text)).unwrap();
+        assert_eq!(step.text, Some(source));
     }
 }

@@ -8,43 +8,23 @@ use fastbrowse_core::recipe::{self, Recipe, RecipePage, RecipeStep, RecipeTarget
 use super::helpers::code_decision;
 use crate::policy::Decision;
 
-/// How many recipe steps ahead a page may match, so a recorded step this run no longer needs (a cookie banner that
-/// is not shown, a step that cannot be replayed) does not end the replay.
-const LOOKAHEAD: usize = 3;
-/// Agent decisions in a row, with no recipe step matching, before the rest of the run is left to the agent.
-const MISSES: u32 = 4;
-
+/// A live Jev decision may match a later saved step when earlier controls are no longer present.
 pub(crate) struct Replay {
     steps: Vec<RecipeStep>,
     next: usize,
     /// The step handed out for the decision now being carried out.
     pending: Option<usize>,
-    misses: u32,
-    /// Whether the next step has already been looked for and was not on the page. Only then may a later step be
-    /// replayed past it: a page still loading lacks the next step's control too, and skipping it there left an
-    /// "Add to cart" out of the order.
-    looked: bool,
-    abandoned: bool,
     pub replayed: usize,
     pub fell_back: usize,
 }
 
 impl Replay {
     pub fn new(recipe: Recipe) -> Replay {
-        Replay {
-            steps: recipe.steps,
-            next: 0,
-            pending: None,
-            misses: 0,
-            looked: false,
-            abandoned: false,
-            replayed: 0,
-            fell_back: 0,
-        }
+        Replay { steps: recipe.steps, next: 0, pending: None, replayed: 0, fell_back: 0 }
     }
 
     pub fn active(&self) -> bool {
-        !self.abandoned && self.next < self.steps.len()
+        self.next < self.steps.len()
     }
 
     /// Reads and completion stay live without consuming a saved browser action.
@@ -65,24 +45,15 @@ impl Replay {
 
     /// The decision for the first of the next recipe steps this page offers, or None for the agent to decide.
     fn decision(&mut self, url: &str, offered: &[Control]) -> Option<Decision> {
-        if self.pending.take().is_some() {
-            // The step handed out last was not carried out: a gate stopped it, or another decision replaced it.
-            self.miss();
-        }
+        self.pending.take();
         if !self.active() {
             return None;
         }
         let Some(page) = RecipePage::of(url) else {
             self.fell_back += 1;
-            self.miss();
             return None;
         };
-        let end = if self.looked || !self.steps[self.next].replayable() {
-            (self.next + LOOKAHEAD).min(self.steps.len())
-        } else {
-            self.next + 1
-        };
-        for index in self.next..end {
+        for index in self.next..self.steps.len() {
             let step = &self.steps[index];
             if !step.replayable() || !step.page.matches(&page) {
                 continue;
@@ -100,9 +71,7 @@ impl Replay {
             decision.replayed = true;
             return Some(decision);
         }
-        self.looked = true;
         self.fell_back += 1;
-        self.miss();
         None
     }
 
@@ -113,8 +82,7 @@ impl Replay {
         if !self.active() {
             return;
         }
-        let end = (self.next + LOOKAHEAD).min(self.steps.len());
-        let took = (self.next..end).find(|&index| {
+        let took = (self.next..self.steps.len()).find(|&index| {
             let step = &self.steps[index];
             step.operation == decision.operation
                 && step.page.matches(&page)
@@ -140,29 +108,16 @@ impl Replay {
         if executed {
             self.advance(index);
             self.replayed += 1;
-        } else {
-            self.miss();
         }
     }
 
     /// The decision handed out was replaced before it was carried out.
     pub fn replaced(&mut self) {
-        if self.pending.take().is_some() {
-            self.miss();
-        }
+        self.pending.take();
     }
 
     fn advance(&mut self, index: usize) {
         self.next = index + 1;
-        self.misses = 0;
-        self.looked = false;
-    }
-
-    fn miss(&mut self) {
-        self.misses += 1;
-        if self.misses >= MISSES {
-            self.abandoned = true;
-        }
     }
 }
 
@@ -306,10 +261,10 @@ mod tests {
     }
 
     #[test]
-    fn live_reads_do_not_abandon_the_next_saved_action() {
+    fn live_reads_do_not_consume_the_next_saved_action() {
         let mut replay = replay(vec![click("Continue", "/p/pico")]);
         let page = [button("new:4", "Continue")];
-        for _ in 0..MISSES + 1 {
+        for _ in 0..8 {
             let mut read = code_decision(Operation::Read, None);
             replay.confirm(URL, &page, &mut read);
             assert!(!read.replayed);
@@ -334,11 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn a_step_not_on_the_page_is_skipped_only_once_it_was_looked_for() {
-        let mut replay = replay(vec![click("Accept cookies", "/p/pico"), click("Add to cart", "/p/pico")]);
+    fn a_missing_step_does_not_block_a_later_replayable_step() {
+        let mut steps: Vec<_> = (0..8).map(|index| click(&format!("Absent control {index}"), "/p/pico")).collect();
+        steps.push(click("Add to cart", "/p/pico"));
+        let mut replay = replay(steps);
         let page = [button("n:1", "Add to cart")];
-        // The page may still be loading the next step's control, so the agent decides this one.
-        assert!(replay.decision(URL, &page).is_none());
         let decision = replay.decision(URL, &page).unwrap();
         assert_eq!(decision.target.unwrap().label, "Add to cart");
         replay.settled(true);
@@ -355,15 +310,15 @@ mod tests {
     }
 
     #[test]
-    fn another_page_or_a_missing_control_falls_back_and_enough_misses_abandon() {
+    fn missing_pages_do_not_abandon_replay() {
         let mut replay = replay(vec![click("Add to cart", "/p/pico")]);
         assert!(replay.decision("https://shop.test/p/other", &[button("n:1", "Add to cart")]).is_none());
-        for _ in 1..MISSES {
+        for _ in 1..8 {
             assert!(replay.decision(URL, &[button("n:1", "Checkout")]).is_none());
         }
-        assert!(!replay.active());
-        assert!(replay.decision(URL, &[button("n:1", "Add to cart")]).is_none());
-        assert_eq!(replay.fell_back, MISSES as usize);
+        assert!(replay.active());
+        assert!(replay.decision(URL, &[button("n:1", "Add to cart")]).is_some());
+        assert_eq!(replay.fell_back, 8);
     }
 
     #[test]
