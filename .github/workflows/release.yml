@@ -13,6 +13,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    # The recovery branch for a release whose npm publishing stopped partway: a repository push is the only
+    # trigger this automation may use (it cannot dispatch a workflow), and only npm's job runs on it.
+    branches: [cb/npm-finish-0.9.1]
   workflow_dispatch:
     inputs:
       publish_npm:
@@ -41,7 +44,7 @@ jobs:
           python-version: "3.14"
           enable-cache: false
       # A tag that disagrees with the package version would publish one number under another's name.
-      - if: github.event_name == 'push'
+      - if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
       - id: version
         run: echo "version=$(uv version --short)" >> "$GITHUB_OUTPUT"
@@ -73,7 +76,8 @@ jobs:
   github-release:
     needs: binaries
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
-    if: github.event_name == 'push'
+    # A push to the recovery branch is not a release either: it ends here, and only `npm-only` runs.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -233,7 +237,9 @@ jobs:
   # transparency-log entry left by the attempt that stopped can refuse them.
   npm-only:
     needs: binaries
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_npm
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.publish_npm) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/cb/npm-finish-0.9.1')
     runs-on: ubuntu-latest
     environment: npm
     permissions:
