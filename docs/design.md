@@ -120,7 +120,9 @@ keeps error code `-32002` and adds the optional `error.data` receipt; other erro
 `RunError::Cancelled(receipt)`. A cancelled cloud start keeps known charges as `unsettled`, or an `unknown`
 browser charge when the provider has not answered. A failed start retains its final known charges.
 An MCP browse error caused by runner cancellation puts the receipt in `_meta["fastbrowse.ai/cancellation"]`,
-outside the browse result schema. Client cancellation notifications and abandoned overruns have no receipt.
+outside the browse result schema. Internal deadline cancellation retains the run through the configured cleanup grace and returns its receipt.
+Client cancellation notifications respond immediately while cleanup continues for that grace. A run that
+does not finish cleanup before the grace expires is abandoned without a receipt.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. Control changes are compared within one document;

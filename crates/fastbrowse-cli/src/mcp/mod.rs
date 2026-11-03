@@ -753,21 +753,32 @@ impl McpServer {
                 };
                 let token = params.get("_meta").and_then(|meta| meta.get("progressToken")).cloned();
                 let cancel = crate::runner::Cancel::default();
+                let run_cancel = crate::runner::Cancel::default();
                 let key = id.to_string();
                 session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), cancel.clone());
                 let (server, session, outbox) = (self.clone(), session.clone(), outbox.clone());
                 tokio::spawn(async move {
-                    let call = server.call(&name, arguments, token, cancel.clone(), &outbox);
+                    let run_stop = run_cancel.clone();
+                    let call = server.call(&name, arguments, token, run_cancel, &outbox);
+                    tokio::pin!(call);
                     let outcome = tokio::select! {
                         biased;
-                        () = cancel.tripped() => None,
-                        outcome = call => Some(outcome),
+                        () = cancel.tripped() => {
+                            // The response is immediate, but keep the run future alive so it can close its browser.
+                            run_stop.trip();
+                            outbox(error_response(&id, 0, "Request cancelled", None));
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs_f64(server.config.grace_seconds.max(0.0)),
+                                &mut call,
+                            ).await;
+                            session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+                            return;
+                        }
+                        outcome = &mut call => outcome,
                     };
                     session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
                     let reply = match outcome {
-                        // FastMCP answers a cancelled request at once, with this error.
-                        None => error_response(&id, 0, "Request cancelled", None),
-                        Some(Ok(structured)) => {
+                        Ok(structured) => {
                             let text = json::write(&structured, Style::PYDANTIC.indented(2));
                             let result = json!({
                                 "content": [{"type": "text", "text": text}],
@@ -776,7 +787,7 @@ impl McpServer {
                             });
                             response(&id, result)
                         }
-                        Some(Err(failure)) => {
+                        Err(failure) => {
                             let (text, receipt) = match failure {
                                 ToolFailure::Tool(message) => (format!("Error executing tool browse: {message}"), None),
                                 ToolFailure::Unknown(name) => (format!("Unknown tool: {name}"), None),
@@ -894,14 +905,24 @@ impl McpServer {
             ..Host::default()
         };
         let running = self.runner.run(task, host);
+        tokio::pin!(running);
         let outcome = match deadline {
             None => running.await,
-            Some(deadline) => match tokio::time::timeout(deadline, running).await {
+            Some(deadline) => match tokio::time::timeout(deadline, &mut running).await {
                 Ok(outcome) => outcome,
                 Err(_) => {
                     cancel.trip();
-                    let seconds = json::float(limits.max_seconds.unwrap_or_default(), Floats::Repr);
-                    return Err(format!("the run overran max_seconds={seconds} and was abandoned").into());
+                    match tokio::time::timeout(Duration::from_secs_f64(config.grace_seconds.max(0.0)), &mut running)
+                        .await
+                    {
+                        Ok(Ok(outcome)) => Ok(outcome),
+                        Ok(Err(RunError::Cancelled(receipt))) => return Err(ToolFailure::Cancelled(receipt)),
+                        Ok(Err(error)) => return Err(error.to_string().into()),
+                        Err(_) => {
+                            let seconds = json::float(limits.max_seconds.unwrap_or_default(), Floats::Repr);
+                            return Err(format!("the run overran max_seconds={seconds} and was abandoned").into());
+                        }
+                    }
                 }
             },
         };

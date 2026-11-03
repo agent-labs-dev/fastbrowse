@@ -432,13 +432,11 @@ jobs:
 
   # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container,
   # then pushed to the AUR so Arch users get the release without anyone copying two files by hand. Its
-  # PKGBUILD and .SRCINFO are this run's `aur` artifact too, and it opens the PR that keeps `packaging/aur` on
-  # `main` at the same version, which is what the weekly AUR check compares against.
+  # PKGBUILD and .SRCINFO are this run's `aur` artifact too. The separate `aur-sync` job updates the
+  # committed package through a pull request.
   aur:
     needs: [build, pypi]
-    permissions:
-      contents: write
-      pull-requests: write
+    permissions: {contents: read}
     uses: ./.github/workflows/aur.yml
     with:
       version: ${{ needs.build.outputs.version }}

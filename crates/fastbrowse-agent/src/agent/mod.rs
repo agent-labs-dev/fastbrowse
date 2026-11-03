@@ -324,9 +324,6 @@ impl Agent {
         if start.is_some() {
             state.start_landing_url = Some(self.page.address().await?);
         }
-        if let Some(opening) = &opening {
-            state.visited.insert(opening.clone(), ());
-        }
         let state = slot.insert(state);
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }

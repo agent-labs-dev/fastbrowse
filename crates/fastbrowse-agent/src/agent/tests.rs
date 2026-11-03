@@ -302,15 +302,13 @@ async fn test_http_error_visit_cannot_evidence_navigation_completion() {
     let front = observation(&[button("Discussion")]);
     let failed =
         Observation { url: "https://example.test/discussion".into(), response_status: Some(419), ..front.clone() };
-    state.visited.insert(front.url.clone(), ());
-    state.visited.insert(failed.url.clone(), ());
     state.history.push(executed(Some(Operation::Click), Some("Discussion"), true));
     state.acted_from = Some(front);
     agent.note_effect(&mut state, &failed);
-    assert!(!state.visited.contains_key(&failed.url));
+    assert!(state.site_failure.as_ref().is_some_and(|failure| failure.url == failed.url));
     assert!(state.history.last().unwrap().effect.as_deref().unwrap_or_default().contains("HTTP 419"));
     agent.note_effect(&mut state, &Observation { response_status: Some(200), ..failed.clone() });
-    assert!(state.visited.contains_key(&failed.url));
+    assert!(state.site_failure.is_none());
 }
 
 fn capacities() -> (Fact, Fact) {

@@ -691,12 +691,6 @@ impl Agent {
 
     /// Record on the last action what it did, which the next choice and recovery both read.
     pub(super) fn note_effect(&self, state: &mut RunState, observation: &Observation) {
-        // An error document has the requested address too, but never proves the destination loaded.
-        if observation.response_status.is_some_and(|status| status >= 400) {
-            state.visited.shift_remove(&observation.url);
-        } else {
-            state.visited.insert(observation.url.clone(), ());
-        }
         if let Some(status) = observation.response_status {
             if status >= 400 {
                 let since = match &state.site_failure {

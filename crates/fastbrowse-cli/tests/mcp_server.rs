@@ -5,6 +5,7 @@ mod common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -497,15 +498,81 @@ async fn test_http_needs_the_bearer_token_except_for_the_health_check() {
 }
 
 #[tokio::test]
-async fn test_a_run_that_overruns_its_deadline_is_abandoned() {
-    let hangs = runner(|args: Call| async move {
-        args.host.cancel.guard(tokio::time::sleep(Duration::from_secs(30))).await?;
-        unreachable!("the deadline stops the run first")
+async fn test_a_run_that_overruns_its_deadline_keeps_its_cancellation_receipt() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let seen = cancelled.clone();
+    let hangs = runner(move |args: Call| {
+        let seen = seen.clone();
+        async move {
+            args.host.cancel.tripped().await;
+            seen.store(true, Ordering::Release);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Err(RunError::Cancelled(CancellationReceipt::default()))
+        }
     });
-    let config = ServerConfig { grace_seconds: 0.0, ..ServerConfig::default() };
-    let (result, _) = Client::new(config, hangs).call(json!({"task": "t", "start": START, "max_seconds": 0.05})).await;
+    let config = ServerConfig { grace_seconds: 0.05, ..ServerConfig::default() };
+    let (result, _) = Client::new(config, hangs).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
     assert_eq!(result["isError"], true);
-    assert!(text(&result).contains("overran max_seconds=0.05"));
+    assert_eq!(text(&result), "Error executing tool browse: the run was cancelled");
+    assert!(result["_meta"]["fastbrowse.ai/cancellation"].is_object());
+    assert!(cancelled.load(Ordering::Acquire), "the timed-out run was dropped before observing cancellation");
+}
+
+#[tokio::test]
+async fn test_a_timeout_keeps_a_completed_result_from_cleanup() {
+    let finished = runner(|args: Call| async move {
+        args.host.cancel.tripped().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        Ok(answered(Status::Complete))
+    });
+    let config = ServerConfig { grace_seconds: 0.05, ..ServerConfig::default() };
+    let (result, _) =
+        Client::new(config, finished).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["structuredContent"]["status"], "complete");
+}
+
+#[tokio::test]
+async fn test_a_noncooperative_timeout_returns_after_the_cleanup_grace() {
+    let hangs = runner(|_| async move {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        Ok(answered(Status::Complete))
+    });
+    let config = ServerConfig { grace_seconds: 0.02, ..ServerConfig::default() };
+    let (result, _) = Client::new(config, hangs).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
+    assert_eq!(result["isError"], true);
+    assert!(text(&result).contains("overran max_seconds=0.01"));
+}
+
+#[tokio::test]
+async fn test_an_external_cancel_replies_immediately_and_keeps_cleanup_running() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let cleaned = Arc::new(Notify::new());
+    let completed = Arc::new(AtomicBool::new(false));
+    let (began, allowed, finished, done) = (started.clone(), release.clone(), cleaned.clone(), completed.clone());
+    let runner = runner(move |args: Call| {
+        let (began, allowed, finished, done) = (began.clone(), allowed.clone(), finished.clone(), done.clone());
+        async move {
+            began.notify_one();
+            args.host.cancel.tripped().await;
+            allowed.notified().await;
+            done.store(true, Ordering::Release);
+            finished.notify_one();
+            Err(RunError::Cancelled(CancellationReceipt::default()))
+        }
+    });
+    let mut client = Client::new(ServerConfig::default(), runner);
+    let id = client.start_call(json!({"task": "t", "start": START}));
+    started.notified().await;
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId": id}}));
+    let mut notices = Vec::new();
+    let reply = client.reply(id, &mut notices).await;
+    assert_eq!(reply["error"]["message"], "Request cancelled");
+    assert!(!completed.load(Ordering::Acquire), "the response must not wait for cleanup");
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), cleaned.notified()).await.expect("run cleanup completed");
+    assert!(completed.load(Ordering::Acquire));
 }
 
 #[tokio::test]

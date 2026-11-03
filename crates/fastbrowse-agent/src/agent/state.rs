@@ -71,7 +71,7 @@ impl Unsure {
     }
 }
 
-/// What can cut a step short: Python's `_Stop`, `_Unsure` and the errors the run catches by class.
+/// A stop, recovery request or typed failure that interrupts the current step.
 #[derive(Debug, Clone)]
 pub(crate) enum Flow {
     Stop(Stop),
@@ -267,8 +267,6 @@ pub(crate) struct RunState {
     pub start_landing_url: Option<String>,
     /// The first page the run looked at, which is what a task's "this page" means once the run has moved on.
     pub first_url: Option<String>,
-    /// Addresses observed without an HTTP error, in order, including the starting address.
-    pub visited: IndexMap<String, ()>,
     /// A decision was dropped because the page redrew under it, so nothing is watched until an action is taken.
     pub redecided: bool,
     /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
@@ -398,7 +396,6 @@ impl RunState {
             caller_start: None,
             start_landing_url: None,
             first_url: None,
-            visited: IndexMap::new(),
             redecided: false,
             missing: HashSet::new(),
         }

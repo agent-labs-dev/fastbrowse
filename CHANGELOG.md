@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- MCP timeouts retain the run through cancellation cleanup and return its receipt. Client cancellation still responds immediately while cooperative cleanup finishes.
+
 - A filled form that asks for confirmation stops before optional screenshot reading, so an image-provider failure cannot replace that ending.
 
 - Model screenshots check fresh page text for resolved secrets before capture. Image readings mask secret values before becoming notes or evidence.
