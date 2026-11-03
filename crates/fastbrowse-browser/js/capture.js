@@ -424,7 +424,9 @@
       const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
       if (target.protocol === 'javascript:' || fragment) continue;
       let row = link.parentElement;
-      while (row && row !== root && !clean(row.innerText ?? '')) row = row.parentElement;
+      // An empty image paragraph must not borrow another paragraph's text from its enclosing article.
+      while (row && row !== root && row.tagName !== 'P' && !clean(row.innerText ?? '')) row = row.parentElement;
+      if (row === root) row = null;
       const metadata = {
         label: nameOf(link) || drawn(link) || null,
         href: imageSource(link.href),

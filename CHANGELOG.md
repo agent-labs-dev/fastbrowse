@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- An icon-only link in an empty paragraph no longer borrows unrelated text from an enclosing article. A link with no nearby text no longer borrows the whole page.
+
 - Decisions retain observed navigation context after a failed fill or redraw and receive a fact when a credential field's origin has no stored secrets.
 
 - Partial answer composition obeys the run's time limit, including a provider call that stalls after browsing stops.

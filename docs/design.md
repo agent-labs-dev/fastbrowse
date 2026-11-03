@@ -61,6 +61,9 @@ offered as what it has. A step only a browser can take starts one on the same pa
 what it knows. `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 
+Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
+wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
+
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step. A page number drawn as text rather than a link or a button is offered
 when it is focusable and has visible text, including a label wrapped in child elements. Hidden menu links do not

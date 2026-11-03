@@ -254,6 +254,57 @@ async fn test_capture_reports_icon_link_destination_with_its_row() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_image_link_does_not_borrow_its_articles_text() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<article><p><a href="/demo.gif"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a></p>' +
+          '<h1>Project</h1><p>A package with its own installation instructions.</p></article>' +
+          '<table><tr><td>Release 2</td><td><span><a href="/release.zip"><svg></svg></a></span></td></tr></table>' +
+          '<div style="display:flex"><span>Flex release</span><span><a href="/flex.zip"><svg></svg></a></span></div>' +
+          '<div style="display:grid"><span>Grid release</span><div><a href="/grid.zip"><svg></svg></a></div></div>' +
+          '<table><tr><td><ul><li>First release <a href="/first.zip"><svg></svg></a></li>' +
+          '<li>Second release <a href="/second.zip"><svg></svg></a></li></ul></td></tr></table>' +
+          '<div>Wrapped release<div><a href="/wrapped.zip"><svg></svg></a></div></div>' +
+          '<li>Floating release<div style="float:right"><a href="/floating.zip"><svg></svg></a></div></li>' +
+          '<article style="display:flex;flex-direction:column"><p><a href="/flex-demo.gif"><img alt=""></a></p><p>Unrelated article text</p></article>' +
+          '<div><a href="/empty.zip"><svg></svg></a></div>' +
+          '<article><h2>Card release</h2><a href="/card.zip"><svg></svg></a></article>' +
+          '<dl><dt>Definition release</dt><dd><a href="/definition.zip"><svg></svg></a></dd></dl>';
+        "#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let links: Vec<_> = capture.text.lines().filter(|line| line.starts_with("Link element DOM metadata")).collect();
+    let demo = links.iter().find(|line| line.contains("/demo.gif")).unwrap();
+    assert!(demo.contains("\"near\":null"), "{demo}");
+    assert!(!demo.contains("installation instructions"));
+    let release = links.iter().find(|line| line.contains("/release.zip")).unwrap();
+    assert!(release.contains("Release 2"), "{release}");
+    for (href, own, other) in [
+        ("/flex.zip", "Flex release", "Grid release"),
+        ("/grid.zip", "Grid release", "Flex release"),
+        ("/first.zip", "First release", "Second release"),
+        ("/second.zip", "Second release", "First release"),
+        ("/wrapped.zip", "Wrapped release", "Floating release"),
+        ("/floating.zip", "Floating release", "Wrapped release"),
+        ("/card.zip", "Card release", "Definition release"),
+        ("/definition.zip", "Definition release", "Card release"),
+    ] {
+        let link = links.iter().find(|line| line.contains(href)).unwrap();
+        assert!(link.contains(own), "{link}");
+        assert!(!link.contains(other), "{link}");
+    }
+    for href in ["/flex-demo.gif", "/empty.zip"] {
+        let link = links.iter().find(|line| line.contains(href)).unwrap();
+        assert!(link.contains("\"near\":null"), "{link}");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_every_icon_link_destination_is_observed_whole() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
