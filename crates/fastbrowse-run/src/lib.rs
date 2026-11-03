@@ -718,7 +718,7 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
 }
 
 /// Open `start`, pursue `task`, and return what the run could prove.
-pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
+pub async fn run_task(mut task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
     let Checked { schema, origins } = checked(&task)?;
     if host.open_browser.is_some() && task.viewport.is_some() {
         return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
@@ -734,6 +734,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             "the recipe task differs from this task; record a new recipe for changed instructions".into(),
         ));
     }
+    task.start = recipe_start(task.start.as_deref(), recipe.as_ref());
     let recipe_sink = host.recipe_sink.clone().or_else(|| task.save_recipe.is_some().then(RecipeSink::default));
     if task.fetch && host.browser_api_key.is_some() {
         return Err(RunError::Invalid("fetch starts no browser, so it cannot be combined with browser_api_key".into()));
@@ -945,7 +946,21 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             }
         }
     };
-    finish(result, recording_failed, &told, fetch_spent, browser_cost, recordings)
+    let result = finish(result, recording_failed, &told, fetch_spent, browser_cost, recordings)?;
+    if result.status == Status::Complete
+        && let (Some(path), Some(sink)) = (&task.save_recipe, &recipe_sink)
+    {
+        let outcome = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        if let Some(outcome) = outcome
+            && let Err(error) = outcome.recipe.save(path)
+        {
+            fastbrowse_browser::warn(&format!(
+                "the run completed but its recipe could not be written to {}: {error}",
+                path.display()
+            ));
+        }
+    }
+    Ok(result)
 }
 
 fn finish(
@@ -963,20 +978,11 @@ fn finish(
     if let Some(message) = recording_failed {
         return Err(RunError::Recording(message).after(told, result.cost.lines, result.recordings));
     }
-    if result.status == Status::Complete
-        && let (Some(path), Some(sink)) = (&task.save_recipe, &recipe_sink)
-    {
-        let outcome = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        if let Some(outcome) = outcome
-            && let Err(error) = outcome.recipe.save(path)
-        {
-            fastbrowse_browser::warn(&format!(
-                "the run completed but its recipe could not be written to {}: {error}",
-                path.display()
-            ));
-        }
-    }
     Ok(result)
+}
+
+fn recipe_start(explicit: Option<&str>, recipe: Option<&fastbrowse_core::recipe::Recipe>) -> Option<String> {
+    explicit.map(str::to_owned).or_else(|| recipe.and_then(|recipe| recipe.start.clone()))
 }
 
 /// `limits` less what a fetched attempt spent, for the browser run that follows it, or the limit the attempt used up.
@@ -1141,6 +1147,22 @@ mod tests {
         assert!(matches!(error.cause(), RunError::Recording(_)));
         let receipt = error.receipt().expect("recording failure must retain the closed browser's charges");
         assert_eq!(receipt.cost.lines, [fetch, model, browser]);
+    }
+
+    #[test]
+    fn a_recipe_start_is_used_only_when_the_caller_did_not_supply_one() {
+        let recipe = fastbrowse_core::recipe::Recipe {
+            version: 1,
+            task: "t".into(),
+            start: Some("https://saved.example/".into()),
+            steps: vec![],
+        };
+        assert_eq!(recipe_start(None, Some(&recipe)).as_deref(), Some("https://saved.example/"));
+        assert_eq!(
+            recipe_start(Some("https://explicit.example/"), Some(&recipe)).as_deref(),
+            Some("https://explicit.example/")
+        );
+        assert_eq!(recipe_start(None, None), None);
     }
 
     /// A stand-in Browser Use Cloud that creates a browser at `$0.01` so far, with a DevTools address that never

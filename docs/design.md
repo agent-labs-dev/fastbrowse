@@ -188,7 +188,8 @@ a recording holds its last clean frame meanwhile.
 ## Recipes
 
 A recipe is the steps a `complete` run took, stored as JSON. `--save-recipe FILE` writes one and `--recipe FILE`
-loads it. The task must match the recorded task. Naming the same file for both flags replaces it atomically after
+loads it. The task must match the recorded task. When `--recipe` is supplied without `--start`, its recorded start
+address is used; an explicit `--start` always overrides it. Naming the same file for both flags replaces it atomically after
 another completed run, including actions the agent chose when a saved step no longer matched.
 
 A step identifies its full page address and a control's role, label, context, link and input attributes. Node ids
