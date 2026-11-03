@@ -3078,3 +3078,16 @@ fn a_late_task_secret_clears_a_previous_recipe_outcome() {
     assert!(sink.lock().unwrap().is_none());
 
 }
+
+#[test]
+fn a_late_start_url_secret_clears_a_previous_recipe_outcome() {
+    let agent = agent();
+    let mut state = run_state();
+    state.started_url = Some("https://example.test/?token=private-token".into());
+    let sink = Default::default();
+    agent.store_recipe(&state, &sink);
+    assert!(sink.lock().unwrap().is_some());
+    agent.redactor().register("token", "private-token", None);
+    agent.store_recipe(&state, &sink);
+    assert!(sink.lock().unwrap().is_none());
+}

@@ -195,16 +195,19 @@ impl Agent {
     fn store_recipe(&self, state: &RunState, sink: &RecipeSink) {
         let mut sink = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let task = self.redact(&state.task);
-        if task != state.task {
+        let start = state.started_url.as_deref().map(|url| self.redact(url));
+        if task != state.task || start.as_deref() != state.started_url.as_deref() {
             *sink = None;
             // Redaction changes exact replay identity; retaining the original would persist a resolved secret.
-            eprintln!("warning: the run used a resolved secret in its task, so no replay recipe was saved");
+            eprintln!(
+                "warning: the run used a resolved secret in its task or start URL, so no replay recipe was saved"
+            );
             return;
         }
         let recipe = fastbrowse_core::recipe::Recipe {
             version: fastbrowse_core::recipe::RECIPE_VERSION,
             task,
-            start: state.started_url.as_deref().map(|url| self.redact(url)),
+            start,
             steps: replay::safe_steps(state.recipe_log.clone(), |text| self.reveals_text(text)),
         };
         let (replayed, fell_back) = state.replay.as_ref().map_or((0, 0), |replay| (replay.replayed, replay.fell_back));
