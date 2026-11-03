@@ -423,6 +423,39 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
 
 
 @pytest.mark.usefixtures("rust_core")
+async def test_cancellation_before_success_delivery_keeps_the_completed_receipt(monkeypatch) -> None:
+    counted = Counted()
+    loop = asyncio.get_running_loop()
+    schedule = loop.call_soon_threadsafe
+    intercepted = []
+    execution = None
+
+    def cancel_before_delivery(callback, *args, **kwargs):
+        # Native run settlement is a builtin closure; host coroutine scheduling uses Python callbacks.
+        if inspect.isbuiltin(callback) and not args:
+
+            def deliver():
+                assert execution is not None
+                intercepted.append(True)
+                execution.cancel()
+                callback()
+
+            return schedule(deliver, **kwargs)
+        return schedule(callback, *args, **kwargs)
+
+    monkeypatch.setattr(loop, "call_soon_threadsafe", cancel_before_delivery)
+    async with counted.http:
+        execution = asyncio.create_task(
+            run_task("Read the version", fetch=True, jev=counted.jev, llm=counted.llm, http=counted.http)
+        )
+        with pytest.raises(RunCancelled) as stopped:
+            await asyncio.wait_for(execution, 10)
+    assert intercepted == [True]
+    assert stopped.value.receipt.cost.lines
+    assert stopped.value.receipt.cost.known_dollars == 0.0
+
+
+@pytest.mark.usefixtures("rust_core")
 async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_it() -> None:
     counted = Counted()
     errors: list[ValidationError] = []

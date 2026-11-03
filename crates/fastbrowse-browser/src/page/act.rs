@@ -291,9 +291,10 @@ impl CdpPage {
             // nothing and must not observe before the captured file is there to read.
             // A file an earlier click already saved is named as such: an exports page whose one link was clicked four
             // times, each time rewriting the same CSV, kept the run's click loop going.
-            changed = true;
+            let repeated = self.session.repeated_download(downloads_before);
+            changed = !repeated;
             detail = detail.or_else(|| {
-                Some(if self.session.repeated_download(downloads_before) {
+                Some(if repeated {
                     "downloaded the same file an earlier step already saved".into()
                 } else {
                     "downloaded the file the link points at".into()

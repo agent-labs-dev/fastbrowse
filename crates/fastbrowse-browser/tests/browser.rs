@@ -459,6 +459,24 @@ async fn test_a_click_that_downloads_is_a_page_change_not_a_dead_click() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_saving_the_same_download_again_is_not_new_progress() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(&h, "document.body.innerHTML = \"<a href='/report.csv?short'>Orders report</a>\";").await;
+    let before = observe_until(&h.page, "Orders report").await;
+    let first = act(&h.page, click(find(&before, "Orders report")), &before).await;
+    let after = h.observe().await;
+    let second = act(&h.page, click(find(&after, "Orders report")), &after).await;
+    h.close().await;
+    assert_eq!(first.outcome, StepOutcome::Executed);
+    assert!(first.page_changed, "the first file supplies new evidence");
+    assert_eq!(second.outcome, StepOutcome::Executed);
+    assert!(!second.page_changed, "saving an identical file again must not renew progress");
+    assert_eq!(second.detail.as_deref(), Some("downloaded the same file an earlier step already saved"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_cross_origin_iframe_control_is_observed_and_clickable() {
     let _turn = turn().await;
     let Some(h) = loaded().await else { return };

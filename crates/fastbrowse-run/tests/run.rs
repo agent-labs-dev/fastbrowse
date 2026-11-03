@@ -650,3 +650,30 @@ async fn cloud_browser_options_do_not_fetch_from_the_hosts_network_first() {
         );
     }
 }
+
+#[tokio::test]
+async fn an_explicit_browser_run_opens_the_supplied_browser_before_reading() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let fetched = requests.clone();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let opened = opens.clone();
+    let options = task(|o, h| {
+        o.browser = true;
+        o.start = Some("https://docs.example.test/value".into());
+        h.http = Some(Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            fetched.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(Response::new(200, "<p>The value is 34.</p>").with_header("content-type", "text/html"))
+            })
+        })));
+        h.open_browser = Some(Arc::new(move || {
+            opened.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err("supplied browser was requested".into()) })
+        }));
+    });
+    let result = run(options).await.unwrap();
+    assert_eq!(opens.load(Ordering::SeqCst), 1, "the browser option must reach the supplied callback");
+    assert_eq!(requests.load(Ordering::SeqCst), 0, "no host-network fetch may precede the requested browser");
+    assert_eq!(result.status, Status::Error);
+    assert!(result.error.as_deref().unwrap().contains("supplied browser was requested"));
+}

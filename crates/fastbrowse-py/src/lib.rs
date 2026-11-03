@@ -16,6 +16,7 @@ use fastbrowse_clients::http::{Http, Request, Response};
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::Event;
 use fastbrowse_core::models::SecretRef;
+use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::Trace;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask};
@@ -299,6 +300,7 @@ fn run_task(
                 PyCFunction::new_closure(py, None, None, move |args: &Bound<'_, PyTuple>, _| -> PyResult<()> {
                     let py = args.py();
                     let result = result.bind(py);
+                    let cancelled = result.call_method0("cancelled")?.is_truthy()?;
                     if !result.call_method0("done")?.is_truthy()? {
                         // A callback that failed stopped the run, though the run may have ended on its own in the
                         // same moment; the callback's exception is what the caller hears either way.
@@ -321,10 +323,18 @@ fn run_task(
                             result.call_method1("set_exception", (error.value(py),))?;
                         }
                     }
-                    // A cancelled run's receipt resolves `finished`, so a caller whose own cancellation already
-                    // settled `result` still hears what the run did and spent.
+                    // Python can cancel after Rust finishes but before this callback delivers the result, so
+                    // either outcome retains what the run did and spent for the cancelled caller.
                     let receipt = match &outcome {
                         Err(RunError::Cancelled(receipt)) => receipt.dump_json().into_pyobject(py)?.into_any(),
+                        Ok(answered) if cancelled => CancellationReceipt {
+                            steps: answered.steps.clone(),
+                            cost: answered.cost.clone(),
+                            recordings: answered.recordings.clone(),
+                        }
+                        .dump_json()
+                        .into_pyobject(py)?
+                        .into_any(),
                         _ => py.None().into_bound(py),
                     };
                     let finished = finished.bind(py);

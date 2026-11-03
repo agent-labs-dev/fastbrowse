@@ -717,7 +717,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     let mut limits = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
-    if host.open_browser.is_some() || reads_first(&task) {
+    if reads_first(&task) {
         let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
         let clients = (jev.clone(), llm.clone());
