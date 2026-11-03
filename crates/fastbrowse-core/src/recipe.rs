@@ -103,6 +103,9 @@ impl Recipe {
         if recipe.version != RECIPE_VERSION {
             return Err(format!("recipe version {}; this fastbrowse reads version {RECIPE_VERSION}", recipe.version));
         }
+        if recipe.start.as_deref().is_some_and(|start| RecipePage::of(start).is_none()) {
+            return Err("recipe start must be an http or https URL".into());
+        }
         Ok(recipe)
     }
 
@@ -374,6 +377,18 @@ mod tests {
         assert_eq!(Recipe::load(&path).unwrap(), replacement);
         assert!(replacement.save(&dir.path().join("missing/recipe.json")).is_err());
         assert_eq!(Recipe::load(&path).unwrap(), replacement);
+    }
+
+    #[test]
+    fn recipe_starts_are_web_addresses() {
+        for start in ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,local", "not a URL"] {
+            let value = serde_json::json!({"version": 1, "task": "t", "start": start, "steps": []});
+            assert!(Recipe::from_json(&value.to_string()).is_err(), "accepted {start}");
+        }
+        for start in ["https://example.com/", "http://localhost:8080/", "HTTPS://example.com/"] {
+            let value = serde_json::json!({"version": 1, "task": "t", "start": start, "steps": []});
+            assert!(Recipe::from_json(&value.to_string()).is_ok(), "refused {start}");
+        }
     }
 
     #[test]
