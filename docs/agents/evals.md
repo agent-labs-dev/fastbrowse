@@ -5,10 +5,10 @@ has its own rules in [publish-evals.md](publish-evals.md).
 
 ## Iterate and verify
 
-Agent changes are iterated against `dev` only. Measure `heldout` before and after a round, and never debug
-its tasks. If a held-out task was used to design a fix, disclose that loss of independence in the PR.
-Fix the general cause (the no eval tuning rule in [AGENTS.md](../../AGENTS.md)), then verify the local and mock
-fixture suites and the relevant dev tasks.
+Agent changes are iterated against `dev` only. The separate held-out suite is gone: Parallax moved its tasks
+into `dev`, so any dev task may be one a fix was designed against. When a task shaped the fix, say so in the PR,
+and check the result against the core suite and the local and mock fixtures rather than the task alone.
+Fix the general cause (the no eval tuning rule in [AGENTS.md](../../AGENTS.md)) before the before-and-after run.
 
 The internal live suite, external corpora, comparator adapters and recording tools live in Parallax under
 `parallax.browser_use`. Run its `parallax browser internal --help`, `official --help`, `data --help` and
