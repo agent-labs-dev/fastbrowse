@@ -114,7 +114,8 @@ field cannot count, even when it opens an autocomplete popup. Control changes ar
 a new document reports its controls instead of treating reused IDs as edits to the page left behind.
 A navigation retains its observed source page, its controls and Jev's sign-in reading for decisions on the destination, including recovery and decisions after a redraw. The source is reported as a past observation whose current state is unknown. Credential availability uses each field's frame origin, as secret resolution does. When that origin has no stored secrets, the decision receives that fact before the historical source. The sign-in question distinguishes a restricted route from a task that requires an account; Jev still decides whether the wall blocks the task. Retained context is masked again before a model reads it. If the request exceeds Jev's documented input limit, retained page facts are shortened with an omission marker before the current page's text is shortened.
 
-An empty observation waits once per document on loading events before action history and progress are recorded.
+An empty observation waits on loading events before action history and progress are recorded.
+The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
 Reloading remains restricted to an untouched opening page, since retrying a later page could repeat a submission.
 `StallRules` has one stall rule: a step that
 changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no

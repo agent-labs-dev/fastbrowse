@@ -772,6 +772,24 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
     }
 }
 
+#[tokio::test]
+async fn a_later_blank_navigation_with_the_same_fingerprint_gets_its_own_wait() {
+    let loaded = at("https://shop.test/", &[button("Browse")]);
+    let blank = Observation {
+        url: "https://shop.test/".into(),
+        page_key: "empty-frame-set".into(),
+        document_key: String::new(),
+        ..observation(&[])
+    };
+    let agent =
+        Agent::new(Arc::new(FinishPage(loaded.clone())), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    assert!(agent.settle_blank(&mut state, &blank).await.unwrap());
+    assert!(!agent.settle_blank(&mut state, &blank).await.unwrap(), "one wait within the same blank episode");
+    assert!(!agent.settle_blank(&mut state, &loaded).await.unwrap());
+    assert!(agent.settle_blank(&mut state, &blank).await.unwrap(), "a later navigation must wait again");
+}
+
 /// The page used by the finish-path test, whose read has already supplied the cited requirement claim.
 struct FinishPage(Observation);
 

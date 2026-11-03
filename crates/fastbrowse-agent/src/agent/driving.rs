@@ -69,7 +69,7 @@ impl Agent {
                 }
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            if !drew_something(&raw) && self.settle_blank(state, &raw).await? {
+            if self.settle_blank(state, &raw).await? {
                 continue;
             }
             self.note_effect(state, &observation);
@@ -369,6 +369,11 @@ impl Agent {
     }
 
     pub(super) async fn settle_blank(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        if drew_something(observation) {
+            // A later navigation can have the same empty frame set before its destination starts answering.
+            state.blank_waited.clear();
+            return Ok(false);
+        }
         let document =
             if observation.document_key.is_empty() { &observation.page_key } else { &observation.document_key };
         if !state.blank_waited.insert((observation.url.clone(), document.clone())) {

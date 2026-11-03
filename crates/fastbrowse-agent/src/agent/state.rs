@@ -211,7 +211,7 @@ pub(crate) struct RunState {
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
     pub blank_opening_checked: bool,
-    /// A blank document is waited out once before its state can renew recovery or reach a decision.
+    /// Blank states waited out during this loading episode, cleared once a readable page appears.
     pub blank_waited: HashSet<(String, String)>,
     pub last_page: Option<(String, String)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
