@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "task": "Local scripted smoke flow",
+  "start": "http://127.0.0.1:42961/",
+  "steps": [
+    {"operation":"click","page":{"origin":"http://127.0.0.1:42961","path":"/","query":null,"fragment":null},"target":{"role":"button","label":"Choose plan","context":"Prepare a workspace"},"text":null,"replay":true},
+    {"operation":"click","page":{"origin":"http://127.0.0.1:42961","path":"/review.html","query":null,"fragment":null},"target":{"role":"button","label":"Review","context":"Review your workspace"},"text":null,"replay":true},
+    {"operation":"click","page":{"origin":"http://127.0.0.1:42961","path":"/finish.html","query":null,"fragment":null},"target":{"role":"button","label":"Finish","context":"Ready to finish"},"text":null,"replay":true}
+  ]
+}

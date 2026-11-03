@@ -1,0 +1,13 @@
+{
+  "jsonrpc":"2.0",
+  "id":2,
+  "result":{
+    "status":"complete",
+    "steps":[
+      {"index":0,"operation":"click","decided_by":"recipe","outcome":"executed","url":"http://127.0.0.1:42961/","target":"Choose plan (Prepare a workspace)","duration_ms":1425},
+      {"index":1,"operation":"click","decided_by":"jev","outcome":"executed","url":"http://127.0.0.1:42961/review.html","target":"Review (Review your workspace)","duration_ms":1410},
+      {"index":2,"operation":"click","decided_by":"recipe","outcome":"executed","url":"http://127.0.0.1:42961/finish.html","target":"Finish (Ready to finish)","duration_ms":1419}
+    ],
+    "artifacts":[{"name":"healing.mp4","href":"demo/healing.mp4"}]
+  }
+}
