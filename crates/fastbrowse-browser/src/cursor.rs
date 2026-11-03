@@ -36,7 +36,27 @@ const CALL_SECONDS: Duration = Duration::from_secs(2);
 // `move_cursor` replies only once its glide has landed, and the driver's own pace takes up to about three seconds
 // across a screen, longer than the half second between quick clicks, so each glide was cut off by the next and the
 // arrow landed nowhere. A fixed glide lands on every click; a shorter one jumps whole inches between drawn frames.
+//
+// One fixed duration for every move still makes a sweep across the page the same length as a hop between two
+// neighbouring controls, so the long move crosses four or five times faster and is gone before it can be followed.
+//
+// The glide is paced to a travel speed instead of by a duration: a move takes as long as its distance needs at
+// `GLIDE_PX_PER_S`, so a sweep and a hop are crossed at the same pace, between the value tuned above and a ceiling
+// that keeps one step from holding up the next for long. On the 1290x910 saucedemo replay the old whole moves ran
+// at a 1,350-2,400px/s peak; at this budget a sweep peaks near 750px/s, which is the pace a hand crosses a screen.
+//
+// `glide_duration_ms` is only the glide length under `timing: fixed`; every other timing keeps the style's own
+// curve and ignores it, so the run asks for `fixed` before it sends a duration at all.
 const GLIDE_MS: f64 = 550.0;
+const GLIDE_MAX_MS: f64 = 2200.0;
+/// Device pixels a glide covers per second: the pace the arrow travels at, whatever the distance.
+const GLIDE_PX_PER_S: f64 = 500.0;
+
+/// The glide to ask for on a move `distance` device pixels long: long enough to cross at `GLIDE_PX_PER_S`, no
+/// shorter than the tuned floor that lands a short hop, and capped so a step is not held up behind a long sweep.
+fn glide_ms(distance: f64) -> f64 {
+    (distance.max(0.0) / GLIDE_PX_PER_S * 1000.0).clamp(GLIDE_MS, GLIDE_MAX_MS)
+}
 // A driver that ignores the fixed glide still lands within its own 5s ceiling; waiting that long is not a failure.
 const MOVE_SECONDS: Duration = Duration::from_secs(6);
 const START_SECONDS: Duration = Duration::from_secs(5);
@@ -382,9 +402,15 @@ struct Inner {
     driver: Driver,
     session: String,
     disabled: AtomicBool,
+    /// Whether the driver takes `set_agent_cursor_motion`, so the glide can be re-paced per move.
+    motion: bool,
     /// None while a visibility change is in flight or was dropped midway: the next one is sent either way.
     shown: StdMutex<Option<bool>>,
     last_call: StdMutex<Instant>,
+    /// Where the overlay was last drawn, in screen pixels; a move from nothing is paced as a short one.
+    drawn: StdMutex<Option<(f64, f64)>>,
+    /// The glide last asked of the driver, so one move does not re-send an unchanged setting.
+    sent_glide: StdMutex<Option<f64>>,
     tasks: StdMutex<Tasks>,
 }
 
@@ -394,14 +420,17 @@ pub struct CursorFeedback {
 }
 
 impl CursorFeedback {
-    fn new(driver: Driver, session: String) -> Self {
+    fn new(driver: Driver, session: String, motion: bool) -> Self {
         let tasks = Tasks { generation: 0, pending: None, watching: None };
         let inner = Inner {
             driver,
             session,
             disabled: AtomicBool::new(false),
+            motion,
             shown: StdMutex::new(Some(true)),
             last_call: StdMutex::new(Instant::now()),
+            drawn: StdMutex::new(None),
+            sent_glide: StdMutex::new(Some(GLIDE_MS)),
             tasks: StdMutex::new(tasks),
         };
         Self { inner: Arc::new(inner) }
@@ -483,10 +512,40 @@ impl Inner {
         let window = self.browser_window(&reading).await?;
         self.show(window.is_some()).await?;
         if window.is_some() {
+            // Pace this move by how far the arrow has to travel, from where it was last drawn. A page change
+            // leaves the previous drawing behind the new page, so that move is paced as a fresh short one.
+            let distance = lock(&self.drawn).map_or(0.0, |(x, y)| (target.0 - x).hypot(target.1 - y));
+            self.pace(glide_ms(distance)).await?;
             let arguments = json!({"session": self.session, "x": target.0, "y": target.1, "scope": "window"});
             self.driver.tool_within("move_cursor", arguments, MOVE_SECONDS).await?;
+            *lock(&self.drawn) = Some(target);
         }
         *lock(&self.last_call) = Instant::now();
+        Ok(())
+    }
+
+    /// Ask for a glide of `glide_ms`, unless the driver already has it. A driver without the motion tool keeps the
+    /// glide it was started with, so this is skipped rather than failing the move.
+    async fn pace(&self, glide_ms: f64) -> Result<(), Failure> {
+        if !self.motion {
+            return Ok(());
+        }
+        {
+            let mut sent = lock(&self.sent_glide);
+            if sent.is_some_and(|current| (current - glide_ms).abs() < 1.0) {
+                return Ok(());
+            }
+            // Cleared while the request is in flight, so a dropped reply is re-sent with the next move.
+            *sent = None;
+        }
+        let arguments = json!({
+            "session": self.session,
+            "idle_hide_ms": 0,
+            "timing": "fixed",
+            "glide_duration_ms": glide_ms
+        });
+        self.driver.tool("set_agent_cursor_motion", arguments).await?;
+        *lock(&self.sent_glide) = Some(glide_ms);
         Ok(())
     }
 
@@ -621,7 +680,8 @@ fn session_name() -> Result<String, Failure> {
     Ok(format!("fastbrowse-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
 }
 
-async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
+/// Set a session up and report whether the driver takes a per-move glide.
+async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
     let hello = json!({
         "protocolVersion": "2025-06-18",
         "capabilities": {},
@@ -648,13 +708,20 @@ async fn handshake(driver: &Driver, session: &str) -> Result<(), Failure> {
     // The overlay fades out on its own after a short idle by default, and a run spends most of its time between
     // steps: ask for a cursor that stays where it was left, and glides short enough to keep up with the clicks.
     // A driver without this tool keeps its own defaults.
+    let mut motion = false;
     if tools.contains_key("set_agent_cursor_motion") {
-        let arguments = json!({"session": session, "idle_hide_ms": 0, "glide_duration_ms": GLIDE_MS});
-        if let Err(failure) = driver.tool("set_agent_cursor_motion", arguments).await {
-            log_warning(&format!("the cursor may fade while the run is idle ({})", failure.kind()));
+        // `fixed` is the timing that reads `glide_duration_ms`; the driver's own default timing ignores it and
+        // keeps its style's curve, which is how a "550ms" glide still crossed at 1,350-2,400px/s.
+        let arguments =
+            json!({"session": session, "idle_hide_ms": 0, "timing": "fixed", "glide_duration_ms": GLIDE_MS});
+        match driver.tool("set_agent_cursor_motion", arguments).await {
+            Ok(_) => motion = true,
+            Err(failure) => {
+                log_warning(&format!("the cursor may fade while the run is idle ({})", failure.kind()));
+            }
         }
     }
-    Ok(())
+    Ok(motion)
 }
 
 pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
@@ -668,14 +735,14 @@ pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
     let guard = CloseOnDrop(Some(driver));
     let opened = match session_name() {
         Ok(session) => match timeout(START_SECONDS, handshake(guard.driver(), &session)).await {
-            Ok(Ok(())) => Ok(session),
+            Ok(Ok(motion)) => Ok((session, motion)),
             Ok(Err(failure)) => Err(failure),
             Err(_) => Err(Failure::Timeout),
         },
         Err(failure) => Err(failure),
     };
     match opened {
-        Ok(session) => Some(CursorFeedback::new(guard.take(), session)),
+        Ok((session, motion)) => Some(CursorFeedback::new(guard.take(), session, motion)),
         Err(failure) => {
             log_warning(&format!("cursor feedback unavailable ({}); running without it", failure.kind()));
             guard.take().close().await;
@@ -869,6 +936,43 @@ if mode == "linger":
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
+    }
+
+    #[test]
+    fn a_long_move_is_given_longer_than_a_short_one() {
+        // One fixed duration made a sweep across the page as quick as a hop between neighbours. The floor is the
+        // value tuned for landing on quick clicks, so a short move keeps it.
+        assert_eq!(glide_ms(0.0), GLIDE_MS);
+        assert!(glide_ms(120.0) < glide_ms(600.0));
+        assert!(glide_ms(600.0) > glide_ms(200.0));
+        // Capped, so a step is not held up for long behind one sweep.
+        assert_eq!(glide_ms(50_000.0), GLIDE_MAX_MS);
+        assert_eq!(glide_ms(f64::MAX), GLIDE_MAX_MS);
+    }
+
+    #[test]
+    fn a_move_crosses_at_one_pace_whatever_its_distance() {
+        // The pace is the point: two moves of different lengths take time in proportion, so the longer one is not
+        // crossed several times faster. Checked over the distances the replay actually ran.
+        // Below the cap a move takes exactly the time its distance needs. A move at the cap is the one exception,
+        // and slower rather than faster, which is the safe direction.
+        for distance in [275.0, 400.0, 600.0, 765.0] {
+            let pace = distance / (glide_ms(distance) / 1000.0);
+            assert!((pace - GLIDE_PX_PER_S).abs() < 1e-9, "{distance}px crossed at {pace}px/s");
+        }
+        // Under the floor a move is a short hop: it keeps the tuned 550ms rather than a fraction of it.
+        assert_eq!(glide_ms(250.0), GLIDE_MS);
+        // A 1290px sweep, the whole viewport of the measured replay, runs into the 2.2s cap and is crossed at about
+        // 590px/s: slower than the budget, where the old fixed 550ms glide crossed it at about 2,300px/s.
+        assert!((glide_ms(1_290.0) - GLIDE_MAX_MS).abs() < 1e-9);
+        assert!(1_290.0 / (glide_ms(1_290.0) / 1000.0) < 600.0);
+        // A 765px move, the cart-to-checkout sweep in the replay, is not capped and gets its full time.
+        assert!(glide_ms(765.0) > 1_500.0);
+    }
+
+    #[test]
+    fn a_negative_distance_is_paced_as_a_short_move() {
+        assert_eq!(glide_ms(-40.0), GLIDE_MS);
     }
 
     #[test]
