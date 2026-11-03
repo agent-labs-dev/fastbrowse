@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Composed claims are judged for scope: quotes about some records support those records, and a source population counter does not establish how many records the answer reports.
+
 - PDF parsing runs in a helper process that is killed and reaped on timeout, cancellation or shutdown. A parser crash leaves the agent running. Kept PDFs whose text could not be read now report the reason. Rust embedders register the helper with `fastbrowse::helper::run_if_requested()` first in `main`.
 
 - Each blank navigation gets a loading wait, even when an earlier navigation showed the same empty page fingerprint.

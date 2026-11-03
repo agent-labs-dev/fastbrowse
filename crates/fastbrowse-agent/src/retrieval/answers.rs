@@ -372,7 +372,7 @@ async fn supported_claims(
         for (key, focus) in checks {
             let question = NoulQuestion::new(
                 format!(
-                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record.\n{cited} {DESCRIPTIVE_VALUES}"
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record. Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer. A count of reported records requires those records as evidence.\n{cited} {DESCRIPTIVE_VALUES}"
                 ),
                 Some("Every assertion being judged is supported by these quotes."),
                 Some(
@@ -725,6 +725,9 @@ mod tests {
         assert!(question.instructions.contains("Record A: 99"));
         assert!(question.instructions.contains("Record B: 34"));
         assert!(question.instructions.contains("right panel"));
+        assert!(question.instructions.contains("quotes about some members support only those members"));
+        assert!(question.instructions.contains("not the number extracted or included in this answer"));
+        assert!(question.instructions.contains("A count of reported records requires those records as evidence"));
     }
 
     #[tokio::test]

@@ -83,6 +83,8 @@ each final claim against its original cited quotes, including record identity an
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.
 The composer and support check interpret a requested field by its meaning: descriptive prose can supply its
 value without a matching heading, and that value contradicts a claim that the field was not shown.
+The support question distinguishes facts about a quoted subset from claims about a whole set, and a source's
+population counter from the number of records the answer reports.
 A claim with no cited quote, no support or no judgment is withheld, and the answer ends `unverified` rather than
 `complete`. A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev
 picked.
