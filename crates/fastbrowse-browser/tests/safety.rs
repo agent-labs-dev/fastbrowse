@@ -598,11 +598,14 @@ async fn test_an_attached_browser_with_only_an_empty_window_takes_it_over() {
     h.page.navigate(&format!("{}/page", sites.foreign("127.0.0.1")), None).await.expect("navigate");
     let created = h.session.send("Target.createTarget", json!({"url": "about:blank"}), None).await.expect("create");
     let blank = created["targetId"].as_str().expect("a target").to_owned();
+    // Count windows: Chrome starts its own component extensions' background pages and workers a few seconds after
+    // launch, so a target list taken across the run gained one that neither the run nor the test opened.
     let target_ids = |targets: serde_json::Value| -> Vec<String> {
         let mut ids: Vec<String> = targets["targetInfos"]
             .as_array()
             .expect("targets")
             .iter()
+            .filter(|t| t["type"] == "page")
             .filter_map(|t| t["targetId"].as_str().map(str::to_owned))
             .collect();
         ids.sort();
