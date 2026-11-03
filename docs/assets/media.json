@@ -1,23 +1,23 @@
 {
   "assets": {
     "assets/architecture-dark.svg": {
-      "surface": "1fcd0398def88cb654a67dc45f296254cb9de9b5c362e0596b10c5d4067c59f0",
+      "surface": "8f874d7282c60724920f79bedae48df126fbd0d446f086e356660e7c5dea4388",
       "shows": "The step loop and the gates, as the code runs them."
     },
     "assets/architecture.svg": {
-      "surface": "1fcd0398def88cb654a67dc45f296254cb9de9b5c362e0596b10c5d4067c59f0",
+      "surface": "8f874d7282c60724920f79bedae48df126fbd0d446f086e356660e7c5dea4388",
       "shows": "The step loop and the gates, as the code runs them."
     },
     "assets/wordmark-dark.svg": {
-      "surface": "1fcd0398def88cb654a67dc45f296254cb9de9b5c362e0596b10c5d4067c59f0",
+      "surface": "8f874d7282c60724920f79bedae48df126fbd0d446f086e356660e7c5dea4388",
       "shows": "The fastbrowse wordmark."
     },
     "assets/wordmark.svg": {
-      "surface": "1fcd0398def88cb654a67dc45f296254cb9de9b5c362e0596b10c5d4067c59f0",
+      "surface": "8f874d7282c60724920f79bedae48df126fbd0d446f086e356660e7c5dea4388",
       "shows": "The fastbrowse wordmark."
     },
     "docs/assets/demo.gif": {
-      "surface": "1fcd0398def88cb654a67dc45f296254cb9de9b5c362e0596b10c5d4067c59f0",
+      "surface": "8f874d7282c60724920f79bedae48df126fbd0d446f086e356660e7c5dea4388",
       "shows": "A run shopping thepihut.com: it adds a Raspberry Pi Pico 2 W and an in-stock BME280 sensor to the basket, fills in checkout without paying, and answers with each price, the delivery cost and the order total, each cited.",
       "command": "uv run fastbrowse \"...\" --start https://thepihut.com/ --local --record demo.mp4",
       "recorded_at": "2026-10-28"
