@@ -12,6 +12,7 @@ public record CostLine(
     @JsonProperty("basis") CostBasis basis,
     @JsonProperty("dollars") Double dollars,
     @JsonProperty("purpose") LLMPurpose purpose,
+    @JsonProperty("decision_purpose") JevPurpose decisionPurpose,
     @JsonProperty("input_tokens") long inputTokens,
     @JsonProperty("output_tokens") long outputTokens,
     @JsonProperty("seconds") Double seconds) {
@@ -27,6 +28,7 @@ public record CostLine(
         private CostBasis basis;
         private Double dollars;
         private LLMPurpose purpose;
+        private JevPurpose decisionPurpose;
         private long inputTokens;
         private long outputTokens;
         private Double seconds;
@@ -53,6 +55,11 @@ public record CostLine(
             return this;
         }
 
+        public Builder decisionPurpose(JevPurpose decisionPurpose) {
+            this.decisionPurpose = decisionPurpose;
+            return this;
+        }
+
         public Builder inputTokens(long inputTokens) {
             this.inputTokens = inputTokens;
             return this;
@@ -69,7 +76,7 @@ public record CostLine(
         }
 
         public CostLine build() {
-            return new CostLine(component, basis, dollars, purpose, inputTokens, outputTokens, seconds);
+            return new CostLine(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds);
         }
     }
 }

@@ -8,6 +8,7 @@ use common::*;
 use fastbrowse_agent::batches::evaluate_batches;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, Question};
+use fastbrowse_core::models::JevPurpose;
 use fastbrowse_core::py::dump::Dump;
 use indexmap::IndexMap;
 use serde_json::json;
@@ -22,6 +23,7 @@ fn batches_send_what_python_sends() {
         let seen = Mutex::new(Vec::<String>::new());
         let record = |key: &str, _: &Answer| seen.lock().unwrap().push(key.to_string());
         let result = block_on(evaluate_batches(
+            JevPurpose::Verify,
             &jev,
             &case["state"],
             &questions,

@@ -98,12 +98,13 @@ const (
 )
 
 type CostLine struct {
-	Component    CostComponent `json:"component"`
-	Basis        CostBasis     `json:"basis"`
-	Dollars      *float64      `json:"dollars"`
-	Purpose      *LLMPurpose   `json:"purpose"`
-	InputTokens  int64         `json:"input_tokens"`
-	OutputTokens int64         `json:"output_tokens"`
+	Component       CostComponent `json:"component"`
+	Basis           CostBasis     `json:"basis"`
+	Dollars         *float64      `json:"dollars"`
+	Purpose         *LLMPurpose   `json:"purpose"`
+	DecisionPurpose *JevPurpose   `json:"decision_purpose,omitempty"`
+	InputTokens     int64         `json:"input_tokens"`
+	OutputTokens    int64         `json:"output_tokens"`
 	// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
 	Seconds *float64 `json:"seconds"`
 }
@@ -181,6 +182,17 @@ type InitializeResult struct {
 	ProtocolVersion   int64  `json:"protocol_version"`
 	FastbrowseVersion string `json:"fastbrowse_version"`
 }
+
+type JevPurpose string
+
+const (
+	JevPurposeAction        JevPurpose = "action"
+	JevPurposeAuthorization JevPurpose = "authorization"
+	JevPurposeRelevance     JevPurpose = "relevance"
+	JevPurposeRead          JevPurpose = "read"
+	JevPurposeVerify        JevPurpose = "verify"
+	JevPurposeLocate        JevPurpose = "locate"
+)
 
 type LLMPurpose string
 

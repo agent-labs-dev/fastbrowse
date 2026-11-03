@@ -8,10 +8,11 @@ use std::sync::{Arc, Mutex};
 use common::{answering, one};
 use fastbrowse_clients::environment::{DecisionSource, Settings};
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_clients::validation::{RETRY_DELAYS_SECONDS, RETRYABLE_STATUS};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulAnswer};
-use fastbrowse_core::models::CostBasis;
+use fastbrowse_core::models::{CostBasis, JevPurpose};
 use indexmap::IndexMap;
 use serde_json::json;
 
@@ -115,7 +116,8 @@ async fn test_exhausted_primary_switches_once_and_each_run_starts_fresh() {
             });
             let configured = settings(setting, direct_key);
             let client = configured.decision(&http).unwrap();
-            let first = client.evaluate(&json!("page"), &one()).await.unwrap();
+            let first = jev_purpose(JevPurpose::Action, client.evaluate(&json!("page"), &one())).await.unwrap();
+            assert_eq!(first.cost.decision_purpose, Some(JevPurpose::Action));
             let second = client.evaluate(&json!("page"), &one()).await.unwrap();
             let mut expected = vec![primary; ATTEMPTS];
             expected.extend([backup, backup]);

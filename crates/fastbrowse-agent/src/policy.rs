@@ -9,13 +9,14 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images, NoulAnswer, NoulQuestion,
     Question,
 };
 use fastbrowse_core::effects::leavable;
-use fastbrowse_core::models::{CostComponent, CostLine, Operation, StepOutcome, TARGETED, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link};
 use fastbrowse_core::py::dump::Dump;
@@ -719,7 +720,9 @@ async fn shortlist(
             cache.remember(written.clone(), noul.clone());
         }
     };
-    let answered = evaluate_batches(jev, &state, &pending, &config.tokens, ledger, Some(&remember), true).await?;
+    let answered =
+        evaluate_batches(JevPurpose::Relevance, jev, &state, &pending, &config.tokens, ledger, Some(&remember), true)
+            .await?;
     if let Some(answered) = &answered {
         answers.extend(answered.answers.iter().map(|(k, a)| (k.clone(), a.clone())));
     }
@@ -1009,7 +1012,8 @@ async fn evaluate(
         if let Some(ledger) = ledger {
             ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         }
-        let answered = jev.evaluate_images(&request.state, questions, &request.images).await?;
+        let answered =
+            jev_purpose(JevPurpose::Action, jev.evaluate_images(&request.state, questions, &request.images)).await?;
         if let Some(ledger) = ledger {
             ledger.record([answered.cost.clone()])?;
         }

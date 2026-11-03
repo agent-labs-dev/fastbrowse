@@ -16,7 +16,7 @@ use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionError, Edges, Evaluation, NoulAnswer, Question, RetriesExhausted,
     ScoreAnswer,
 };
-use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
+use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, JevPurpose};
 use fastbrowse_core::py::json::{dumps, float_str};
 use fastbrowse_core::py::lax::float_of;
 use fastbrowse_core::py::{self, text};
@@ -489,7 +489,7 @@ impl Drop for CancelledJev<'_> {
         }
         if unaccounted > 0 {
             self.trace.event("cancelled_request_cost", || {
-                let mut fields = Map::new();
+                let mut fields = jev_trace_fields();
                 fields.insert("call".into(), "jev".into());
                 fields.insert("requests".into(), unaccounted.into());
                 if !self.image_input {
@@ -750,6 +750,39 @@ pub fn parse_answers(
 
 tokio::task_local! {
     static SPEND: JevSpend;
+    static PURPOSE: JevPurpose;
+}
+
+fn current_jev_purpose() -> Option<JevPurpose> {
+    PURPOSE.try_with(|purpose| *purpose).ok()
+}
+
+pub(crate) fn jev_trace_fields() -> Map<String, Value> {
+    current_jev_purpose()
+        .map(|purpose| Map::from_iter([("decision_purpose".into(), purpose.as_str().into())]))
+        .unwrap_or_default()
+}
+
+/// The caller names the decision before dispatch, so retries and dropped futures retain the same purpose.
+pub async fn jev_purpose<F>(purpose: JevPurpose, future: F) -> Result<Evaluation, DecisionError>
+where
+    F: Future<Output = Result<Evaluation, DecisionError>>,
+{
+    PURPOSE
+        .scope(purpose, async {
+            let mut result = future.await;
+            match &mut result {
+                Ok(evaluation) => evaluation.cost.decision_purpose = Some(purpose),
+                Err(DecisionError::RetriesExhausted(exhausted)) => {
+                    for evaluation in &mut exhausted.answered {
+                        evaluation.cost.decision_purpose = Some(purpose);
+                    }
+                }
+                Err(_) => {}
+            }
+            result
+        })
+        .await
 }
 
 /// Cost lines a caller collects. Python passes a list and appends to it in place; this is that list, shared.
@@ -831,7 +864,13 @@ impl JevSpend {
 
     /// `record_jev_spend`.
     pub fn record(&self, costs: impl IntoIterator<Item = CostLine>) {
-        self.0.lines.extend(costs);
+        let purpose = current_jev_purpose();
+        self.0.lines.extend(costs.into_iter().map(|mut cost| {
+            if cost.component == CostComponent::Jev && cost.decision_purpose.is_none() {
+                cost.decision_purpose = purpose;
+            }
+            cost
+        }));
     }
 }
 
@@ -883,11 +922,13 @@ pub fn record_jev_spend(costs: impl IntoIterator<Item = CostLine>) {
 /// Image tokenization is unpublished, so only the route's documented context bounds an unanswered image call.
 fn input_cost(body: &Value, price: Option<f64>, image_context: Option<i64>) -> CostLine {
     if let Some(context) = image_context {
-        return CostLine::new(
+        let mut cost = CostLine::new(
             CostComponent::Jev,
             if price.is_some() { CostBasis::Bounded } else { CostBasis::Unknown },
             price.map(|price| context as f64 * price),
         );
+        cost.decision_purpose = current_jev_purpose();
+        return cost;
     }
     let tokens = (dumped_chars(body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
     estimated_cost(price, tokens, 0)
@@ -925,6 +966,10 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
             Some(py::sum(lines.iter().map(|line| line.dollars.unwrap_or(0.0))))
         },
         purpose: None,
+        decision_purpose: current_jev_purpose().or_else(|| {
+            let purpose = lines.first()?.decision_purpose?;
+            lines.iter().all(|line| line.decision_purpose == Some(purpose)).then_some(purpose)
+        }),
         input_tokens: lines.iter().map(|line| line.input_tokens).sum(),
         output_tokens: lines.iter().map(|line| line.output_tokens).sum(),
         seconds: Some(py::sum(lines.iter().map(|line| line.seconds.unwrap_or(0.0)))),
@@ -1087,6 +1132,7 @@ pub fn reported_cost(
             basis: CostBasis::Metered,
             dollars: Some(cost),
             purpose: None,
+            decision_purpose: current_jev_purpose(),
             input_tokens,
             output_tokens,
             seconds: None,
@@ -1102,6 +1148,7 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
         basis: if price.is_some() { CostBasis::Estimated } else { CostBasis::Unknown },
         dollars: price.map(|price| input_tokens as f64 * price),
         purpose: None,
+        decision_purpose: current_jev_purpose(),
         input_tokens,
         output_tokens,
         seconds: None,

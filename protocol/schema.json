@@ -269,6 +269,17 @@
           ],
           "default": null
         },
+        "decision_purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JevPurpose"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "input_tokens": {
           "default": 0,
           "minimum": 0,
@@ -526,6 +537,18 @@
       ],
       "title": "InitializeResult",
       "type": "object"
+    },
+    "JevPurpose": {
+      "enum": [
+        "action",
+        "authorization",
+        "relevance",
+        "read",
+        "verify",
+        "locate"
+      ],
+      "title": "JevPurpose",
+      "type": "string"
     },
     "JsonValue": {},
     "LLMPurpose": {

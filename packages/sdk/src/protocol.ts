@@ -29,6 +29,7 @@ export type FactReader = 'jev_choice' | 'llm_image';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type LLMPurpose = 'start' | 'compose' | 'image_read' | 'fill';
+export type JevPurpose = 'action' | 'authorization' | 'relevance' | 'read' | 'verify' | 'locate';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
  */
@@ -165,6 +166,7 @@ export interface CostLine {
   basis: CostBasis;
   dollars: number | null;
   purpose: LLMPurpose | null;
+  decision_purpose?: JevPurpose | null;
   input_tokens: number;
   output_tokens: number;
   /**

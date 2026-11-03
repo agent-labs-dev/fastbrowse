@@ -229,6 +229,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -423,6 +424,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -742,6 +744,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -751,6 +754,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -1010,6 +1014,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -1019,6 +1024,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -1028,6 +1034,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -1297,6 +1304,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -1645,6 +1653,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -1654,6 +1663,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -1663,6 +1673,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -2057,6 +2068,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -2066,6 +2078,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -2075,6 +2088,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -2084,6 +2098,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -2093,6 +2108,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -2629,6 +2645,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -2638,6 +2655,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3149,6 +3167,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3158,6 +3177,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3395,6 +3415,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3649,6 +3670,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3658,6 +3680,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3943,6 +3966,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3952,6 +3976,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3961,6 +3986,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -3970,6 +3996,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4775,6 +4802,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4784,6 +4812,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4793,6 +4822,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4802,6 +4832,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4811,6 +4842,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4820,6 +4852,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4829,6 +4862,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4838,6 +4872,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4847,6 +4882,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4856,6 +4892,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -4865,6 +4902,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5419,6 +5457,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5428,6 +5467,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5437,6 +5477,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5446,6 +5487,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5455,6 +5497,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5817,6 +5860,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5826,6 +5870,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -5835,6 +5880,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -6122,6 +6168,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -6131,6 +6178,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -6400,6 +6448,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -6661,6 +6710,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -6670,6 +6720,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -6912,6 +6963,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -6921,6 +6973,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -7461,6 +7514,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -7470,6 +7524,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -7479,6 +7534,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -7488,6 +7544,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -7497,6 +7554,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -7506,6 +7564,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "verify",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8211,6 +8270,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8220,6 +8280,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8229,6 +8290,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8238,6 +8300,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8247,6 +8310,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8256,6 +8320,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8265,6 +8330,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8274,6 +8340,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8283,6 +8350,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8292,6 +8360,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8569,6 +8638,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -8764,6 +8834,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -9089,6 +9160,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -9098,6 +9170,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -9107,6 +9180,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "authorization",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -9116,6 +9190,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "read",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -9364,6 +9439,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null
@@ -9373,6 +9449,7 @@
       "basis": "estimated",
       "dollars": 0.0,
       "purpose": null,
+      "decision_purpose": "action",
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null

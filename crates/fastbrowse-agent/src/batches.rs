@@ -2,11 +2,11 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use fastbrowse_clients::validation::{Lines, Paid, jev_spend};
+use fastbrowse_clients::validation::{Lines, Paid, jev_purpose, jev_spend};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Question};
-use fastbrowse_core::models::{CostComponent, CostLine};
+use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
@@ -67,7 +67,9 @@ fn lock(spent: &Mutex<Spent>) -> MutexGuard<'_, Spent> {
 }
 
 /// None when no batch was answered; a question too large to send with the state alone goes unscored.
+#[allow(clippy::too_many_arguments)]
 pub async fn evaluate_batches(
+    purpose: JevPurpose,
     jev: &dyn DecisionClient,
     state: &Value,
     questions: &IndexMap<String, Question>,
@@ -132,7 +134,10 @@ pub async fn evaluate_batches(
         lock(&spent).receipts.push(receipt.clone());
         let spent = &spent;
         tasks.push(Box::pin(async move {
-            let evaluation = match jev_spend(Lines::Paid(receipt.clone()), None, jev.evaluate(state, questions)).await {
+            let evaluation = match jev_purpose(
+                purpose,
+                jev_spend(Lines::Paid(receipt.clone()), None, jev.evaluate(state, questions)),
+            ).await {
                 Ok(evaluation) => evaluation,
                 Err(error) => {
                     // Provider adapters retain partial receipts in the batch's spend scope. Custom clients can
@@ -254,7 +259,16 @@ mod tests {
         let many: IndexMap<String, Question> = (0..4000)
             .map(|i| (format!("r{i}"), NoulQuestion::new(format!("Is element {i} relevant?"), None, None).into()))
             .collect();
-        let answered = block_on(evaluate_batches(&jev, &state, &many, &TokenBudget::default(), None, None, false));
+        let answered = block_on(evaluate_batches(
+            JevPurpose::Verify,
+            &jev,
+            &state,
+            &many,
+            &TokenBudget::default(),
+            None,
+            None,
+            false,
+        ));
         assert_eq!(answered.unwrap().unwrap().answers.len(), 4000);
         let sent = jev.sent.lock().unwrap();
         assert!(sent.len() < 40, "{} requests for 4000 questions", sent.len());
@@ -267,12 +281,22 @@ mod tests {
         let questions = questions(&[("a", "first"), ("b", "second")]);
         let tokens = one_per_batch();
         let state = json!({});
-        let mut pass = Box::pin(evaluate_batches(&jev, &state, &questions, &tokens, Some(&ledger), None, true));
+        let mut pass = Box::pin(evaluate_batches(
+            JevPurpose::Verify,
+            &jev,
+            &state,
+            &questions,
+            &tokens,
+            Some(&ledger),
+            None,
+            true,
+        ));
         assert!(pass.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
         // Dropped where a deadline would cancel it.
         drop(pass);
         assert_eq!(jev.sent.lock().unwrap().len(), 2);
         assert!((ledger.breakdown().known_dollars() - 0.01).abs() < 1e-12);
+        assert!(ledger.breakdown().lines.iter().all(|line| line.decision_purpose == Some(JevPurpose::Verify)));
     }
 
     #[test]
@@ -282,7 +306,16 @@ mod tests {
         let questions = questions(&[("a", "first"), ("b", "second")]);
         let tokens = one_per_batch();
         let state = json!({});
-        let mut pass = Box::pin(evaluate_batches(&jev, &state, &questions, &tokens, Some(&ledger), None, true));
+        let mut pass = Box::pin(evaluate_batches(
+            JevPurpose::Verify,
+            &jev,
+            &state,
+            &questions,
+            &tokens,
+            Some(&ledger),
+            None,
+            true,
+        ));
         let Poll::Ready(Err(AgentError::Budget(stop))) = pass.as_mut().poll(&mut Context::from_waker(Waker::noop()))
         else {
             panic!("the pass should stop before sending")
@@ -298,7 +331,10 @@ mod tests {
         let many: IndexMap<String, Question> =
             (0..40).map(|i| (format!("q{i}"), NoulQuestion::new("x".repeat(300), None, None).into())).collect();
         let tokens = TokenBudget { batch_tokens: 1000, ..TokenBudget::default() };
-        let answered = block_on(evaluate_batches(&jev, &json!({}), &many, &tokens, None, None, true)).unwrap().unwrap();
+        let answered =
+            block_on(evaluate_batches(JevPurpose::Verify, &jev, &json!({}), &many, &tokens, None, None, true))
+                .unwrap()
+                .unwrap();
         assert_eq!(answered.answers.len(), 40);
         let sent = jev.sent.lock().unwrap();
         assert!(sent.len() > 1 && sent.iter().all(|batch| batch.len() < 40));
@@ -309,8 +345,17 @@ mod tests {
         let jev = Fake { max_questions: Some(3), ..fake("") };
         let many: IndexMap<String, Question> =
             (0..7).map(|i| (format!("q{i}"), NoulQuestion::new("x", None, None).into())).collect();
-        let answered =
-            block_on(evaluate_batches(&jev, &json!({}), &many, &TokenBudget::default(), None, None, true)).unwrap();
+        let answered = block_on(evaluate_batches(
+            JevPurpose::Verify,
+            &jev,
+            &json!({}),
+            &many,
+            &TokenBudget::default(),
+            None,
+            None,
+            true,
+        ))
+        .unwrap();
         assert_eq!(answered.unwrap().answers.len(), 7);
         let sizes: Vec<usize> = jev.sent.lock().unwrap().iter().map(Vec::len).collect();
         assert_eq!(sizes, [3, 3, 1]);
@@ -323,7 +368,10 @@ mod tests {
             TokenBudget { state_plus_largest_question: 1, state_plus_all_questions: 1, ..TokenBudget::default() };
         let asked = questions(&[("a", "first")]);
         let state = json!({"text": "x".repeat(100)});
-        assert_eq!(block_on(evaluate_batches(&jev, &state, &asked, &tiny, None, None, true)).unwrap(), None);
+        assert_eq!(
+            block_on(evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tiny, None, None, true)).unwrap(),
+            None
+        );
         assert!(jev.sent.lock().unwrap().is_empty());
     }
 
@@ -347,8 +395,14 @@ mod tests {
     fn a_failed_batch_is_unscored_unless_the_caller_wants_the_error() {
         let asked = questions(&[("a", "first")]);
         let tokens = TokenBudget::default();
-        assert_eq!(block_on(evaluate_batches(&Failing, &json!({}), &asked, &tokens, None, None, true)).unwrap(), None);
-        let error = block_on(evaluate_batches(&Failing, &json!({}), &asked, &tokens, None, None, false)).unwrap_err();
+        assert_eq!(
+            block_on(evaluate_batches(JevPurpose::Verify, &Failing, &json!({}), &asked, &tokens, None, None, true))
+                .unwrap(),
+            None
+        );
+        let error =
+            block_on(evaluate_batches(JevPurpose::Verify, &Failing, &json!({}), &asked, &tokens, None, None, false))
+                .unwrap_err();
         assert_eq!(error, AgentError::Jev(DecisionError::Failed("down".into())));
     }
 }

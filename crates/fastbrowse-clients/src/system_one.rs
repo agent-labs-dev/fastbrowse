@@ -102,7 +102,7 @@ impl SystemOneClient {
     ) -> Result<Evaluation, AskError> {
         // The span covers the parse as well as the request: a 200 whose body is not a valid answer is a failed call.
         let asked = self.request(state, &questions, images, start_attempt, split_batch);
-        self.http.trace.call_span("jev", Map::new(), asked).await
+        self.http.trace.call_span("jev", crate::validation::jev_trace_fields(), asked).await
     }
 
     async fn request(

@@ -134,6 +134,7 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
         Ok(CostLine {
             component: CostComponent::Llm,
             purpose: Some(purpose),
+            decision_purpose: None,
             basis: if cost.is_none() { CostBasis::Unknown } else { CostBasis::Metered },
             dollars: cost.map(|cost| dollars(Some(cost))).transpose()?,
             input_tokens: token_count(Some(usage.get("prompt_tokens").unwrap_or(&zero)))?,
@@ -153,6 +154,7 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
     CostLine {
         component: CostComponent::Llm,
         purpose: Some(purpose),
+        decision_purpose: None,
         basis,
         dollars: (basis != CostBasis::Unknown).then(|| py::sum(costs.iter().map(|line| line.dollars.unwrap_or(0.0)))),
         input_tokens: costs.iter().map(|line| line.input_tokens).sum(),

@@ -386,6 +386,17 @@ str_enum! {
     }
 }
 
+str_enum! {
+    pub enum JevPurpose {
+        Action = "action",
+        Authorization = "authorization",
+        Relevance = "relevance",
+        Read = "read",
+        Verify = "verify",
+        Locate = "locate",
+    }
+}
+
 /// The basis of a sum of lines: the weakest claim among them. A bound plus an estimate is an estimate, since the
 /// estimate may be under its charge.
 pub fn combined_basis<'a>(lines: impl IntoIterator<Item = &'a CostLine>) -> CostBasis {
@@ -405,6 +416,8 @@ pub struct CostLine {
     pub dollars: Option<f64>,
     #[serde(default)]
     pub purpose: Option<LLMPurpose>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_purpose: Option<JevPurpose>,
     #[serde(default, deserialize_with = "lax::int_ge0")]
     pub input_tokens: i64,
     #[serde(default, deserialize_with = "lax::int_ge0")]
@@ -416,10 +429,24 @@ pub struct CostLine {
 
 impl CostLine {
     pub fn new(component: CostComponent, basis: CostBasis, dollars: Option<f64>) -> CostLine {
-        CostLine { component, basis, dollars, purpose: None, input_tokens: 0, output_tokens: 0, seconds: None }
+        CostLine {
+            component,
+            basis,
+            dollars,
+            purpose: None,
+            decision_purpose: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            seconds: None,
+        }
     }
 
     pub fn label(&self) -> String {
+        if self.component == CostComponent::Jev
+            && let Some(purpose) = self.decision_purpose
+        {
+            return format!("{}:{}", self.component, purpose);
+        }
         match self.purpose {
             None => self.component.as_str().to_string(),
             Some(purpose) => format!("{}:{}", self.component, purpose),
@@ -436,6 +463,7 @@ impl Schema for CostLine {
                 Field::required("basis", CostBasis::ty()),
                 Field::default("dollars", Ty::optional(Ty::Float.ge(0)), Value::Null),
                 Field::default("purpose", Ty::optional(LLMPurpose::ty()), Value::Null),
+                Field::default("decision_purpose", Ty::optional(JevPurpose::ty()), Value::Null).omitted_when_empty(),
                 Field::default("input_tokens", Ty::Int.ge(0), 0),
                 Field::default("output_tokens", Ty::Int.ge(0), 0),
                 Field::default("seconds", Ty::optional(Ty::Float.ge(0)), Value::Null).doc(

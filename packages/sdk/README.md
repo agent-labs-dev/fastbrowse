@@ -60,6 +60,10 @@ with `ProcessExitedError` when the process is gone. It also rejects with `Output
 finished but its data fails the `output` schema. A run that fails after it starts, including one whose
 callback throws, resolves with status `error`.
 
+Jev cost lines include `decision_purpose` when the agent named the decision: `action`, `authorization`,
+`relevance`, `read`, `verify` or `locate`. LLM lines keep their existing `purpose`. An unscoped decision
+client call omits the optional field, and older receipts remain readable.
+
 An `AbortError` carries `receipt` once the server has closed the browser: the steps it reported, known cost
 lines and finished recordings. A cancelled `RpcError` carries the same receipt. A cancellation before the run
 starts has none. The receipt has no status or answer, and an unpriced charge remains `unknown`.

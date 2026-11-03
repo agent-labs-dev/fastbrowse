@@ -1,7 +1,8 @@
 //! A covered control found in the viewport screenshot rather than by the DOM hit test.
 
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, BoxQuestion, DecisionError, Images, NoulQuestion, Question};
-use fastbrowse_core::models::{CostComponent, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, JevPurpose, UNTRUSTED};
 use fastbrowse_core::page::{ActResult, Control, Observation};
 use indexmap::IndexMap;
 use serde_json::{Map, json};
@@ -44,16 +45,20 @@ impl Agent {
             ),
         ]);
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let evaluation =
-            match self.jev.evaluate_images(&seen, &questions, &Images::from([(reference, png.clone())])).await {
-                Ok(evaluation) => evaluation,
-                Err(error @ DecisionError::Budget(_)) => return Err(error.into()),
-                // Box is experimental at TypeSafe; a refused question leaves the click as the hit test left it.
-                Err(error) => {
-                    self.event("covered_box_failed", || Map::from_iter([("error".into(), error.to_string().into())]));
-                    return Ok(None);
-                }
-            };
+        let evaluation = match jev_purpose(
+            JevPurpose::Locate,
+            self.jev.evaluate_images(&seen, &questions, &Images::from([(reference, png.clone())])),
+        )
+        .await
+        {
+            Ok(evaluation) => evaluation,
+            Err(error @ DecisionError::Budget(_)) => return Err(error.into()),
+            // Box is experimental at TypeSafe; a refused question leaves the click as the hit test left it.
+            Err(error) => {
+                self.event("covered_box_failed", || Map::from_iter([("error".into(), error.to_string().into())]));
+                return Ok(None);
+            }
+        };
         state.ledger.record([evaluation.cost.clone()])?;
         let (Some(Answer::Noul(shown)), Some(Answer::Box(found))) =
             (evaluation.answers.get("shown"), evaluation.answers.get("where"))

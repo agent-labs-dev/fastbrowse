@@ -3,9 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, MAX_CHOICE_OPTIONS, NoulQuestion, Question};
-use fastbrowse_core::models::{CostComponent, CostLine, Evidence, FactReader, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, CostLine, Evidence, FactReader, JevPurpose, UNTRUSTED};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
@@ -208,7 +209,7 @@ async fn focus<'a>(
         "task": task,
         "page": {"url": capture.url, "title": capture.title},
     });
-    let answered = evaluate_batches(jev, &state, &questions, tokens, ledger, None, true).await?;
+    let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, None, true).await?;
     let (answers, cost) = match answered {
         Some(answered) => (answered.answers, answered.cost),
         None => (IndexMap::new(), Vec::new()),
@@ -312,7 +313,7 @@ pub(crate) async fn read_page(
     if let Some(ledger) = ledger {
         ledger.reserve(CostComponent::Jev, 0.0, 1)?;
     }
-    let evaluation = jev.evaluate(&state, &asked).await?;
+    let evaluation = jev_purpose(JevPurpose::Read, jev.evaluate(&state, &asked)).await?;
     if let Some(ledger) = ledger {
         ledger.record([evaluation.cost.clone()])?;
     }

@@ -2,8 +2,9 @@
 
 use std::collections::HashSet;
 
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, NoulQuestion, Question};
-use fastbrowse_core::models::{CostComponent, Decider, Operation, Status, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -333,7 +334,8 @@ impl Agent {
         }
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let questions = IndexMap::from([("downloads".to_string(), Question::Noul(downloads_question(&state.task)))]);
-        let evaluation = self.jev.evaluate(&json!({"task": state.task}), &questions).await?;
+        let evaluation =
+            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
         // No answer refuses this once, as the irreversible gate does, but is not kept: one failed call must not forbid
         // every download for the rest of a run that asked for one.
@@ -372,7 +374,7 @@ impl Agent {
             // and the control's label and form are already in the questions. The title, path and query are the page's
             // to write too, so only the origin goes with them.
             let page = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
-            let evaluation = self.jev.evaluate(&page, &questions).await?;
+            let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await?;
             state.ledger.record([evaluation.cost.clone()])?;
             let answers = evaluation.answers;
             let noul = |key: &str| match answers.get(key) {
@@ -875,7 +877,7 @@ impl Agent {
             // Output format is a requirement of the task, independent of what the page or notes say.
             None => JsonValue::Object(Map::new()),
         };
-        let evaluation = self.jev.evaluate(&page, &questions).await?;
+        let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&page, &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let mut picks = IndexMap::new();
         for (key, options) in &offered {

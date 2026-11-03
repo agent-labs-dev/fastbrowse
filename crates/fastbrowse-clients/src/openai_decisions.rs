@@ -164,7 +164,14 @@ impl OpenAIDecisionsClient {
         split_batch: bool,
     ) -> Result<Evaluation, AskError> {
         // The span covers the parse as well as the request: a 200 whose body is not a valid answer is a failed call.
-        self.http.trace.call_span("jev", Map::new(), self.request(state, &questions, start_attempt, split_batch)).await
+        self.http
+            .trace
+            .call_span(
+                "jev",
+                crate::validation::jev_trace_fields(),
+                self.request(state, &questions, start_attempt, split_batch),
+            )
+            .await
     }
 
     async fn request(

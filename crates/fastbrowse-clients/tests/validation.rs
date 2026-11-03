@@ -3,6 +3,8 @@
 
 mod common;
 
+use fastbrowse_clients::validation::jev_purpose;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,7 +17,7 @@ use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
     DecisionClient, DecisionError, Images, JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, Question,
 };
-use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Limits, MaybeUnavailable};
+use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, JevPurpose, Limits, MaybeUnavailable};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
@@ -32,6 +34,34 @@ fn answered() -> Response {
 
 fn events(trace: &Trace, kind: &str) -> Vec<Value> {
     trace.events().into_iter().filter(|event| event["event"] == kind).collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_decisions_keep_distinct_purposes_without_changing_costs() {
+    let script = Script::new((0..3).map(|_| common::Step::Reply(answered())));
+    let trace = Trace::collecting();
+    let client = direct(script.traced(&trace));
+    let page = json!("page");
+    let questions = one();
+    let (read, verify) = tokio::join!(
+        jev_purpose(JevPurpose::Read, client.evaluate(&page, &questions)),
+        jev_purpose(JevPurpose::Verify, client.evaluate(&page, &questions)),
+    );
+    let read = read.unwrap();
+    let verify = verify.unwrap();
+    let unscoped = client.evaluate(&page, &questions).await.unwrap();
+    assert_eq!(read.cost.decision_purpose, Some(JevPurpose::Read));
+    assert_eq!(verify.cost.decision_purpose, Some(JevPurpose::Verify));
+    assert_eq!(unscoped.cost.decision_purpose, None);
+    assert_eq!(read.cost.purpose, None);
+    assert_eq!(read.cost.dollars, unscoped.cost.dollars);
+    assert_eq!(verify.cost.dollars, unscoped.cost.dollars);
+    assert_eq!(read.cost.input_tokens, unscoped.cost.input_tokens);
+    let spans = events(&trace, "call");
+    assert_eq!(spans.len(), 3);
+    assert_eq!(spans[0]["decision_purpose"], "read");
+    assert_eq!(spans[1]["decision_purpose"], "verify");
+    assert!(spans[2].get("decision_purpose").is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -104,7 +134,11 @@ async fn test_an_exhausted_split_counts_every_request_it_sent() {
         } else {
             Box::new(direct(http))
         };
-        let message = client.evaluate(&json!("page"), &pair()).await.unwrap_err().to_string();
+        let error = jev_purpose(JevPurpose::Read, client.evaluate(&json!("page"), &pair())).await.unwrap_err();
+        let DecisionError::RetriesExhausted(exhausted) = &error else { panic!("expected exhausted split") };
+        assert!(!exhausted.answered.is_empty());
+        assert!(exhausted.answered.iter().all(|answer| answer.cost.decision_purpose == Some(JevPurpose::Read)));
+        let message = error.to_string();
         let sent = sent.load(Ordering::SeqCst);
         assert!(sent > 3);
         assert!(message.contains(&format!("after {sent} requests in ")), "{message}");
@@ -247,11 +281,12 @@ async fn test_cancelled_dispatched_request_retains_estimated_input_cost() {
     let page = json!("page");
     let questions = one();
     tokio::select! {
-        _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&page, &questions)) => panic!("cancelled"),
+        _ = jev_spend(Lines::Paid(paid.clone()), None, jev_purpose(JevPurpose::Read, client.evaluate(&page, &questions))) => panic!("cancelled"),
         _ = sent.notified() => {}
     }
     let costs = paid.lines();
     assert_eq!(costs.len(), 1);
+    assert_eq!(costs[0].decision_purpose, Some(JevPurpose::Read));
     // Text without usage retains the request-length estimate, independent of the image path.
     let body: Value = serde_json::from_slice(&bodies.lock().unwrap()[0]).unwrap();
     let tokens = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
@@ -315,11 +350,12 @@ async fn test_split_cancellation_retains_answered_and_cancelled_costs_once() {
     let page = json!("page");
     let questions = IndexMap::from([("first".to_string(), noul("First")), ("second".to_string(), noul("Second"))]);
     tokio::select! {
-        _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&page, &questions)) => panic!("cancelled"),
+        _ = jev_spend(Lines::Paid(paid.clone()), None, jev_purpose(JevPurpose::Read, client.evaluate(&page, &questions))) => panic!("cancelled"),
         _ = sent.notified() => {}
     }
     let costs = paid.lines();
     assert_eq!(costs.len(), 2);
+    assert!(costs.iter().all(|cost| cost.decision_purpose == Some(JevPurpose::Read)));
     assert_eq!((costs[0].basis, costs[0].dollars), (CostBasis::Metered, Some(0.01)));
     assert_eq!(costs[1].basis, CostBasis::Estimated);
     assert_eq!(costs[1].dollars, Some(costs[1].input_tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
@@ -329,7 +365,8 @@ async fn test_split_cancellation_retains_answered_and_cancelled_costs_once() {
 async fn image_cancellation_keeps_a_context_bound_without_inventing_tokens() {
     for (long_context, unpriced) in [(false, false), (true, false), (true, true)] {
         let script = Script::new([common::Step::Cancel]);
-        let mut client = SystemOneClient::new("key", script.http(), TYPESAFE_URL, JEV_MODEL).images();
+        let trace = Trace::collecting();
+        let mut client = SystemOneClient::new("key", script.traced(&trace), TYPESAFE_URL, JEV_MODEL).images();
         if long_context {
             client = client.long_context();
         }
@@ -341,11 +378,14 @@ async fn image_cancellation_keeps_a_context_bound_without_inventing_tokens() {
         let page = json!({"screenshot": "viewport"});
         let questions = one();
         tokio::select! {
-            _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate_images(&page, &questions, &images)) => panic!("cancelled"),
+            _ = jev_spend(Lines::Paid(paid.clone()), None, jev_purpose(JevPurpose::Locate, client.evaluate_images(&page, &questions, &images))) => panic!("cancelled"),
             _ = script.cancel.notified() => {}
         }
         let costs = paid.lines();
         assert_eq!(costs.len(), 1);
+        assert_eq!(costs[0].decision_purpose, Some(JevPurpose::Locate));
+        assert_eq!(events(&trace, "cancelled_request_cost")[0]["decision_purpose"], "locate");
+        assert_eq!(events(&trace, "call")[0]["decision_purpose"], "locate");
         assert_eq!(costs[0].input_tokens, 0);
         if unpriced {
             assert_eq!(costs[0].basis, CostBasis::Unknown);

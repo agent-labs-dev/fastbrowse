@@ -2,10 +2,11 @@
 
 use std::collections::HashSet;
 
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
-use fastbrowse_core::models::{Citation, CostComponent, Evidence, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::models::{Citation, CostComponent, Evidence, JevPurpose, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
@@ -435,11 +436,12 @@ async fn supported_claims(
     let state = json!({"task": task});
     let state_chars = text::len(&dumps(&state)) as i64;
     let oversized = questions.values().any(|question| state_chars > tokens.input_chars(&[question.dump_json()]));
-    let (answered, failure) = match evaluate_batches(jev, &state, &questions, &tokens, ledger, None, false).await {
-        Ok(answered) => (answered, None),
-        Err(AgentError::Jev(error)) => (None, Some(format!("Jev could not judge composed claims: {error}"))),
-        Err(error) => return Err(error),
-    };
+    let (answered, failure) =
+        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
+            Ok(answered) => (answered, None),
+            Err(AgentError::Jev(error)) => (None, Some(format!("Jev could not judge composed claims: {error}"))),
+            Err(error) => return Err(error),
+        };
     let count = claims.len();
     let missing = questions.keys().any(|key| answered.as_ref().is_none_or(|pass| !pass.answers.contains_key(key)));
     let supported = claims
@@ -543,7 +545,7 @@ pub async fn verdict(
     if let Some(ledger) = ledger {
         ledger.reserve(CostComponent::Jev, 0.0, 1)?;
     }
-    let Ok(evaluation) = jev.evaluate(&state, &questions).await else {
+    let Ok(evaluation) = jev_purpose(JevPurpose::Verify, jev.evaluate(&state, &questions)).await else {
         return Ok(None);
     };
     if let Some(ledger) = ledger {

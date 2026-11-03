@@ -214,11 +214,21 @@ class LLMPurpose(StrEnum):
     FILL = "fill"
 
 
+class JevPurpose(StrEnum):
+    ACTION = "action"
+    AUTHORIZATION = "authorization"
+    RELEVANCE = "relevance"
+    READ = "read"
+    VERIFY = "verify"
+    LOCATE = "locate"
+
+
 class CostLine(Frozen):
     component: CostComponent
     basis: CostBasis
     dollars: float | None = Field(default=None, ge=0)
     purpose: LLMPurpose | None = None
+    decision_purpose: JevPurpose | None = Field(default=None, exclude_if=lambda purpose: purpose is None)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     seconds: float | None = Field(default=None, ge=0)
@@ -226,6 +236,8 @@ class CostLine(Frozen):
 
     @property
     def label(self) -> str:
+        if self.component == CostComponent.JEV and self.decision_purpose is not None:
+            return f"{self.component.value}:{self.decision_purpose.value}"
         return self.component.value if self.purpose is None else f"{self.component.value}:{self.purpose.value}"
 
 

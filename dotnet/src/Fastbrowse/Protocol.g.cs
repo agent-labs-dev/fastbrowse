@@ -170,6 +170,9 @@ public sealed record CostLine
     [JsonPropertyName("purpose")]
     public LLMPurpose? Purpose { get; init; }
 
+    [JsonPropertyName("decision_purpose")]
+    public JevPurpose? DecisionPurpose { get; init; }
+
     [JsonPropertyName("input_tokens")]
     public required long InputTokens { get; init; }
 
@@ -273,6 +276,23 @@ public sealed record InitializeResult
 
     [JsonPropertyName("fastbrowse_version")]
     public required string FastbrowseVersion { get; init; }
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<JevPurpose>))]
+public enum JevPurpose
+{
+    [JsonStringEnumMemberName("action")]
+    Action,
+    [JsonStringEnumMemberName("authorization")]
+    Authorization,
+    [JsonStringEnumMemberName("relevance")]
+    Relevance,
+    [JsonStringEnumMemberName("read")]
+    Read,
+    [JsonStringEnumMemberName("verify")]
+    Verify,
+    [JsonStringEnumMemberName("locate")]
+    Locate,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<LLMPurpose>))]

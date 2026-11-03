@@ -1,7 +1,8 @@
 //! Scalar fields copied by span: candidates cut from a capture or the notes, and Jev's choice among them.
 
+use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, Question};
-use fastbrowse_core::models::{CostComponent, Evidence};
+use fastbrowse_core::models::{CostComponent, Evidence, JevPurpose};
 use fastbrowse_core::output_schema::{OutputField, OutputType};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::datetime::days_in_month;
@@ -547,7 +548,7 @@ pub async fn choose_candidate(
         if let Some(ledger) = ledger {
             ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         }
-        let evaluation = jev.evaluate(state, &questions).await?;
+        let evaluation = jev_purpose(JevPurpose::Read, jev.evaluate(state, &questions)).await?;
         if let Some(ledger) = ledger {
             ledger.record([evaluation.cost.clone()])?;
         }

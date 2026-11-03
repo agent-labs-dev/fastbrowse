@@ -133,6 +133,12 @@ cancellation and finish their cleanup. Returning while a paid request still runs
 Split batches collect provider receipts once. Custom decision clients that return partial answers without recording
 receipts retain those answers' costs through the error.
 
+Jev cost lines carry an optional `decision_purpose`: `action`, `authorization`, `relevance`, `read`,
+`verify` or `locate`. The owning call supplies it before dispatch, so retries, provider failover and
+cancellation keep the same attribution. LLM lines retain their separate `purpose` field. Calls made
+directly through a decision client without an agent purpose omit `decision_purpose`; older receipts
+remain readable. Purpose labels group calls without changing their charges.
+
 Cancellation returns a receipt of reported steps, cost lines and finished recordings after cleanup. Protocol 2
 keeps error code `-32002` and adds the optional `error.data` receipt; other errors omit it. Rust returns
 `RunError::Cancelled(receipt)`. A cancelled cloud start keeps known charges as `unsettled`, or an `unknown`
