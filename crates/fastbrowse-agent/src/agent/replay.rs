@@ -1,6 +1,5 @@
-//! Replaying a recipe: each observation is offered the next recipe steps, and the first whose page and control are
-//! here is dispatched as a code decision, through the same gates as any other. A page the recipe does not describe is
-//! decided by the agent, as a run without a recipe would be.
+//! Match saved steps to live controls. Jev still chooses every action and judges the current page; an agreed
+//! action may reuse a saved task value. Missing or ambiguous controls leave the run to its ordinary decisions.
 
 use fastbrowse_core::models::Operation;
 use fastbrowse_core::page::{Action, Control};
@@ -83,9 +82,6 @@ impl Replay {
             self.pending = Some(index);
             let mut decision = code_decision(step.operation, target);
             decision.replayed = true;
-            if step.read_first {
-                decision.shows_answer = Some(1.0);
-            }
             return Some(decision);
         }
         self.looked = true;
@@ -120,11 +116,6 @@ impl Replay {
     /// The text a replayed fill types, from the step being carried out.
     pub fn text(&self) -> Option<&RecipeText> {
         self.pending.and_then(|index| self.steps[index].text.as_ref())
-    }
-
-    /// The option a replayed select chooses, from the step being carried out.
-    pub fn option(&self) -> Option<&str> {
-        self.pending.and_then(|index| self.steps[index].option.as_deref())
     }
 
     /// The decision handed out was carried out, or was not.
@@ -177,7 +168,7 @@ pub(crate) fn step_of(
 ) -> Option<RecipeStep> {
     let page = RecipePage::of(page_url)?;
     let target = decision.target.as_ref();
-    let mut replay = true;
+    let mut replay = decision.operation != Operation::Select;
     let text = match decision.operation {
         Operation::Fill => match source {
             Some(RecipeText::Live) => {
@@ -308,6 +299,9 @@ mod tests {
         let (decision, action) = fill(ordinary, "a value read on an earlier page", false);
         let live = step_of(URL, &decision, &action, Some(RecipeText::Live), |_| false).unwrap();
         assert!(!live.replayable());
+        let select =
+            RecipeStep { operation: Operation::Select, option: Some("formerly cheapest".into()), ..live.clone() };
+        assert!(!select.replayable());
         let password = Control {
             input_type: Some("password".into()),
             ..Control::new("p", "textbox", "Password", [Operation::Fill])

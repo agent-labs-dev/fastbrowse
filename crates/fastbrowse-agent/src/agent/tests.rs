@@ -1564,6 +1564,47 @@ async fn test_a_failed_image_read_can_be_retried_for_identical_pixels() {
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
+struct DateWriter;
+
+impl LLMClient for DateWriter {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            assert_eq!(purpose, LLMPurpose::Fill);
+            if let Some(ledger) = ledger {
+                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
+            }
+            let data = schema.validate_json(r#"{"value":"2026-11-04"}"#).map_err(LLMError::Failed)?;
+            let cost = CostLine {
+                purpose: Some(purpose),
+                ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
+            };
+            Ok(Generation { data, cost })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_relative_date_written_by_the_llm_is_decided_live_when_a_recipe_is_reused() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let mut state = run_state();
+    state.task = "Book a table for tomorrow".into();
+    let target = field("Date");
+    let decision = code_decision(Operation::Fill, Some(target.clone()));
+    let value = agent.text(&mut state, &observation(&[]), &decision, &target).await.unwrap();
+    assert_eq!(value, "2026-11-04");
+    let action = Action { text: Some(value), ..Action::new(Operation::Fill) };
+    let saved =
+        super::replay::step_of("https://book.test/", &decision, &action, state.text_source.take(), |_| false).unwrap();
+    assert!(!saved.replayable());
+    assert!(!serde_json::to_string(&saved).unwrap().contains("2026-11-04"));
+}
+
 /// The scripted Jev, its every choice held at `confidence`, and the states it was shown.
 struct Unsure(ScriptedJev, f64, std::sync::Mutex<Vec<serde_json::Value>>);
 

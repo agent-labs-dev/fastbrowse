@@ -196,15 +196,15 @@ and selectors are not stored. Query strings, fragments and generated path segmen
 have identical controls without being the same order. A missing or ambiguous control is left to Jev.
 
 Jev decides each action and judges the current page for answers, errors and sign-in walls. When its action agrees
-with a matching recipe step, the fill or select can reuse the saved value and the step reports
+with a matching recipe step, the fill can reuse the saved value and the step reports
 `decided_by: "recipe"`. Freshness checks, hit testing, authorization and secret handling still apply. Password
 fields always use the live credential checks. A stored secret is kept only by name, caller inputs by name, and
-ordinary task text as a literal. Values taken from page evidence are decided live on every run. Recipes can
+ordinary task text as a literal. Values taken from page evidence, values written by the LLM and select options are decided live on every run. Recipes can
 contain personal information from ordinary fields, so keep them private like the task that produced them.
 
 Reading, answering and the check for `complete` always run live. A recipe is not evidence that the present task
 has succeeded. After a mismatch, live actions can advance the saved sequence; repeated mismatches leave the rest
-to the agent. A recipe save failure is reported as a warning without losing the completed run's result.
+to the agent. A recipe save failure is written to server stderr without losing the completed run's result. SDK responses do not carry that warning; callers that require the file should check it exists on the server.
 
 ## Cursor feedback
 

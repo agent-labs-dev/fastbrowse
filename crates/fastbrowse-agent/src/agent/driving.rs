@@ -98,18 +98,16 @@ impl Agent {
             {
                 replay.replaced();
             }
-            let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
-            context.screenshot = self.drawn_viewport(&observation).await?;
-            let mut offered = observation.clone();
-            leave_out_idle(state, &mut offered, &mut context);
-            let replayed = if picked.is_none() {
-                state.replay.as_mut().and_then(|replay| replay.decision(&offered.url, &offered.controls))
-            } else {
-                None
-            };
+            let mut replayed = None;
             let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
+                    let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    context.screenshot = self.drawn_viewport(&observation).await?;
+                    let mut offered = observation.clone();
+                    leave_out_idle(state, &mut offered, &mut context);
+                    replayed =
+                        state.replay.as_mut().and_then(|replay| replay.decision(&offered.url, &offered.controls));
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
                         let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));

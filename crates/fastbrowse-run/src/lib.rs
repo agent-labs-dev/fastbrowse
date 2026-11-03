@@ -723,6 +723,10 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     if host.open_browser.is_some() && task.viewport.is_some() {
         return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
     }
+    if let Some(path) = &task.save_recipe {
+        fastbrowse_core::recipe::Recipe::check_destination(path)
+            .map_err(|error| RunError::Invalid(format!("cannot save a recipe to {}: {error}", path.display())))?;
+    }
     let recipe =
         task.recipe.as_deref().map(fastbrowse_core::recipe::Recipe::load).transpose().map_err(RunError::Invalid)?;
     if recipe.as_ref().is_some_and(|recipe| recipe.task != task.task) {
@@ -963,13 +967,13 @@ fn finish(
         && let (Some(path), Some(sink)) = (&task.save_recipe, &recipe_sink)
     {
         let outcome = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        if let Some(outcome) = outcome {
-            if let Err(error) = outcome.recipe.save(path) {
-                fastbrowse_browser::warn(&format!(
-                    "the run completed but its recipe could not be written to {}: {error}",
-                    path.display()
-                ));
-            }
+        if let Some(outcome) = outcome
+            && let Err(error) = outcome.recipe.save(path)
+        {
+            fastbrowse_browser::warn(&format!(
+                "the run completed but its recipe could not be written to {}: {error}",
+                path.display()
+            ));
         }
     }
     Ok(result)

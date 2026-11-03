@@ -14,12 +14,12 @@ use crate::page::Control;
 pub const RECIPE_VERSION: u32 = 1;
 
 /// Operations a recipe can carry out again. A drag, upload, dialog, tab switch or opened address depends on run state
-/// a recipe does not hold, so it is recorded in its place but left to the agent on replay.
+/// a recipe does not hold, so it is recorded in its place but left to the agent on replay. Select choices are
+/// decided live because the requested option may depend on current page evidence.
 pub const REPLAYABLE: &[Operation] = &[
     Operation::Click,
     Operation::Enter,
     Operation::Fill,
-    Operation::Select,
     Operation::Hover,
     Operation::Scroll,
     Operation::ScrollUp,
@@ -87,7 +87,7 @@ pub struct RecipeStep {
     /// The option a select step chose.
     #[serde(default)]
     pub option: Option<String>,
-    /// Whether the run read the page for evidence before this step; replay reads there too, live.
+    /// Whether the original run read evidence before this step. Live reads use Jev's current page judgement.
     #[serde(default)]
     pub read_first: bool,
     /// False when the step cannot be carried out again from the recipe alone; the agent decides it on replay.
@@ -111,17 +111,29 @@ impl Recipe {
         Ok(recipe)
     }
 
+    /// Refuse an unwritable destination before a browser run can change the site.
+    pub fn check_destination(path: &std::path::Path) -> std::io::Result<()> {
+        temporary(path).map(drop)
+    }
+
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
         let mut text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         text.push('\n');
-        let parent = path.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
-        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        let mut file = temporary(path)?;
         use std::io::Write;
         file.write_all(text.as_bytes())?;
         file.as_file().sync_all()?;
         file.persist(path).map_err(|error| error.error)?;
         Ok(())
     }
+}
+
+fn temporary(path: &std::path::Path) -> std::io::Result<tempfile::NamedTempFile> {
+    if path.is_dir() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the recipe destination is a directory"));
+    }
+    let parent = path.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    tempfile::NamedTempFile::new_in(parent)
 }
 
 fn yes() -> bool {
@@ -277,6 +289,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("recipe.json");
         let original = Recipe { version: RECIPE_VERSION, task: "original".into(), start: None, steps: vec![] };
+        Recipe::check_destination(&path).unwrap();
+        assert!(!path.exists());
+        assert!(Recipe::check_destination(dir.path()).is_err());
+        assert!(Recipe::check_destination(&dir.path().join("missing/recipe.json")).is_err());
         original.save(&path).unwrap();
         let replacement = Recipe { task: "replacement".into(), ..original };
         replacement.save(&path).unwrap();

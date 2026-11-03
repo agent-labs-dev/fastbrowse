@@ -233,18 +233,8 @@ impl Agent {
                     }
                     return Err(Unsure { reason, gives_up_as: Status::Stuck }.into());
                 }
-                let recorded = decision
-                    .replayed
-                    .then(|| state.replay.as_ref().and_then(super::replay::Replay::option))
-                    .flatten()
-                    .map(str::to_string);
-                let option = match recorded.filter(|option| raw.options.contains(option)) {
-                    Some(option) => option,
-                    None => {
-                        let question = format!("Which option should {} be set to?", text::repr(&target.label));
-                        self.choose(state, observation, &question, &raw.options).await?
-                    }
-                };
+                let question = format!("Which option should {} be set to?", text::repr(&target.label));
+                let option = self.choose(state, observation, &question, &raw.options).await?;
                 Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
             }
             Operation::Upload => {
@@ -429,14 +419,17 @@ impl Agent {
         target: &Control,
     ) -> Step<String> {
         let origin = self.target_origin(target);
-        state.text_source = None;
+        state.text_source = Some(RecipeText::Live);
         let recorded = (decision.replayed
             && !state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone())))
         .then(|| state.replay.as_ref().and_then(super::replay::Replay::text).cloned())
         .flatten();
         if let Some(source) = recorded {
             match source {
-                RecipeText::Literal(text) if !target.sensitive && !is_password(target) => return Ok(text),
+                RecipeText::Literal(text) if !target.sensitive && !is_password(target) => {
+                    state.text_source = Some(RecipeText::Literal(text.clone()));
+                    return Ok(text);
+                }
                 RecipeText::Input(name) if !target.sensitive && !is_password(target) => {
                     let value = state
                         .inputs
@@ -550,7 +543,11 @@ impl Agent {
                         .find(|word| word.index >= first.index && word.index.to_string() == picked)
                         .unwrap_or(first)
                 };
-                Ok(task.chars().skip(first.start).take(last.end - first.start).collect())
+                let value: String = task.chars().skip(first.start).take(last.end - first.start).collect();
+                if source == IN_TASK {
+                    state.text_source = Some(RecipeText::Literal(value.clone()));
+                }
+                Ok(value)
             }
             _ => Err(self.missing(state, observation, target)),
         }
