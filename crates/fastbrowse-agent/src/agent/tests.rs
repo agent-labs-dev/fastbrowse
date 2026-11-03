@@ -3076,7 +3076,6 @@ fn a_late_task_secret_clears_a_previous_recipe_outcome() {
     agent.redactor().register("username", "ada@example.test", None);
     agent.store_recipe(&state, &sink);
     assert!(sink.lock().unwrap().is_none());
-
 }
 
 #[test]
