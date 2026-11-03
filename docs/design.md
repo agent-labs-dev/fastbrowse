@@ -201,6 +201,7 @@ with a matching recipe step, the fill can reuse the saved value and the step rep
 fields always use the live credential checks. A stored secret is kept only by name, caller inputs by name, and
 ordinary task text as a literal. Values taken from page evidence, values written by the LLM and select options are decided live on every run. Recipes can
 contain personal information from ordinary fields, so keep them private like the task that produced them. A step whose page address or control metadata reveals a resolved secret is omitted and decided live on replay.
+If the task itself contains a resolved secret, no recipe is saved: the task is redacted in run output, and saving that redacted form would fail the exact task match required for replay.
 
 Reading, answering and the check for `complete` always run live. A recipe is not evidence that the present task
 has succeeded. After a mismatch, live actions can advance the saved sequence; repeated mismatches leave the rest

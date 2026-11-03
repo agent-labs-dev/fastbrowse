@@ -1067,7 +1067,16 @@ impl DecisionClient for Answers {
                     probabilities: IndexMap::new(),
                     confidence: 1.0,
                 };
-                questions.keys().map(move |key| (key.clone(), Answer::Choice(answer.clone())))
+                questions.iter().map(move |(key, question)| {
+                    let mut answer = answer.clone();
+                    if *pick == "write"
+                        && let Question::Choice(question) = question
+                        && !question.criteria.contains_key("write")
+                    {
+                        answer.choice = question.criteria.first().unwrap().0.clone();
+                    }
+                    (key.clone(), Answer::Choice(answer))
+                })
             })
             .collect();
         Box::pin(
@@ -3052,4 +3061,18 @@ async fn test_refusing_a_long_read_source_does_not_send_an_empty_request() {
         .expect_err("no value");
     assert!(format!("{error:?}").contains("NeedsInput"), "{error:?}");
     assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_late_task_secret_clears_a_previous_recipe_outcome() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = "Log in as ada@example.test".into();
+    let sink = Default::default();
+    agent.store_recipe(&state, &sink);
+    assert!(sink.lock().unwrap().is_some());
+    agent.redactor().register("username", "ada@example.test", None);
+    agent.store_recipe(&state, &sink);
+    assert!(sink.lock().unwrap().is_none());
+
 }
