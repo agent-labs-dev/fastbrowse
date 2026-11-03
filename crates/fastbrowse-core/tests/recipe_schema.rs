@@ -28,3 +28,30 @@ fn uploads_and_files_refuse_the_same_invalid_documents() {
         assert!(Recipe::load(&path).is_err());
     }
 }
+
+#[test]
+fn recipe_starts_follow_navigation_policy_when_loaded_or_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    for (index, start) in [
+        "https://example.com/",
+        "https:example.com",
+        "ht\ttps://example.com",
+        " https://example.com/",
+        "https://user:password@example.com/",
+        "https://example.com:0/",
+        "https:",
+        "file:///tmp/local.html",
+        "data:text/plain,hello",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let expected = fastbrowse_core::navigation::valid_address(start);
+        let value = serde_json::json!({"version": 1, "task": "Review", "start": start, "steps": []});
+        assert_eq!(Recipe::from_json(&value.to_string()).is_ok(), expected, "parse {start:?}");
+        let recipe: Recipe = serde_json::from_value(value).unwrap();
+        let path = dir.path().join(format!("{index}.json"));
+        assert_eq!(recipe.save(&path).is_ok(), expected, "save {start:?}");
+        assert_eq!(path.exists(), expected);
+    }
+}

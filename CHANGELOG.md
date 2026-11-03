@@ -117,7 +117,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 
 - A cancelled run preserves the steps it reported, known charges and finished recordings in a cancellation receipt. It remains an error with no success status or answer, and unpriced charges remain unknown. Python cancellation retains the receipt even when Rust finished before its result was delivered. Failed cloud browser starts retain their known cost. Rust callers now match `RunError::Cancelled(receipt)` instead of the unit variant.
-- Recipe replay preserves an attached tab's current page unless the caller supplies a start URL.
+- Recipe replay preserves an attached tab's current page unless the caller supplies a start URL. Recipe loads and saves reject start URLs containing credentials or unusable hosts and ports.
 
 - A copied field value is chosen from complete source spans. The end selection shows the text each choice would type, so surrounding task instructions can be excluded.
 

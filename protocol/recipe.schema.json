@@ -38,7 +38,6 @@
         "start": {
           "anyOf": [
             {
-              "pattern": "^[\\u0000-\\u0020]*[hH][tT][tT][pP][sS]?:",
               "type": "string"
             },
             {
@@ -46,6 +45,7 @@
             }
           ],
           "default": null,
+          "description": "A credential-free HTTP(S) address. Validate its URL semantics with validate_recipe before use.",
           "title": "Start"
         },
         "steps": {
@@ -604,7 +604,6 @@
         {
           "anyOf": [
             {
-              "pattern": "^[\\u0000-\\u0020]*[hH][tT][tT][pP][sS]?:",
               "type": "string"
             },
             {

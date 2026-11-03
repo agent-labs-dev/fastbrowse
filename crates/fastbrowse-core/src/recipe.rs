@@ -103,8 +103,8 @@ impl Recipe {
         if recipe.version != RECIPE_VERSION {
             return Err(format!("recipe version {}; this fastbrowse reads version {RECIPE_VERSION}", recipe.version));
         }
-        if recipe.start.as_deref().is_some_and(|start| RecipePage::of(start).is_none()) {
-            return Err("recipe start must be an http or https URL".into());
+        if recipe.start.as_deref().is_some_and(|start| !crate::navigation::valid_address(start)) {
+            return Err("recipe start must be a credential-free http or https URL with a usable host and port".into());
         }
         Ok(recipe)
     }
@@ -122,6 +122,7 @@ impl Recipe {
 
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
         let mut text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        Self::from_json(&text).map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         text.push('\n');
         let mut file = temporary(path)?;
         use std::io::Write;
@@ -144,10 +145,8 @@ impl Schema for Recipe {
             vec![
                 Field::required("version", Ty::Literal(vec![RECIPE_VERSION.into()])),
                 Field::required("task", Ty::Str),
-                Field::default(
-                    "start",
-                    Ty::optional(Ty::Str.constrained("pattern", r"^[\u0000-\u0020]*[hH][tT][tT][pP][sS]?:")),
-                    serde_json::Value::Null,
+                Field::default("start", Ty::optional(Ty::Str), serde_json::Value::Null).doc(
+                    "A credential-free HTTP(S) address. Validate its URL semantics with validate_recipe before use.",
                 ),
                 Field::required("steps", Ty::list(RecipeStep::ty())),
             ],

@@ -195,7 +195,7 @@ a recording holds its last clean frame meanwhile.
 
 A recipe is the steps a `complete` run took, stored as JSON. `--save-recipe FILE` writes one and `--recipe FILE`
 loads it. The task must match the recorded task. When `--recipe` is supplied without `--start`, its recorded start
-address is used for a new tab. An attached tab keeps its current page unless an explicit `--start` overrides it. A recipe start must use HTTP or HTTPS. Naming the same file for both flags replaces it atomically after
+address is used for a new tab. An attached tab keeps its current page unless an explicit `--start` overrides it. A recipe start must be a credential-free HTTP or HTTPS URL with a usable host and port. Naming the same file for both flags replaces it atomically after
 another completed run, including actions the agent chose when a saved step no longer matched.
 
 A step identifies its full page address and a control's role, label, context, link and input attributes. Node ids
@@ -217,7 +217,7 @@ has succeeded. After a mismatch, actions decided live can advance the saved sequ
 The public Python `fastbrowse.recipes.validate_recipe()` accepts a JSON string, UTF-8 bytes or a dictionary
 and returns the normalized recipe, including defaults. Unsupported versions and invalid fields raise
 `ValueError` before a browser opens. `recipe_schema()` exports the Rust-owned file schema, also kept in
-`protocol/recipe.schema.json`. Format validation does not prove that a control exists or authorize an action.
+`protocol/recipe.schema.json`. The schema checks field shapes; use `validate_recipe()` for URL semantics, including credentials and ports. Validation does not prove that a control exists or authorize an action.
 To regenerate the schema, run `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrowse-core --test recipe_schema`.
 
 ## Cursor feedback
