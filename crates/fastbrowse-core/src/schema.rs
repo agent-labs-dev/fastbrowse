@@ -542,22 +542,17 @@ fn flatten(node: &Value, defs: &Value) -> Value {
                     // These map names to schemas, so a property called "anyOf" is a name, not a keyword.
                     Value::Object(names) if key == "properties" || key == "$defs" => {
                         let mut flat = Map::new();
+                        let mapping = flat_fields(names, defs);
                         for (name, item) in names {
-                            match optional_object(item, defs).filter(|_| key == "properties") {
-                                Some(object) => {
-                                    let before = flat.len();
-                                    leaves(
-                                        name,
-                                        object,
-                                        item.get("description").and_then(Value::as_str).map(str::to_string),
-                                        defs,
-                                        &mut flat,
-                                    );
-                                    renamed.insert(name.clone(), flat.keys().skip(before).cloned().collect());
+                            if key == "properties" && optional_object(item, defs).is_some() {
+                                let mut aliases = Vec::new();
+                                for field in mapping.iter().filter(|field| field.path[0] == *name) {
+                                    flat.insert(field.alias.clone(), field.schema.clone());
+                                    aliases.push(field.alias.clone());
                                 }
-                                None => {
-                                    flat.insert(name.clone(), flatten(item, defs));
-                                }
+                                renamed.insert(name.clone(), aliases);
+                            } else {
+                                flat.insert(name.clone(), flatten(item, defs));
                             }
                         }
                         Value::Object(flat)
@@ -604,22 +599,57 @@ fn optional_object<'a>(node: &'a Value, defs: &'a Value) -> Option<&'a Map<Strin
     object_schema(present, defs)
 }
 
+struct FlatField {
+    alias: String,
+    path: Vec<String>,
+    schema: Value,
+}
+
+// Literal names are reserved before aliases are assigned, so a nested field cannot replace a sibling property.
+fn flat_fields(properties: &Map<String, Value>, defs: &Value) -> Vec<FlatField> {
+    let mut fields = Vec::new();
+    for (name, item) in properties {
+        if let Some(object) = optional_object(item, defs) {
+            leaves(
+                vec![name.clone()],
+                object,
+                item.get("description").and_then(Value::as_str).map(str::to_string),
+                defs,
+                &mut fields,
+            );
+        }
+    }
+    let mut used: std::collections::BTreeSet<String> = properties.keys().cloned().collect();
+    for field in &mut fields {
+        let base = field.path.join(FLAT);
+        let mut alias = base.clone();
+        let mut suffix = 1;
+        while !used.insert(alias.clone()) {
+            alias = format!("{base}{FLAT}{suffix}");
+            suffix += 1;
+        }
+        field.alias = alias;
+    }
+    fields
+}
+
 fn leaves(
-    prefix: &str,
+    prefix: Vec<String>,
     object: &Map<String, Value>,
     mut description: Option<String>,
     defs: &Value,
-    flat: &mut Map<String, Value>,
+    flat: &mut Vec<FlatField>,
 ) {
     let Some(Value::Object(fields)) = object.get("properties") else { return };
     for (field, schema) in fields {
-        let name = format!("{prefix}{FLAT}{field}");
+        let mut path = prefix.clone();
+        path.push(field.clone());
         if let Some(inner) = object_schema(schema, defs).or_else(|| optional_object(schema, defs)) {
-            leaves(&name, inner, description.take(), defs, flat);
+            leaves(path, inner, description.take(), defs, flat);
             continue;
         }
         let Value::Object(mut leaf) = flatten(schema, defs) else {
-            flat.insert(name, schema.clone());
+            flat.push(FlatField { alias: String::new(), path, schema: schema.clone() });
             continue;
         };
         let own = leaf.remove("description").and_then(|d| d.as_str().map(str::to_string));
@@ -632,7 +662,19 @@ fn leaves(
         if !text.is_empty() {
             wrapped.insert("description".into(), text.into());
         }
-        flat.insert(name, Value::Object(wrapped));
+        flat.push(FlatField { alias: String::new(), path, schema: Value::Object(wrapped) });
+    }
+}
+
+fn insert_flat_value(result: &mut Map<String, Value>, path: &[String], value: Value) {
+    let Some((head, tail)) = path.split_first() else { return };
+    if tail.is_empty() {
+        result.insert(head.clone(), value);
+    } else {
+        let slot = result.entry(head.clone()).or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(fields) = slot {
+            insert_flat_value(fields, tail, value);
+        }
     }
 }
 
@@ -643,11 +685,18 @@ fn leaves(
 pub fn nest_flat_objects(schema: &Value, value: Value) -> (Value, Vec<String>) {
     let defs = schema.get("$defs").cloned().unwrap_or(Value::Null);
     let mut dropped = Vec::new();
-    let nested = nest(value, schema, &defs, "", &mut dropped);
+    let nested = nest(value, schema, &defs, "", &mut dropped, false);
     (nested, dropped)
 }
 
-fn nest(value: Value, node: &Value, defs: &Value, path: &str, dropped: &mut Vec<String>) -> Value {
+fn nest(
+    value: Value,
+    node: &Value,
+    defs: &Value,
+    path: &str,
+    dropped: &mut Vec<String>,
+    in_flat_object: bool,
+) -> Value {
     let at = |key: &str| if path.is_empty() { key.to_string() } else { format!("{path}.{key}") };
     match value {
         Value::Array(items) => {
@@ -656,7 +705,7 @@ fn nest(value: Value, node: &Value, defs: &Value, path: &str, dropped: &mut Vec<
                 items
                     .into_iter()
                     .enumerate()
-                    .map(|(i, value)| nest(value, item, defs, &at(&i.to_string()), dropped))
+                    .map(|(i, value)| nest(value, item, defs, &at(&i.to_string()), dropped, false))
                     .collect(),
             )
         }
@@ -665,35 +714,35 @@ fn nest(value: Value, node: &Value, defs: &Value, path: &str, dropped: &mut Vec<
                 .or_else(|| optional_object(node, defs))
                 .and_then(|object| object.get("properties"))
                 .unwrap_or(&Value::Null);
-            let mut result = Map::new();
-            let mut grouped: Vec<String> = Vec::new();
+            let mapping = properties.as_object().map(|properties| flat_fields(properties, defs)).unwrap_or_default();
+            let mut expanded = Map::new();
             for (key, value) in map {
-                let Some((head, rest)) = key.split_once(FLAT) else {
-                    let value = nest(value, properties.get(&key).unwrap_or(&Value::Null), defs, &at(&key), dropped);
-                    result.insert(key, value);
-                    continue;
-                };
-                if !grouped.iter().any(|name| name == head) {
-                    grouped.push(head.to_string());
-                    result.insert(head.to_string(), Value::Object(Map::new()));
-                }
-                if let Some(Value::Object(fields)) = result.get_mut(head) {
-                    fields.insert(rest.to_string(), value);
+                match mapping.iter().find(|field| field.alias == key) {
+                    Some(field) => insert_flat_value(&mut expanded, &field.path, value),
+                    None => {
+                        expanded.insert(key, value);
+                    }
                 }
             }
-            for head in grouped {
-                let field = properties.get(&head).unwrap_or(&Value::Null);
-                if let Some(slot) = result.get_mut(&head) {
-                    let nested = nest(slot.take(), field, defs, &at(&head), dropped);
-                    *slot = if all_null(&nested) {
-                        Value::Null
-                    } else if !complete(&nested, field, defs) {
-                        dropped.push(at(&head));
-                        Value::Null
+            let mut result = Map::new();
+            for (key, value) in expanded {
+                let field = properties.get(&key).unwrap_or(&Value::Null);
+                let flattened = in_flat_object || mapping.iter().any(|field| field.path[0] == key);
+                let nested = nest(value, field, defs, &at(&key), dropped, flattened);
+                let nested =
+                    if optional_object(field, defs).is_some() || (flattened && object_schema(field, defs).is_some()) {
+                        if all_null(&nested) {
+                            Value::Null
+                        } else if !complete(&nested, field, defs) {
+                            dropped.push(at(&key));
+                            Value::Null
+                        } else {
+                            nested
+                        }
                     } else {
                         nested
                     };
-                }
+                result.insert(key, nested);
             }
             Value::Object(result)
         }
@@ -708,6 +757,49 @@ fn items_schema<'a>(node: &'a Value, defs: &'a Value) -> Option<&'a Value> {
         None => node,
     };
     node.get("items").or_else(|| node.get("anyOf")?.as_array()?.iter().find_map(|branch| items_schema(branch, defs)))
+}
+
+#[cfg(test)]
+mod literal_separator_tests {
+    use super::nest_flat_objects;
+    use serde_json::json;
+
+    #[test]
+    fn flattened_aliases_preserve_colliding_and_nested_literal_names() {
+        let schema = json!({"type":"object", "properties": {
+            "a__b": {"type":"string"},
+            "a__b__1": {"type":"string"},
+            "a": {"anyOf": [{"type":"object", "properties": {
+                "b": {"type":"string"},
+                "nested__name": {"type":"string"},
+                "nested": {"type":"object", "properties": {"name": {"type":"string"}}, "required":["name"]}
+            }, "required":["b", "nested__name", "nested"]}, {"type":"null"}]}
+        }, "required":["a", "a__b", "a__b__1"]});
+        let flat = super::flat_optional_objects(&schema);
+        let properties = flat["properties"].as_object().unwrap();
+        assert_eq!(properties.len(), 5, "every distinct field must remain available");
+        let mut reply = serde_json::Map::new();
+        for key in properties.keys() {
+            reply.insert(key.clone(), json!(key));
+        }
+        let (nested, dropped) = nest_flat_objects(&schema, reply.into());
+        assert!(dropped.is_empty());
+        assert_eq!(nested["a__b"], "a__b");
+        assert_eq!(nested["a__b__1"], "a__b__1");
+        assert_eq!(nested["a"]["b"], "a__b__2");
+        assert_eq!(nested["a"]["nested__name"], "a__nested__name");
+        assert_eq!(nested["a"]["nested"]["name"], "a__nested__name__1");
+        assert_eq!(flat["required"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn literal_double_underscore_property_round_trips() {
+        let schema = json!({"type":"object","properties":{"account__name":{"type":"string"}}});
+        let value = json!({"account__name":"Ada"});
+        let (nested, dropped) = nest_flat_objects(&schema, value.clone());
+        assert!(dropped.is_empty());
+        assert_eq!(nested, value);
+    }
 }
 
 /// Whether `value` has every field its object schema requires, `null` only where that field allows it.

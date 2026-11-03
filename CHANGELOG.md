@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Optional-object schema aliases preserve literal property names containing double underscores, including names that collide with a flattened nested field.
+
+- MCP requests stop sending notifications before their response, while cancelled runs continue cleanup.
+
 - A single password field marked `new-password` asks Jev whether the task needs the existing password or its replacement. An unclear role stops at `needs_input`; secret values remain hidden from the model.
 
 - Refusing a read source without a usable field value stops at `needs_input` before another Jev request.

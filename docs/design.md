@@ -124,7 +124,8 @@ outside the browse result schema. By default MCP allows the runner its time limi
 forcing cancellation, then waits up to a further 60 seconds for cleanup and its receipt. A runner that does not
 cooperate can therefore take its time limit plus 120 seconds to return. Client cancellation notifications
 respond immediately without a receipt while cleanup continues for up to 60 seconds. The request ID is released
-before that response, so cleanup cannot remove a later call's cancellation entry. A run that does not finish
+before that response, so cleanup cannot remove a later call's cancellation entry. Progress and log notifications
+stop before the response, while cleanup continues. A run that does not finish
 cleanup before the grace expires is abandoned without a receipt.
 
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed

@@ -696,6 +696,26 @@ async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whol
 }
 
 #[tokio::test]
+async fn test_optional_object_aliases_do_not_overwrite_literal_property_names() {
+    let nested = ModelTy::frozen("Nested", vec![Field::required("b", Ty::Str)]).ty();
+    let model = ModelTy::frozen(
+        "Collision",
+        vec![Field::required("a", Ty::optional(nested)), Field::required("a__b", Ty::Str)],
+    )
+    .ty();
+    let reply = json!({"a__b__1": "nested value", "a__b": "literal value"});
+    let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
+    let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Start, "deepseek/deepseek-v4.1-flash-1017");
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let result = llm.generate_value(LLMPurpose::Start, &[message], &Model(model), None).await.unwrap();
+    assert_eq!(result.data, json!({"a": {"b": "nested value"}, "a__b": "literal value"}));
+    let body = &script.bodies()[0];
+    let schema = &body["response_format"]["json_schema"]["schema"];
+    assert_eq!(schema["required"], json!(["a__b__1", "a__b"]));
+    assert_eq!(script.requests().len(), 1);
+}
+
+#[tokio::test]
 async fn test_a_half_answered_optional_object_comes_back_as_none_rather_than_failing_validation() {
     // DeepSeek answered a comparison's operator without its limit, and a tally field without its span: the original
     // schema allows no object there, but not half of one, so both runs failed validation twice and stopped.

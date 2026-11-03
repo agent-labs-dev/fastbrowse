@@ -576,6 +576,40 @@ async fn test_an_external_cancel_replies_immediately_and_keeps_cleanup_running()
 }
 
 #[tokio::test]
+async fn test_cancelled_calls_stop_notifications_before_replying_but_finish_cleanup() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let cleaned = Arc::new(Notify::new());
+    let run = runner({
+        let (started, release, cleaned) = (started.clone(), release.clone(), cleaned.clone());
+        move |args: Call| {
+            let (started, release, cleaned) = (started.clone(), release.clone(), cleaned.clone());
+            async move {
+                let on_event = args.host.on_event.as_ref().unwrap();
+                on_event(step_event(0, None)).await;
+                started.notify_one();
+                args.host.cancel.tripped().await;
+                release.notified().await;
+                on_event(step_event(1, None)).await;
+                on_event(browser_event(Some("https://live.example.com/late"), None)).await;
+                cleaned.notify_one();
+                Err(RunError::Cancelled(CancellationReceipt::default()))
+            }
+        }
+    });
+    let mut client = Client::new(ServerConfig::default(), run);
+    let id = client.start_call(json!({"task":"t", "start":START}));
+    tokio::time::timeout(Duration::from_secs(2), started.notified()).await.unwrap();
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":id}}));
+    let mut notices = Vec::new();
+    assert_eq!(client.reply(id, &mut notices).await["error"]["message"], "Request cancelled");
+    assert_eq!(notices.len(), 1, "active progress must still be delivered");
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), cleaned.notified()).await.unwrap();
+    assert!(client.inbox.try_recv().is_err(), "cleanup must not publish events for an answered call");
+}
+
+#[tokio::test]
 async fn test_a_cancelled_cleanup_cannot_remove_a_reused_request_id() {
     let first_started = Arc::new(Notify::new());
     let second_started = Arc::new(Notify::new());

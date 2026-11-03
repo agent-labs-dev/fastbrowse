@@ -759,12 +759,24 @@ impl McpServer {
                 let (server, session, outbox) = (self.clone(), session.clone(), outbox.clone());
                 tokio::spawn(async move {
                     let run_stop = run_cancel.clone();
-                    let call = server.call(&name, arguments, token, run_cancel, &outbox);
+                    // Cleanup keeps running after cancellation, but an answered request cannot send more progress.
+                    let events_open = Arc::new(Mutex::new(true));
+                    let events: Outbox = {
+                        let (events_open, outbox) = (events_open.clone(), outbox.clone());
+                        Arc::new(move |message| {
+                            let open = events_open.lock().unwrap_or_else(|p| p.into_inner());
+                            if *open {
+                                outbox(message);
+                            }
+                        })
+                    };
+                    let call = server.call(&name, arguments, token, run_cancel, &events);
                     tokio::pin!(call);
                     let outcome = tokio::select! {
                         biased;
                         () = cancel.tripped() => {
                             // The response is immediate, but keep the run future alive so it can close its browser.
+                            *events_open.lock().unwrap_or_else(|p| p.into_inner()) = false;
                             run_stop.trip();
                             // Remove before replying so cleanup cannot remove a newer request reusing this id.
                             session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
@@ -777,6 +789,7 @@ impl McpServer {
                         }
                         outcome = &mut call => outcome,
                     };
+                    *events_open.lock().unwrap_or_else(|p| p.into_inner()) = false;
                     session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
                     let reply = match outcome {
                         Ok(structured) => {
