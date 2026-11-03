@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import fnmatch
+import functools
 import json
 import os
 import re
@@ -20,14 +22,15 @@ from pathlib import Path
 from typing import Any
 
 sys.dont_write_bytecode = True
-VERSION = "0.3.0"
+VERSION = "0.1.0"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-CONFIG = ".sift/sgconfig.yml"
+CONFIG = ".sloppatrol/sgconfig.yml"
 SCRIPT_TIMEOUT = 600.0
 BUILTIN_LENSES: frozenset[str] = frozenset(
     "comment-narration copy-slop dead-code defensive-noise oversized-modules parallel-implementations "  # noqa: SIM905 (a word list reads best as one string)
-    "reinvented-wheel session-residue silent-fallbacks speculative-abstraction stale-docs "
-    "standards stringly-typed test-plumbing wall-of-text".split()
+    "reader-journey reinvented-wheel session-residue shallow-modules silent-fallbacks "
+    "hidden-dependency interface-leak speculative-abstraction stale-docs "
+    "stringly-typed test-plumbing wall-of-text".split()
 )
 COMMENT_EXTENSIONS = {
     "#": "py pyi py3 bzl sh bash zsh ksh bats rb rbw gemspec yaml yml toml r pl ex exs nix tf hcl dockerfile "
@@ -51,6 +54,15 @@ PR_EVENTS = frozenset({"pull_request", "pull_request_target", "merge_group"})
 ID = r"[a-z0-9][a-z0-9-]*"
 SCRIPT_TEST_CASE = re.compile(r"(?:^|/)script-tests/[^/]+/[^/]+/")
 QUOTED = r""""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`"""
+RETIRED_DIRS = (".sloppatrol/rules/", ".sloppatrol/scripts/")
+RETIRED_EXCLUDED = (
+    ".sloppatrol/reports/",
+    ".sloppatrol/runs/",
+    ".sloppatrol/ledger.json",
+    ".sloppatrol/rule-tests/",
+    ".sloppatrol/script-tests/",
+)
+MIN_RETIRED_ID = 8
 
 
 def comment_token(path: str) -> str | None:
@@ -78,34 +90,36 @@ def comment(path: str, line: str) -> tuple[str, bool] | None:
     return None
 
 
-MARKER_START = r"(?<![\w./-])sift:"
+MARKER_START = r"(?<![\w./-])sloppatrol:"
 
 
 def scan_markers(path: str, text: str, ids: set[str] | frozenset[str]) -> list[dict[str, Any]]:
     """Return {line, id, reason, error}; comment-shaped multiline-string lines count as comments."""
-    markers = []
+    markers: list[dict[str, Any]] = []
+    if "sloppatrol:" not in text and "ast-grep-ignore" not in text:  # every marker and marker error names one
+        return markers
     for number, line in enumerate(text.split("\n"), 1):
         parsed = comment(path, line)
         if parsed is None:
             continue
         body, whole = parsed
         if "ast-grep-ignore" in body:
-            markers.append(dict(line=number, id=None, reason="", error="sift-ast-grep-ignore"))
-        # The marker word inside a path or another word, such as a .sift directory, is prose.
+            markers.append(dict(line=number, id=None, reason="", error="sloppatrol-ast-grep-ignore"))
+        # The marker word inside a path or another word, such as a .sloppatrol directory, is prose.
         if not (named := re.search(rf"{MARKER_START}\s*({ID})?", body)):
             continue
-        match = re.fullmatch(rf"sift: ({ID}) -(?: (.*))?", body)
+        match = re.fullmatch(rf"sloppatrol: ({ID}) -(?: (.*))?", body)
         rule_id, reason = (match[1], match[2] or "") if match else (named[1], "")
         words = re.findall(r"[^\W_]+", reason.casefold())
         error = None
         if not whole:
-            error = "sift-trailing-marker"
+            error = "sloppatrol-trailing-marker"
         elif not match:
-            error = "sift-bad-marker"
-        elif rule_id not in ids or rule_id.startswith("sift-"):
-            error = "sift-unknown-id"
+            error = "sloppatrol-bad-marker"
+        elif rule_id not in ids or rule_id.startswith("sloppatrol-"):
+            error = "sloppatrol-unknown-id"
         elif len(words) < 3 or " ".join(words) in GENERIC_REASONS:
-            error = "sift-weak-reason"
+            error = "sloppatrol-weak-reason"
         markers.append(dict(line=number, id=rule_id, reason=reason, error=error))
     return markers
 
@@ -128,6 +142,11 @@ def marker_covers(path: str, text: str, marker_line: int, hit_line: int) -> bool
 
 
 def glob_matches(pattern: str, path: str) -> bool:
+    return glob_regex(pattern).fullmatch(path) is not None
+
+
+@functools.cache
+def glob_regex(pattern: str) -> re.Pattern[str]:
     """globset's separator-crossing wildcards, component globstars, classes and alternatives."""
     pattern = re.sub(r"\{([^{}]*)\}", lambda m: "{" + ",".join(filter(None, m[1].split(","))) + "}", pattern)
     parts, depth = [], 0
@@ -152,13 +171,13 @@ def glob_matches(pattern: str, path: str) -> bool:
         else:
             parts.append(re.escape(token.removeprefix("\\")))
     try:
-        return re.fullmatch("".join(parts), path) is not None
+        return re.compile("".join(parts))
     except re.error as error:
         raise GateError(f"invalid files glob {pattern}: {error}") from error
 
 
 class GateError(Exception):
-    def __init__(self, message: str, code: str = "sift-config"):
+    def __init__(self, message: str, code: str = "sloppatrol-config"):
         super().__init__(message)
         self.code = code
 
@@ -172,6 +191,82 @@ def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
     if result.returncode:
         raise GateError(result.stderr.strip())
     return result.stdout.strip("\n")
+
+
+def retired_ids(root: Path) -> dict[str, str]:
+    """Return rule and script ids deleted from history and absent from the current tree."""
+    result = run(
+        [
+            "git",
+            "log",
+            "--no-merges",
+            "--reverse",
+            "--diff-filter=D",
+            "--format=%H",
+            "--name-only",
+            "--",
+            *RETIRED_DIRS,
+        ],
+        root,
+    )
+    if result.returncode:
+        if "does not have any commits yet" in result.stderr:
+            return {}
+        raise GateError(result.stderr.strip())
+    output = result.stdout
+    deleted: dict[str, str] = {}
+    sha = ""
+    for line in output.splitlines():
+        if re.fullmatch(r"[0-9a-f]{40}", line):
+            sha = line
+            continue
+        if not sha or not any(line.startswith(directory) for directory in RETIRED_DIRS):
+            continue
+        path = Path(line)
+        if path.parent.as_posix() not in {directory.rstrip("/") for directory in RETIRED_DIRS}:
+            continue
+        deleted[path.stem] = sha
+    live = {
+        path.stem for directory in RETIRED_DIRS for path in (root / directory).glob("*") if path.is_file()
+    }
+    return {
+        rule_id: sha
+        for rule_id, sha in deleted.items()
+        if rule_id not in live and len(rule_id) >= MIN_RETIRED_ID and re.search(r"[-_]", rule_id)
+    }
+
+
+def retired_findings(root: Path) -> list[dict[str, Any]]:
+    """Find current tracked files that still name a deleted rule or script id."""
+    findings = []
+    for rule_id, sha in sorted(retired_ids(root).items()):
+        result = run(["git", "grep", "-n", "-F", "-e", rule_id, "HEAD", "--"], root)
+        if result.returncode not in (0, 1):
+            raise GateError(result.stderr.strip())
+        for match in result.stdout.splitlines():
+            if not match.startswith("HEAD:"):
+                continue
+            name_line = match[5:]
+            try:
+                path, line, _ = name_line.rsplit(":", 2)
+                number = int(line)
+            except ValueError:
+                path, number = name_line, 1
+            if any(path.startswith(prefix) or path == prefix.rstrip("/") for prefix in RETIRED_EXCLUDED):
+                continue
+            if "CHANGELOG" in Path(path).name.upper():
+                continue
+            findings.append(
+                finding(
+                    "sloppatrol-retired-id",
+                    "gate",
+                    path,
+                    number,
+                    f"{rule_id} was deleted in {sha}",
+                )
+            )
+            break
+    return findings
 
 
 def scalar(value: str) -> str:
@@ -209,9 +304,9 @@ def yaml_fields(path: Path, keys: set[str]) -> dict[str, Any]:  # noqa: PLR0912 
             if key == "metadata":
                 if value and not value.startswith("#"):
                     raise ValueError("metadata must be a block mapping")
-                scope = [line.strip() for line in body if re.match(r"\s+sift-scope\s*:", line)]
+                scope = [line.strip() for line in body if re.match(r"\s+sloppatrol-scope\s*:", line)]
                 if len(scope) > 1:
-                    raise ValueError("duplicate sift-scope")
+                    raise ValueError("duplicate sloppatrol-scope")
                 fields[key] = scalar(scope[0].split(":", 1)[1]) if scope else "all"
             elif key in {"valid", "invalid"}:  # ast-grep parses the cases; the gate needs one of each
                 flow = " ".join([value, *(line.strip() for line in body)])
@@ -248,19 +343,26 @@ def ls_z(root: Path, *args: str, env: dict[str, str] | None = None) -> list[str]
 
 
 def corpus(root: Path, env: dict[str, str] | None = None) -> list[str]:
-    """Script-test cases are inputs, wherever they live: `.sift/`, a rule catalog or a standards pack."""
+    """Script-test cases are inputs wherever they live in the repository.
+
+    They are excluded from the corpus after discovery so fixtures cannot report their own findings.
+    """
     paths = ls_z(root, "ls-files", "-co", "--exclude-standard", env=env)
     return sorted({p for p in paths if not SCRIPT_TEST_CASE.search(p) and (root / p).is_file()})
 
 
 def discover(root: Path, paths: list[str]) -> tuple[dict[str, Any], set[str]]:  # noqa: PLR0912 (one branch per layout check)
     rules, ids = {}, set(BUILTIN_LENSES)
-    sift = root / ".sift"
+    sloppatrol = root / ".sloppatrol"
     for path in sorted(
-        [*(sift / "rules").glob("*.yml"), *(sift / "scripts").glob("*"), *(sift / "lenses").glob("*.md")]
+        [
+            *(sloppatrol / "rules").glob("*.yml"),
+            *(sloppatrol / "scripts").glob("*"),
+            *(sloppatrol / "lenses").glob("*.md"),
+        ]
     ):
         rule_id = path.stem
-        if not re.fullmatch(ID, rule_id) or rule_id.startswith("sift-") or rule_id in ids:
+        if not re.fullmatch(ID, rule_id) or rule_id.startswith("sloppatrol-") or rule_id in ids:
             raise GateError(f"{path}: invalid, reserved or duplicate id {rule_id}")
         ids.add(rule_id)
         if path.parent.name == "lenses":
@@ -271,7 +373,7 @@ def discover(root: Path, paths: list[str]) -> tuple[dict[str, Any], set[str]]:  
                 raise GateError(f"{path}: id must equal stem; severity must be absent or error")
             if not data.get("message") or not data.get("note"):
                 raise GateError(f"{path}: message and note are required")
-            test = sift / "rule-tests" / f"{rule_id}-test.yml"
+            test = sloppatrol / "rule-tests" / f"{rule_id}-test.yml"
             fields = yaml_fields(test, {"id", "valid", "invalid"}) if test.is_file() else {}
             if fields.get("id") != rule_id or not fields.get("valid") or not fields.get("invalid"):
                 raise GateError(f"{test}: matching id and nonempty valid and invalid lists required")
@@ -284,23 +386,29 @@ def discover(root: Path, paths: list[str]) -> tuple[dict[str, Any], set[str]]:  
             lines, headers = path.read_text().splitlines(), {}
             for line in lines[:40]:
                 if match := re.match(
-                    r"\s*(?:#|//|--|;|%|<!--|/\*)\s*sift-([\w-]+):\s*(.*?)\s*(?:-->|\*/)?$", line
+                    r"\s*(?:#|//|--|;|%|<!--|/\*)\s*sloppatrol-([\w-]+):\s*(.*?)\s*(?:-->|\*/)?$", line
                 ):
-                    if match[1] not in {"scope", "fix"} or match[1] in headers:
-                        raise GateError(f"{path}: unknown or duplicate sift-{match[1]} header")
+                    if match[1] not in {"scope", "fix", "inputs"} or match[1] in headers:
+                        raise GateError(f"{path}: unknown or duplicate sloppatrol-{match[1]} header")
                     headers[match[1]] = match[2]
-            cases = sorted((sift / "script-tests" / rule_id).glob("*"))
+            cases = sorted((sloppatrol / "script-tests" / rule_id).glob("*"))
             if not lines or not lines[0].startswith("#!") or not headers.get("fix"):
-                raise GateError(f"{path}: shebang and sift-fix required")
+                raise GateError(f"{path}: shebang and sloppatrol-fix required")
             if not cases or any(not (c / "head").is_dir() or not (c / "expected").is_file() for c in cases):
                 raise GateError(f"{path}: each script case needs head/ and expected")
             if {bool((c / "expected").read_text().strip()) for c in cases} != {False, True}:
                 raise GateError(f"{path}: script needs nonempty and empty expected cases")
             data = dict(kind="script", scope=headers.get("scope", "all"), note=headers["fix"], cases=cases)
+            if "inputs" in headers:  # only --fast reads it: a rule whose inputs did not change cannot move
+                data["inputs"] = headers["inputs"].split()
+                if not data["inputs"] or not all(
+                    any(glob_matches(g, p) for p in paths) for g in data["inputs"]
+                ):
+                    raise GateError(f"{path}: every sloppatrol-inputs glob must match a corpus path")
         if data["scope"] not in {"all", "changed"}:
-            raise GateError(f"{path}: sift-scope must be all or changed")
+            raise GateError(f"{path}: sloppatrol-scope must be all or changed")
         rules[rule_id] = dict(data, path=path)
-    for test in (sift / "rule-tests").glob("*"):
+    for test in (sloppatrol / "rule-tests").glob("*"):
         fields = yaml_fields(test, {"id"}) if test.is_file() else {}
         rule_id = fields.get("id")
         if rule_id not in rules or rules[rule_id]["kind"] != "ast-grep" or test.name != f"{rule_id}-test.yml":
@@ -343,7 +451,7 @@ def resolve_base(root: Path, base: dict[str, Any], ref: str | None, all_files: b
                 raise GateError("merge-base equals HEAD in PR context")
         base.update(merge_base=merge_base, changed=changes(root, merge_base))
     except GateError as error:
-        raise GateError(f"{ref}: {error}; set --base and fetch-depth: 0", "sift-base") from error
+        raise GateError(f"{ref}: {error}; set --base and fetch-depth: 0", "sloppatrol-base") from error
 
 
 def finding(rule_id: str, kind: str, path: str, line: int, message: str) -> dict[str, Any]:
@@ -356,27 +464,36 @@ def script_hits(
     root: Path, script: Path, paths: list[str], base: dict[str, Any], env: dict[str, str] | None = None
 ) -> list[dict[str, Any]]:
     rule_id, lib, corpus_set = script.stem, script.parent.parent / "lib", set(paths)
-    with tempfile.TemporaryDirectory(prefix="sift-protocol-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="sloppatrol-protocol-") as temporary:
         files, changed = Path(temporary) / "files", Path(temporary) / "changed"
         files.write_text("".join(p + "\n" for p in paths))
-        env = {k: v for k, v in (env or os.environ).items() if k not in {"SIFT_BASE", "SIFT_CHANGED"}}
-        env.update(SIFT_ROOT=str(root), SIFT_RULE=rule_id, SIFT_FILES=str(files), SIFT_LIB=str(lib))
+        env = {
+            k: v for k, v in (env or os.environ).items() if k not in {"SLOPPATROL_BASE", "SLOPPATROL_CHANGED"}
+        }
+        env.update(
+            SLOPPATROL_ROOT=str(root),
+            SLOPPATROL_RULE=rule_id,
+            SLOPPATROL_FILES=str(files),
+            SLOPPATROL_LIB=str(lib),
+        )
         if base["merge_base"]:
             changed.write_text("".join("\t".join(row) + "\n" for row in base["changed"]))
-            env.update(SIFT_BASE=base["merge_base"], SIFT_CHANGED=str(changed))
+            env.update(SLOPPATROL_BASE=base["merge_base"], SLOPPATROL_CHANGED=str(changed))
         try:
             result = run([str(script)], root, env=env, timeout=SCRIPT_TIMEOUT)
         except (OSError, UnicodeError, subprocess.TimeoutExpired) as error:
-            raise GateError(f"{rule_id}: {error}", "sift-script-protocol") from error
+            raise GateError(f"{rule_id}: {error}", "sloppatrol-script-protocol") from error
         hits = []
         for line in result.stdout.splitlines():
             match = re.fullmatch(r"(.+?):([1-9][0-9]*): (\S+) (\S.*)", line)
             if not match or match[1] not in corpus_set or match[3] != rule_id:
-                raise GateError(f"{rule_id}: malformed or foreign output: {line}", "sift-script-protocol")
+                raise GateError(
+                    f"{rule_id}: malformed or foreign output: {line}", "sloppatrol-script-protocol"
+                )
             hits.append(finding(rule_id, "script", match[1], int(match[2]), match[4]))
         if result.returncode != int(bool(hits)):
             raise GateError(
-                f"{rule_id}: exit {result.returncode} with {len(hits)} lines", "sift-script-protocol"
+                f"{rule_id}: exit {result.returncode} with {len(hits)} lines", "sloppatrol-script-protocol"
             )
         return hits
 
@@ -412,7 +529,7 @@ def filter_hits(  # noqa: PLR0913 -- explicit inputs shared by live scans and fi
                     if not hit["suppressed"]:
                         hit.update(suppressed=True, marker_line=marker["line"])
                 if not covered and marker["id"] in whole:
-                    error = "sift-unused-marker"
+                    error = "sloppatrol-unused-marker"
             if error:
                 checks.append(finding(error, "gate", path, marker["line"], marker["id"] or "invalid marker"))
     return checks
@@ -424,10 +541,17 @@ def script_tests(root: Path, rule_id: str, data: dict[str, Any], ids: set[str]) 
     local = set(git(root, "rev-parse", "--local-env-vars").split())
     env = {k: v for k, v in os.environ.items() if k not in local}
     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
-    config = ["-c", "user.name=sift", "-c", "user.email=sift@example.invalid", "-c", "commit.gpgsign=false"]
+    config = [
+        "-c",
+        "user.name=sloppatrol",
+        "-c",
+        "user.email=sloppatrol@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+    ]
     findings = []
     for case in data["cases"]:
-        with tempfile.TemporaryDirectory(prefix="sift-case-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="sloppatrol-case-") as temporary:
             work = Path(temporary)
             git(work, "init", "-q", env=env)
             base = EMPTY_TREE
@@ -452,7 +576,7 @@ def script_tests(root: Path, rule_id: str, data: dict[str, Any], ids: set[str]) 
             if actual != expected:
                 difference = f"missing {sorted(expected - actual)}, extra {sorted(actual - expected)}"
                 findings.append(
-                    finding("sift-script-test", "gate", "", 0, f"{rule_id}/{case.name}: {difference}")
+                    finding("sloppatrol-script-test", "gate", "", 0, f"{rule_id}/{case.name}: {difference}")
                 )
     return findings
 
@@ -460,7 +584,7 @@ def script_tests(root: Path, rule_id: str, data: dict[str, Any], ids: set[str]) 
 def ast_run(root: Path, args: list[str], allowed: set[int]) -> subprocess.CompletedProcess[str]:
     result = run(["ast-grep", *args], root)
     if result.returncode not in allowed or re.search(r"(?m)^ERROR", result.stderr):
-        raise GateError(f"ast-grep exit {result.returncode}: {result.stderr.strip()}", "sift-ast-grep")
+        raise GateError(f"ast-grep exit {result.returncode}: {result.stderr.strip()}", "sloppatrol-ast-grep")
     return result
 
 
@@ -491,7 +615,7 @@ def ast_scan(
                 f"ast-grep loaded {counts.get('effectiveRuleCount', '?')} of {len(rules)} rules and "
                 f"could not read {counts.get('skippedFileCount', '?')} files in {chunk[0]} .. {chunk[-1]}; "
                 f"check {CONFIG} and that source files are UTF-8",
-                "sift-ast-grep",
+                "sloppatrol-ast-grep",
             )
         parsed.update(
             re.findall(r"(?m)^sg: entity\|file\|(.+): language=\w+,appliedRuleCount=[1-9]", result.stderr)
@@ -507,17 +631,81 @@ def ast_scan(
                         finding(rule_id, "ast-grep", path, hit["range"]["start"]["line"] + 1, message)
                     )
             except (ValueError, TypeError, KeyError) as error:
-                raise GateError(f"ast-grep invalid JSON hit: {line}", "sift-ast-grep") from error
+                raise GateError(f"ast-grep invalid JSON hit: {line}", "sloppatrol-ast-grep") from error
     # ast-grep honours its own ignore comment in every file a rule applies to, including languages the
     # comment table lacks (a languageGlobs mapping, say); there the bare word fails closed.
     for path in sorted(p for p in parsed if comment_token(p) is None):
         for number, line in enumerate((root / path).read_text(errors="replace").split("\n"), 1):
             if "ast-grep-ignore" in line:
-                hits.append(finding("sift-ast-grep-ignore", "gate", path, number, "invalid marker"))
+                hits.append(finding("sloppatrol-ast-grep-ignore", "gate", path, number, "invalid marker"))
     return hits
 
 
-def execute(root: Path, args: argparse.Namespace, report: dict[str, Any], rules: dict[str, Any]) -> None:
+def rule_filter(selected: dict[str, Any]) -> list[str]:
+    return ["--filter", "^(" + "|".join(sorted(selected)) + ")$"]
+
+
+def edited_rules(root: Path, rules: dict[str, Any], merge_base: str) -> set[str]:
+    """Rules whose definition, tests or shared library the branch touched; every rule if the gate changed."""
+    touched = set(ls_z(root, "diff", "--name-only", "--no-renames", merge_base, "--", ".sloppatrol"))
+    touched |= set(ls_z(root, "ls-files", "--others", "--exclude-standard", "--", ".sloppatrol"))
+    if ".sloppatrol/gate.py" in touched:
+        return set(rules)
+    edited = set()
+    for rule_id, data in rules.items():
+        own = {data["path"].relative_to(root).as_posix()}
+        if data["kind"] == "ast-grep":
+            own |= {f".sloppatrol/rule-tests/{rule_id}-test.yml", CONFIG}
+            prefixes: tuple[str, ...] = ()
+        else:
+            prefixes = (f".sloppatrol/script-tests/{rule_id}/", ".sloppatrol/lib/")
+        if touched & own or (prefixes and any(p.startswith(prefixes) for p in touched)):
+            edited.add(rule_id)
+    return edited
+
+
+def unmoved_scripts(rules: dict[str, Any], edited: set[str], rows: list[list[str]]) -> set[str]:
+    """Whole-tree scripts that declare `sloppatrol-inputs` and whose inputs no changed path touches."""
+    touched = {path for row in rows for path in row[1:]}
+    return {
+        rule_id
+        for rule_id, data in rules.items()
+        if data["kind"] == "script"
+        and data["scope"] == "all"
+        and "inputs" in data
+        and rule_id not in edited
+        and not any(glob_matches(g, p) for g in data["inputs"] for p in touched)
+    }
+
+
+def run_script(  # noqa: PLR0913 (one worker's inputs)
+    root: Path,
+    rule_id: str,
+    data: dict[str, Any],
+    *,
+    ids: set[str],
+    base: dict[str, Any],
+    paths: list[str],
+    test: bool,
+) -> list[dict[str, Any]]:
+    try:
+        tests = script_tests(root, rule_id, data, ids) if test else []
+        return [*tests, *script_hits(root, data["path"], paths, base)]
+    except GateError as error:
+        if error.code != "sloppatrol-script-protocol":
+            raise
+        return [finding(error.code, "gate", "", 0, str(error))]
+
+
+def execute(  # noqa: PLR0912 (one branch per gate stage)
+    root: Path, args: argparse.Namespace, report: dict[str, Any], rules: dict[str, Any]
+) -> set[str]:
+    """Fill the report; return the scripts --fast skipped."""
+    if not args.rule and not args.fast:
+        shallow = run(["git", "rev-parse", "--is-shallow-repository"], root)
+        if shallow.returncode == 0 and shallow.stdout.strip() == "true":
+            raise GateError("shallow repository; set --base and fetch-depth: 0", "sloppatrol-base")
+        report["findings"].extend(retired_findings(root))
     paths = corpus(root)
     discovered, ids = discover(root, paths)
     if args.rule and (unknown := set(args.rule) - discovered.keys()):
@@ -528,33 +716,78 @@ def execute(root: Path, args: argparse.Namespace, report: dict[str, Any], rules:
         if not shutil.which("ast-grep"):
             raise GateError("ast-grep is required on PATH when rules exist")
         report["ast_grep"] = ast_run(root, ["--version"], {0}).stdout.strip().removeprefix("ast-grep ")
-    if args.all or any(v["scope"] == "changed" for v in rules.values()):
+    if args.all or args.fast or any(v["scope"] == "changed" for v in rules.values()):
         resolve_base(root, report["base"], args.base, args.all)
+    base = report["base"]
+    # --fast keeps every finding the branch can cause: a rule's own tests run only when the rule changed,
+    # an unchanged single-file ast-grep rule scans only changed files, and a script whose declared
+    # sloppatrol-inputs the diff misses is skipped. Findings inherited unchanged from the base are not shown.
+    edited = edited_rules(root, rules, base["merge_base"]) if args.fast else set(rules)
+    skipped = unmoved_scripts(rules, edited, base["changed"]) if args.fast else set()
+    changed = {row[-1] for row in base["changed"] if row[0] in {"A", "M", "R"}}
     hits = report["findings"]
-    if ast_rules:
-        filters = ["--filter", "^(" + "|".join(sorted(ast_rules)) + ")$"] if args.rule else []
+    diff_only = {k: v for k, v in ast_rules.items() if k not in edited}
+    if tested := {k: v for k, v in ast_rules.items() if k in edited}:
+        filters = rule_filter(tested) if args.rule or diff_only else []
         result = ast_run(root, ["test", "-c", CONFIG, "--skip-snapshot-tests", *filters], {0, 4})
-        if not re.search(rf"(?m)^Running {len(ast_rules)} tests$", result.stdout):
+        if not re.search(rf"(?m)^Running {len(tested)} tests$", result.stdout):
             raise GateError(
-                f"ast-grep test did not run {len(ast_rules)} rule tests; check {CONFIG}", "sift-ast-grep"
+                f"ast-grep test did not run {len(tested)} rule tests; check {CONFIG}", "sloppatrol-ast-grep"
             )
         if result.returncode == 4:
-            hits.append(finding("sift-rule-test", "gate", "", 0, " ".join(result.stdout.split())))
-        changed = {row[-1] for row in report["base"]["changed"] if row[0] in {"A", "M", "R"}}
-        hits.extend(ast_scan(root, ast_rules, paths, filters, changed))
-    for rule_id, data in rules.items():
-        if data["kind"] == "script":
-            try:
-                hits.extend(script_tests(root, rule_id, data, ids))
-                hits.extend(script_hits(root, data["path"], paths, report["base"]))
-            except GateError as error:
-                if error.code != "sift-script-protocol":
-                    raise
-                hits.append(finding(error.code, "gate", "", 0, str(error)))
+            hits.append(finding("sloppatrol-rule-test", "gate", "", 0, " ".join(result.stdout.split())))
+        hits.extend(ast_scan(root, tested, paths, filters, changed))
+    if diff_only:
+        scanned = [p for p in paths if p in changed]
+        hits.extend(ast_scan(root, diff_only, scanned, rule_filter(diff_only), changed))
+    scripts = {k: v for k, v in rules.items() if v["kind"] == "script" and k not in skipped}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:
+        futures = [
+            pool.submit(run_script, root, k, v, ids=ids, base=base, paths=paths, test=k in edited)
+            for k, v in scripts.items()
+        ]
+        for future in futures:
+            hits.extend(future.result())
     unique = {(h["id"], h["path"], h["line"], h["message"] if h["kind"] == "gate" else ""): h for h in hits}
     hits[:] = unique.values()
-    whole = {k for k, v in rules.items() if v["scope"] == "all" or args.all}
-    hits.extend(filter_hits(root, paths, hits, ids, whole, selected=set(args.rule) if args.rule else None))
+    whole = {k for k, v in rules.items() if (v["scope"] == "all" or args.all) and k not in skipped}
+    selected = set(args.rule) if args.rule else None
+    if diff_only:  # a marker for an ast-grep rule that did not scan its file cannot be judged unused
+        unscanned = [p for p in paths if p not in changed]
+        hits.extend(filter_hits(root, unscanned, hits, ids, whole - diff_only.keys(), selected=selected))
+        hits.extend(
+            filter_hits(root, [p for p in paths if p in changed], hits, ids, whole, selected=selected)
+        )
+    else:
+        hits.extend(filter_hits(root, paths, hits, ids, whole, selected=selected))
+    return skipped
+
+
+def github_escape(value: str, *, property_value: bool = False) -> str:
+    value = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return value.replace(":", "%3A").replace(",", "%2C") if property_value else value
+
+
+SUMMARY_BEGIN, SUMMARY_END = "=== sloppatrol findings:", "=== end sloppatrol findings ==="
+
+
+def github_report(visible: list[dict[str, Any]]) -> None:
+    """Annotate each finding, then list them all: a step shows only its first ten error annotations."""
+    for hit in visible:
+        path = github_escape(hit["path"], property_value=True)
+        location = f"file={path},line={hit['line']}," if hit["path"] else ""
+        title = github_escape(hit["id"], property_value=True)
+        print(f"::error {location}title={title}::{github_escape(' '.join(hit['message'].split()))}")
+    if not visible:
+        return
+    print(f"{SUMMARY_BEGIN} {len(visible)} ===")
+    for rule_id in sorted({h["id"] for h in visible}):
+        sites = [
+            f"{h['path']}:{h['line']}" if h["path"] else "sloppatrol" for h in visible if h["id"] == rule_id
+        ]
+        print(f"{rule_id} ({len(sites)}): {' '.join(sites)}")
+    print(SUMMARY_END)
+    sys.stdout.flush()
 
 
 def main() -> int:
@@ -564,21 +797,26 @@ def main() -> int:
     bases.add_argument("--base")
     bases.add_argument("--all", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--fast", action="store_true", help="only what this branch can change")
     args, started = parser.parse_args(), time.monotonic()
     if args.base == "":
         parser.error("--base needs a ref")
+    if args.fast and args.all:
+        parser.error("--fast needs a base, not --all")
     rules: dict[str, Any] = {}
     report: dict[str, Any] = dict(
         version=VERSION, ast_grep=None, base=dict(ref=None, merge_base=None, changed=[]), findings=[]
     )
-    failed = False
+    failed, skipped = False, set()
     try:
         root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
-        execute(root, args, report, rules)
+        skipped = execute(root, args, report, rules)
     except (GateError, OSError, ValueError) as error:
         failed = True
         report["findings"].append(
-            finding(error.code if isinstance(error, GateError) else "sift-config", "gate", "", 0, str(error))
+            finding(
+                error.code if isinstance(error, GateError) else "sloppatrol-config", "gate", "", 0, str(error)
+            )
         )
     hits = sorted(report["findings"], key=lambda h: (h["path"], h["line"], h["id"], h["message"]))
     report["findings"] = hits
@@ -589,23 +827,31 @@ def main() -> int:
         print(json.dumps(report))
     else:
         for hit in visible:
-            location = f"{hit['path']}:{hit['line']}:" if hit["path"] else "sift:"
+            location = f"{hit['path']}:{hit['line']}:" if hit["path"] else "sloppatrol:"
             print(f"{location} {hit['id']} {' '.join(hit['message'].split())}")
         fixes = sorted({h["id"] for h in visible} & rules.keys())
         if fixes:
             print("fix:")
             for rule_id in fixes:
                 print(f"  {rule_id}: {' '.join(rules[rule_id]['note'].split())}")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            github_report(visible)
     ast_count = sum(v["kind"] == "ast-grep" for v in rules.values())
     print(
-        f"sift gate {VERSION}: {len(visible)} findings, {len(hits) - len(visible)} suppressed, "
+        f"sloppatrol gate {VERSION}: {len(visible)} findings, {len(hits) - len(visible)} suppressed, "
         f"{len(rules)} rules ({ast_count} ast-grep, {len(rules) - ast_count} script); "
-        f"ast-grep {report['ast_grep'] or 'not needed'}; base {base['ref'] or 'not needed'} "
-        f"(merge-base {(base['merge_base'] or '-')[:12]}), {base['changed']} changed files; "
-        f"{time.monotonic() - started:.1f} s",
+        f"ast-grep {report['ast_grep'] or 'not needed'}; "
+        + (
+            f"base {base['ref']} (merge-base {(base['merge_base'] or '-')[:12]}), "
+            f"{base['changed']} changed files; "
+            if base["ref"]
+            else "base not needed, every rule scans all files; "
+        )
+        + (f"--fast: {len(skipped)} scripts skipped; " if args.fast else "")
+        + f"{time.monotonic() - started:.1f} s",
         file=sys.stderr,
     )
-    return 2 if failed or any(h["id"] == "sift-script-protocol" for h in hits) else int(bool(visible))
+    return 2 if failed or any(h["id"] == "sloppatrol-script-protocol" for h in hits) else int(bool(visible))
 
 
 if __name__ == "__main__":
