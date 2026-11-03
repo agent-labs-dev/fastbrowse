@@ -461,15 +461,15 @@ impl AskError {
     }
 }
 
-/// Characters `json.dumps` writes for `body`, the measure Python prices a request by.
+/// Serialized request size for the text-only token estimate.
 fn dumped_chars(body: &Value) -> usize {
     dumps(body).len()
 }
 
-/// Records the input estimate of a Jev request dropped in flight, as Python's `except CancelledError` does.
+/// Retains the input estimate or documented image bound when a dispatched request loses its response.
 struct CancelledJev<'a> {
     spend: Option<JevSpend>,
-    body: &'a Value,
+    cost: CostLine,
     price: Option<f64>,
     usage: &'a Usage,
     trace: &'a Trace,
@@ -482,17 +482,20 @@ impl Drop for CancelledJev<'_> {
             return;
         }
         // Cancellation loses reported usage, so retain the dispatched input estimate rather than a free call.
-        let tokens = (dumped_chars(self.body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
         let unaccounted = self.usage.lock().unaccounted_requests;
         if let Some(spend) = &self.spend {
-            spend.record((0..unaccounted).map(|_| estimated_cost(self.price, tokens, 0)));
+            spend.record((0..unaccounted).map(|_| self.cost.clone()));
         }
         if unaccounted > 0 {
             self.trace.event("cancelled_request_cost", || {
                 let mut fields = Map::new();
                 fields.insert("call".into(), "jev".into());
                 fields.insert("requests".into(), unaccounted.into());
-                fields.insert("estimated_input_tokens".into(), tokens.into());
+                if self.cost.basis == CostBasis::Estimated {
+                    fields.insert("estimated_input_tokens".into(), self.cost.input_tokens.into());
+                } else {
+                    fields.insert("cost".into(), serde_json::to_value(&self.cost).unwrap());
+                }
                 fields.insert("dollars_per_input_token".into(), self.price.into());
                 fields
             });
@@ -511,10 +514,16 @@ pub(crate) async fn post(
     start_attempt: usize,
     split_batch: bool,
     price: Option<f64>,
+    image_context: Option<i64>,
 ) -> Result<Response, AskError> {
     let spend = JevSpend::current();
     // Priced before sending, so a split single or a retry cannot carry the run past its dollar cap.
-    let estimate = body_dollars(body, price);
+    let cost = input_cost(body, price, image_context);
+    let estimate = if image_context.is_some() {
+        cost.dollars.unwrap_or(0.0)
+    } else {
+        dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * price.unwrap_or(0.0)
+    };
     let check = || check_jev_spend(spend.as_ref(), estimate);
     check().map_err(DecisionError::Budget)?;
     let started = Instant::now();
@@ -531,7 +540,7 @@ pub(crate) async fn post(
         start_attempt,
         split_batch,
     };
-    let mut cancelled = CancelledJev { spend: spend.clone(), body, price, usage, trace: &http.trace, armed: true };
+    let mut cancelled = CancelledJev { spend: spend.clone(), cost, price, usage, trace: &http.trace, armed: true };
     let sent = post_with_retry(http, url, body, &auth, &attempts, usage).await;
     cancelled.armed = false;
     let response = match sent {
@@ -862,9 +871,17 @@ pub fn record_jev_spend(costs: impl IntoIterator<Item = CostLine>) {
     }
 }
 
-/// A request's input estimate at `price`; an unpriced model reserves nothing, and its receipt says what it cost.
-fn body_dollars(body: &Value, price: Option<f64>) -> f64 {
-    dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * price.unwrap_or(0.0)
+/// Image tokenization is unpublished, so only the route's documented context bounds an unanswered image call.
+fn input_cost(body: &Value, price: Option<f64>, image_context: Option<i64>) -> CostLine {
+    if let Some(context) = image_context {
+        return CostLine::new(
+            CostComponent::Jev,
+            if price.is_some() { CostBasis::Bounded } else { CostBasis::Unknown },
+            price.map(|price| context as f64 * price),
+        );
+    }
+    let tokens = (dumped_chars(body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
+    estimated_cost(price, tokens, 0)
 }
 
 /// Refuse a request whose estimate, beside every receipt held so far, would break the ledger's limits.

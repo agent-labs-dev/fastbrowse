@@ -74,7 +74,8 @@ impl VercelGatewayJevClient {
             ("ai-evaluation-model-specification-version", "4"),
         ];
         let response =
-            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch, PRICE).await?;
+            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch, PRICE, None)
+                .await?;
         let sent = sent.snapshot();
         let empty = Value::Object(Map::new());
         let parsed = (|| {

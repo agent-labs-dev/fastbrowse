@@ -12,10 +12,12 @@ use fastbrowse_clients::http::{Response, TransportError};
 use fastbrowse_clients::system_one::{SystemOneClient, TYPESAFE_URL};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
-use fastbrowse_core::decision::{DecisionClient, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, Question};
-use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, MaybeUnavailable};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, Images, JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, Question,
+};
+use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Limits, MaybeUnavailable};
 use fastbrowse_core::py::json::dumps;
-use fastbrowse_core::telemetry::Trace;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -250,7 +252,7 @@ async fn test_cancelled_dispatched_request_retains_estimated_input_cost() {
     }
     let costs = paid.lines();
     assert_eq!(costs.len(), 1);
-    // Priced as Python prices it: `json.dumps(body)` characters over three per token.
+    // Text without usage retains the request-length estimate, independent of the image path.
     let body: Value = serde_json::from_slice(&bodies.lock().unwrap()[0]).unwrap();
     let tokens = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
     assert_eq!((costs[0].component, costs[0].basis), (CostComponent::Jev, CostBasis::Estimated));
@@ -297,4 +299,75 @@ async fn test_split_cancellation_retains_answered_and_cancelled_costs_once() {
     assert_eq!((costs[0].basis, costs[0].dollars), (CostBasis::Metered, Some(0.01)));
     assert_eq!(costs[1].basis, CostBasis::Estimated);
     assert_eq!(costs[1].dollars, Some(costs[1].input_tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+}
+
+#[tokio::test]
+async fn image_cancellation_keeps_a_context_bound_without_inventing_tokens() {
+    for (long_context, unpriced) in [(false, false), (true, false), (true, true)] {
+        let script = Script::new([common::Step::Cancel]);
+        let mut client = SystemOneClient::new("key", script.http(), TYPESAFE_URL, JEV_MODEL).images();
+        if long_context {
+            client = client.long_context();
+        }
+        if unpriced {
+            client = client.unpriced();
+        }
+        let paid = Paid::default();
+        let images = Images::from([("viewport".into(), vec![0; 300_000])]);
+        let page = json!({"screenshot": "viewport"});
+        let questions = one();
+        tokio::select! {
+            _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate_images(&page, &questions, &images)) => panic!("cancelled"),
+            _ = script.cancel.notified() => {}
+        }
+        let costs = paid.lines();
+        assert_eq!(costs.len(), 1);
+        assert_eq!(costs[0].input_tokens, 0);
+        if unpriced {
+            assert_eq!(costs[0].basis, CostBasis::Unknown);
+            assert_eq!(costs[0].dollars, None);
+        } else {
+            assert_eq!(costs[0].basis, CostBasis::Bounded);
+            let context = if long_context { 262_144 } else { 64_000 };
+            assert_eq!(costs[0].dollars, Some(context as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+        }
+    }
+}
+
+#[tokio::test]
+async fn image_budget_admission_uses_the_context_bound_before_dispatch() {
+    for bytes in [1, 300_000] {
+        let script = Script::new([common::Step::Reply(answered())]);
+        let client = direct(script.http()).images();
+        let images = Images::from([("viewport".into(), vec![0; bytes])]);
+        let ledger = Arc::new(Ledger::new(Limits { max_dollars: Some(0.001), ..Limits::default() }));
+        let result = jev_spend(
+            Lines::Ledger(ledger.clone()),
+            Some(ledger.clone()),
+            client.evaluate_images(&json!({"screenshot":"viewport"}), &one(), &images),
+        )
+        .await;
+        assert!(matches!(result, Err(DecisionError::Budget(_))));
+        assert!(script.requests().is_empty());
+        assert!(ledger.state().lines.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn image_budget_does_not_charge_transport_encoding_as_text() {
+    let script = Script::new([common::Step::Reply(answered())]);
+    let client = SystemOneClient::new("key", script.http(), TYPESAFE_URL, JEV_MODEL).images();
+    let images = Images::from([("viewport".into(), vec![0; 300_000])]);
+    let ledger = Arc::new(Ledger::new(Limits { max_dollars: Some(0.003), ..Limits::default() }));
+    let result = jev_spend(
+        Lines::Ledger(ledger.clone()),
+        Some(ledger),
+        client.evaluate_images(&json!({"screenshot":"viewport"}), &one(), &images),
+    )
+    .await
+    .unwrap();
+    assert_eq!(script.requests().len(), 1);
+    assert_eq!(result.cost.input_tokens, 100);
+    assert_eq!(result.cost.basis, CostBasis::Estimated);
+    assert_eq!(result.cost.dollars, Some(100.0 * JEV_DOLLARS_PER_INPUT_TOKEN));
 }

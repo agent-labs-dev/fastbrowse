@@ -123,7 +123,11 @@ input tokens, uses Jev's list-price estimate. Direct TypeSafe responses without 
 The call's time includes both providers. HTTP errors add no charge; unanswered requests that may have been
 billed are estimated from the successful answer's input tokens at Jev's input price, without multiplying
 the backup's own retries. Cancelled requests without usage retain an input estimate from the
-serialized request length divided by `TokenBudget.chars_per_token`, rounded up, at Jev's input price.
+serialized text request length divided by `TokenBudget.chars_per_token`, rounded up, at Jev's input price.
+For requests carrying images, TypeSafe publishes no image token estimator. Admission reserves the route's
+documented maximum request tokens at its input price. A cancelled dispatched image request retains that
+upper bound with `bounded` cost basis and no token count, rather than treating base64 as text tokens.
+An unpriced route still reports unknown cost. Answered image requests use the provider's reported tokens.
 This is estimated spend, not provider-reported billing; output is free. Cancellation before dispatch adds
 no charge. All three routes reach Typesafe, so an outage there can affect all three.
 

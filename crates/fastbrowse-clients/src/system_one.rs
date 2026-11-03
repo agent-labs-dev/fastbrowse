@@ -129,8 +129,20 @@ impl SystemOneClient {
         }
         let url = format!("{}{}", self.base_url, self.path);
         let price = self.profile.dollars_per_input_token;
-        let response =
-            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch, price).await?;
+        let image_context = (!images.is_empty()).then_some(self.profile.max_total_tokens);
+        let response = post(
+            &self.http,
+            &url,
+            &self.api_key,
+            &body,
+            &headers,
+            &sent,
+            start_attempt,
+            split_batch,
+            price,
+            image_context,
+        )
+        .await?;
         let sent = sent.snapshot();
         let parsed = (|| {
             let payload = json_object(&response)?;

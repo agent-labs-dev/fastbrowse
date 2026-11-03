@@ -180,7 +180,7 @@ impl OpenAIDecisionsClient {
         let url = format!("{}/v1/decisions", self.base_url);
         let price = self.profile.dollars_per_input_token;
         let response =
-            post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch, price).await?;
+            post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch, price, None).await?;
         let sent = sent.snapshot();
         let parsed = (|| {
             let payload = json_object(&response)?;
