@@ -1021,6 +1021,41 @@ async fn test_a_value_whose_end_is_picked_before_its_beginning_asks_for_the_end_
     assert_eq!(text, "SW1A 1AA");
 }
 
+struct EndValues;
+
+impl DecisionClient for EndValues {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            if let Some(Question::Choice(question)) = questions.get("pick") {
+                assert_eq!(question.criteria["3"], json!("Grace"));
+                assert_eq!(question.criteria["4"], json!("Grace Hopper"));
+                assert_eq!(question.criteria["5"], json!("Grace Hopper then"));
+            }
+            Picks(&[("source", "task"), ("first", "3"), ("last", "4"), ("pick", "3")]).evaluate(state, questions).await
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_span_end_choice_shows_each_value_that_would_be_typed() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Use first name Grace Hopper then stop".into();
+    let text = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("First name"))
+        .await
+        .unwrap();
+    assert_eq!(text, "Grace");
+}
+
 #[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";

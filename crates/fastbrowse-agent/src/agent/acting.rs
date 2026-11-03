@@ -485,12 +485,19 @@ impl Agent {
                     last
                 } else {
                     let rest: Vec<Word> = group.iter().filter(|word| word.index >= first.index).cloned().collect();
-                    let begins: String = task.chars().skip(first.start).take(first.end - first.start).collect();
+                    let chars: Vec<char> = task.chars().collect();
+                    let options = rest
+                        .iter()
+                        .map(|word| {
+                            let value: String = chars[first.start..word.end].iter().collect();
+                            (word.index.to_string(), JsonValue::String(value))
+                        })
+                        .collect();
                     let question = format!(
-                        "The value for {label} begins at {}. Which word ends this one value?",
-                        text::repr(&begins)
+                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, beginning at the selected word. Choose only the field's value, without surrounding task instructions.",
+                        holder = if source == IN_READ { "what was read" } else { "the task" },
                     );
-                    let picked = self.ask_choice(state, observation, &question, word_options(&task, &rest)).await?;
+                    let picked = self.ask_choice(state, observation, &question, options).await?;
                     group
                         .iter()
                         .find(|word| word.index >= first.index && word.index.to_string() == picked)

@@ -6,6 +6,10 @@ fastbrowse splits a browser agent into three owners:
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled or a composed claim that cannot be supported ends `unverified`.
 
+When a field value is copied, Jev selects its source and first word. If its end needs a separate choice,
+each choice shows the complete text that would be typed from that first word to the candidate end.
+Code copies the selected span unchanged.
+
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
 `fastbrowse._native` into the wheel ([ADR 0004](adr/0004-rust-core-by-default.md)).
