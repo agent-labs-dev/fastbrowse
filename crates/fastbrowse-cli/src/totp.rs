@@ -85,34 +85,9 @@ fn base32(text: &str) -> Option<Vec<u8>> {
 
 /// `parse_qs(query, keep_blank_values=True)` for the names a key URI uses.
 fn query_values(query: &str, name: &str) -> Vec<String> {
-    query
-        .split('&')
-        .filter_map(|pair| {
-            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            let decode = |text: &str| percent_decode(&text.replace('+', " "));
-            (decode(key) == name).then(|| decode(value))
-        })
+    url::form_urlencoded::parse(query.as_bytes())
+        .filter_map(|(key, value)| (key == name).then_some(value.into_owned()))
         .collect()
-}
-
-fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        let hex = |b: u8| (b as char).to_digit(16);
-        if bytes[index] == b'%'
-            && let (Some(high), Some(low)) =
-                (bytes.get(index + 1).and_then(|b| hex(*b)), bytes.get(index + 2).and_then(|b| hex(*b)))
-        {
-            out.push((high * 16 + low) as u8);
-            index += 3;
-            continue;
-        }
-        out.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn parse_key(key: &str) -> Result<Totp, TotpError> {
@@ -234,5 +209,12 @@ mod tests {
             totp_at("otpauth://totp/x?secret=GE&period=0", 0.0).unwrap_err().0,
             "authenticator period must be a whole number of seconds up to a day"
         );
+    }
+
+    #[test]
+    fn query_values_match_form_urlencoded_contract() {
+        assert_eq!(query_values("secret=A+B&secret=A%2BB", "secret"), ["A B", "A+B"]);
+        assert_eq!(query_values("secret=%ZZ&secret=%FF", "secret"), ["%ZZ", "�"]);
+        assert_eq!(query_values("secret=A=B&other=x", "secret"), ["A=B"]);
     }
 }

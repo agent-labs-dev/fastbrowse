@@ -4672,10 +4672,10 @@
       "what": "query_values and percent_decode (totp.rs:87-116) hand-roll application/x-www-form-urlencoded parsing; url::form_urlencoded::parse does it, and the workspace already depends on url 2.5.8 (fastbrowse-agent uses form_urlencoded::parse at agent/helpers.rs:294)",
       "why": "form_urlencoded also maps + to space, percent-decodes, keeps malformed escapes literally and decodes UTF-8 lossily, matching parse_qs(keep_blank_values=True) here; check that a pair with no `=` still yields an empty value (it does in form_urlencoded). Needs `url` added to fastbrowse-cli from the workspace",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "Not edited: Adding url to fastbrowse-cli changes the fastbrowse-cli entry in Cargo.lock, which is on the hot list.. Verifier: `url::form_urlencoded::parse` is already used in `fastbrowse-agent` and matches this parser's relevant behavior, including `+` decoding, malformed escapes, lossy UTF-8, and missing values. The CLI crate needs the existing workspace dependency declare",
+      "status": "fixed",
+      "reason": "Replaced query_values and hand-written percent_decode with url::form_urlencoded::parse. All production names are fixed nonempty TOTP parameters; decoding preserves plus, malformed escapes, lossy UTF-8, duplicate order, blank values and embedded equals. Existing strict key validation remains. Root TOTP tests and strict Clippy pass.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: whether a dependency matches the semantics byte for byte needs judgment"
     },
     {
