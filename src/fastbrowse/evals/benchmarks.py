@@ -49,10 +49,6 @@ class PublicModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-DNF = "dnf"
-"""The status of an attempt stopped at the owner's 10 minute limit on one attempt: a failure, scored as one."""
-
-
 class Row(PublicModel):
     """One graded slot. `seconds` is measured as `timing_basis` says; a row without one was measured under an older
     clock, so it is compared with nothing that has one (`Group.one_clock`)."""
@@ -93,11 +89,9 @@ class Row(PublicModel):
 
     @model_validator(mode="after")
     def completion(self) -> Self:
-        if self.status == DNF and (self.completed or self.score):
-            raise ValueError("A did-not-finish attempt is a failure")
         # fastbrowse-pool is fastbrowse itself on another browser, so its completion is its own run status too.
         if self.arm in FASTBROWSE_ARMS:
-            finished = self.status != DNF and Status(self.status) is Status.COMPLETE
+            finished = Status(self.status) is Status.COMPLETE
             if self.completed != finished:
                 raise ValueError("Fastbrowse completion must agree with its run status")
             if self.dollars is None:

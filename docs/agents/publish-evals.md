@@ -5,10 +5,9 @@ identity, physical ledgers and private Langfuse read-back before producing the c
 The file contains sanitized per-run grades, completion, time, cost, LLM and Jev call counts and model
 throughput. Official rubric scores retain their source meaning.
 
-Every attempt of every agent stops at 10 minutes, with its browser. That attempt is recorded as DNF (status `dnf`), a
-failure inside the score, not ungraded and not retried. Parallax records the limit in each run and manifest, and
-publication refuses a run under any other limit. The retry path for a blocked site or an interrupted run is separate;
-the limit applies to each attempt.
+No attempt of any agent has a time, step or spend limit: it runs until the agent ends it or a provider does. Parallax
+records the absence of limits in each run and manifest, and publication refuses a run that records any limit. A limit
+a provider imposes and no request can lift, such as Browser Use's 4 hour session maximum, is stated with the figures.
 
 ## What may be published
 

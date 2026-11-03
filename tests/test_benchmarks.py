@@ -1371,16 +1371,6 @@ def test_a_competitor_reference_holds_every_row_it_names(candidate):
         benchmarks.CompetitorReference.model_validate({**body, "arms": []})
 
 
-def test_a_did_not_finish_row_is_a_failure(candidate):
-    data = _head_to_head(candidate, ("fastbrowse", "jev-ultrafast"))
-    row = next(r for r in data["groups"][0]["rows"] if r["arm"] == "jev-ultrafast")
-    row.update(status="dnf", completed=False, score=0.0)
-    assert Candidate.model_validate(data)
-    row.update(completed=True, score=1.0)
-    with pytest.raises(ValidationError):
-        Candidate.model_validate(data)
-
-
 def test_a_group_never_mixes_timing_bases(candidate):
     """One rule for every arm: rows on two clocks are refused, whichever arm or reference they came from."""
     data = copy.deepcopy(candidate)

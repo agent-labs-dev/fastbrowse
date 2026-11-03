@@ -18,7 +18,7 @@ upstream suites below and the Codex with Cua Driver arm are diagnostics, not com
 | BU Bench | fastbrowse, with Browser Use's published figures as a separate reference | Official weighted rubric score |
 | Online-Mind2Web | fastbrowse, with published figures as a separate reference | Official full-task success |
 
-An attempt stops at 10 minutes and counts as DNF, a failure. An official benchmark's partial
+No attempt has a time, step or spend limit. An official benchmark's partial
 rubric score is not a solved-task percentage. A reported comparison needs matching task revision, scope,
 judge and browser protocol; missing reference configuration is disclosed rather than assumed equivalent.
 
