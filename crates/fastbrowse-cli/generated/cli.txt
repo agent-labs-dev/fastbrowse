@@ -2,7 +2,7 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--cloud | --local] [--headed] [--profile PROFILE]
                   [--cloud-profile ID] [--cdp-url URL] [--cdp-port PORT]
                   [--attach] [--target-match PATTERN] [--foreground]
-                  [--proxy-country CC] [--authorize]
+                  [--proxy-country CC] [--viewport WIDTHxHEIGHT] [--authorize]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
                   [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
                   [--downloads DOWNLOADS] [--json] [--record FILE] [--fetch]
@@ -43,6 +43,10 @@ options:
                         in the background
   --proxy-country CC    country the cloud browser browses from, as Browser
                         Use's two-letter code, e.g. uk (default: us)
+  --viewport WIDTHxHEIGHT
+                        CSS viewport for owned local Chrome, or the screen
+                        size requested from cloud Chrome; this does not
+                        emulate mobile, touch, device scale, or user agent
   --authorize           allow irreversible actions without confirmation
   --secret NAME=ENV_VAR[@ORIGIN]
                         secret from an environment variable, scoped to ORIGIN

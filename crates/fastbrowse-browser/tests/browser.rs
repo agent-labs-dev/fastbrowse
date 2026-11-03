@@ -500,6 +500,32 @@ async fn test_a_click_that_opens_a_tab_continues_there() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_viewport_is_applied_to_popup_tabs() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    let Some(h) = common::harness_on(
+        connection,
+        Config::default(),
+        SessionOptions { viewport: Some((640, 480)), ..Default::default() },
+    )
+    .await
+    else {
+        return;
+    };
+    h.goto("/").await;
+    let obs = h.observe().await;
+    let result = act(&h.page, click(find(&obs, "Open popup")), &obs).await;
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    let s = &h.session;
+    wait_until(move || async move { s.tabs().iter().any(|t| t.url.contains("popup.html")) }).await;
+    assert_eq!(
+        eval_value(&h.session, &h.session.active_session_id().unwrap(), "innerWidth + 'x' + innerHeight").await,
+        json!("640x480")
+    );
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_new_tab_slow_to_set_up_is_still_followed() {
     let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };

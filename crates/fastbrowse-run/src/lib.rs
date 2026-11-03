@@ -187,6 +187,9 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
         pairs.iter().filter(|(_, on)| *on).map(|(name, _)| *name).collect()
     };
     let chrome = task.chrome.clone().unwrap_or_default();
+    if task.viewport.is_some_and(|(width, height)| width == 0 || height == 0) {
+        return refuse("viewport width and height must be greater than zero".into());
+    }
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
     if task.fetch && task.browser {
         return refuse("fetch never starts a browser and browser always does, so pass one of them".into());
@@ -205,8 +208,8 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("foreground", task.foreground),
             ("proxy_country", task.proxy_country.is_some()),
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
-            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
             ("viewport", task.viewport.is_some()),
+            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
             ("record", task.record.is_some()),
             ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
@@ -227,6 +230,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("cloud_profile", task.cloud_profile.is_some()),
             ("proxy_country", task.proxy_country.is_some()),
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
+            ("viewport", task.viewport.is_some()),
         ]);
         if !shaping.is_empty() {
             return refuse(format!(
@@ -672,6 +676,9 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
 /// Open `start`, pursue `task`, and return what the run could prove.
 pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
     let Checked { schema, origins } = checked(&task)?;
+    if host.open_browser.is_some() && task.viewport.is_some() {
+        return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
+    }
     if task.fetch && host.browser_api_key.is_some() {
         return Err(RunError::Invalid("fetch starts no browser, so it cannot be combined with browser_api_key".into()));
     }
@@ -768,6 +775,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
                 refuse_cookie_banners: config.refuse_cookie_banners,
                 on_frame: host.on_frame.clone(),
                 check_access: host.check_access.clone(),
+                viewport: matches!(owned.as_ref(), Some(Owned::Local(_))).then_some(task.viewport).flatten(),
             },
         );
         session = Some(opened.clone());

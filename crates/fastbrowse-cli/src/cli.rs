@@ -124,6 +124,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::value("--target-match"),
             Opt::flag("--foreground"),
             Opt::value("--proxy-country"),
+            Opt::value("--viewport"),
             Opt::flag("--authorize"),
             Opt::append("--secret"),
             Opt::value("--bitwarden"),
@@ -159,6 +160,7 @@ pub struct Args {
     pub target_match: Option<String>,
     pub foreground: bool,
     pub proxy_country: Option<String>,
+    pub viewport: Option<(u32, u32)>,
     pub authorize: bool,
     pub secret: Vec<(String, String, Option<String>)>,
     pub bitwarden: Option<String>,
@@ -197,6 +199,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         "--cdp-port" | "--max-steps" => int_value(value),
         "--max-dollars" => float_value(value),
         "--proxy-country" => fastbrowse_run::country_code(value).map(drop),
+        "--viewport" => viewport_value(value),
         "--secret" => options::scoped_secret(value).map(drop),
         _ => Ok(()),
     })?;
@@ -217,6 +220,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         target_match: text("--target-match"),
         foreground: parsed.flag("--foreground"),
         proxy_country: parsed.value("--proxy-country").and_then(|value| fastbrowse_run::country_code(value).ok()),
+        viewport: parsed.value("--viewport").and_then(|value| parse_viewport(value).ok()),
         authorize: parsed.flag("--authorize"),
         secret: parsed.all("--secret").iter().filter_map(|value| options::scoped_secret(value).ok()).collect(),
         bitwarden: text("--bitwarden"),
@@ -230,6 +234,42 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
+}
+
+fn viewport_value(value: &str) -> Result<(), String> {
+    parse_viewport(value).map(|_| ()).map_err(|error| error.to_string())
+}
+
+fn parse_viewport(value: &str) -> Result<(u32, u32), &'static str> {
+    let Some((width, height)) = value.split_once('x') else { return Err("expected WIDTHxHEIGHT") };
+    let width = width.parse().map_err(|_| "expected WIDTHxHEIGHT")?;
+    let height = height.parse().map_err(|_| "expected WIDTHxHEIGHT")?;
+    if width == 0 || height == 0 {
+        return Err("expected WIDTHxHEIGHT greater than zero");
+    }
+    Ok((width, height))
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod viewport_tests {
+    use super::*;
+
+    fn args(value: &str) -> Vec<String> {
+        vec!["read".into(), "--local".into(), "--viewport".into(), value.into()]
+    }
+
+    #[test]
+    fn viewport_flag_parses_typed_dimensions() {
+        assert_eq!(parse(&args("640x480"), &Build::default()).unwrap().viewport, Some((640, 480)));
+    }
+
+    #[test]
+    fn viewport_flag_rejects_malformed_and_zero_dimensions() {
+        for value in ["640", "0x480", "640x0", "640by480"] {
+            assert!(parse(&args(value), &Build::default()).is_err(), "{value}");
+        }
+    }
 }
 
 /// Values read now, so a missing one fails before a browser is opened.
@@ -372,6 +412,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         attach: args.attach,
         target_match: args.target_match.clone(),
         foreground: args.foreground,
+        viewport: args.viewport,
         proxy_country: args.proxy_country.clone(),
         fetch: args.fetch,
         browser: args.browser,

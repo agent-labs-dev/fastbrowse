@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Covered actions are offered again after a performed action changes the page. Focus changes during a refused click no longer count as that click working, and stale actions remain available on the next page state. Recovery states whether the browser performed an action without claiming that the last action changed nothing.
 
+- **Local runs can set their CSS viewport.** `--viewport WIDTHxHEIGHT` applies reversible desktop viewport emulation before the first observation on an owned local Chrome; handed browsers reject it and cloud runs keep their existing screen-size behaviour.
+
 - A focus change is no longer reported as added records. Changes to text or controls are stated as observations after a click attempt, leaving Jev to judge whether a list is complete.
 
 - Answer composition stops when its claims no longer pack into fewer requests or fewer bytes. Supported claims keep their sources, and a normal finish reports `unverified` when composition stops short. Claims that keep shrinking can continue until they fit one request.

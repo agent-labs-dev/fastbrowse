@@ -66,6 +66,7 @@ pub async fn upload(
         max_download_bytes: shared.max_download_bytes,
         new_document_scripts: vec![],
         on_frame: None,
+        viewport: None,
         client: Mutex::new(shared.client.lock().unwrap().clone()),
         state: Mutex::new(state),
         dialog_opened: watch::channel(0).0,

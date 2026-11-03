@@ -162,11 +162,18 @@ pub struct SessionOptions {
     pub refuse_cookie_banners: bool,
     pub on_frame: Option<FrameHandler>,
     pub check_access: Option<CheckAccess>,
+    pub viewport: Option<(u32, u32)>,
 }
 
 impl Default for SessionOptions {
     fn default() -> Self {
-        Self { max_download_bytes: MAX_DOWNLOAD_BYTES, refuse_cookie_banners: true, on_frame: None, check_access: None }
+        Self {
+            max_download_bytes: MAX_DOWNLOAD_BYTES,
+            refuse_cookie_banners: true,
+            on_frame: None,
+            check_access: None,
+            viewport: None,
+        }
     }
 }
 
@@ -310,6 +317,7 @@ pub(crate) struct Shared {
     pub(crate) max_download_bytes: usize,
     pub(crate) new_document_scripts: Vec<String>,
     pub(crate) on_frame: Option<FrameHandler>,
+    pub(crate) viewport: Option<(u32, u32)>,
     pub(crate) client: Mutex<Option<Cdp>>,
     pub(crate) state: Mutex<State>,
     pub(crate) dialog_opened: watch::Sender<u64>,
@@ -367,6 +375,7 @@ impl BrowserSession {
             max_download_bytes: options.max_download_bytes,
             new_document_scripts,
             on_frame,
+            viewport: options.viewport,
             client: Mutex::new(None),
             state: Mutex::default(),
             dialog_opened: watch::channel(0).0,
@@ -901,7 +910,7 @@ impl BrowserSession {
         let target_id = str_of(&target["targetId"]);
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id))]).await?;
+        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
         self.run_document_scripts(&session_id).await;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
@@ -1004,7 +1013,7 @@ impl BrowserSession {
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
         // Foregrounding the tab and enabling its session are independent, and both finish before the tab is used.
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id))]).await?;
+        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
             session_id,
@@ -1016,7 +1025,7 @@ impl BrowserSession {
         Ok(())
     }
 
-    pub(crate) async fn prepare_session(&self, session_id: &str) -> Result<(), BrowserError> {
+    pub(crate) async fn prepare_session(&self, session_id: &str, top_level: bool) -> Result<(), BrowserError> {
         self.check_access().await?;
         let scoped = self.0.grant.is_some();
         let mut patterns = vec![download_pattern()];
@@ -1050,6 +1059,17 @@ impl BrowserSession {
         commands.push(Box::pin(async move {
             self.send("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), s).await.map(drop)
         }));
+        if top_level && let Some((width, height)) = self.0.viewport {
+            commands.push(Box::pin(async move {
+                self.send(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({"width": width, "height": height, "deviceScaleFactor": 0, "mobile": false}),
+                    s,
+                )
+                .await
+                .map(drop)
+            }));
+        }
         if scoped {
             commands.push(Box::pin(self.bypass_service_workers(session_id, true)));
         }
@@ -1418,7 +1438,7 @@ impl Shared {
                 state.frame_parents.insert(child.clone(), parent.to_owned());
                 let session = self.session();
                 self.spawn(&mut state, async move {
-                    let _ = session.prepare_session(&child).await;
+                    let _ = session.prepare_session(&child, false).await;
                 });
             }
             Some(_) if info["type"] == "page" && paused => self.on_new_page(&mut state, info, &child),
@@ -1592,8 +1612,11 @@ pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id
                 str_of(&attach["sessionId"])
             }
         };
-        together(vec![Box::pin(session_handle.show(target_id)), Box::pin(session_handle.prepare_session(&session_id))])
-            .await?;
+        together(vec![
+            Box::pin(session_handle.show(target_id)),
+            Box::pin(session_handle.prepare_session(&session_id, true)),
+        ])
+        .await?;
         if shared.connection.attach {
             session_handle.run_document_scripts(&session_id).await;
         }

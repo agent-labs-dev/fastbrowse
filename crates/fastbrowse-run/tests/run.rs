@@ -1,6 +1,7 @@
-//! run_task decisions that need no real browser.
+//! run_task decisions, including one owned-local browser initialization check.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::Settings;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
@@ -18,6 +19,23 @@ use tokio::net::TcpListener;
 
 /// Clients no test here gets far enough to need.
 struct Silent;
+
+struct RecordingDecision(Arc<Mutex<Vec<Value>>>);
+
+impl DecisionClient for RecordingDecision {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.0.lock().unwrap().push(state.clone());
+        Box::pin(async { Err(DecisionError::Failed("stop after recording observation".into())) })
+    }
+}
 
 impl DecisionClient for Silent {
     fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
@@ -60,6 +78,36 @@ fn task(change: impl FnOnce(&mut RunTask, &mut Host)) -> (RunTask, Host) {
 
 async fn run((task, host): (RunTask, Host)) -> Result<fastbrowse_core::models::RunResult, RunError> {
     run_task(task, host).await
+}
+
+#[tokio::test]
+async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    let start = "data:text/html,<body><script>document.body.textContent=innerWidth+'x'+innerHeight</script>";
+    for (width, height) in [(640, 480), (1024, 700)] {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let host = Host {
+            jev: Some(Arc::new(RecordingDecision(seen.clone()))),
+            llm: Some(Arc::new(Silent)),
+            settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+            ..Host::default()
+        };
+        let task = RunTask {
+            task: "read the page".into(),
+            start: Some(start.into()),
+            local: true,
+            browser: true,
+            viewport: Some((width, height)),
+            ..RunTask::default()
+        };
+        let result = run_task(task, host).await.expect("run returns a result");
+        assert_eq!(result.status, Status::Error);
+        let states = seen.lock().unwrap();
+        let text = states.iter().find_map(|state| state.pointer("/page/text").and_then(Value::as_str));
+        assert_eq!(text, Some(format!("{width}x{height}").as_str()), "states: {states:?}");
+    }
 }
 
 fn answering(status: u16) -> Http {
@@ -189,6 +237,32 @@ fn only_a_named_local_or_handed_browser_leaves_the_cloud() {
     assert!(!on_cloud(&RunTask { fetch: true, ..RunTask::default() }, &chrome));
     let headed = fastbrowse_core::models::LocalChrome { headed: true, ..chrome };
     assert!(!on_cloud(&RunTask::default(), &headed));
+}
+
+#[test]
+fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
+    let local = RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() };
+    assert!(fastbrowse_run::check(&local).is_ok());
+    let handed = RunTask { cdp_port: Some(9222), viewport: Some((640, 480)), ..RunTask::default() };
+    let error = fastbrowse_run::check(&handed).unwrap_err().to_string();
+    assert!(error.contains("viewport"), "{error}");
+    let error =
+        fastbrowse_run::check(&RunTask { viewport: Some((0, 480)), ..RunTask::default() }).unwrap_err().to_string();
+    assert!(error.contains("greater than zero"), "{error}");
+}
+
+#[tokio::test]
+async fn a_viewport_rejects_open_browser_before_invoking_the_callback() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = calls.clone();
+    let (_, mut host) = task(|o, _| o.viewport = Some((640, 480)));
+    host.open_browser = Some(Arc::new(move || {
+        callback_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err("callback must not run".to_string()) })
+    }));
+    let error = run_task(RunTask { viewport: Some((640, 480)), ..RunTask::default() }, host).await.unwrap_err();
+    assert!(matches!(error, RunError::Invalid(message) if message.contains("viewport")));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

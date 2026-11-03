@@ -22,6 +22,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
 | `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
 | `--cdp-url URL`, `--cdp-port PORT` | drive a browser already running, at a `ws://` URL or on `127.0.0.1:PORT` |
+| `--viewport WIDTHxHEIGHT` | set the CSS viewport for owned local Chrome, or the screen size requested from cloud Chrome; does not emulate mobile, touch, device scale or user agent |
 | `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab |
 | `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--foreground` | bring the run's tab to the front instead of working behind the current one |

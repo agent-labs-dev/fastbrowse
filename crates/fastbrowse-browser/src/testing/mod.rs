@@ -91,7 +91,7 @@ pub async fn open_owned_tab(session: &BrowserSession, url: &str) -> Result<(), B
 }
 
 pub async fn prepare_session(session: &BrowserSession, session_id: &str) -> Result<(), BrowserError> {
-    session.prepare_session(session_id).await
+    session.prepare_session(session_id, true).await
 }
 
 pub fn has_pending_frame(session: &BrowserSession) -> bool {

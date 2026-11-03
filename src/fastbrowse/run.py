@@ -126,7 +126,9 @@ async def run_task(
     `FASTBROWSE_PROFILE`; `LocalChrome()` is headless with a throwaway profile.
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
-    and `viewport` shape a cloud browser this run starts: `viewport` is its real screen size. `cloud_extensions`
+    selects the cloud browser's egress country. `viewport` sets the CSS viewport on an owned local
+    browser before its first observation, or shapes a cloud browser this run starts; it does not emulate mobile,
+    touch, device scale or user agent. `cloud_extensions`
     lists up to three distinct extension IDs (UUIDs of ready extensions on that account) to load into the cloud
     browser; it is an error with a local or attached browser rather than ignored. `cloud_timeout_minutes` is how
     long that browser may live (15 by default; the service allows up to 240), so a run that needs longer asks for it
