@@ -5,11 +5,11 @@ use std::sync::Arc;
 use fastbrowse_agent::batches::evaluate_batches;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_clients::system_one::{SystemOneClient, TYPESAFE_URL};
-use fastbrowse_clients::validation::{Lines, jev_spend};
+use fastbrowse_clients::validation::{Lines, jev_purpose, jev_spend};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{DecisionClient, JEV_MODEL, NoulQuestion, Question};
-use fastbrowse_core::models::{CostBasis, Limits};
+use fastbrowse_core::models::{CostBasis, JevPurpose, Limits};
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -45,9 +45,18 @@ async fn an_exhausted_split_keeps_its_answered_receipt_once_for_each_caller() {
         let questions = questions();
         jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
             if batched {
-                evaluate_batches(&client, &page, &questions, &TokenBudget::default(), Some(&ledger), None, true)
-                    .await
-                    .unwrap();
+                evaluate_batches(
+                    JevPurpose::Verify,
+                    &client,
+                    &page,
+                    &questions,
+                    &TokenBudget::default(),
+                    Some(&ledger),
+                    None,
+                    true,
+                )
+                .await
+                .unwrap();
             } else {
                 assert!(client.evaluate(&page, &questions).await.is_err());
             }
@@ -90,7 +99,7 @@ async fn cancelling_a_split_batch_keeps_answered_and_inflight_receipts_once() {
     let tokens = TokenBudget::default();
     tokio::select! {
         _ = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()),
-            evaluate_batches(&client, &page, &questions, &tokens, Some(&ledger), None, true)) => panic!("cancelled"),
+            evaluate_batches(JevPurpose::Verify, &client, &page, &questions, &tokens, Some(&ledger), None, true)) => panic!("cancelled"),
         _ = sent.notified() => {}
     }
     let paid = ledger.state().lines.clone();
@@ -128,10 +137,20 @@ async fn failover_receipts_match_direct_and_batched_callers() {
             let questions = questions();
             jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
                 if batched {
-                    evaluate_batches(&client, &page, &questions, &TokenBudget::default(), Some(&ledger), None, true)
-                        .await
-                        .unwrap();
-                } else if let Ok(evaluation) = client.evaluate(&page, &questions).await {
+                    evaluate_batches(
+                        JevPurpose::Verify,
+                        &client,
+                        &page,
+                        &questions,
+                        &TokenBudget::default(),
+                        Some(&ledger),
+                        None,
+                        true,
+                    )
+                    .await
+                    .unwrap();
+                } else if let Ok(evaluation) = jev_purpose(JevPurpose::Verify, client.evaluate(&page, &questions)).await
+                {
                     ledger.record([evaluation.cost]).unwrap();
                 }
             })
@@ -184,9 +203,18 @@ impl DecisionClient for CustomPartial {
 #[tokio::test]
 async fn a_custom_clients_distinct_equal_cost_receipts_are_both_retained() {
     let ledger = Ledger::new(Limits::default());
-    evaluate_batches(&CustomPartial, &json!("page"), &questions(), &TokenBudget::default(), Some(&ledger), None, true)
-        .await
-        .unwrap();
+    evaluate_batches(
+        JevPurpose::Verify,
+        &CustomPartial,
+        &json!("page"),
+        &questions(),
+        &TokenBudget::default(),
+        Some(&ledger),
+        None,
+        true,
+    )
+    .await
+    .unwrap();
     let paid = ledger.state().lines.clone();
     assert_eq!(paid.len(), 2);
     assert_eq!(paid[0], paid[1]);
@@ -198,11 +226,19 @@ async fn partial_receipts_are_returned_without_a_run_ledger() {
     let clients: [(Box<dyn DecisionClient>, usize, f64); 2] =
         [(Box::new(CustomPartial), 2, 0.02), (Box::new(partial()), 1, 0.01)];
     for (client, count, dollars) in clients {
-        let answered =
-            evaluate_batches(&*client, &json!("page"), &questions(), &TokenBudget::default(), None, None, true)
-                .await
-                .unwrap()
-                .unwrap();
+        let answered = evaluate_batches(
+            JevPurpose::Verify,
+            &*client,
+            &json!("page"),
+            &questions(),
+            &TokenBudget::default(),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(answered.cost.len(), count);
         assert_eq!(answered.cost.iter().map(|line| line.dollars.unwrap()).sum::<f64>(), dollars);
     }

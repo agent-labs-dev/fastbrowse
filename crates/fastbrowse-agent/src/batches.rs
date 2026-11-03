@@ -137,7 +137,9 @@ pub async fn evaluate_batches(
             let evaluation = match jev_purpose(
                 purpose,
                 jev_spend(Lines::Paid(receipt.clone()), None, jev.evaluate(state, questions)),
-            ).await {
+            )
+            .await
+            {
                 Ok(evaluation) => evaluation,
                 Err(error) => {
                     // Provider adapters retain partial receipts in the batch's spend scope. Custom clients can
