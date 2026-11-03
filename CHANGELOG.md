@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- PDF parsing runs in a helper process that is killed and reaped on timeout, cancellation or shutdown. A parser crash leaves the agent running. Kept PDFs whose text could not be read now report the reason. Rust embedders register the helper with `fastbrowse::helper::run_if_requested()` first in `main`.
+
 - Each blank navigation gets a loading wait, even when an earlier navigation showed the same empty page fingerprint.
 
 - Step frames no longer make a pending action stale by replacing its observation. They still check fresh page text for secrets and leave download notices for the next decision.

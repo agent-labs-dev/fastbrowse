@@ -195,6 +195,19 @@ that clicked an export it could not hold says the file was not saved instead of 
 kept name is the response's `filename*` (RFC 5987), else the URL's path segment without its query, reduced
 to one safe path segment.
 
+A PDF is kept the same way, inline or downloaded, and its text is read in a helper process: the host program run
+again with `__fastbrowse-helper pdf-text 1` as its arguments, the PDF on stdin and a framed reply on stdout. The
+run kills and reaps it after 10 seconds, when the run is cancelled, and when its runtime shuts down, and a parser
+crash ends only the helper. Only that one process is killed, so each host names a program that is the helper
+itself. The `fastbrowse` binary runs itself. The Python package runs its interpreter's own executable as
+`-I -S fastbrowse/_helper.py`, never a venv's `python.exe`, which on Windows starts the interpreter as a child. It
+does so when Python parsed the process arguments, detected by `sys.argv` differing from `sys.orig_argv`;
+a frozen application or an embedding host that keeps its own arguments registers nothing. The Node addon runs the binary
+selected by `binaryPath`, `FASTBROWSE_BINARY` or its platform package, and a Rust program calls `fastbrowse::helper::run_if_requested()`
+first in `main`. A program that registers no helper still keeps the PDF, and the observation says its text was not
+read (`[Downloaded file: ...] The file was kept, but its text was not read: ...`), naming why: no reader, a read
+past 10 seconds, a file that is no PDF, or a reader that did not start or ended without an answer.
+
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 
 ### Foreground and background

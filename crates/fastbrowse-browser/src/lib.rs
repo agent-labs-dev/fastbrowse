@@ -9,6 +9,7 @@ pub mod cdp;
 #[cfg(feature = "cursor")]
 pub mod cursor;
 pub mod error;
+pub mod helper;
 pub mod page;
 mod pdf;
 #[cfg(feature = "recording")]
@@ -17,6 +18,8 @@ pub mod session;
 #[doc(hidden)]
 pub mod testing;
 pub mod urlsplit;
+
+pub use pdf::PdfUnread;
 
 /// A warning for whoever runs this, on stderr. Never pass an error's message here, only its kind: transport errors
 /// can carry credentials or page text.

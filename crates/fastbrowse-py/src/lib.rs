@@ -6,8 +6,10 @@ mod bridge;
 mod connect;
 mod host;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use fastbrowse_browser::helper::HelperCommand;
 use fastbrowse_cli::embed::{HostCall, HostResolve};
 use fastbrowse_clients::environment::Settings;
 use fastbrowse_clients::http::{Http, Request, Response};
@@ -427,8 +429,46 @@ fn totp_period(key: &str) -> PyResult<u64> {
     fastbrowse_cli::totp::period_of(key).map_err(|error| PyValueError::new_err(error.0))
 }
 
+/// The command that reads PDFs: this interpreter running `fastbrowse/_helper.py`, or None where this process is no
+/// interpreter that can be run again.
+///
+/// A process whose arguments were parsed as Python can be run again as Python. That parsing means `sys.argv`
+/// lacks the program and interpreter options `sys.orig_argv` keeps. An application that embeds the interpreter (a
+/// web server, a Rust or C program) leaves `orig_argv` empty, or equal to `argv` when it hands its own arguments over
+/// unparsed, and running it with Python's arguments would start that application for every PDF. A frozen application
+/// has no interpreter at all.
+///
+/// The program is this process's own executable, not `sys.executable`: a Windows venv's `python.exe` is a launcher
+/// that starts the real interpreter as its child, and killing the launcher would leave that child reading. `-S` keeps
+/// the interpreter's `site` and the `.pth` files it runs out, which the script needs none of, since it loads this
+/// module by path; `-I` keeps out the environment's `PYTHON*` settings, the user's site and the current directory.
+fn pdf_helper(py: Python<'_>) -> PyResult<Option<HelperCommand>> {
+    let sys = py.import("sys")?;
+    if sys.hasattr("frozen")? || !sys.hasattr("argv")? {
+        return Ok(None);
+    }
+    let original = sys.getattr("orig_argv")?;
+    if original.len()? == 0 || original.eq(sys.getattr("argv")?)? {
+        return Ok(None);
+    }
+    let Some(package) = sys.getattr("modules")?.get_item("fastbrowse").ok() else { return Ok(None) };
+    // Every directory the package spans, not the first: another installation can put its own ahead of this one, and
+    // a path, not a str, since a name that is no UTF-8 still names a directory.
+    let path = package.getattr("__path__")?;
+    let directories = path.try_iter()?.flatten().filter_map(|directory| directory.extract::<PathBuf>().ok());
+    let Some(script) = directories.map(|directory| directory.join("_helper.py")).find(|script| script.is_file()) else {
+        return Ok(None);
+    };
+    let Ok(interpreter) = std::env::current_exe() else { return Ok(None) };
+    Ok(Some(HelperCommand::new(interpreter).arg("-I").arg("-S").arg(script)))
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Reading no PDF text is said on each PDF a run meets; failing the import would take every run down with it.
+    if let Ok(Some(command)) = pdf_helper(m.py()) {
+        fastbrowse_browser::helper::register(command);
+    }
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;

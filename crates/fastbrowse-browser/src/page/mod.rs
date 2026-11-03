@@ -31,8 +31,10 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
+use crate::PdfUnread;
 use crate::cdp::secs;
 use crate::error::BrowserError;
+use crate::pdf::PARSE_SECONDS;
 use crate::session::{BrowserSession, CAPTURE_JS, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
 use crate::urlsplit::urlsplit;
 use scripts::py_float;
@@ -605,6 +607,22 @@ impl CdpPage {
                     notices.push_str(&format!(
                         "\n\n[Download not kept: {} from {}] {why}; nothing was saved.",
                         refused.name, refused.url,
+                    ));
+                }
+                for unread in self.session.pending_download_unread() {
+                    let why = match unread.reason {
+                        PdfUnread::NoReader => "this program has no PDF reader set up".to_owned(),
+                        PdfUnread::TimedOut => format!("reading it took longer than {PARSE_SECONDS} seconds"),
+                        PdfUnread::Unparsable => "it could not be parsed as a PDF".to_owned(),
+                        // Not the file's fault, so not said to be: the run should not judge the document by it.
+                        PdfUnread::ReaderFailed => {
+                            "the PDF reader did not start or ended without an answer, which says nothing about the file"
+                                .to_owned()
+                        }
+                    };
+                    notices.push_str(&format!(
+                        "\n\n[Downloaded file: {} from {}] The file was kept, but its text was not read: {why}.",
+                        unread.name, unread.url,
                     ));
                 }
             }

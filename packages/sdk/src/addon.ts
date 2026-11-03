@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 
 import { Callbacks } from './callbacks.ts';
 import { abortable } from './abort.ts';
-import { platformPackage } from './binary.ts';
+import { platformPackage, resolveBinary } from './binary.ts';
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
 import { ErrorCode, type RunParams, type RunResult, type Error as WireError } from './protocol.ts';
 import type { RunOptions } from './run.ts';
@@ -36,6 +36,14 @@ export interface Addon {
   RunCancel: new () => AddonCancel;
   version(): string;
   protocolVersion(): number;
+  /**
+   * Read PDFs by running this fastbrowse binary as a helper process. False when a helper was already set.
+   *
+   * Optional because an addon built before it still speaks protocol 2 and must still load with its original PDF
+   * handling. Make it required when the protocol version next changes, since the check in `Fastbrowse.start` then
+   * refuses every addon that lacks it before `readPdfsWith` is called.
+   */
+  setPdfHelper?(path: string): boolean;
 }
 
 /**
@@ -51,6 +59,23 @@ export function loadAddon(addonPath: string | undefined, env: NodeJS.ProcessEnv)
       cause: error,
     });
   }
+}
+
+/**
+ * Have `addon` read PDFs with the fastbrowse binary `env` resolves to, once its protocol is known to match. A PDF is
+ * read in a process the run can kill, and Node is no program the addon can run again for that: the binary beside it
+ * is. Without a binary, the current addon still runs and says of each PDF that its text went unread. An older
+ * addon without this method retains its original PDF handling.
+ */
+export function readPdfsWith(addon: Addon, env: NodeJS.ProcessEnv, binaryPath?: string): void {
+  if (typeof addon.setPdfHelper !== 'function') return;
+  let binary: string;
+  try {
+    binary = resolveBinary(binaryPath, env);
+  } catch {
+    return;
+  }
+  addon.setPdfHelper(binary);
 }
 
 /** The JSON a host function answers with. What a callback threw reaches the core as its message alone. */

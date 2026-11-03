@@ -6,6 +6,7 @@ The runs need `fastbrowse._native`, which `uv sync` builds.
 import asyncio
 import base64
 import gzip
+import importlib
 import inspect
 import json
 import os
@@ -572,3 +573,16 @@ async def test_settings_passed_in_are_read_instead_of_the_environment(monkeypatc
             )
     assert "Vercel AI Gateway" in (providers(events) or "")
     assert seen and all("from-the-environment" not in header for header in seen)
+
+
+def test_the_helper_script_reads_a_pdf_on_the_base_interpreter_without_site() -> None:
+    """Run as the package registers it: on the interpreter itself, not a venv's link, without the venv's packages."""
+    core: Any = importlib.import_module("fastbrowse._native")
+    helper = [os.path.realpath(sys.executable), "-I", "-S", str(Path(core.__file__).with_name("_helper.py"))]
+    pdf = Path(__file__).parents[1] / "crates/fastbrowse-browser/tests/fixtures/wind.pdf"
+    marker = ["__fastbrowse-helper", "pdf-text", "1"]
+    done = subprocess.run([*helper, *marker], input=pdf.read_bytes(), capture_output=True, timeout=60, check=True)
+    magic = b"\0fastbrowse-helper-reply\0"
+    reply = done.stdout[done.stdout.index(magic) + len(magic) :]
+    assert reply[0] == 0
+    assert reply[9 : 9 + int.from_bytes(reply[1:9], "little")].decode().strip() == "Fairbanks Wind"

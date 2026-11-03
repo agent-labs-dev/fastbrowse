@@ -9,6 +9,26 @@ use misc_support::{content_capture, path, set_body, text_of, texts};
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
+/// This binary registers no PDF helper, as a Rust program that never calls `run_if_requested` does not. The PDF is
+/// still kept, and the run is told its text went unread instead of seeing a file that seems to hold nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_pdf_with_no_helper_to_read_it_is_kept_and_said_unread() {
+    let Some(h) = harness().await else { return };
+    h.goto("/map.pdf").await;
+    let url = format!("{}/map.pdf", sites().main);
+    let glance = h.page.glance().await.expect("PDF safety reading");
+    assert!(!glance.viewport_text.contains("The file was kept, but its text was not read"));
+    let text = h.observe().await.viewport_text;
+    let notice = format!(
+        "[Downloaded file: map.pdf from {url}] The file was kept, but its text was not read: this program has no PDF \
+         reader set up."
+    );
+    assert!(text.contains(&notice), "{text}");
+    assert!(!text.contains("Fairbanks Wind"), "{text}");
+    assert!(h.sink.artifacts.lock().unwrap().iter().any(|artifact| artifact.name == "map.pdf"));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };

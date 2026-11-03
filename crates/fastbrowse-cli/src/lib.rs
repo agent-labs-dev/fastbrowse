@@ -4,6 +4,8 @@
 //! Each ends in a call to `run_task`, which [`runner::Runner`] stands for. The modules are a library so the tests drive
 //! them in process, over in-memory streams.
 
+pub use fastbrowse_run::helper;
+
 pub mod argparse;
 pub mod bitwarden;
 pub mod cli;

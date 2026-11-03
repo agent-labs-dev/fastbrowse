@@ -11,6 +11,8 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), fastbrowse::RunError> {
+//!     // A PDF's text is read in this program run again as a helper process: see [`helper`].
+//!     fastbrowse::helper::run_if_requested();
 //!     let task = RunTask {
 //!         task: "What is the top story's title?".into(),
 //!         start: Some("https://news.ycombinator.com/".into()),
@@ -31,4 +33,4 @@ pub use fastbrowse_core::models::{
     Artifact, Attachment, Authorization, BrowserEvent, Citation, CostBreakdown, CostLine, Event, Evidence, Limits,
     LocalChrome, RunResult, SecretRef, SecretResolver, Status, StepEvent, StepResult, Wall,
 };
-pub use fastbrowse_run::{ConnectCdp, Connected, Host, RunError, RunTask, connect_cdp, run_task};
+pub use fastbrowse_run::{ConnectCdp, Connected, Host, RunError, RunTask, connect_cdp, helper, run_task};

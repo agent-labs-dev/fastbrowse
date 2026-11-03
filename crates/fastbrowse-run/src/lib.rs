@@ -77,6 +77,7 @@ impl From<ConfigurationError> for RunError {
 }
 
 pub use fastbrowse_browser::adapters::local_chrome::which;
+pub use fastbrowse_browser::helper;
 pub use fastbrowse_core::protocol::{CancellationReceipt, RunTask};
 
 /// What a run is given besides its arguments: the caller's own objects, which no wire carries.

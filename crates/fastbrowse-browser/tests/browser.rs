@@ -1609,10 +1609,21 @@ async fn test_a_page_slower_than_one_try_is_waited_for() {
     h.close().await;
 }
 
+/// Not a test: the PDF helper, when this binary is run as one.
+#[test]
+fn pdf_helper() {
+    testing::serve_if_helper();
+}
+
+fn read_pdfs() {
+    fastbrowse_browser::helper::register(testing::test_binary_helper("pdf_helper"));
+}
+
 /// Chrome's PDF viewer keeps a PDF's text out of the DOM, so the tab read as an empty page and a run never saw a map
 /// whose every label is text in the file. A PDF tab is kept as a downloaded file is, and its text reaches the run so.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_pdf_tab_shows_and_captures_the_text_the_pdf_holds() {
+    read_pdfs();
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.goto("/map.pdf").await;
@@ -1627,6 +1638,7 @@ async fn test_a_pdf_tab_shows_and_captures_the_text_the_pdf_holds() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_pdf_popup_is_readable_from_its_first_response() {
+    read_pdfs();
     let _turn = turn().await;
     let Some(h) = loaded().await else { return };
     eval_active(

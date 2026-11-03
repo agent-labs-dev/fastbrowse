@@ -50,6 +50,10 @@ stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or
 a second `run` while one is active rejects with the busy error, so start more instances to run side by side.
 `close()` shuts the process down and waits for it, and the process also exits when yours does.
 
+`Fastbrowse.start({ inProcess: true })` runs on the native addon in your Node process. PDF reading still uses a
+helper binary, selected by `binaryPath`, then `FASTBROWSE_BINARY`, then the installed platform package. Keep the
+addon and helper on matching fastbrowse versions.
+
 `run` rejects when no run took place or none finished: with `RpcError` when the server refuses the request before
 a browser opens (a bad option, a missing key, a busy server), with `AbortError` when `signal` stopped the run, and
 with `ProcessExitedError` when the process is gone. It also rejects with `OutputValidationError` when a run

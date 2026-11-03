@@ -179,6 +179,15 @@ pub(crate) struct TabState {
     pub(crate) opener_id: Option<String>,
 }
 
+/// A PDF the run kept and could not read. Said rather than left out: a PDF that shows no text looks like one that
+/// holds none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadUnread {
+    pub name: String,
+    pub url: String,
+    pub reason: crate::PdfUnread,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadText {
     pub mime: String,
@@ -267,8 +276,12 @@ pub(crate) struct State {
     pub(crate) download_keys: Vec<Option<(String, String)>>,
     /// Downloads not kept, oldest first: evidence the file was offered.
     pub(crate) download_refusals: Vec<DownloadRefused>,
-    /// How many of them an observation has already reported, so each refusal is reported once.
+    /// How many refusals an observation has already reported, so each is reported once.
     pub(crate) download_refusals_shown: usize,
+    /// Kept downloads whose PDF text could not be read.
+    pub(crate) download_unread: Vec<DownloadUnread>,
+    /// How many of `download_unread` an observation has already shown.
+    pub(crate) download_unread_shown: usize,
     /// Pending JS dialog per tab session id; cleared once handled.
     pub(crate) dialogs: HashMap<String, Dialog>,
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
@@ -692,6 +705,15 @@ impl BrowserSession {
         let shown = state.download_refusals_shown.min(state.download_refusals.len());
         let pending = state.download_refusals[shown..].to_vec();
         state.download_refusals_shown = state.download_refusals.len();
+        pending
+    }
+
+    /// PDFs kept and not read that the run has not been shown yet, and now marked as shown.
+    pub fn pending_download_unread(&self) -> Vec<DownloadUnread> {
+        let mut state = self.0.state.lock().unwrap();
+        let shown = state.download_unread_shown.min(state.download_unread.len());
+        let pending = state.download_unread[shown..].to_vec();
+        state.download_unread_shown = state.download_unread.len();
         pending
     }
 
@@ -1754,8 +1776,12 @@ async fn capture_download(
     state.artifacts.push(artifact);
     state.downloads_captured += 1;
     state.download_keys.push(Some((url.to_owned(), crate::page::sha256_bytes(&raw))));
-    if let Some(text) = readable {
-        state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete });
+    match readable {
+        Ok(Some(text)) => {
+            state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete })
+        }
+        Ok(None) => {}
+        Err(reason) => state.download_unread.push(DownloadUnread { name, url: url.to_owned(), reason }),
     }
     Ok(())
 }
@@ -1934,16 +1960,17 @@ fn is_download(mime: &str, disposition: &str) -> bool {
     DOWNLOAD_MIME_TYPES.contains(&response_mime(mime).as_str())
 }
 
-/// The response's text when it is a text file or a PDF the run should be able to read, else None.
-async fn readable_text(mime: &str, raw: &[u8]) -> Option<String> {
+/// The response's text when it is a text file or a PDF the run should be able to read, None for any other file, and
+/// why a PDF went unread.
+async fn readable_text(mime: &str, raw: &[u8]) -> Result<Option<String>, crate::PdfUnread> {
     let kind = response_mime(mime);
     if kind == "application/pdf" {
         return crate::pdf::text(raw.to_vec()).await;
     }
     if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
-        return None;
+        return Ok(None);
     }
-    Some(String::from_utf8_lossy(raw).into_owned())
+    Ok(Some(String::from_utf8_lossy(raw).into_owned()))
 }
 
 pub fn str_of(value: &Value) -> String {
@@ -2139,11 +2166,12 @@ mod tests {
 
     #[tokio::test]
     async fn text_and_pdf_downloads_are_read_whole() {
+        crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
         let raw = vec![b'a'; 100_000];
-        assert_eq!(readable_text("text/csv", &raw).await.unwrap().len(), raw.len());
-        assert_eq!(readable_text("application/zip", b"PK").await, None);
+        assert_eq!(readable_text("text/csv", &raw).await.unwrap().unwrap().len(), raw.len());
+        assert_eq!(readable_text("application/zip", b"PK").await, Ok(None));
         let pdf = readable_text("application/pdf", include_bytes!("../tests/fixtures/wind.pdf")).await;
-        assert_eq!(pdf.as_deref(), Some("Fairbanks Wind"));
+        assert_eq!(pdf, Ok(Some("Fairbanks Wind".to_owned())));
     }
 
     #[test]

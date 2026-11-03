@@ -140,3 +140,19 @@ pub fn back_to(page: &CdpPage) -> Vec<(String, String)> {
 pub fn status_worlds(page: &CdpPage) -> Vec<(String, String)> {
     page.state.lock().unwrap().status_worlds.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
+
+/// The running test binary as a PDF helper: it runs the test `test_name` alone, which serves the request.
+pub fn test_binary_helper(test_name: &str) -> crate::helper::HelperCommand {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    ["--exact", test_name, "--nocapture", "-q"]
+        .into_iter()
+        .fold(crate::helper::HelperCommand::new(exe), crate::helper::HelperCommand::arg)
+}
+
+/// In a test named as [`test_binary_helper`] was given: when this run of the binary is a helper, serve and exit.
+pub fn serve_if_helper() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(at) = args.iter().position(|arg| arg == crate::helper::MARKER) {
+        std::process::exit(crate::helper::serve(&args[at..]).unwrap_or(1));
+    }
+}

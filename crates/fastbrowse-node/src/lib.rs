@@ -178,6 +178,14 @@ pub fn run_task<'env>(
     start(env, Arc::new(Embedded::new(Vec::new())), params_json, host, cancel)
 }
 
+/// Read PDFs with `path`, a fastbrowse binary of this version run as a helper process, which a run kills when its
+/// time is up. Node has no program of its own to run again, so the SDK names the binary its platform package carries.
+/// The first path set stands: false when one already was.
+#[napi]
+pub fn set_pdf_helper(path: String) -> bool {
+    fastbrowse_cli::helper::register(fastbrowse_cli::helper::HelperCommand::new(path))
+}
+
 /// The version of the core and of the protocol its params and replies follow.
 #[napi]
 pub fn version() -> String {

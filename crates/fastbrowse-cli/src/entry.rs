@@ -128,6 +128,10 @@ fn mcp_command(argv: &[String]) -> i32 {
 /// Run the command `program` names with `args`, the arguments after the program, and return its exit code. `build`
 /// is the commit the CLI reports.
 pub fn main(program: &str, args: &[String], build: Build) -> i32 {
+    // Before any runtime, logger or argument parsing: a helper writes nothing but its reply.
+    if let Some(code) = fastbrowse_run::helper::serve(args) {
+        return code;
+    }
     let program = std::path::Path::new(program).file_stem();
     if program.is_some_and(|name| name == "fastbrowse-mcp") {
         mcp_command(args)

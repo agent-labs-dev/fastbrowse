@@ -29,9 +29,15 @@ interface Core {
   RunCancel: new () => RunCancel;
   version(): string;
   protocolVersion(): number;
+  setPdfHelper(path: string): boolean;
 }
 
 const core = createRequire(import.meta.url)('../fastbrowse.node') as Core;
+
+test('the first PDF helper set stands', () => {
+  assert.equal(core.setPdfHelper('/opt/fastbrowse/bin/fastbrowse'), true);
+  assert.equal(core.setPdfHelper('/elsewhere/fastbrowse'), false);
+});
 
 test('a grant entry is normalized to one exact origin', () => {
   assert.equal(core.parseOrigin('https://Example.COM'), 'https://example.com');
