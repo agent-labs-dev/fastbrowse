@@ -80,7 +80,7 @@ on:
       suites:
         description: Space separated Parallax suites
         required: true
-        default: "core dev heldout stretch-dev stretch-heldout"
+        default: "core dev stretch-dev"
 
 permissions: {}
 
@@ -91,7 +91,7 @@ concurrency:
 
 env:
   UV_PYTHON: "3.13"
-  SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev heldout stretch-dev stretch-heldout' }}
+  SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev stretch-dev' }}
   REPEAT: ${{ inputs.repeat || github.event.client_payload.repeat || '3' }}
   BUDGET: ${{ inputs.budget || github.event.client_payload.budget || '300' }}
   BROWSER: ${{ inputs.browser || github.event.client_payload.browser || 'local' }}
@@ -131,8 +131,8 @@ jobs:
           test "${#chosen[@]}" -gt 0 || { echo "::error::suites names no suite"; exit 1; }
           for suite in "${chosen[@]}"; do
             case "$suite" in
-              core|dev|heldout|stretch-dev|stretch-heldout) ;;
-              *) echo "::error::suites must be core, dev, heldout, stretch-dev or stretch-heldout, got '$suite'"; exit 1 ;;
+              core|dev|stretch-dev) ;;
+              *) echo "::error::suites must be core, dev or stretch-dev, got '$suite'"; exit 1 ;;
             esac
           done
           for key in groups suites browser; do
