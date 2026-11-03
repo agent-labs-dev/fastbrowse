@@ -4,7 +4,7 @@
 //! Replies route to callers by id through oneshot channels, so any number of calls are in flight at once. Events
 //! go to handlers synchronously and in socket order, so a handler sees every event before the reply that follows
 //! it on the socket is delivered: state a handler keeps (frames, dialogs, tabs) is current by the time a caller
-//! wakes, as cdp-use's callbacks are.
+//! wakes.
 //!
 //! Dropping a `call` future removes its pending entry, so a late reply is read and discarded. When the socket
 //! closes, every pending call and every later one fails with `CdpError::Closed`.

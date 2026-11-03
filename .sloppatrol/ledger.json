@@ -50,10 +50,10 @@
       "what": "The skill's Gate list omits checks AGENTS.md and CI run: scripts/docs_sync.py, the evidence storage check, and the benchmarks/publication --check-diff checks",
       "why": "AGENTS.md lines 33, 35, 37-38 and ci.yml lines 52, 56, 65, 68 run them; the skill says 'Every command must exit 0' for its own shorter list, so two docs describe the gate and disagree. An audit agent following the skill can pass a gate CI fails.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "Fix landed in 6b470138; the quoted line survives it.",
+      "status": "fixed",
+      "reason": "Fixed in 8af84776: the project skill directs agents to the complete AGENTS.md gate rather than a stale copied list. Current Sloppatrol skill names SDK and language-client checks and retains the required rule gate.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: whether prose matches the code needs a reader"
     },
     {
@@ -162,10 +162,10 @@
       "what": "The contents: write and pull-requests: write grant on the reusable `aur` call is unused (fully dead grant; contents: read suffices)",
       "why": "aur.yml's only job declares `permissions: {contents: read}` and pushes to the AUR over SSH with AUR_SSH_PRIVATE_KEY, never with the GitHub token; nothing in it pushes to GitHub or opens a PR (aur-sync does that with its own token). A called job cannot exceed its own declared permissions, so the write scopes reach nothing. Not string-built, not a registry, no other caller of this job.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The reusable aur.yml job declares contents: read, performs no GitHub repository or PR writes, and authenticates AUR publishing over SSH. The caller's write permissions are therefore unused. The workflow is hot.",
+      "status": "fixed",
+      "reason": "Fixed in ae02737e: reusable aur job grants contents: read. The called AUR job does not need repository write permissions.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: reachability through open branches and published surfaces needs judgment"
     },
     {
@@ -190,10 +190,10 @@
       "what": "The `aur` job comment claims it 'opens the PR that keeps packaging/aur on main at the same version'",
       "why": "The `aur` job only calls aur.yml, whose single `package` job builds, publishes to the AUR and uploads an artifact; it opens no PR. The PR is opened by the separate `aur-sync` job (release.yml lines 403-454) with AUR_SYNC_TOKEN. Verified by reading aur.yml in full.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "aur.yml only builds, publishes to AUR, and uploads an artifact; the PR is opened by the separate aur-sync job in release.yml. The comment is stale. The workflow is hot.",
+      "status": "fixed",
+      "reason": "Fixed in ae02737e: the aur job describes publishing the package and its actual workflow; the removed PR claim is not part of the current contract.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: whether prose matches the code needs a reader"
     },
     {
@@ -1093,10 +1093,10 @@
       "what": "Stale Python-era doc: Flow described as \"Python's `_Stop`, `_Unsure` and the errors the run catches by class\"",
       "why": "Python classes no longer exist; describe the variants.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The doc comment references removed Python `_Stop` and `_Unsure` classes, while the implementation uses Rust `Flow::Stop` and `Flow::Unsure`. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed in ae02737e: Flow describes Rust run-ending states without the removed Python exception names.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "settled:python-port-residue"
     },
     {
@@ -1135,10 +1135,10 @@
       "what": "visited is an IndexMap with unit values used as an ordered set (insert(url, ()), shift_remove, keys()); indexmap::IndexSet is that type.",
       "why": "IndexSet offers insert, shift_remove and ordered iteration with the same semantics; callers at driving.rs:750-752, mod.rs:491 and helpers::visited would drop the `()` values. No behaviour difference.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "`visited` stores only keys, and existing `indexmap::IndexSet` provides ordered insertion, `shift_remove`, and membership semantics; callers can use its corresponding APIs without behavior change. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed in ae02737e: unread visited bookkeeping and its writers were removed together. Current RunState has no visited field; read_pages and read_documents track distinct active evidence behavior.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: whether a dependency matches the semantics byte for byte needs judgment"
     },
     {
@@ -1973,10 +1973,10 @@
       "what": "iso_date re-derives leap years and month lengths, which fastbrowse-core/src/py/datetime.rs already has: days_in_month (line 66), used by DateTime::parse_str (line 196) to validate a YYYY-MM-DD date.",
       "why": "Before switching, preserve two things. iso_date rejects year 0, as date.fromisoformat does, while parse_str does not check the year. parse_str also reads an all-digit string as a timestamp, which cannot happen for a span the Date pattern matched. Exposing a date validator from py::datetime would keep one calendar implementation.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "Not edited: days_in_month is private in crates/fastbrowse-core/src/py/datetime.rs, so reuse needs a file outside this crate.. Verifier: The existing datetime module already owns leap-year and month-length validation, while iso_date duplicates that calendar logic and adds its own year rule. This is hot; reuse requires preserving the span-specific timestamp exclusion and year-zero beha",
+      "status": "fixed",
+      "reason": "Fixed in 21a00702: extracted date validation and datetime parsing share fastbrowse_core::py::datetime::days_in_month. Separate year-zero and timestamp input contracts remain; dedicated tests preserve their distinction.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "lens-only: whether a dependency matches the semantics byte for byte needs judgment"
     },
     {
@@ -3210,10 +3210,10 @@
       "what": "stale: module doc says `send` is `session.py`'s `_BrowserClient.send_raw` (and line 7 'as cdp-use's callbacks are')",
       "why": "The Python core and its cdp-use client are removed; same at cdp.rs:48, 52, 169, 290, 311, 398, 406.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The module documentation still names removed Python `_BrowserClient` and cdp-use callbacks, while this file is now the Rust CDP implementation. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed in 11c8d8a3 and this followup: CDP docs describe event/reply ordering directly. Removed the remaining cdp-use comparison while retaining the reader, writer, pending-call and socket-close contracts.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "settled:python-port-residue"
     },
     {
@@ -3224,10 +3224,10 @@
       "what": "stale: cites `clients/validation.py` as the source of RETRYABLE_STATUS",
       "why": "src/fastbrowse/clients does not exist. The same list is restated in browser_use_cloud.rs:43.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The cited `clients/validation.py` no longer exists; the active Rust list is independently duplicated in `browser_use_cloud.rs`. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed in 11c8d8a3: RETRYABLE_STATUS no longer cites the removed Python validation module; the status list and callers are unchanged.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "settled:python-port-residue"
     },
     {
@@ -3251,10 +3251,10 @@
       "what": "Comment names a demo site ('on The Pi Hut a frame's ... met its deadline twice')",
       "why": "The per-session deadline behaviour is general and needs no site; a site incident is history. State the general case (a third-party frame hanging must not stop the main tab).",
       "confidence": "low",
-      "status": "confirmed",
-      "reason": "The comment records a The Pi Hut incident even though the code implements a general per-session deadline rule; the site-specific history is unnecessary narration. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed in 21a00702: command deadline comments explain the unresponsive-browser behavior without naming the demo or a benchmark observation.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "settled:python-port-residue"
     },
     {
@@ -3599,10 +3599,10 @@
       "what": "stale/history: points at `browser/page.py`, a removed Python module",
       "why": "No src/fastbrowse/browser directory exists; the pointer leads nowhere. Drop the trailing reference",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The referenced browser/page.py path does not exist, and the only remaining references are stale historical pointers in Rust module docs. Removing the trailing reference is behavior-preserving.",
+      "status": "fixed",
+      "reason": "Fixed in 21a00702: page module documentation names the current Rust browser contract without the removed browser/page.py provenance.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "settled:python-port-residue"
     },
     {
@@ -3679,10 +3679,10 @@
       "what": "history: NAVIGATE_ATTEMPTS justified by a count of failures in three named-release evals",
       "why": "Release-numbered eval tallies belong in the changelog; the constraint is that a cloud proxy drops first connections. Suggest: 'A cloud browser's proxy can drop a first connection or leave it loading; four tries with doubling backoff ride that out.'",
       "confidence": "low",
-      "status": "confirmed",
-      "reason": "The comment embeds release-specific evaluation history, including version and run counts, rather than only the enduring proxy behavior; the code supports the latter but not a need to retain those historical figures. This is in the hot file.",
+      "status": "fixed",
+      "reason": "Fixed in 21a00702: navigation retry explanation names transient navigation behavior rather than historical eval failure counts.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "settled:python-port-residue"
     },
     {
@@ -5356,10 +5356,10 @@
       "what": "stale: carried over from src/fastbrowse/config.py; nothing records 'decision packets'",
       "why": "rg for 'decision packet' finds only this line and the Python docstring it was copied from; no code records or recalibrates from such packets. Suggest '//! Tunable policy.' or a line naming what the defaults are actually set from.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The repository search finds the phrase only in this stale module comment and the copied Python docstring; no code records or recalibrates decision packets.",
+      "status": "fixed",
+      "reason": "Fixed in 21a00702: configuration documentation describes its current settings and contains no removed Python module or decision-packet claim.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-03",
       "guard": "settled:python-port-residue"
     },
     {
