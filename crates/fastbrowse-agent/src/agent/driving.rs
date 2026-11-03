@@ -16,7 +16,7 @@ use fastbrowse_core::safety::origin_of;
 use serde_json::{Map, Value, json};
 
 use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
-use super::recovery::{Withheld, leave_out_idle, withheld};
+use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
 use crate::policy::{Decision, HistoryEntry, decide};
@@ -533,6 +533,9 @@ impl Agent {
                 // stated: Google Flights' "One way" was clicked to the step limit while the history said only "changed".
                 let landed = self.observe().await?;
                 let done = effect(observation, &landed, Some(target));
+                if done.changed {
+                    uncover(&mut state.idle);
+                }
                 state.acted_from = None;
                 state.settle_change(&landed);
                 setting = done.set_something;
@@ -580,7 +583,8 @@ impl Agent {
         self.record_step(state, step, false, frame).await?;
         match progressed {
             Some(progressed) => {
-                self.count_progress(state, progressed, observation, withheld(decision), Status::Stuck).await
+                let stalled = Idle { action: withheld(decision), outcome: act.outcome };
+                self.count_progress(state, progressed, observation, stalled, Status::Stuck).await
             }
             None => {
                 state.landing = Some(withheld(decision));
@@ -597,7 +601,7 @@ impl Agent {
         state: &mut RunState,
         progressed: bool,
         observation: &Observation,
-        stalled: Withheld,
+        stalled: Idle,
         gives_up_as: Status,
     ) -> Step {
         if progressed {
@@ -679,7 +683,8 @@ impl Agent {
         }
         if let Some(stalled) = state.landing.take() {
             let progressed = last.is_none_or(|seen_at| seen_at < state.evidence_reads);
-            Box::pin(self.count_progress(state, progressed, observation, stalled, Status::Stuck)).await?;
+            Box::pin(self.count_progress(state, progressed, observation, Idle::performed(stalled), Status::Stuck))
+                .await?;
         }
         Ok(())
     }
@@ -734,11 +739,22 @@ impl Agent {
             effect(&before, observation, None)
         };
         last.added = done.added;
-        // A click can change the page after it reports nothing: one that came back stale because the page moved the
-        // control away, or one that added only text. Either way what was read is out of date and the click worked.
+        if done.changed && last.outcome == StepOutcome::Executed {
+            uncover(&mut state.idle);
+        }
+        // A page can change while an attempted action goes stale. Reconsider it on the new page, including Back,
+        // but keep stale actions withheld when the next observation still shows the same page state.
+        if done.changed && last.outcome == StepOutcome::Stale {
+            let attempted = last.operation.map(|operation| (operation, last.target.clone()));
+            state.idle.retain(|idle| idle.action != attempted);
+        }
+        // Text or controls changed after the click attempt, so the earlier read is out of date even when the browser
+        // did not perform the click. A covered click's own focus change must not make its target available again.
         if done.changed && last.operation == Some(Operation::Click) {
-            let clicked = Some((Operation::Click, last.target.clone()));
-            state.idle.retain(|action| *action != clicked);
+            if last.outcome != StepOutcome::Covered {
+                let clicked = Some((Operation::Click, last.target.clone()));
+                state.idle.retain(|idle| idle.action != clicked);
+            }
             if let Some(read) = state.read_documents.get_mut(&read_key(observation)) {
                 *read = true;
             }

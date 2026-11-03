@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 use super::helpers::unsent_fact;
-use super::recovery::DONE;
+use super::recovery::{DONE, Idle};
 use super::state::{RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
@@ -94,7 +94,7 @@ impl Agent {
             ..crate::policy::HistoryEntry::new(Some(Operation::Done), None, StepOutcome::Failed, false)
         });
         self.record_failure(state, observation, Operation::Done, reason, None, None, None, Decider::Code).await?;
-        Box::pin(self.count_progress(state, false, observation, DONE, Status::Stuck)).await?;
+        Box::pin(self.count_progress(state, false, observation, Idle::performed(DONE), Status::Stuck)).await?;
         Ok(None)
     }
 

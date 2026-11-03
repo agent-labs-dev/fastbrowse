@@ -1733,7 +1733,7 @@ async fn test_a_stale_click_on_a_page_that_moved_leaves_the_read_out_of_date() {
     let mut state = run_state();
     state.read_documents.insert(super::state::read_key(&before), false);
     state.history.push(HistoryEntry::new(Some(Operation::Click), Some("More"), StepOutcome::Stale, false));
-    state.idle.push(Some((Operation::Click, Some("More".into()))));
+    state.idle.push(super::recovery::Idle::performed(Some((Operation::Click, Some("More".into())))));
     state.acted_from = Some(before.clone());
     agent.note_effect(&mut state, &after);
     assert!(state.idle.is_empty());
@@ -2006,7 +2006,7 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
         &mut offered,
         &mut context,
         "nothing changed",
-        Some((Operation::Blur, Some("Reference".into()))),
+        &super::recovery::Idle::performed(Some((Operation::Blur, Some("Reference".into())))),
     );
     let request = crate::policy::build_request(&offered, &offered.controls, &context, &Default::default(), 64);
     let Question::Choice(targets) = &request.questions["blur_target"] else { panic!("a choice") };
@@ -2179,4 +2179,223 @@ fn newly_shown_controls_do_not_establish_that_a_list_has_more_records() {
     let fact = super::helpers::page_change_fact(&stale, &page).unwrap();
     assert!(fact.starts_with("Since the last attempt to click"));
     assert!(!fact.contains("Clicking"));
+}
+
+/// A page whose every act returns the outcome scripted for it and leaves the page as scripted, so a test walks the
+/// loop's own step, observation, effect and settle through actions the browser refused or performed.
+struct Scripted {
+    now: std::sync::Mutex<Observation>,
+    acts: std::sync::Mutex<std::collections::VecDeque<(Operation, StepOutcome, Observation)>>,
+}
+
+impl Scripted {
+    fn new(now: Observation, acts: Vec<(Operation, StepOutcome, Observation)>) -> Scripted {
+        Scripted { now: std::sync::Mutex::new(now), acts: std::sync::Mutex::new(acts.into()) }
+    }
+}
+
+impl Page for Scripted {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let now = self.now.lock().unwrap().clone();
+        Box::pin(async move { Ok(now) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the scripted steps do not navigate")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("the scripted steps do not read")
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        let (expected, outcome, landed) = self.acts.lock().unwrap().pop_front().expect("a scripted act");
+        assert_eq!(action.operation, expected);
+        let page_changed = landed != *self.now.lock().unwrap();
+        *self.now.lock().unwrap() = landed;
+        Box::pin(async move { Ok(ActResult { outcome, page_changed, detail: None, moved: false }) })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(std::future::pending())
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("a scripted page draws nothing".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("the scripted steps do not ask the address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        unreachable!("the scripted steps do not ask the status")
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// Take `operation` on `label` from the page as it is now, the way the loop does: step, then observe, note and settle.
+async fn take(agent: &Agent, state: &mut RunState, operation: Operation, label: Option<&str>) {
+    let observation = agent.observe().await.expect("observed");
+    let target = label.map(|label| observation.controls.iter().find(|c| c.label == label).expect("offered").clone());
+    agent.step(state, &observation, &code_decision(operation, target)).await.expect("stepped");
+    let landed = agent.observe().await.expect("observed");
+    agent.note_effect(state, &landed);
+    agent.settle(state, &landed).await.expect("settled");
+}
+
+/// What the next ask on the page as it is now offers, and the problem it states.
+async fn next_ask(agent: &Agent, state: &RunState) -> (Observation, Option<String>, Vec<Operation>) {
+    let mut offered = agent.observe().await.expect("observed");
+    let mut context = crate::policy::StepContext::new(&state.task);
+    super::recovery::leave_out_idle(state, &mut offered, &mut context);
+    (offered, context.problem, context.withheld)
+}
+
+fn offers(offered: &Observation, operation: Operation, label: &str) -> bool {
+    offered.controls.iter().any(|c| c.label == label && c.operations.contains(&operation))
+}
+
+fn search_field(focused: bool) -> Control {
+    let mut control = Control::new("query", "textbox", "What are you looking for?", [Operation::Fill]);
+    control.value = Some(String::new());
+    control.focused = Some(focused);
+    control
+}
+
+/// The header behind a search dialog, and the dialog drawn over it.
+fn header() -> Observation {
+    observation(&[button("Search"), button("Contact us")])
+}
+
+fn header_under_dialog(focused: bool) -> Observation {
+    observation(&[button("Search"), button("Contact us"), search_field(focused), button("Close")])
+}
+
+/// A run that tried "Contact us" under the search dialog, its header seen before the dialog opened.
+async fn covered_contact() -> (Agent, RunState) {
+    let page = Scripted::new(
+        header_under_dialog(false),
+        vec![
+            (Operation::Click, StepOutcome::Covered, header_under_dialog(false)),
+            (Operation::Click, StepOutcome::Executed, header()),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &header()).await.expect("settled");
+    agent.settle(&mut state, &header_under_dialog(false)).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    (agent, state)
+}
+
+#[tokio::test]
+async fn test_a_covered_link_is_left_out_as_unperformed_while_its_cover_stands() {
+    let (agent, state) = covered_contact().await;
+    let (offered, problem, _) = next_ask(&agent, &state).await;
+    let problem = problem.expect("the left-out link is named");
+    assert!(!offers(&offered, Operation::Click, "Contact us"), "{problem}");
+    assert!(problem.contains("was not performed"), "{problem}");
+    assert!(!problem.contains("did not move the task on"), "{problem}");
+}
+
+#[tokio::test]
+async fn test_a_covered_link_is_offered_again_once_close_removes_its_cover() {
+    // BU Bench bu2-140: a search dialog covered "Contact us", Close removed the dialog, and every ask after it still
+    // left the link out, though the browser never clicked it.
+    let (agent, mut state) = covered_contact().await;
+    take(&agent, &mut state, Operation::Click, Some("Close")).await;
+    // Closing returned to the header already seen with nothing read since, so neither step moved the run on.
+    assert_eq!(state.unchanged, 2);
+    let (offered, problem, _) = next_ask(&agent, &state).await;
+    assert!(offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
+    // Close did change the page; nothing tells Jev otherwise.
+    assert!(!problem.as_deref().unwrap_or_default().contains("changed nothing"), "{problem:?}");
+}
+
+#[tokio::test]
+async fn test_a_covered_click_that_only_moves_focus_stays_left_out() {
+    // BU Bench bu2-140: the browser left the focused search field while trying to reach a covered Search button, and
+    // that focus change cleared the click from what was left out, so Jev picked it again and it was covered again.
+    let page = Scripted::new(
+        header_under_dialog(true),
+        vec![(Operation::Click, StepOutcome::Covered, header_under_dialog(false))],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &header_under_dialog(true)).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Search")).await;
+    // The focus change is still told as what happened.
+    let effect = state.history.last().and_then(|entry| entry.effect.clone());
+    assert_eq!(effect.as_deref(), Some("changed What are you looking for? focused: True -> False"));
+    let (offered, problem, _) = next_ask(&agent, &state).await;
+    assert!(!offers(&offered, Operation::Click, "Search"), "{problem:?}");
+}
+
+#[tokio::test]
+async fn test_a_stale_back_is_not_left_out_as_one_that_moved_nothing() {
+    // BU Bench bu2-119: Back came back stale as a related-products block drew, never ran, and the next ask left it out
+    // as an action that "did not move the task on", so the run took the site's search link back to page one.
+    let product = Observation { can_go_back: true, ..observation(&[button("Add to basket")]) };
+    let drawn = Observation { can_go_back: true, ..observation(&[button("Add to basket"), button("Load more")]) };
+    let page = Scripted::new(product.clone(), vec![(Operation::Back, StepOutcome::Stale, drawn)]);
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &product).await.expect("settled");
+    take(&agent, &mut state, Operation::Back, None).await;
+    assert_eq!(state.unchanged, 1, "a step that did nothing still counts toward the stall");
+    let (_, problem, withheld) = next_ask(&agent, &state).await;
+    assert!(!withheld.contains(&Operation::Back), "{problem:?}");
+    assert!(!problem.as_deref().unwrap_or_default().contains("did not move the task on"), "{problem:?}");
+}
+
+#[tokio::test]
+async fn a_stale_action_on_an_unchanged_page_stays_withheld() {
+    let unchanged = observation(&[button("Settings")]);
+    let page = Scripted::new(unchanged.clone(), vec![(Operation::Click, StepOutcome::Stale, unchanged.clone())]);
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &unchanged).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Settings")).await;
+    let (offered, problem, _) = next_ask(&agent, &state).await;
+    assert!(!offers(&offered, Operation::Click, "Settings"), "{problem:?}");
+    let problem = problem.unwrap();
+    assert!(problem.contains("was not performed"), "{problem}");
+    assert!(!problem.contains("page changed"), "{problem}");
+}
+
+#[tokio::test]
+async fn an_executed_action_without_a_page_change_keeps_covered_actions_withheld() {
+    let covered = header_under_dialog(false);
+    let page = Scripted::new(
+        covered.clone(),
+        vec![
+            (Operation::Click, StepOutcome::Covered, covered.clone()),
+            (Operation::Escape, StepOutcome::Executed, covered.clone()),
+        ],
+    );
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    agent.settle(&mut state, &covered).await.expect("settled");
+    take(&agent, &mut state, Operation::Click, Some("Contact us")).await;
+    take(&agent, &mut state, Operation::Escape, None).await;
+    let (offered, problem, _) = next_ask(&agent, &state).await;
+    assert!(!offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
 }

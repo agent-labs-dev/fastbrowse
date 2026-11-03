@@ -10,7 +10,7 @@ use fastbrowse_core::page::{BrowserError, Capture, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
 
-use super::recovery::Withheld;
+use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::Notes;
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
@@ -226,8 +226,9 @@ pub(crate) struct RunState {
     /// The action whose page change the next observation judges: a new page state, or one revisited after new
     /// evidence, is progress.
     pub landing: Option<Withheld>,
-    /// The actions that moved nothing since the last one that did. Done again they do the same, so asks leave them out.
-    pub idle: Vec<Withheld>,
+    /// The actions that moved nothing since the last one that did. Done again they do the same, so asks leave them out;
+    /// one the browser refused as covered is left out only until a performed action changes the page.
+    pub idle: Vec<Idle>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.

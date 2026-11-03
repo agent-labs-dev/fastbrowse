@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use fastbrowse_core::effects::{leavable, state_key};
-use fastbrowse_core::models::{Operation, Status};
+use fastbrowse_core::models::{Operation, Status, StepOutcome};
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{origin_of, starts_download};
@@ -21,10 +21,49 @@ pub(super) type Withheld = Option<(Operation, Option<String>)>;
 /// A refused DONE, withheld from the ask that follows it.
 pub(super) const DONE: Withheld = Some((Operation::Done, None));
 
-/// Ask Jev about `problem` on `offered`, with the action it is about left out of the options.
-pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, problem: &str, withheld: Withheld) {
+/// An action the stall rule counted as moving nothing, with the outcome the browser gave it: one it performed, one it
+/// refused because something covered the target, or one whose observed target or page state it could not use.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Idle {
+    pub action: Withheld,
+    pub outcome: StepOutcome,
+}
+
+impl Idle {
+    pub(super) fn performed(action: Withheld) -> Idle {
+        Idle { action, outcome: StepOutcome::Executed }
+    }
+
+    /// What is true of the action, stated after its name when an ask leaves it out.
+    fn why(&self) -> &'static str {
+        match self.outcome {
+            StepOutcome::Covered => COVERED,
+            StepOutcome::Stale => STALE,
+            _ => MOVED_NOTHING,
+        }
+    }
+}
+
+impl From<Withheld> for Idle {
+    fn from(action: Withheld) -> Idle {
+        Idle::performed(action)
+    }
+}
+
+const MOVED_NOTHING: &str = "did not move the task on from this page, so it is not offered this time.";
+
+/// A covered action was never performed, so it is no evidence about what the action does, only that the cover stood.
+const COVERED: &str =
+    "was not performed: something covers its target, so it is not offered until an action changes the page.";
+
+/// A stale action never ran, but its outcome alone does not prove that the next observation will show a change.
+const STALE: &str = "was not performed by the browser, so it is not offered this time.";
+
+/// Ask Jev about `problem` on `offered`, with the action it is about left out of the options and what is true of it
+/// stated after its name.
+pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, problem: &str, withheld: &Idle) {
     let mut problem = problem.to_string();
-    if let Some((operation, label)) = withheld {
+    if let Some((operation, label)) = withheld.action.clone() {
         let mut left_out = false;
         match &label {
             Some(label) => {
@@ -45,10 +84,13 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
         if left_out {
             let what =
                 label.map_or_else(|| operation.to_string(), |label| format!("{operation} {}", text::repr(&label)));
-            problem += &format!("\n{what} did not move the task on from this page, so it is not offered this time.");
+            if !problem.is_empty() {
+                problem.push('\n');
+            }
+            problem += &format!("{what} {}", withheld.why());
         }
     }
-    context.problem = Some(problem);
+    context.problem = (!problem.is_empty()).then_some(problem);
 }
 
 /// The labels of the fields standing on this page that the task gave no value for, in page order.
@@ -65,11 +107,12 @@ fn unfilled<'a>(observation: &'a Observation, missing: &HashSet<(String, String,
     labels
 }
 
-/// Leave the actions that moved nothing out of an ask on `offered`.
+/// Leave the actions that moved nothing out of an ask on `offered`. Each is named with what is true of it: the last
+/// action may well have changed the page, as a Close that returns to a state already seen does.
 pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, context: &mut StepContext) {
-    for action in &state.idle {
-        let problem = context.problem.take().unwrap_or_else(|| "The last action changed nothing.".to_string());
-        withhold(offered, context, &problem, action.clone());
+    for idle in &state.idle {
+        let problem = context.problem.take().unwrap_or_default();
+        withhold(offered, context, &problem, idle);
     }
     // Told once, Jev still reaches for a field it has no value for, by any operation it offers.
     offered.controls.retain(|control| {
@@ -78,6 +121,12 @@ pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, contex
             .iter()
             .any(|(url, label, field)| *url == offered.url && control.label == *label && control.context == *field)
     });
+}
+
+/// Offer covered actions again once a performed action changed the page, since it may have removed what covered them. A
+/// change the browser made while refusing one, as leaving the field a cover came from, removed no cover.
+pub(super) fn uncover(idle: &mut Vec<Idle>) {
+    idle.retain(|idle| idle.outcome != StepOutcome::Covered);
 }
 
 /// `decision`'s action, withheld from the ask that follows it.
@@ -94,8 +143,9 @@ impl Agent {
         observation: &Observation,
         reason: &str,
         gives_up_as: Status,
-        withheld: Withheld,
+        withheld: impl Into<Idle>,
     ) -> Step {
+        let withheld = withheld.into();
         let reason = self.redact(reason);
         state.recoveries += 1;
         // Recovery spends the stall's evidence so the same threshold crossing cannot trigger it again.
@@ -146,7 +196,7 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         reason: &str,
-        withheld: Withheld,
+        withheld: Idle,
     ) -> Step {
         let secrets = self.secret_names(&origin_of(&observation.url));
         let mut context = self.context(state, observation, secrets, false, false)?;
@@ -154,7 +204,7 @@ impl Agent {
         context.problem = Some(reason.to_string());
         leave_out_idle(state, &mut offered, &mut context);
         let reason = context.problem.take().unwrap_or_default();
-        withhold(&mut offered, &mut context, &reason, withheld);
+        withhold(&mut offered, &mut context, &reason, &withheld);
         context.screenshot = self.viewport().await?;
         let decision = decide(
             &*self.jev,
