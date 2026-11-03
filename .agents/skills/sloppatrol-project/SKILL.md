@@ -12,30 +12,9 @@ fastbrowse's core is Rust, in `crates/` (ADR 0004). The `fastbrowse` wheel carri
 
 ## Gate
 
-From the repository root, after `uv sync --all-extras` and `npm ci --ignore-scripts`:
-
-```sh
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
-uv run python scripts/changelog.py --check "$(uv version --short)"
-uv run python scripts/npm_versions.py
-uv run python scripts/no_slop.py
-uv run python scripts/docs_sync.py
-uv run vale sync
-uv run vale README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md docs skills src scripts tests
-uv run python -m fastbrowse.evals.storage --manifest docs/results/evidence.manifest.json --check
-uv run pytest -q
-uv run python -m fastbrowse.evals.benchmarks --check-diff origin/main
-uv run python -m fastbrowse.evals.publication --check-diff origin/main
-npm run check:browser
-npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
-npm run check:sdk
-uv run actionlint
-uv run python .sloppatrol/agents.py check
-uv run python .sloppatrol/gate.py --base origin/main
-just rust
-```
+Run the complete gate in [AGENTS.md](../../../AGENTS.md#commands) from the repository root, after
+`uv sync --all-extras` and `npm ci --ignore-scripts`. That list includes the Python, browser, SDK, Go, Java,
+.NET, Rust and project-rule checks. Use it as the source of truth when a client or required check changes.
 
 Every command must exit 0. Node.js 22+ is needed only for development. CI retains the required `check`
 status, which depends on the Python matrix, Rust job, AUR job, secret scan, project-rules job and SDK job, and on the five
