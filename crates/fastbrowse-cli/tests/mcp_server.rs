@@ -700,3 +700,28 @@ async fn test_budget_stop_details_survive_the_mcp_transport() {
         call(ServerConfig::default(), &Recorder::new(run), json!({"task": "Find it", "start": START})).await;
     assert_eq!(result["structuredContent"]["budget"], json!({"resource": "steps", "limit": 20.0}));
 }
+
+#[tokio::test]
+async fn an_assembly_error_keeps_its_receipt_beside_the_tool_error() {
+    let receipt = CancellationReceipt {
+        steps: vec![step(0)],
+        cost: answered(Status::Complete).cost,
+        recordings: vec![PathBuf::from("run.mp4")],
+    };
+    let spent = receipt.clone();
+    let failed = runner(move |_| {
+        let receipt = spent.clone();
+        async move {
+            Err(RunError::AfterSpending {
+                error: Box::new(RunError::Configuration("browser key missing".into())),
+                receipt,
+            })
+        }
+    });
+    let (result, _) = Client::new(ServerConfig::default(), failed).call(json!({"task": "t", "start": START})).await;
+    assert_eq!(result["isError"], true);
+    assert!(text(&result).contains("browser key missing"));
+    assert!(result.get("structuredContent").is_none());
+    let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/receipt"].clone());
+    assert_eq!(kept, receipt);
+}

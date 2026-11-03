@@ -54,6 +54,11 @@ pub enum RunError {
     /// [`Host::cancel`] was tripped; the browser was closed before this returned. The receipt is what the run did
     /// until then, which is never a result: a cancelled run proved nothing.
     Cancelled(CancellationReceipt),
+    /// An assembly failure after work was done, with its original error and accounting receipt.
+    AfterSpending {
+        error: Box<RunError>,
+        receipt: CancellationReceipt,
+    },
 }
 
 impl std::fmt::Display for RunError {
@@ -64,6 +69,36 @@ impl std::fmt::Display for RunError {
             | RunError::Configuration(message)
             | RunError::Recording(message) => f.write_str(message),
             RunError::Cancelled(_) => f.write_str("the run was cancelled"),
+            RunError::AfterSpending { error, .. } => error.fmt(f),
+        }
+    }
+}
+
+impl RunError {
+    /// What the run did and spent before an error stopped delivery of its result.
+    pub fn receipt(&self) -> Option<&CancellationReceipt> {
+        match self {
+            Self::Cancelled(receipt) | Self::AfterSpending { receipt, .. } => Some(receipt),
+            _ => None,
+        }
+    }
+
+    /// The original refusal, without its accounting envelope.
+    pub fn cause(&self) -> &Self {
+        match self {
+            Self::AfterSpending { error, .. } => error.cause(),
+            error => error,
+        }
+    }
+
+    fn after(self, told: &Told, lines: Vec<CostLine>, recordings: Vec<PathBuf>) -> Self {
+        let steps = told.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        if steps.is_empty() && lines.is_empty() && recordings.is_empty() {
+            return self;
+        }
+        Self::AfterSpending {
+            error: Box::new(self),
+            receipt: CancellationReceipt { steps, cost: CostBreakdown { lines }, recordings },
         }
     }
 }
@@ -744,12 +779,18 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         && task.chrome.is_none()
         && on_cloud(&task, &chrome)
     {
-        host.browser_api_key = Some(settings.browser_key()?.to_string());
+        host.browser_api_key = Some(
+            settings
+                .browser_key()
+                .map_err(|error| RunError::from(error).after(&told, fetch_spent.clone(), Vec::new()))?
+                .to_string(),
+        );
     }
     let mut browser_cost: Vec<CostLine> = Vec::new();
     // Held here rather than by the agent, so what the browser run spent is still read when it is cancelled.
     let ledger = Arc::new(Ledger::new(limits.clone().unwrap_or_default()));
-    let scratch = Scratch::new().map_err(|error| RunError::Invalid(error.to_string()))?;
+    let scratch = Scratch::new()
+        .map_err(|error| RunError::Invalid(error.to_string()).after(&told, fetch_spent.clone(), Vec::new()))?;
     let mut session: Option<BrowserSession> = None;
     let mut owned: Option<Owned> = None;
     let mut starting: Option<BrowserUseCloudBrowser> = None;
@@ -850,7 +891,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     if let Some(owned) = owned.take() {
         stop(owned, &mut browser_cost).await;
     }
-    let mut result = match outcome {
+    let result = match outcome {
         None => {
             // In the order a finished run's lines are: the fetched read, the browser run, then the browser itself.
             let mut lines = fetch_spent;
@@ -880,13 +921,24 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             }
         }
     };
-    if let Some(message) = recording_failed {
-        return Err(RunError::Recording(message));
-    }
+    finish(result, recording_failed, &told, fetch_spent, browser_cost, recordings)
+}
+
+fn finish(
+    mut result: RunResult,
+    recording_failed: Option<String>,
+    told: &Told,
+    mut fetch_spent: Vec<CostLine>,
+    browser_cost: Vec<CostLine>,
+    recordings: Vec<PathBuf>,
+) -> Result<RunResult, RunError> {
     result.cost.lines.extend(browser_cost);
     fetch_spent.append(&mut result.cost.lines);
     result.cost.lines = fetch_spent;
     result.recordings = recordings;
+    if let Some(message) = recording_failed {
+        return Err(RunError::Recording(message).after(told, result.cost.lines, result.recordings));
+    }
     Ok(result)
 }
 
@@ -1027,6 +1079,30 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn a_recording_start_failure_keeps_fetch_model_and_browser_charges() {
+        let fetch = CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.01));
+        let model = CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.02));
+        let browser = CostLine::new(CostComponent::Browser, CostBasis::Metered, Some(0.03));
+        let result = serde_json::from_value(serde_json::json!({
+            "status": "error", "answer": null, "data": null, "evidence": [], "steps": [],
+            "cost": {"lines": [model.clone()]}, "artifacts": [],
+        }))
+        .unwrap();
+        let error = finish(
+            result,
+            Some("ffmpeg failed to start".into()),
+            &Arc::default(),
+            vec![fetch.clone()],
+            vec![browser.clone()],
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(error.cause(), RunError::Recording(_)));
+        let receipt = error.receipt().expect("recording failure must retain the closed browser's charges");
+        assert_eq!(receipt.cost.lines, [fetch, model, browser]);
+    }
 
     /// A stand-in Browser Use Cloud that creates a browser at `$0.01` so far, with a DevTools address that never
     /// answers, so a start against it stays unfinished until it is cancelled.

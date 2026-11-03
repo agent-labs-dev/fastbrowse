@@ -533,6 +533,18 @@ pub fn reply(
 ) -> Result<RunResult, Refused> {
     match outcome {
         Ok(result) => Ok(result),
+        Err(RunError::AfterSpending { error, receipt }) => match reply(Err(*error), failure, run_id) {
+            Ok(mut result) => {
+                result.steps = receipt.steps;
+                result.cost = receipt.cost;
+                result.recordings = receipt.recordings;
+                Ok(result)
+            }
+            Err(mut error) => {
+                error.data = Some(receipt);
+                Err(error)
+            }
+        },
         Err(RunError::Configuration(message)) => Err(refused(ErrorCode::Configuration, message)),
         // A callback's failure stopped the run, and the reply says what the client failed, with what the run did and
         // spent before then.

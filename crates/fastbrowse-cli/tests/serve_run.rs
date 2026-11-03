@@ -517,3 +517,41 @@ fn test_a_name_that_is_not_a_callable_is_a_usage_error() {
         assert!(String::from_utf8_lossy(&served.stderr).contains(name));
     }
 }
+
+#[tokio::test]
+async fn an_assembly_error_keeps_its_code_and_receipt_after_spending() {
+    use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine};
+    use fastbrowse_core::protocol::CancellationReceipt;
+    let receipt = CancellationReceipt {
+        steps: vec![common::step(0)],
+        cost: CostBreakdown { lines: vec![CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.01))] },
+        recordings: vec![PathBuf::from("run.mp4")],
+    };
+    for recording in [false, true] {
+        let kept = receipt.clone();
+        let failed = runner(move |_| {
+            let receipt = kept.clone();
+            async move {
+                let error = if recording {
+                    RunError::Recording("recording unavailable".into())
+                } else {
+                    RunError::Configuration("browser key missing".into())
+                };
+                Err(RunError::AfterSpending { error: Box::new(error), receipt })
+            }
+        });
+        let mut client = serving(failed, settings());
+        let response = client.request("run", Some(run_params("run-1", json!({})))).await;
+        let received = if recording {
+            assert_eq!(response["result"]["status"], "error");
+            &response["result"]
+        } else {
+            assert_eq!(response["error"]["code"], -32003);
+            &response["error"]["data"]
+        };
+        assert_eq!(received["cost"], serde_json::to_value(&receipt.cost).unwrap());
+        assert_eq!(received["steps"], serde_json::to_value(&receipt.steps).unwrap());
+        assert_eq!(received["recordings"], json!(["run.mp4"]));
+        assert!(received.get("answer").is_none_or(Value::is_null));
+    }
+}

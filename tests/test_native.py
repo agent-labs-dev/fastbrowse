@@ -24,7 +24,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from fastbrowse import native, run_task
 from fastbrowse.config import Config
 from fastbrowse.evals.harness import providers, transient_seconds
-from fastbrowse.jev import Evaluation, Question
+from fastbrowse.jev import Evaluation, NoulAnswer, Question
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
@@ -625,3 +625,42 @@ def test_the_helper_script_reads_a_pdf_on_the_base_interpreter_without_site() ->
     reply = done.stdout[done.stdout.index(magic) + len(magic) :]
     assert reply[0] == 0
     assert reply[9 : 9 + int.from_bytes(reply[1:9], "little")].decode().strip() == "Fairbanks Wind"
+
+
+@pytest.mark.usefixtures("rust_core")
+async def test_a_missing_browser_key_after_a_paid_fetch_keeps_the_configuration_receipt() -> None:
+    class PaidBotCheck(ScriptedJev):
+        async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+            evaluation = await super().evaluate(state, questions)
+            answers = dict(evaluation.answers)
+            if "bot_check" in answers:
+                answers["bot_check"] = NoulAnswer(probability=1.0)
+            return evaluation.model_copy(
+                update={
+                    "answers": answers,
+                    "cost": CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.01),
+                }
+            )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                text="<html><body>Checking access</body></html>",
+                headers={"content-type": "text/html"},
+            )
+        )
+    ) as http:
+        with pytest.raises(ConfigurationError, match="BROWSER_USE_API_KEY") as caught:
+            await run_task(
+                "Read the release",
+                start="https://docs.example.test/value",
+                settings={},
+                jev=PaidBotCheck([]),
+                llm=ScriptedLLM("https://docs.example.test/value"),
+                http=http,
+            )
+    receipt = caught.value.receipt
+    assert receipt is not None
+    assert receipt.cost.known_dollars > 0
+    assert receipt.steps == ()

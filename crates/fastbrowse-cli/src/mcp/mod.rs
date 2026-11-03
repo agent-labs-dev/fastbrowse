@@ -606,6 +606,10 @@ enum ToolFailure {
     Unknown(String),
     /// A run that stopped before it finished, with what it did and spent.
     Cancelled(CancellationReceipt),
+    Failed {
+        message: String,
+        receipt: CancellationReceipt,
+    },
 }
 
 impl From<String> for ToolFailure {
@@ -805,13 +809,18 @@ impl McpServer {
                             let (text, receipt) = match failure {
                                 ToolFailure::Tool(message) => (format!("Error executing tool browse: {message}"), None),
                                 ToolFailure::Unknown(name) => (format!("Unknown tool: {name}"), None),
-                                ToolFailure::Cancelled(receipt) => {
-                                    ("Error executing tool browse: the run was cancelled".to_string(), Some(receipt))
-                                }
+                                ToolFailure::Cancelled(receipt) => (
+                                    "Error executing tool browse: the run was cancelled".to_string(),
+                                    Some((RECEIPT_META, receipt)),
+                                ),
+                                ToolFailure::Failed { message, receipt } => (
+                                    format!("Error executing tool browse: {message}"),
+                                    Some(("fastbrowse.ai/receipt", receipt)),
+                                ),
                             };
                             let mut result = json!({"content": [{"type": "text", "text": text}], "isError": true});
-                            if let Some(receipt) = receipt {
-                                result["_meta"] = json!({RECEIPT_META: receipt.dump()});
+                            if let Some((key, receipt)) = receipt {
+                                result["_meta"] = json!({key: receipt.dump()});
                             }
                             response(&id, result)
                         }
@@ -943,6 +952,9 @@ impl McpServer {
         let result = match outcome {
             Ok(result) => result,
             Err(RunError::Cancelled(receipt)) => return Err(ToolFailure::Cancelled(receipt)),
+            Err(RunError::AfterSpending { error, receipt }) => {
+                return Err(ToolFailure::Failed { message: error.to_string(), receipt });
+            }
             Err(error) => return Err(error.to_string().into()),
         };
         let live_url = live_url.lock().unwrap_or_else(|p| p.into_inner()).clone();

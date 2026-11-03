@@ -213,6 +213,9 @@ scrolls to the quote; it may not resolve on a page that changes or needs a sessi
   A cancelled `run_task` raises `fastbrowse.models.RunCancelled`, an `asyncio.CancelledError` with a `receipt`
   of reported steps, known cost lines and finished recordings once the browser closes. A cancellation before
   the core starts may have no receipt. The receipt has no status or answer; unpriced charges stay `unknown`.
+  `ConfigurationError` and `RecordingError` also carry a `receipt` when they stop a run after work or charges
+  have accrued; otherwise their `receipt` is `None`. JSON-RPC preserves this receipt in error data, or in the
+  error result for recording failures. MCP keeps it in `_meta["fastbrowse.ai/receipt"]` beside the tool error.
 - `with traced() as events:` collects the run's trace in-process, as `--trace` writes it.
 
 No frame or screenshot is sent while a resolved secret may show on the page.

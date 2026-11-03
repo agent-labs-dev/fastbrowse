@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Configuration and recording startup failures retain the work and charges already incurred. Python keeps the original exception class with a typed receipt; JSON-RPC, MCP and CLI error responses preserve the same accounting without an answer or success status.
+
 - A Chrome profile or headed window selected through settings starts the browser before any HTTP read, just as an explicit Chrome option does. Explicit HTTP-only runs still use HTTP.
 
 - JavaScript, Go, Java and .NET run options now reach the server for origin restrictions, HTTP-only and browser-first routing, cloud extensions and browser lifetime. Per-run browser defaults still replace or clear the client defaults. Go rejects an empty origin list rather than dropping the restriction during serialization.

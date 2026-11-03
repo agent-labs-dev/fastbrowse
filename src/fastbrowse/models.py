@@ -53,9 +53,15 @@ class Unavailable(RuntimeError):
 class ConfigurationError(RuntimeError):
     """A missing key or an invalid setting in the environment, reported without a traceback."""
 
+    receipt: CancellationReceipt | None = None
+    """Work already done before configuration prevented the run from continuing."""
+
 
 class RecordingError(RuntimeError):
     """ffmpeg is missing. Later failures are logged instead: a video is never worth a run's result."""
+
+    receipt: CancellationReceipt | None = None
+    """Work and browser charges incurred before recording could start."""
 
 
 class RunCancelled(asyncio.CancelledError):

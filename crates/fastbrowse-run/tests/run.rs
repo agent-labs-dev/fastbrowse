@@ -731,3 +731,24 @@ async fn settings_local_profile_or_headed_route_to_browser_before_http() {
         assert_eq!(fetch_requests.load(Ordering::SeqCst), 1, "{variable}: explicit fetch must use HTTP");
     }
 }
+
+#[tokio::test]
+async fn a_missing_browser_key_after_a_paid_fetch_preserves_its_receipt() {
+    let http = Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+        Box::pin(async {
+            Ok(Response::new(200, "<html><body>Checking access</body></html>").with_header("content-type", "text/html"))
+        })
+    }));
+    let options = task(|o, h| {
+        o.start = Some("https://docs.example.test/value".into());
+        h.http = Some(http);
+        h.jev = Some(Arc::new(Priced(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new())))));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+    });
+    let error = run(options).await.unwrap_err();
+    assert!(error.to_string().contains("BROWSER_USE_API_KEY"));
+    let receipt = error.receipt().expect("the paid fetch must survive an escalation configuration error");
+    assert!(receipt.cost.known_dollars() > 0.0);
+    assert!(matches!(error.cause(), RunError::Configuration(_)));
+    assert!(receipt.steps.is_empty(), "the bot check was read before the first action");
+}

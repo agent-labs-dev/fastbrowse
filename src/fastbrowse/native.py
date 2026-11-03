@@ -448,10 +448,11 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
 def _refusal(exc: Exception, raised: _Raised) -> BaseException:
     """What `run_task` raises for a run the core refused, by the kind the core names."""
     kind, message = exc.args
-    if kind == "configuration":
-        return ConfigurationError(message)
-    if kind == "recording":
-        return RecordingError(message)
+    if kind in {"configuration", "recording"}:
+        error = ConfigurationError(message) if kind == "configuration" else RecordingError(message)
+        if receipt := getattr(exc, "receipt", None):
+            error.receipt = CancellationReceipt.model_validate_json(receipt)
+        return error
     if kind == "cancelled":
         return asyncio.CancelledError(message)
     if kind == "callback" and raised.first is not None:

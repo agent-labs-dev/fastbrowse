@@ -98,7 +98,7 @@ impl Run {
     }
 
     /// An asyncio future that resolves once the run has returned and its browser is closed: with the
-    /// `CancellationReceipt` as JSON for a completed or cancelled run, and None for a refusal.
+    /// accounting receipt as JSON for a completed run, cancellation or refusal after spending, and None otherwise.
     #[getter]
     fn finished(&self, py: Python<'_>) -> Py<PyAny> {
         self.finished.clone_ref(py)
@@ -303,7 +303,7 @@ fn run_task(
                     if !result.call_method0("done")?.is_truthy()? {
                         // A callback that failed stopped the run, though the run may have ended on its own in the
                         // same moment; the callback's exception is what the caller hears either way.
-                        let error = match &outcome {
+                        let error = match outcome.as_ref().map_err(RunError::cause) {
                             _ if failure.failed() => Some(refused("callback", String::new())),
                             Ok(answered) => {
                                 // The final frame is left out of the JSON, so it travels beside it as bytes.
@@ -317,15 +317,24 @@ fn run_task(
                             }
                             Err(RunError::Configuration(message)) => Some(refused("configuration", message.clone())),
                             Err(RunError::Recording(message)) => Some(refused("recording", message.clone())),
+                            Err(RunError::AfterSpending { .. }) => unreachable!("cause unwraps accounting envelopes"),
                         };
                         if let Some(error) = error {
+                            if let Err(refusal) = &outcome
+                                && let Some(receipt) = refusal.receipt()
+                            {
+                                error.value(py).setattr("receipt", receipt.dump_json())?;
+                            }
                             result.call_method1("set_exception", (error.value(py),))?;
                         }
                     }
                     // Python can cancel before delivery or after it while the awaiting task has not resumed,
                     // so every finished outcome keeps its receipt until the caller has heard it.
                     let receipt = match &outcome {
-                        Err(RunError::Cancelled(receipt)) => receipt.dump_json().into_pyobject(py)?.into_any(),
+                        Err(error) => match error.receipt() {
+                            Some(receipt) => receipt.dump_json().into_pyobject(py)?.into_any(),
+                            None => py.None().into_bound(py),
+                        },
                         Ok(answered) => CancellationReceipt {
                             steps: answered.steps.clone(),
                             cost: answered.cost.clone(),
@@ -334,7 +343,6 @@ fn run_task(
                         .dump_json()
                         .into_pyobject(py)?
                         .into_any(),
-                        _ => py.None().into_bound(py),
                     };
                     let finished = finished.bind(py);
                     if !finished.call_method0("done")?.is_truthy()? {
