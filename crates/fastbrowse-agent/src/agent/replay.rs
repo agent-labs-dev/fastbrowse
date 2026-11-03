@@ -47,8 +47,24 @@ impl Replay {
         !self.abandoned && self.next < self.steps.len()
     }
 
+    /// Reads and completion stay live without consuming a saved browser action.
+    pub fn confirm(&mut self, url: &str, offered: &[Control], decision: &mut Decision) {
+        if !recorded(decision.operation) {
+            return;
+        }
+        if let Some(saved) = self.decision(url, offered) {
+            if saved.operation == decision.operation
+                && saved.target.as_ref().map(|target| &target.id) == decision.target.as_ref().map(|target| &target.id)
+            {
+                decision.replayed = true;
+            } else {
+                self.replaced();
+            }
+        }
+    }
+
     /// The decision for the first of the next recipe steps this page offers, or None for the agent to decide.
-    pub fn decision(&mut self, url: &str, offered: &[Control]) -> Option<Decision> {
+    fn decision(&mut self, url: &str, offered: &[Control]) -> Option<Decision> {
         if self.pending.take().is_some() {
             // The step handed out last was not carried out: a gate stopped it, or another decision replaced it.
             self.miss();
@@ -291,6 +307,23 @@ mod tests {
 
     fn replay(steps: Vec<RecipeStep>) -> Replay {
         Replay::new(Recipe { version: 1, task: "t".into(), start: None, steps })
+    }
+
+    #[test]
+    fn live_reads_do_not_abandon_the_next_saved_action() {
+        let mut replay = replay(vec![click("Continue", "/p/pico")]);
+        let page = [button("new:4", "Continue")];
+        for _ in 0..MISSES + 1 {
+            let mut read = code_decision(Operation::Read, None);
+            replay.confirm(URL, &page, &mut read);
+            assert!(!read.replayed);
+        }
+        let mut click = code_decision(Operation::Click, Some(page[0].clone()));
+        replay.confirm(URL, &page, &mut click);
+        assert!(click.replayed);
+        replay.settled(true);
+        assert_eq!(replay.replayed, 1);
+        assert!(!replay.active());
     }
 
     #[test]

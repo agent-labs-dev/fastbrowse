@@ -714,7 +714,9 @@ async fn an_ordinary_masked_username_replays_named_input_without_password_policy
     let mut state = run_state();
     state.inputs.insert("username".into(), "ada@example.test".into());
     state.replay = Some(super::replay::Replay::new(recipe));
-    let decision = state.replay.as_mut().unwrap().decision(url, &controls).unwrap();
+    let mut decision = super::helpers::code_decision(Operation::Fill, Some(username.clone()));
+    state.replay.as_mut().unwrap().confirm(url, &controls, &mut decision);
+    assert!(decision.replayed);
     let value = agent.text(&mut state, &page, &decision, &username).await.unwrap();
     assert_eq!(value, "ada@example.test");
     assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Input("username".into())));

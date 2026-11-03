@@ -98,16 +98,13 @@ impl Agent {
             {
                 replay.replaced();
             }
-            let mut replayed = None;
-            let mut decision = match picked {
+            let decision = match picked {
                 Some(picked) => picked,
                 None => {
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
                     context.screenshot = self.drawn_viewport(&observation).await?;
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
-                    replayed =
-                        state.replay.as_mut().and_then(|replay| replay.decision(&offered.url, &offered.controls));
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
                         let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
@@ -115,28 +112,20 @@ impl Agent {
                         Ok(decide(&*self.jev, &offered, &context, config, ledger, cache, &self.trace).await?)
                     });
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
-                    let Watched::Done(decision) = decided else {
+                    let Watched::Done(mut decision) = decided else {
                         if let Some(replay) = state.replay.as_mut() {
                             replay.replaced();
                         }
                         self.redecide(state, &observation);
                         continue;
                     };
+                    if let Some(replay) = state.replay.as_mut() {
+                        replay.confirm(&offered.url, &offered.controls, &mut decision);
+                    }
                     state.last_page = Some(page);
                     decision
                 }
             };
-            // A saved step cannot replace the live page's wall, evidence or action judgement.
-            if let Some(saved) = replayed {
-                if saved.operation == decision.operation
-                    && saved.target.as_ref().map(|target| &target.id)
-                        == decision.target.as_ref().map(|target| &target.id)
-                {
-                    decision.replayed = true;
-                } else if let Some(replay) = state.replay.as_mut() {
-                    replay.replaced();
-                }
-            }
             self.record_page(state, &observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
