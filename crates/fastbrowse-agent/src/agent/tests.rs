@@ -1959,3 +1959,59 @@ async fn test_focus_changes_do_not_block_an_ordinary_twin_retry() {
     assert_eq!(result.map(|r| r.outcome), Some(StepOutcome::Executed));
     assert!(agent.act_on_twin(&Action::new(Operation::Blur), &before, &target).await.expect("no blur retry").is_none());
 }
+
+#[tokio::test]
+async fn navigation_context_keeps_the_observed_source_without_claiming_a_back_destination() {
+    let agent = agent();
+    let source = Observation {
+        document_key: "public-document".into(),
+        viewport_text: "Browse public inventory or query your account".into(),
+        offscreen_text: "The public inventory needs no account.".into(),
+        ..at("https://shop.test/", &[button("Public inventory"), button("Account query")])
+    };
+    let destination =
+        Observation { document_key: "login-document".into(), ..at("https://shop.test/login", &[field("Password")]) };
+    let mut state = run_state();
+    state.login_readings.insert(super::state::read_key(&source), 0.12);
+    state.acted_from = Some(source);
+    state.history.push(executed(Some(Operation::Click), Some("Account query"), true));
+    agent.note_effect(&mut state, &destination);
+    let facts = agent.context(&state, &destination, Vec::new(), true, false).unwrap().page_facts;
+    let context =
+        facts.iter().find(|fact| fact.starts_with("The latest navigation")).expect("navigation source missing");
+    assert!(context.contains("Public inventory") && context.contains("The public inventory needs no account."));
+    assert!(context.contains("\"login_required_probability\":0.12"));
+    assert!(context.contains("their current state is unknown"));
+    assert!(
+        !agent
+            .context(&state, &at("https://shop.test/other", &[]), Vec::new(), true, false)
+            .unwrap()
+            .page_facts
+            .iter()
+            .any(|fact| fact.starts_with("The latest navigation"))
+    );
+}
+
+#[tokio::test]
+async fn navigation_context_is_masked_again_when_a_value_becomes_a_secret() {
+    let agent = agent();
+    let destination = at("https://shop.test/login", &[]);
+    let source = Observation { viewport_text: "private-\"value".into(), ..at("https://shop.test/", &[]) };
+    let mut state = run_state();
+    state.navigation_from = Some((super::state::read_key(&destination), source));
+    agent.redactor().register("credential", "private-\"value", None);
+    let context = agent.context(&state, &destination, Vec::new(), true, false).unwrap();
+    assert!(!context.page_facts.join(" ").contains("private-"));
+}
+
+#[tokio::test]
+async fn a_tab_switch_is_not_reported_as_navigation_from_the_other_tab() {
+    let agent = agent();
+    let mut state = run_state();
+    state.acted_from = Some(at("https://shop.test/", &[button("Public inventory")]));
+    state.history.push(executed(Some(Operation::SwitchTab), Some("Account"), true));
+    let destination = at("https://shop.test/login", &[field("Password")]);
+    agent.note_effect(&mut state, &destination);
+    assert!(state.navigation_from.is_none());
+    assert!(agent.navigation_fact(&state, &destination).is_none());
+}

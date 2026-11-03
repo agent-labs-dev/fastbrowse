@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A sign-in judgment receives the source page of the latest navigation and its earlier sign-in reading, so Jev can weigh observed alternatives before reporting that the task requires login. The source is a past observation, not a promise about where Back leads.
+
 - Local Chrome startup errors preserve the complete diagnostic, so a crash stack cannot hide the cause.
 
 - A blank document after navigation waits on its loading events before it reaches Jev or renews recovery. Only the untouched opening page may be reloaded.

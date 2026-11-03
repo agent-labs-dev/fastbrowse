@@ -35,7 +35,7 @@ use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use state::{Flow, RunState, Stop};
 
@@ -593,7 +593,10 @@ impl Agent {
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
-        let page_facts = Self::page_facts(state, observation);
+        let mut page_facts = Self::page_facts(state, observation);
+        if check_login && let Some(source) = self.navigation_fact(state, observation) {
+            page_facts.push(source);
+        }
         Ok(StepContext {
             task: state.task.clone(),
             subgoal: state.hint.clone(),
@@ -629,6 +632,41 @@ impl Agent {
             screenshot: None,
             ahead: self.ahead(state, observation),
         })
+    }
+
+    /// A wall on the route just opened does not describe the alternatives observed before it.
+    fn navigation_fact(&self, state: &RunState, observation: &Observation) -> Option<String> {
+        let (destination, source) = state.navigation_from.as_ref()?;
+        if *destination != state::read_key(observation) {
+            return None;
+        }
+        let controls: Vec<Value> = source
+            .controls
+            .iter()
+            .map(|control| {
+                json!({
+                    "label": self.mask(&control.label),
+                    "role": self.mask(&control.role),
+                    "context": control.context.as_deref().map(|value| self.mask(value)),
+                    "href": control.href.as_deref().map(|value| self.mask(value)),
+                    "operations": control.operations,
+                })
+            })
+            .collect();
+        let previous = json!({
+            "page": {
+                "url": self.mask(&source.url),
+                "title": self.mask(&source.title),
+                "text": self.mask(&source.viewport_text),
+                "offscreen_text": self.mask(&source.offscreen_text),
+                "response_status": source.response_status,
+            },
+            "login_required_probability": state.login_readings.get(&state::read_key(source)),
+            "controls": controls,
+        });
+        Some(format!(
+            "The latest navigation began on this observed page. These controls were available there before navigation; their current state is unknown. This source is historical context, not content of the current page: {previous}"
+        ))
     }
 
     /// This page was read and no action has changed it since.

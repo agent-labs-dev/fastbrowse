@@ -650,3 +650,72 @@ async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
         assert_eq!(Value::Array(events), case["events"], "{name}: step events");
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn sign_in_judgments_get_the_navigation_source_and_still_decide_whether_it_blocks() {
+    for (name, login, opening_wall, expected) in [
+        ("public alternative", 0.2, false, "budget_exceeded"),
+        ("authenticated destination", 0.95, false, "needs_login"),
+        ("opening sign-in wall", 0.95, true, "needs_login"),
+    ] {
+        let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+        case["name"] = name.into();
+        case["calls"] = serde_json::json!([]);
+        case["limits"]["max_steps"] = 3.into();
+        case["jev"]["pick"] = serde_json::json!({
+            "operation": ["click", "back", "click"], "click_target": ["query", "public"]
+        });
+        case["jev"]["nouls"]["login_required"] =
+            if opening_wall { serde_json::json!([login]) } else { serde_json::json!([0.12, login, 0.12]) };
+        let mut home = case["site"]["screens"]["home"].clone();
+        home["observation"]["document_key"] = "public-document".into();
+        home["observation"]["viewport_text"] = "Browse public inventory or query your account".into();
+        home["observation"]["controls"] = serde_json::json!([
+            {"id": "query", "frame_id": null, "role": "button", "label": "Account query", "operations": ["click"]},
+            {"id": "public", "frame_id": null, "role": "button", "label": "Public inventory", "operations": ["click"]}
+        ]);
+        let mut wall = home.clone();
+        wall["observation"]["url"] = "https://books.test/login".into();
+        wall["observation"]["document_key"] = "login-document".into();
+        wall["observation"]["page_key"] = "login".into();
+        wall["observation"]["can_go_back"] = (!opening_wall).into();
+        wall["observation"]["viewport_text"] = "Sign in to query your account".into();
+        wall["observation"]["controls"] = serde_json::json!([
+            {"id": "password", "frame_id": null, "role": "textbox", "label": "Password",
+             "operations": ["fill"], "input_type": "password"}
+        ]);
+        case["site"] = serde_json::json!({
+            "start": if opening_wall {"wall"} else {"home"},
+            "urls": {"https://books.test/": if opening_wall {"wall"} else {"home"}},
+            "screens": {"home": home, "wall": wall},
+            "actions": [{"screen": "home", "operation": "click", "target": "query", "next": "wall"}]
+        });
+        let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let (outcome, _) = play(&case, Some(log.clone())).await;
+        assert_eq!(outcome["status"], expected, "{name}: {outcome}");
+        let log = log.lock().unwrap();
+        let wall_call = log
+            .iter()
+            .find_map(|call| {
+                let state: Value = serde_json::from_str(call["jev"]["state"].as_str()?).ok()?;
+                (state["page"]["url"] == "https://books.test/login").then_some((call, state))
+            })
+            .expect("login judgment");
+        let facts = wall_call.1["page_facts"].to_string();
+        assert_eq!(facts.contains("Public inventory"), !opening_wall, "{name}: {facts}");
+        if !opening_wall {
+            assert!(facts.contains("login_required_probability") && facts.contains("0.12"));
+            let questions: Value = serde_json::from_str(wall_call.0["jev"]["questions"].as_str().unwrap()).unwrap();
+            assert!(
+                questions["login_required"]["instructions"]
+                    .as_str()
+                    .unwrap()
+                    .contains("A restricted route does not make the whole task require sign-in")
+            );
+        }
+        if expected == "budget_exceeded" {
+            assert_eq!(outcome["steps"][1]["operation"], "back");
+            assert_eq!(outcome["steps"][2]["target"], "Public inventory");
+        }
+    }
+}

@@ -489,6 +489,10 @@ impl Fitting<'_> {
     }
 }
 
+fn fact_marker(omitted_chars: usize) -> String {
+    format!("\n[Page fact cut: {omitted_chars} characters omitted to fit Jev's input limit]")
+}
+
 fn notes_marker(omitted_chars: usize) -> String {
     format!("\n[Notes cut: {omitted_chars} characters omitted to fit the request]")
 }
@@ -537,6 +541,15 @@ fn trim(
     } else {
         // The excess is counted in JSON-escaped characters, so each text is cut as it is written into the state.
         let room = |text: &str, excess: i64| (dumped_len(text) as i64 - excess).max(0) as usize;
+        // A retained source can be larger than this page, so fit its facts before discarding the current text.
+        for index in (0..context.page_facts.len()).rev() {
+            let excess = fitting.excess(&observation, controls, &without(&context, 0));
+            if excess <= 0 {
+                break;
+            }
+            let fact = &context.page_facts[index];
+            context.page_facts[index] = cut_with(fact, room(fact, excess), true, fact_marker);
+        }
         let excess = fitting.excess(&observation, controls, &without(&context, 0));
         if excess > 0 {
             observation.offscreen_text =
@@ -554,7 +567,8 @@ fn trim(
         let dropped = fewest(&observation, &context);
         context = without(&context, dropped);
     }
-    let cut = context.history.len() < history.len()
+    let cut = context.page_facts != original.page_facts
+        || context.history.len() < history.len()
         || context.notes != original.notes
         || observation.viewport_text != page_text
         || observation.offscreen_text != original_offscreen;
@@ -1292,7 +1306,7 @@ fn target_element(control: &Control, operation: Operation) -> Map<String, Value>
 /// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
 pub(crate) fn login_question() -> Question {
     noul(
-        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task asks to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in. A page that refuses access outright and offers no way to sign in is not a sign-in wall.",
+        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task asks to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in. A page that refuses access outright and offers no way to sign in is not a sign-in wall. A restricted route does not make the whole task require sign-in when an observed alternative can advance it. Use the observed navigation context and available operations to judge whether the task can continue elsewhere. Going back is useful only when that earlier page offers another way to advance the task. A task that requires this account or authenticated destination still requires sign-in.",
         "A sign-in or account verification wall blocks the task and the task gives no way through it.",
         "The task can progress without signing in, or the task supplies the credentials to sign in.",
     )
@@ -1614,6 +1628,22 @@ mod tests {
         let mut config = Config::default();
         (config.tokens.state_plus_largest_question, config.tokens.state_plus_all_questions) = (4000, 8000);
         config
+    }
+
+    #[test]
+    fn test_a_large_prior_page_fact_fits_jevs_limit_without_erasing_the_current_page() {
+        let jev = fake(&[("operation", "click")], "");
+        let mut context = StepContext::new("press button 3");
+        context.check_login = true;
+        context.page_facts = vec![format!("Previously observed source: {}", "catalogue data ".repeat(5000))];
+        let mut page = observation((0..3).map(button).collect());
+        page.viewport_text = "Current account sign-in page".into();
+        let decision = block_on(decide(&jev, &page, &context, &tight(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.reduction, Reduction::Trimmed);
+        let states = jev.states.lock().unwrap();
+        assert_eq!(states[0]["page"]["text"], "Current account sign-in page");
+        assert!(states[0]["page_facts"].to_string().contains("Jev's input limit"));
+        assert_eq!(states[0]["elements"].as_array().unwrap().len(), 3);
     }
 
     #[test]

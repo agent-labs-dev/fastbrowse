@@ -119,6 +119,9 @@ impl Agent {
             self.record_page(state, &observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
+            if let Some(probability) = decision.login_required {
+                state.login_readings.insert(read_key(&observation), probability);
+            }
             // A page can say it failed and still show the answer, as one with a stale Loading line does: the likelier
             // of Jev's two readings stands.
             state.page_failed = decision
@@ -703,6 +706,11 @@ impl Agent {
         let Some(before) = state.acted_from.take() else { return };
         state.settle_change(observation);
         let landed = read_key(observation);
+        if landed != read_key(&before)
+            && state.history.last().is_some_and(|last| last.operation != Some(Operation::SwitchTab))
+        {
+            state.navigation_from = Some((landed.clone(), before.clone()));
+        }
         if let Some(href) = state.followed.take()
             && landed != read_key(&before)
         {

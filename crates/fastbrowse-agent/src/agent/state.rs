@@ -214,6 +214,10 @@ pub(crate) struct RunState {
     /// A blank document is waited out once before its state can renew recovery or reach a decision.
     pub blank_waited: HashSet<(String, String)>,
     pub last_page: Option<(String, String)>,
+    /// The source of the latest navigation, scoped to the destination that followed it.
+    pub navigation_from: Option<((String, String), Observation)>,
+    /// Jev's sign-in readings stay with the document they described, not with every later route.
+    pub login_readings: HashMap<(String, String), f64>,
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
     /// since is going round, not forward.
     pub reached: HashMap<String, usize>,
@@ -331,6 +335,7 @@ impl RunState {
             committing: false,
             redecided: false,
             last_page: None,
+            navigation_from: None,
             ..self
         }
     }
@@ -365,6 +370,8 @@ impl RunState {
             blank_opening_checked: false,
             blank_waited: HashSet::new(),
             last_page: None,
+            navigation_from: None,
+            login_readings: HashMap::new(),
             reached: HashMap::new(),
             evidence_reads: 0,
             landing: None,
