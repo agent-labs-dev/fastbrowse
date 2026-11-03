@@ -40,6 +40,9 @@ impl Agent {
     ) -> Step<fastbrowse_core::models::RunResult> {
         loop {
             state.ledger.check(0.0)?;
+            if let Some(stop) = super::out_of_browsing_time(state) {
+                return Err(Flow::Stop(stop));
+            }
             let observation = self.observe().await?;
             if state.first_url.is_none() {
                 state.first_url = Some(observation.url.clone());

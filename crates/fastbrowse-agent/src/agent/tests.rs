@@ -1576,3 +1576,32 @@ fn a_failure_kind_names_the_error_and_none_of_its_text() {
     let script = BrowserError::Failed("page script returned an unexpected tuple".into());
     assert_eq!(super::browser_failure_kind(&script), "Failed");
 }
+
+/// A run 100 seconds long whose clock has run for `elapsed`.
+fn clocked(elapsed: f64, compose: bool) -> RunState {
+    let ledger = Arc::new(Ledger::new(Limits { max_seconds: Some(100.0), ..Limits::default() }));
+    ledger.set_started(Some(std::time::Instant::now() - std::time::Duration::from_secs_f64(elapsed)));
+    RunState { compose, ledger, ..run_state() }
+}
+
+#[test]
+fn test_a_composing_run_stops_browsing_in_time_to_write_its_answer() {
+    assert!(super::out_of_browsing_time(&clocked(80.0, true)).is_none());
+    let stop = super::out_of_browsing_time(&clocked(91.0, true)).expect("the reserve has begun");
+    assert_eq!(stop.status, Status::BudgetExceeded);
+    // A run that answers from its notes as they stand needs no time to write them.
+    assert!(super::out_of_browsing_time(&clocked(91.0, false)).is_none());
+}
+
+#[tokio::test]
+async fn test_a_run_the_clock_stopped_answers_from_what_it_read() {
+    let mut state = clocked(91.0, false);
+    let (pine, _) = capacities();
+    state.notes.add(pine);
+    let ledger = state.ledger.clone();
+    let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Pine capacity 10")));
+    assert_eq!(result.budget.map(|budget| budget.limit), Some(100.0));
+}

@@ -37,7 +37,7 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-use state::{Flow, RunState};
+use state::{Flow, RunState, Stop};
 
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
@@ -331,7 +331,14 @@ impl Agent {
             // A stop's message can quote the page, such as a field's label, and a page can echo a typed secret there;
             // redacting at each raise missed one, so every stop is redacted here before the caller sees it.
             let error = stop.error.as_deref().map(|error| self.redact(error));
-            if matches!(stop.status, Status::Stuck | Status::Unverified) && !state.notes.evidence().is_empty() {
+            // Only a stop on the clock is a budget stop; spend limits raise their own error.
+            let budget = (stop.status == Status::BudgetExceeded).then(|| BudgetStop {
+                resource: BudgetResource::Seconds,
+                limit: ledger.limits.max_seconds.unwrap_or_default(),
+            });
+            if matches!(stop.status, Status::Stuck | Status::Unverified | Status::BudgetExceeded)
+                && !state.notes.evidence().is_empty()
+            {
                 // What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                 let notes = if state.compose { state.notes_to_compose() } else { state.notes.clone() };
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
@@ -339,12 +346,12 @@ impl Agent {
                     && let Ok(composed) = compose(&*self.llm, &state.task, &notes, Some(&state.ledger)).await
                 {
                     let partial = marked_partial(composed);
-                    return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, None);
+                    return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }
-                return self.partial_result(&notes, Some(state), ledger, stop.status, error, None);
+                return self.partial_result(&notes, Some(state), ledger, stop.status, error, budget);
             }
             let wall = self.wall(stop);
-            let outcome = Outcome { error, evidence: stop.evidence.clone(), wall, ..Outcome::default() };
+            let outcome = Outcome { error, evidence: stop.evidence.clone(), wall, budget, ..Outcome::default() };
             return self.result(Some(state), ledger, stop.status, outcome);
         }
         let state = state.map(|state| &*state);
@@ -702,6 +709,19 @@ struct Outcome {
     error: Option<String>,
     budget: Option<BudgetStop>,
     wall: Option<Wall>,
+}
+
+/// The time a run that composes its answer keeps back from its limit to write it: composing waits on one LLM call.
+fn compose_reserve(limit: f64) -> f64 {
+    (limit * 0.1).min(60.0)
+}
+
+/// A run that composes its answer has browsed for as long as it can and still write it within its time limit.
+pub(super) fn out_of_browsing_time(state: &RunState) -> Option<Stop> {
+    let limit = state.ledger.limits.max_seconds?;
+    let elapsed = state.ledger.started()?.elapsed().as_secs_f64();
+    (state.compose && elapsed >= limit - compose_reserve(limit))
+        .then(|| Stop::new(Status::BudgetExceeded, time_limit(limit)))
 }
 
 fn time_limit(limit: f64) -> String {
