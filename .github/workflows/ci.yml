@@ -67,7 +67,7 @@ jobs:
         env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
-  sift:
+  project-rules:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
@@ -81,9 +81,9 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check:browser
       - run: uv run --no-sync actionlint
-      - run: uv run --no-sync python .sift/agents.py check
+      - run: uv run --no-sync python .sloppatrol/agents.py check
       - env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
-        run: uv run --no-sync python .sift/gate.py --base "origin/$BASE"
+        run: uv run --no-sync python .sloppatrol/gate.py --base "origin/$BASE"
       # The Jev review's base-only pull_request_target use needs human review of zizmor's warning.
       - name: Zizmor (advisory)
         continue-on-error: true
@@ -240,16 +240,16 @@ jobs:
     uses: ./.github/workflows/aur.yml
 
   # `check` is the required status check, so its name must not move when the matrix gains a version.
-  # It passes only when the Python matrix, secret scan, sift, SDK and Rust checks pass, and the binaries and the
+  # It passes only when the Python matrix, secret scan, project rules, SDK and Rust checks pass, and the binaries and the
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    needs: [gate, sift, sdk, rust, secrets, changes, binaries, aur]
+    needs: [gate, project-rules, sdk, rust, secrets, changes, binaries, aur]
     if: always()
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
-          SIFT_RESULT: ${{ needs.sift.result }}
+          PROJECT_RULES_RESULT: ${{ needs.project-rules.result }}
           SDK_RESULT: ${{ needs.sdk.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           SECRETS_RESULT: ${{ needs.secrets.result }}
@@ -258,7 +258,7 @@ jobs:
           AUR_RESULT: ${{ needs.aur.result }}
         run: |
           test "$GATE_RESULT" = success
-          test "$SIFT_RESULT" = success
+          test "$PROJECT_RULES_RESULT" = success
           test "$SDK_RESULT" = success
           test "$RUST_RESULT" = success
           test "$SECRETS_RESULT" = success
