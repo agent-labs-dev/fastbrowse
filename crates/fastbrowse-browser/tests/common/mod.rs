@@ -149,6 +149,13 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         respond(&mut stream, if path == "/report.csv?partial" { 206 } else { 200 }, &headers, &body);
         return;
     }
+    if path == "/map.pdf" {
+        // Served inline, as a site links a PDF: Chrome shows it in its viewer instead of downloading it.
+        let body = include_bytes!("../fixtures/wind.pdf");
+        let headers = [("Content-Type", "application/pdf".to_owned()), ("Content-Length", body.len().to_string())];
+        respond(&mut stream, 200, &headers, body);
+        return;
+    }
     if path.starts_with("/files/") {
         let body = b"PK fixture release archive";
         let headers = [("Content-Type", "application/zip".to_owned()), ("Content-Length", body.len().to_string())];

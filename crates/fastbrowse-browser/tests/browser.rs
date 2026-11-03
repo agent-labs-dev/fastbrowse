@@ -1565,6 +1565,23 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
     }
 }
 
+/// Chrome's PDF viewer keeps a PDF's text out of the DOM, so the tab read as an empty page and a run never saw a map
+/// whose every label is text in the file.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_pdf_tab_shows_and_captures_the_text_the_pdf_holds() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/map.pdf").await;
+    assert_eq!(h.observe().await.viewport_text, "[PDF document]\nFairbanks Wind");
+    let capture = h.page.capture().await.expect("capture");
+    let texts: Vec<_> = capture.blocks.iter().map(|block| capture.block_text(block)).collect();
+    assert_eq!(texts, ["Fairbanks Wind"]);
+    assert_eq!(capture.blocks[0].source_url.as_deref(), Some(format!("{}/map.pdf", sites().main).as_str()));
+    h.goto("").await;
+    assert!(!h.observe().await.viewport_text.contains("PDF document"));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_http_error_status_travels_with_the_observed_document() {
     let _turn = turn().await;

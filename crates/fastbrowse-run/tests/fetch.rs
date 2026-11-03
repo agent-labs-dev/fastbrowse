@@ -111,6 +111,16 @@ async fn test_plain_text_is_read_as_one_block() {
 }
 
 #[tokio::test]
+async fn test_a_pdf_is_read_as_the_text_it_holds() {
+    let pdf = include_bytes!("../../fastbrowse-browser/tests/fixtures/wind.pdf");
+    let http = serving(|_| Response::new(200, pdf.to_vec()).with_header("content-type", "application/pdf"));
+    let capture = fetched(&http, "https://www.dteenergy.com/map.pdf").await.expect("fetched");
+    assert_eq!(capture.text.trim(), "Fairbanks Wind");
+    let error = fetched(&client("%PDF-1.4 broken", 200, "application/pdf"), "https://shop.example.com/a.pdf").await;
+    assert!(error.unwrap_err().0.contains("holds no text"));
+}
+
+#[tokio::test]
 async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
     let error = fetched(&client("{}", 200, "application/json"), "https://shop.example.com/api").await.unwrap_err();
     assert!(error.0.contains("not a document read as text"), "{error}");

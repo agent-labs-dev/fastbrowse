@@ -10,6 +10,7 @@ pub mod cdp;
 pub mod cursor;
 pub mod error;
 pub mod page;
+pub mod pdf;
 #[cfg(feature = "recording")]
 pub mod recording;
 pub mod session;

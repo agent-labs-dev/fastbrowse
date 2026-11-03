@@ -574,6 +574,10 @@ impl CdpPage {
                 None => self.origin_once().await?,
             };
             let mut viewport_text = main.map(|m| m.raw.viewport_text.clone()).unwrap_or_default();
+            // Chrome's PDF viewer shows only its toolbar to the DOM; the document's text is what the tab shows.
+            if let Some(pdf) = self.session.pdf_text(&url) {
+                viewport_text = format!("[PDF document]\n{pdf}");
+            }
             let mut notices = String::new();
             for download in self.session.pending_download_texts() {
                 notices.push_str(&format!(
@@ -811,13 +815,15 @@ impl CdpPage {
             Some(main) => main.raw.url.clone(),
             None => self.origin_once().await?,
         };
+        let pdf = self.session.pdf_text(&url);
         for (_, frame) in &frames {
             let frame_key = frame.frame_id.clone().unwrap_or_else(|| MAIN.to_owned());
             match coverage.iter_mut().find(|(s, _)| *s == frame.session_id) {
                 Some(entry) => entry.1 = frame.raw.inaccessible_frames,
                 None => coverage.push((frame.session_id.clone(), frame.raw.inaccessible_frames)),
             }
-            for block in &frame.raw.blocks {
+            // A PDF tab's DOM is Chrome's viewer toolbar, not the document.
+            for block in frame.raw.blocks.iter().filter(|_| pdf.is_none()) {
                 let start = offset;
                 text.push_str(&block.text);
                 offset += text::len(&block.text);
@@ -842,6 +848,30 @@ impl CdpPage {
                     list_count: block.list_count,
                     list_frameless: block.list_frameless,
                 });
+            }
+        }
+        if let Some(pdf) = pdf {
+            for (index, paragraph) in crate::pdf::paragraphs(&pdf).enumerate() {
+                let start = offset;
+                text.push_str(paragraph);
+                offset += text::len(paragraph);
+                blocks.push(Block {
+                    source_id: format!("pdf:{index}"),
+                    source_url: Some(url.clone()),
+                    complete_source: false,
+                    kind: BlockKind::Paragraph,
+                    frame_id: None,
+                    start: int(start),
+                    end: int(offset),
+                    heading_path: vec!["PDF document".to_owned()],
+                    control_context: None,
+                    href: None,
+                    list_id: None,
+                    list_count: None,
+                    list_frameless: false,
+                });
+                text.push_str("\n\n");
+                offset += 2;
             }
         }
         for (index, download) in self.session.download_texts().into_iter().enumerate() {

@@ -261,6 +261,8 @@ pub(crate) struct State {
     pub(crate) download_texts: Vec<DownloadText>,
     /// How many of them an observation has already shown, so each is shown to the run once.
     pub(crate) download_texts_shown: usize,
+    /// The text of each PDF a tab shows, by its address without a fragment. Chrome's viewer keeps it out of the DOM.
+    pub(crate) pdf_texts: HashMap<String, String>,
     /// Every settled download's identity (address, body digest), oldest first, indexed as `downloads_settled` counts.
     /// A refused one has no identity: nothing was saved. A link that only downloads never changes the page, so the
     /// same click taken again looks productive every time; identity is what tells the second save from the first.
@@ -686,6 +688,11 @@ impl BrowserSession {
         let pending = state.download_texts[state.download_texts_shown.min(state.download_texts.len())..].to_vec();
         state.download_texts_shown = state.download_texts.len();
         pending
+    }
+
+    /// The text of the PDF shown at this address, when the document there is a PDF that holds text.
+    pub fn pdf_text(&self, url: &str) -> Option<String> {
+        self.0.state.lock().unwrap().pdf_texts.get(&without_fragment(url)).cloned()
     }
 
     /// Refusals the run has not been told about yet, and now marked as told.
@@ -1722,6 +1729,20 @@ async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
             warn("Download capture failed");
             refuse_download(shared, download_filename(&disposition, &url), &url, Refusal::Failed);
         }
+    } else {
+        let url = without_fragment(&str_of(&event["request"]["url"]));
+        let pdf =
+            response_mime(&mime) == "application/pdf" && event["responseStatusCode"].as_i64().is_some_and(|s| s < 400);
+        let text = match pdf {
+            true => shown_pdf_text(shared, &request_id, &session_id, &headers).await,
+            false => None,
+        };
+        // Any other document at this address replaces the PDF that was there.
+        let mut state = shared.state.lock().unwrap();
+        match text {
+            Some(text) => state.pdf_texts.insert(url, text),
+            None => state.pdf_texts.remove(&url),
+        };
     }
     // Never leave a request paused, even if capture above failed. The request or session may already be gone
     // (navigation, tab close), which is fine to swallow here.
@@ -1762,7 +1783,7 @@ async fn capture_download(
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
-    let readable = readable_text(mime, &raw);
+    let readable = readable_text(mime, &raw).await;
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
@@ -1772,6 +1793,35 @@ async fn capture_download(
         state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete });
     }
     Ok(())
+}
+
+/// The text of a PDF the browser is about to show, read from the paused response. One past the download ceiling is
+/// left unread, as a download that size is.
+async fn shown_pdf_text(
+    shared: &Arc<Shared>,
+    request_id: &str,
+    session_id: &str,
+    headers: &HashMap<String, String>,
+) -> Option<String> {
+    let stated = headers.get("content-length").and_then(|value| content_length(value));
+    if stated.is_some_and(|stated| stated > shared.max_download_bytes as u64) {
+        return None;
+    }
+    let body = shared
+        .session()
+        .send("Fetch.getResponseBody", json!({"requestId": request_id}), Some(session_id))
+        .await
+        .ok()?;
+    let text = body["body"].as_str().unwrap_or_default();
+    let raw =
+        if body["base64Encoded"] == true { BASE64.decode(text.as_bytes()).ok()? } else { text.as_bytes().to_vec() };
+    (raw.len() <= shared.max_download_bytes).then_some(())?;
+    crate::pdf::text(raw).await
+}
+
+/// An address as a document is known by: a fragment names a place in it, not another document.
+fn without_fragment(url: &str) -> String {
+    url.split_once('#').map_or(url, |(document, _)| document).to_owned()
 }
 
 /// Send independent commands at once and wait for all of them, failing with the first error as
@@ -1948,9 +1998,12 @@ fn is_download(mime: &str, disposition: &str) -> bool {
     DOWNLOAD_MIME_TYPES.contains(&response_mime(mime).as_str())
 }
 
-/// The response's text when it is a text file the run should be able to read, else None.
-fn readable_text(mime: &str, raw: &[u8]) -> Option<String> {
+/// The response's text when it is a text file or a PDF the run should be able to read, else None.
+async fn readable_text(mime: &str, raw: &[u8]) -> Option<String> {
     let kind = response_mime(mime);
+    if kind == "application/pdf" {
+        return crate::pdf::text(raw.to_vec()).await;
+    }
     if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
         return None;
     }
@@ -2148,11 +2201,13 @@ mod tests {
         assert_eq!(content_length("-1"), None);
     }
 
-    #[test]
-    fn text_downloads_are_read_whole() {
+    #[tokio::test]
+    async fn text_and_pdf_downloads_are_read_whole() {
         let raw = vec![b'a'; 100_000];
-        assert_eq!(readable_text("text/csv", &raw).unwrap().len(), raw.len());
-        assert_eq!(readable_text("application/zip", b"PK"), None);
+        assert_eq!(readable_text("text/csv", &raw).await.unwrap().len(), raw.len());
+        assert_eq!(readable_text("application/zip", b"PK").await, None);
+        let pdf = readable_text("application/pdf", include_bytes!("../tests/fixtures/wind.pdf")).await;
+        assert_eq!(pdf.as_deref(), Some("Fairbanks Wind"));
     }
 
     #[test]
