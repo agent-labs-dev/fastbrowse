@@ -103,12 +103,58 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes) -> ComposedAnswer {
 #[serde(deny_unknown_fields)]
 struct AnswerDraft {
     claims: Vec<Claim>,
+    /// The column names of the table the task asks for, each claim then being one of its rows.
+    columns: Option<Vec<String>>,
 }
 
 impl Schema for AnswerDraft {
     fn ty() -> Ty {
-        ModelTy::frozen("AnswerDraft", vec![Field::required("claims", Ty::list(Claim::ty()))]).ty()
+        ModelTy::frozen(
+            "AnswerDraft",
+            vec![
+                Field::required("claims", Ty::list(Claim::ty())),
+                Field::default("columns", Ty::optional(Ty::list(Ty::Str)), serde_json::Value::Null),
+            ],
+        )
+        .ty()
     }
+}
+
+/// What the composer wrote: its claims, and the columns when the task asks for a table.
+type Drafted = (Option<Vec<String>>, Vec<Claim>);
+
+const CELL: &str = " | ";
+
+/// `answer` as the table the task asked for: one row per claim, its citations in a last column. An answer whose claims
+/// do not each split into one cell per column stays as written.
+fn tabled(columns: Option<Vec<String>>, answer: ComposedAnswer) -> ComposedAnswer {
+    let Some(columns) = columns.filter(|columns| columns.len() > 1) else { return answer };
+    let lines: Vec<&str> = answer.linked_answer.split("\n\n").collect();
+    let rows: Option<Vec<(Vec<&str>, &str)>> = (lines.len() == answer.claims.len())
+        .then(|| {
+            answer
+                .claims
+                .iter()
+                .zip(&lines)
+                .map(|(claim, line)| {
+                    let cells: Vec<&str> = claim.text.split(CELL).map(str::trim).collect();
+                    let links = line.strip_prefix(claim.text.as_str())?.trim();
+                    (!claim.text.contains('\n') && cells.len() == columns.len()).then_some((cells, links))
+                })
+                .collect()
+        })
+        .flatten();
+    let Some(rows) = rows else { return answer };
+    let row = |cells: &[&str]| format!("| {} |", cells.join(CELL));
+    let header: Vec<&str> = columns.iter().map(String::as_str).collect();
+    let rule = |count: usize| row(&vec!["---"; count]);
+    let mut plain = vec![row(&header), rule(header.len())];
+    let mut linked = vec![row(&[header.as_slice(), &["Sources"]].concat()), rule(header.len() + 1)];
+    for (cells, links) in rows {
+        plain.push(row(&cells));
+        linked.push(row(&[cells.as_slice(), &[links]].concat()));
+    }
+    ComposedAnswer { answer: plain.join("\n"), linked_answer: linked.join("\n"), ..answer }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,7 +164,7 @@ struct ComposeItem {
     sources: Vec<String>,
 }
 
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and write each claim as one row: its cells in column order, separated by \" | \", with no other text. Otherwise set columns to null.\n\n# Trust\n";
 
 fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
     [
@@ -199,7 +245,7 @@ async fn compose_part(
     task: &str,
     items: &[ComposeItem],
     ledger: Option<&Ledger>,
-) -> Result<Vec<Claim>> {
+) -> Result<Drafted> {
     let written: Vec<String> = items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect();
     let messages = compose_messages(task, &written);
     let draft = generate::<AnswerDraft>(llm, LLMPurpose::Compose, &messages, ledger).await?;
@@ -220,7 +266,7 @@ async fn compose_part(
             (!cited.is_empty()).then(|| Claim::new(&claim.text, cited))
         })
         .collect();
-    Ok(claims)
+    Ok((draft.data.columns, claims))
 }
 
 async fn compose_packed(
@@ -229,16 +275,19 @@ async fn compose_packed(
     mut items: Vec<ComposeItem>,
     limit: usize,
     ledger: Option<&Ledger>,
-) -> Result<Vec<Claim>> {
+) -> Result<Drafted> {
     let mut seen: HashSet<Vec<Claim>> = HashSet::new();
     loop {
         let parts = pack_items(task, &items, limit)?;
         let mut claims = Vec::new();
+        let mut columns = None;
         for part in &parts {
-            claims.extend(compose_part(llm, task, part, ledger).await?);
+            let (part_columns, part_claims) = compose_part(llm, task, part, ledger).await?;
+            columns = columns.or(part_columns);
+            claims.extend(part_claims);
         }
         if parts.len() == 1 || claims.len() <= 1 || !seen.insert(claims.clone()) {
-            return Ok(claims);
+            return Ok((columns, claims));
         }
         items = claims
             .into_iter()
@@ -264,15 +313,13 @@ pub async fn compose(
     let items = initial_items(&facts);
     let written: Vec<String> = items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect();
     let messages = compose_messages(task, &written);
-    let Some(context) = llm.context_tokens(LLMPurpose::Compose).await else {
-        return Ok(assemble_answer(&compose_part(llm, task, &items, ledger).await?, notes));
+    let (columns, claims) = match llm.context_tokens(LLMPurpose::Compose).await {
+        Some(context) if estimated_context_bytes(&messages) > context_limit(context)? => {
+            compose_packed(llm, task, items, context_limit(context)?, ledger).await?
+        }
+        _ => compose_part(llm, task, &items, ledger).await?,
     };
-    let limit = context_limit(context)?;
-    if estimated_context_bytes(&messages) <= limit {
-        return Ok(assemble_answer(&compose_part(llm, task, &items, ledger).await?, notes));
-    }
-    let claims = compose_packed(llm, task, items, limit, ledger).await?;
-    Ok(assemble_answer(&claims, notes))
+    Ok(tabled(columns, assemble_answer(&claims, notes)))
 }
 
 fn initial_items(facts: &[&crate::memory::Fact]) -> Vec<ComposeItem> {
@@ -408,6 +455,23 @@ mod tests {
 
     use super::*;
     use crate::memory::Fact;
+
+    fn answer(claims: &[&str]) -> ComposedAnswer {
+        let claims: Vec<Claim> = claims.iter().map(|text| Claim::new(text, vec!["f".into()])).collect();
+        let linked = claims.iter().map(|claim| format!("{} [1](<https://shop.test/>)", claim.text)).collect::<Vec<_>>();
+        ComposedAnswer { answer: String::new(), linked_answer: linked.join("\n\n"), claims, citations: Vec::new() }
+    }
+
+    #[test]
+    fn a_task_asking_for_a_table_gets_one_row_per_claim() {
+        let columns = Some(vec!["Product".into(), "Fabric".into()]);
+        let table = tabled(columns.clone(), answer(&["TEE | 100% cotton", "TOP | not shown"]));
+        assert_eq!(table.answer, "| Product | Fabric |\n| --- | --- |\n| TEE | 100% cotton |\n| TOP | not shown |");
+        assert!(table.linked_answer.ends_with("| TOP | not shown | [1](<https://shop.test/>) |"));
+        // A claim that is not a row leaves the answer as the composer wrote it.
+        let prose = answer(&["TEE | 100% cotton", "The site lists two products."]);
+        assert_eq!(tabled(columns, prose.clone()), prose);
+    }
 
     struct RecordingLlm {
         context: Option<i64>,
