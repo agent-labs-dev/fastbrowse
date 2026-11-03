@@ -79,7 +79,10 @@ fn value_questions<'a>(
     let tried = if tried.is_empty() {
         String::new()
     } else {
-        format!(" Already typed here: {}. A value the page rejected is not typed again.", tried.join(", "))
+        format!(
+            " Already typed here: {}. Earlier typing does not prove the page rejected the value. Choose what the task requires; the page may have changed it.",
+            tried.join(", ")
+        )
     };
     let options = word_options(text, group);
     let mut asked = vec![("source", source_question, sources)];

@@ -1021,6 +1021,46 @@ async fn test_a_value_whose_end_is_picked_before_its_beginning_asks_for_the_end_
     assert_eq!(text, "SW1A 1AA");
 }
 
+struct TypingAttempts;
+
+impl DecisionClient for TypingAttempts {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            for key in ["first", "last"] {
+                let Question::Choice(question) = &questions[key] else { panic!("span choice") };
+                assert!(question.instructions.contains("Already typed here: 'Alpha-17'"));
+                assert!(question.instructions.contains("Earlier typing does not prove the page rejected the value"));
+                assert!(!question.instructions.contains("is not typed again"));
+            }
+            Picks(&[("source", "task"), ("first", "1"), ("last", "1")]).evaluate(state, questions).await
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_typing_history_does_not_claim_a_value_was_rejected() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(TypingAttempts), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Use Alpha-17".into();
+    state.history.push(HistoryEntry {
+        text: Some("Alpha-17".into()),
+        ..executed(Some(Operation::Fill), Some("Reference"), false)
+    });
+    let value = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Reference"))
+        .await
+        .unwrap();
+    assert_eq!(value, "Alpha-17");
+}
+
 struct EndValues;
 
 impl DecisionClient for EndValues {

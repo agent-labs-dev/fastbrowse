@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.
+
 - A cancelled run preserves the steps it reported, known charges and finished recordings in a cancellation receipt. It remains an error with no success status or answer, and unpriced charges remain unknown. Failed cloud browser starts retain their known cost. Rust callers now match `RunError::Cancelled(receipt)` instead of the unit variant.
 
 - A copied field value is chosen from complete source spans. The end selection shows the text each choice would type, so surrounding task instructions can be excluded.

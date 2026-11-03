@@ -8,7 +8,8 @@ fastbrowse splits a browser agent into three owners:
 
 When a field value is copied, Jev selects its source and first word. If its end needs a separate choice,
 each choice shows the complete text that would be typed from that first word to the candidate end.
-Code copies the selected span unchanged.
+Code copies the selected span unchanged. Earlier typing is shown as history, without assuming
+rejection or requiring a different value when the page changed the field.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
