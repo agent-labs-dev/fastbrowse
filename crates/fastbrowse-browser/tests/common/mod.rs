@@ -126,6 +126,12 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         );
         return;
     }
+    if let Some(query) = path.strip_prefix("/slow-page?ms=") {
+        // A page whose parse waits on a slow script in its head, as a site behind a slow proxy does.
+        let body = format!("<html><head><script src=\"/slow?ms={query}\"></script></head><body>Loaded</body></html>");
+        respond(&mut stream, 200, &[html, ("Content-Length", body.len().to_string())], body.as_bytes());
+        return;
+    }
     if let Some(status) = path.strip_prefix("/http-error/") {
         let body = b"<html><body>Sorry</body></html>";
         respond(&mut stream, status.parse().unwrap_or(500), &[html, ("Content-Length", body.len().to_string())], body);

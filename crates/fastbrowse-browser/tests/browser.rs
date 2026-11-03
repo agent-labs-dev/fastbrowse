@@ -1565,6 +1565,17 @@ async fn test_a_csv_download_is_read_row_by_row_and_cites_the_response() {
     }
 }
 
+/// A try restarts the load, so a page whose parse waits on a script slower than one try's wait was never ready on any.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_page_slower_than_one_try_is_waited_for() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    let url = format!("{}/slow-page?ms=1200", sites().main);
+    h.page.navigate_within(&url, 0.4, None).await.expect("a slow page becomes ready on a later, longer try");
+    assert!(h.observe().await.viewport_text.contains("Loaded"));
+    h.close().await;
+}
+
 /// Chrome's PDF viewer keeps a PDF's text out of the DOM, so the tab read as an empty page and a run never saw a map
 /// whose every label is text in the file. A PDF tab is kept as a downloaded file is, and its text reaches the run so.
 #[tokio::test(flavor = "multi_thread")]

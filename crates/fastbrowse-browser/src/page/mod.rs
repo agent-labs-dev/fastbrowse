@@ -63,7 +63,9 @@ pub(crate) const SCREENSHOT_STALL_SECONDS: f64 = 5.0;
 pub(crate) const HISTORY_REREADS: u32 = 2;
 /// Two tries a second apart were not enough behind a cloud browser's proxy: in three 0.5.8 evals of about 300 runs,
 /// a first page failed both, once on a certificate error, twice timing out connecting and once never becoming ready,
-/// each while the site answered the harness and Browser Use's agent reloaded its way through.
+/// each while the site answered the harness and Browser Use's agent reloaded its way through. Each try waits twice as
+/// long as the one before for the page to become ready: a try restarts the load, so a page whose scripts take longer
+/// than one wait, as DTE Energy's took 35 s each behind the proxy, was otherwise never ready on any try.
 pub(crate) const NAVIGATE_ATTEMPTS: u32 = 4;
 /// Doubled after each failed try.
 pub(crate) const NAVIGATE_RETRY_SECONDS: f64 = 1.0;
@@ -1153,7 +1155,7 @@ impl CdpPage {
                 timed_out = false;
                 continue;
             }
-            if self.ready(&session_id, load_timeout_seconds).await? {
+            if self.ready(&session_id, load_timeout_seconds * f64::from(1u32 << attempt)).await? {
                 // Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
                 let _ = self.changed_since("", requests).await;
                 return Ok(());
