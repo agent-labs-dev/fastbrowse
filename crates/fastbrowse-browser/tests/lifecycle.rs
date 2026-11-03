@@ -644,7 +644,12 @@ async fn test_attach_adopts_its_popups_and_windows_without_opener_only_when_matc
             if let Some(opener) = opener {
                 info["openerId"] = opener.into();
             }
-            testing::dispatch(&session, "Target.targetCreated", json!({"targetInfo": info}), None);
+            testing::dispatch(
+                &session,
+                "Target.attachedToTarget",
+                json!({"targetInfo": info, "sessionId": format!("session-{target_id}"), "waitingForDebugger": target_id != "other"}),
+                None,
+            );
         }
         assert_eq!(session.popups(), adopted, "{target_match:?}");
         assert!(testing::popups(&session).iter().all(|(_, opener, _)| opener == "app"));

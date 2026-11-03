@@ -175,6 +175,10 @@ awake, without which a screenshot of an idle page waits seconds for a frame; it 
 frame, on a session of its own so that live frames and recordings cannot replace it. Measured on Chrome 155 in
 a headed window beside a focused window of another program: none of the session's commands moved focus.
 
+New popup pages pause until Fetch can capture their first response, including an inline PDF. Renderer setup
+follows resuming the page because a paused popup may have no renderer yet. A page outside the run's ownership
+is resumed and detached.
+
 What still moves it is Chrome's own doing: a popup a page opens is created in front, and a pointer press
 dispatched to the front tab of an inactive window activates that window, as an attached window often is.
 

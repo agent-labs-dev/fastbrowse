@@ -422,17 +422,15 @@ impl BrowserSession {
                 ])
                 .await?;
             }
-            if self.0.grant.is_some() {
-                // A popup's first request can leave before a session attached after targetCreated has Fetch on, so a
-                // scoped run has every new page attach paused and resumes it only once its Fetch is enabled.
-                self.send(
-                    "Target.setAutoAttach",
-                    json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
-                        "filter": [{"type": "page", "exclude": false}, {"exclude": true}]}),
-                    None,
-                )
-                .await?;
-            }
+            // A popup's first response can arrive before targetCreated adoption enables Fetch, losing inline PDFs
+            // and downloads. New pages pause until their session can capture; unrelated pages resume and detach.
+            self.send(
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+                    "filter": [{"type": "page", "exclude": false}, {"exclude": true}]}),
+                None,
+            )
+            .await?;
             Ok::<(), BrowserError>(())
         }
         .await;
@@ -1004,6 +1002,10 @@ impl BrowserSession {
             patterns.push(scope_pattern());
         }
         let s = Some(session_id);
+        // A new popup has no renderer until it resumes, so renderer setup waits forever if it precedes this. Fetch
+        // is enabled first so the initial request meets any scope gate and its response can be captured.
+        self.send("Fetch.enable", json!({"patterns": patterns}), s).await?;
+        self.send("Runtime.runIfWaitingForDebugger", json!({}), s).await?;
         let mut commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>> = vec![];
         for domain in ENABLE_DOMAINS {
             commands
@@ -1016,7 +1018,6 @@ impl BrowserSession {
             ("Runtime.addBinding", json!({"name": INPUT_NAVIGATION_BINDING, "executionContextName": INPUT_WORLD})),
             ("Page.addScriptToEvaluateOnNewDocument", json!({"source": INPUT_HISTORY_JS, "worldName": INPUT_WORLD})),
             ("Target.setAutoAttach", json!({"autoAttach": true, "waitForDebuggerOnStart": scoped, "flatten": true})),
-            ("Fetch.enable", json!({"patterns": patterns})),
         ];
         for (method, params) in sends {
             commands.push(Box::pin(async move { self.send(method, params, s).await.map(drop) }));
@@ -1038,9 +1039,6 @@ impl BrowserSession {
             }));
         }
         together(commands).await?;
-        if scoped {
-            self.send("Runtime.runIfWaitingForDebugger", json!({}), s).await?;
-        }
         Ok(())
     }
 
@@ -1320,14 +1318,6 @@ impl Shared {
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.navigating.retain(|(sid, _)| *sid != child);
             }
-            // A scoped run adopts popups where they attach paused, not here, after their first request may have left.
-            "Target.targetCreated" if self.grant.is_none() => {
-                let info = &params["targetInfo"];
-                let mut state = self.state.lock().unwrap();
-                if let Some(opener) = self.popup_opener(&state, info) {
-                    self.begin_popup(&mut state, &str_of(&info["targetId"]), &opener, None);
-                }
-            }
             "Target.targetInfoChanged" => {
                 let info = &params["targetInfo"];
                 let target_id = str_of(&info["targetId"]);
@@ -1338,13 +1328,6 @@ impl Shared {
                         info["url"].as_str().unwrap_or_default(),
                         info["title"].as_str().unwrap_or_default(),
                     );
-                } else if self.grant.is_none()
-                    && info["openerId"].as_str().is_some_and(|o| !o.is_empty())
-                    && !state.popups.iter().any(|p| p.target_id == target_id)
-                    && let Some(opener) = self.popup_opener(&state, info)
-                {
-                    // An opener Chrome reports only after the target was created makes it the run's popup from then on.
-                    self.begin_popup(&mut state, &target_id, &opener, None);
                 }
             }
             "Target.targetDestroyed" => {
@@ -1400,7 +1383,7 @@ impl Shared {
         let mut state = self.state.lock().unwrap();
         match session {
             None => {
-                if self.grant.is_some() && paused {
+                if paused {
                     self.on_new_page(&mut state, info, &child);
                 }
             }
@@ -1416,8 +1399,9 @@ impl Shared {
                     let _ = session.prepare_session(&child).await;
                 });
             }
-            Some(_) if self.grant.is_some() && paused => {
-                // A worker has no document to scope.
+            Some(_) if info["type"] == "page" && paused => self.on_new_page(&mut state, info, &child),
+            Some(_) if paused => {
+                // A worker has no document to capture or scope.
                 let session = self.session();
                 self.spawn(&mut state, async move {
                     let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(&child)).await;
@@ -1427,7 +1411,7 @@ impl Shared {
         }
     }
 
-    /// A page that opened since a scoped run asked for them paused. Sessions this run attached itself, and windows
+    /// A page that opened since the run asked for them paused. Sessions this run attached itself, and windows
     /// open before it asked, arrive with nothing to wait on and are left as they are.
     fn on_new_page(self: &Arc<Self>, state: &mut State, info: &Value, child: &str) {
         match self.popup_opener(state, info) {

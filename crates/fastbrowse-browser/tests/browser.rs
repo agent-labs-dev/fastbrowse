@@ -1593,6 +1593,26 @@ async fn test_a_pdf_tab_shows_and_captures_the_text_the_pdf_holds() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_pdf_popup_is_readable_from_its_first_response() {
+    let _turn = turn().await;
+    let Some(h) = loaded().await else { return };
+    eval_active(
+        &h,
+        r#"document.body.insertAdjacentHTML('beforeend', '<a href="/map.pdf" target="_blank">Open PDF</a>')"#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let result = act(&h.page, click(find(&obs, "Open PDF")), &obs).await;
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    let capture = h.page.capture().await.expect("capture");
+    let url = format!("{}/map.pdf", sites().main);
+    let pdf =
+        capture.blocks.iter().find(|block| block.source_url.as_deref() == Some(url.as_str())).expect("popup PDF text");
+    assert_eq!(capture.block_text(pdf), "Fairbanks Wind");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_http_error_status_travels_with_the_observed_document() {
     let _turn = turn().await;
     for status in [403u16, 419, 429, 503, 999] {
