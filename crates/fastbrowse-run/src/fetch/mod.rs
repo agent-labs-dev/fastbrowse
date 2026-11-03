@@ -177,10 +177,7 @@ pub async fn fetch_document(
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
     // 200 to one that names it. The version is the crate's own.
     let headers = [
-        (
-            "accept".to_string(),
-            "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8,application/pdf;q=0.8".to_string(),
-        ),
+        ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
         ("accept-encoding".to_string(), "gzip, deflate".to_string()),
         ("user-agent".to_string(), format!("fastbrowse/{}", env!("CARGO_PKG_VERSION"))),
     ];
@@ -221,19 +218,6 @@ pub async fn fetch_document(
     let mime = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
-    if mime == "application/pdf" {
-        let text = fastbrowse_browser::pdf::text(body.into_owned()).await;
-        let text = text.ok_or_else(|| refused("the PDF holds no text, which leaves its pages to the browser"))?;
-        let found = fastbrowse_browser::pdf::paragraphs(&text)
-            .map(|paragraph| Found {
-                kind: BlockKind::Paragraph,
-                text: clean(paragraph),
-                heading_path: Vec::new(),
-                href: None,
-            })
-            .collect();
-        return Ok(Fetched { capture: capture(&final_url, String::new(), found), controls: Vec::new() });
-    }
     let body = decode(content_type, &body, HTML_TYPES.contains(&mime.as_str()));
     if mime == "text/plain" {
         if text::strip(&body).is_empty() {
