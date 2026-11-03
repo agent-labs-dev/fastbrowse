@@ -8,9 +8,10 @@ use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
     NoulAnswer, Question,
 };
+use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Event, EventHandler, Evidence, FactReader,
-    Limits, Operation, Status, StepOutcome, StepResult,
+    LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
@@ -1096,6 +1097,35 @@ impl Page for Screenshots {
     }
 }
 
+/// A composer that reads a value off the attached screenshot, so a drawn page's read can be followed.
+struct ImageLLM;
+
+impl LLMClient for ImageLLM {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            if let Some(ledger) = ledger {
+                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
+            }
+            let reply = match purpose {
+                LLMPurpose::Compose => json!({"text": "premium 3.459 per gallon"}),
+                _ => json!(null),
+            };
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            let cost = CostLine {
+                purpose: Some(purpose),
+                ..CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0))
+            };
+            Ok(Generation { data, cost })
+        })
+    }
+}
+
 /// The scripted Jev, its every choice held at `confidence`, and the states it was shown.
 struct Unsure(ScriptedJev, f64, std::sync::Mutex<Vec<serde_json::Value>>);
 
@@ -1151,6 +1181,28 @@ async fn test_past_the_recovery_budget_the_run_ends_with_the_reason() {
     let withheld = super::recovery::withheld(&decision);
     let error = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
     assert!(matches!(error, Some(Flow::Stop(stop)) if stop.error.as_deref() == Some("nothing changed")));
+}
+
+#[tokio::test]
+async fn test_a_drawn_page_is_read_before_a_stalled_run_gives_up() {
+    // A Street View run turned the map for a price only the pixels showed, and stalled before `conclude`, so the read
+    // added there never ran and the stop carried no answer. The give-up now reads the screenshot first.
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ImageLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let rotate = button("Rotate the view");
+    let page = Observation { visual_content: true, ..observation(std::slice::from_ref(&rotate)) };
+    let decision = code_decision(Operation::Click, Some(rotate));
+    let withheld = super::recovery::withheld(&decision);
+    let error = agent.recover(&mut state, &page, "no_progress (3)", Status::Stuck, withheld).await.err();
+    assert!(matches!(error, Some(Flow::Stop(ref stop)) if stop.status == Status::Stuck), "{error:?}");
+    assert!(state.notes.answered(), "what the screenshot showed stands as the answer");
+    let fact = state.notes.facts()[0];
+    assert_eq!(fact.text, "premium 3.459 per gallon");
+    let evidence = fact.evidence.as_ref().expect("cited to the screenshot");
+    assert!(!evidence.rendered_text);
+    assert!(evidence.quote.starts_with("read from the screenshot:"));
 }
 
 #[tokio::test]

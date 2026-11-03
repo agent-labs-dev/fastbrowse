@@ -62,6 +62,11 @@ impl Agent {
         {
             return Err(failure.stop().into());
         }
+        // A drawn page's answer may be only in its pixels, so it is read before the run treats "nothing read" as a
+        // step short of the answer. Without this the run recovers on a page whose answer is in the image it shows.
+        if output_schema.is_none() {
+            self.read_drawn_page(state, observation).await?;
+        }
         // DONE on nothing read, when the task wants to be told something, is a step short of the answer.
         if output_schema.is_none() && state.notes.facts().is_empty() && self.asks_to_be_told(state, observation).await?
         {
@@ -106,27 +111,34 @@ impl Agent {
         Ok(extract(&*self.jev, task, &capture, schema, &options).await?)
     }
 
+    /// Read a drawn page's screenshot into the notes when nothing read answers the task.
+    ///
+    /// A drawn page's answer is only in its pixels: the text layer cannot quote it. The task's wording may allow
+    /// saying the value is not visible, and a person looking at the same screen reads it off the image; without this
+    /// the run reports nothing while the value is in view. The read runs wherever the run is about to answer or give
+    /// up on such a page, so a run that stalls before `conclude` still reads what the screen showed.
+    pub(super) async fn read_drawn_page(&self, state: &mut RunState, observation: &Observation) -> Step {
+        // What a failed page shows is not what the task asked to be told, as the text read holds too.
+        if state.page_failed || !observation.visual_content || state.notes.answered() {
+            return Ok(());
+        }
+        let Some(png) = self.viewport().await? else { return Ok(()) };
+        let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
+        state.ledger.record([reading.cost.clone()])?;
+        if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
+            state.notes.add_image_read(&text, &observation.url, observation.captured_at, &png);
+        }
+        Ok(())
+    }
+
     pub(super) async fn conclude(
         &self,
         state: &mut RunState,
         observation: &Observation,
         output_schema: Option<&RecordSchema>,
     ) -> Step<RunResult> {
-        // A drawn page's answer is only in its pixels: the text layer cannot quote it, so the screenshot's own text is
-        // read into the notes before the answer is composed. The task's wording may allow saying the value is not
-        // visible, and a person looking at the same screen reads it off the image; without this the run reports
-        // nothing while the value is in view, which is what BU Bench bu2-120 did after reaching Street View.
-        if output_schema.is_none()
-            && observation.visual_content
-            && !state.notes.answered()
-            && let Some(png) = self.viewport().await?
-        {
-            let reading =
-                crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
-            state.ledger.record([reading.cost.clone()])?;
-            if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
-                state.notes.add_image_read(&text, &observation.url, observation.captured_at, &png);
-            }
+        if output_schema.is_none() {
+            self.read_drawn_page(state, observation).await?;
         }
         let mut evidence: Vec<Evidence> = state.notes.facts().iter().filter_map(|fact| fact.evidence.clone()).collect();
         let extraction = match output_schema {

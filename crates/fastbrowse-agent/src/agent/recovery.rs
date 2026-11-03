@@ -117,6 +117,12 @@ impl Agent {
             // "no_progress (3)" has nothing to supply before running the same task again.
             let unfilled = unfilled(observation, &state.missing);
             let status = if unfilled.is_empty() { gives_up_as } else { Status::NeedsInput };
+            // A drawn page's answer may be only in its pixels. Read the screenshot before the run gives up, so the
+            // answer it composes cites what the screen showed instead of ending empty. The read is the same one
+            // `conclude` makes, moved onto the path a stalled run reaches without ever concluding.
+            if status == Status::Stuck {
+                self.read_drawn_page(state, observation).await?;
+            }
             let reason = match unfilled.as_slice() {
                 [] => reason,
                 [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
