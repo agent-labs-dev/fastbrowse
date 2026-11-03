@@ -668,13 +668,11 @@ def test_a_whole_current_suite_clears_coverage() -> None:
     assert not any(finding.check == "coverage" for finding in report.blocking)
 
 
-def test_core_coverage_ignores_an_unrelated_heldout_baseline() -> None:
+def test_core_coverage_ignores_an_unrelated_dev_baseline() -> None:
     """A suite the candidate did not claim is not its business, however much a baseline ran of it."""
     sources = suite_rows("core")
-    heldout = _at_release(suite_rows("heldout"), "9.9.8")
-    report = publication.gate(
-        sources, release=RELEASE, ledger=evidence(sources), baselines_=heldout, require_ledger=True
-    )
+    other = _at_release(suite_rows("dev"), "9.9.8")
+    report = publication.gate(sources, release=RELEASE, ledger=evidence(sources), baselines_=other, require_ledger=True)
     assert not any(finding.check == "coverage" for finding in report.blocking)
     assert report.blocking == ()
 

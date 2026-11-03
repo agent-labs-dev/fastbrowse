@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# sift-scope: changed
-# sift-fix: Point the comment at the file that holds the code now, or drop a citation of a removed file.
+# sloppatrol-scope: changed
+# sloppatrol-fix: Point the comment at the file that holds the code now, or drop a citation of a removed file.
 """Report code comments that cite a repository path which no longer exists.
 
 A path resolves when it exists from the repository root or from any directory
@@ -30,21 +30,21 @@ def resolves(root: Path, citing: str, cited: str) -> bool:
 
 
 def main() -> int:
-    root = Path(os.environ["SIFT_ROOT"])
-    rule = os.environ["SIFT_RULE"]
-    if os.environ.get("SIFT_CHANGED"):
+    root = Path(os.environ["SLOPPATROL_ROOT"])
+    rule = os.environ["SLOPPATROL_RULE"]
+    if os.environ.get("SLOPPATROL_CHANGED"):
         paths = []
-        for line in Path(os.environ["SIFT_CHANGED"]).read_text().splitlines():
+        for line in Path(os.environ["SLOPPATROL_CHANGED"]).read_text().splitlines():
             parts = line.split("\t")
             if parts[0] in ("A", "M"):
                 paths.append(parts[1])
             elif parts[0] == "R":
                 paths.append(parts[2])
     else:
-        paths = Path(os.environ["SIFT_FILES"]).read_text().splitlines()
+        paths = Path(os.environ["SLOPPATROL_FILES"]).read_text().splitlines()
     found = 0
     for path in sorted(set(paths)):
-        if path.startswith(".sift/") or Path(path).suffix not in CODE or not (root / path).is_file():
+        if path.startswith(".sloppatrol/") or Path(path).suffix not in CODE or not (root / path).is_file():
             continue
         text = (root / path).read_text(errors="replace")
         for number, line in enumerate(text.splitlines(), 1):

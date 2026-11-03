@@ -3,9 +3,7 @@
   "suites": [
     "core",
     "dev",
-    "heldout",
-    "stretch-dev",
-    "stretch-heldout"
+    "stretch-dev"
   ],
   "tasks": [
     {
@@ -411,7 +409,7 @@
     },
     {
       "id": "books-mystery-cheapest",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://books.toscrape.com/",
       "task": "Which is the cheapest book in the Mystery category, and what does it cost?",
@@ -423,7 +421,7 @@
     },
     {
       "id": "quotes-einstein-count",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://quotes.toscrape.com/",
       "task": "How many quotes by Albert Einstein are there across the whole site?",
@@ -435,7 +433,7 @@
     },
     {
       "id": "quotes-js-page2",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://quotes.toscrape.com/js/",
       "task": "Who wrote the first quote on the second page?",
@@ -447,7 +445,7 @@
     },
     {
       "id": "crates-serde",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://crates.io/",
       "task": "What is the latest stable version of the serde crate?",
@@ -459,7 +457,7 @@
     },
     {
       "id": "httpx-requires-python",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://pypi.org/",
       "task": "What is the oldest Python version the latest httpx release supports?",
@@ -471,7 +469,7 @@
     },
     {
       "id": "new-tab-page",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "widget",
       "start": "https://www.qa-practice.com/elements/new_tab/link",
       "task": "Follow the link that opens a new tab and tell me the sentence the new page shows.",
@@ -483,7 +481,7 @@
     },
     {
       "id": "countries-namibia-area",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://www.scrapethissite.com/pages/simple/",
       "task": "What area, in square kilometres, does this page list for Namibia?",
@@ -495,7 +493,7 @@
     },
     {
       "id": "table-total-due",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://the-internet.herokuapp.com/tables",
       "task": "In the second table, what is the total amount due across all of its rows?",
@@ -507,7 +505,7 @@
     },
     {
       "id": "quotes-search-lewis",
-      "suite": "heldout",
+      "suite": "dev",
       "category": "lookup",
       "start": "https://quotes.toscrape.com/search.aspx",
       "task": "Use the search form to find C.S. Lewis's quote tagged god, and tell me what it says.",
@@ -615,7 +613,7 @@
     },
     {
       "id": "stretch-bstack-apple-samsung",
-      "suite": "stretch-heldout",
+      "suite": "stretch-dev",
       "category": "widget",
       "start": "https://bstackdemo.com/",
       "task": "Filter the product list to Apple and Samsung together, then remove the Apple filter so only Samsung remains. Sort by price highest to lowest, and tell me the three most expensive phones and their prices.",
@@ -627,7 +625,7 @@
     },
     {
       "id": "stretch-datepicker-last-sunday",
-      "suite": "stretch-heldout",
+      "suite": "stretch-dev",
       "category": "widget",
       "start": "https://testautomationpractice.blogspot.com/",
       "task": "Using Date Picker 2, the dd/mm/yyyy calendar, select the last Sunday of the month after next. Tell me the date the field shows.",
@@ -639,7 +637,7 @@
     },
     {
       "id": "stretch-books-sequential-art-one-star",
-      "suite": "stretch-heldout",
+      "suite": "stretch-dev",
       "category": "lookup",
       "start": "https://books.toscrape.com/catalogue/category/books/sequential-art_5/index.html",
       "task": "Across every page of the Sequential Art category, how many books are rated one star, and which of them is the most expensive, at what price?",

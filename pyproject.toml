@@ -57,20 +57,20 @@ dev = [
     "pytest>=9.2,<10",
     "pytest-asyncio>=1.4.1,<2",
     "ruff>=0.17.3,<1",
-    "vale==3.25.1.0",
+    "vale==3.26.0.1",
     "pytest-timeout>=2.4,<3",
-    "ty==0.0.94",          # preview: pinned, and moved with the pre-commit hook
+    "ty==0.0.96",          # preview: pinned, and moved with the pre-commit hook
     "pre-commit>=4.7.0",
     "actionlint-py==1.7.12.25",
 ]
 # snapshot.js benchmarks (`benchmarks/`), which CodSpeed runs when the script changes.
-bench = ["pytest-codspeed>=5.0.3,<6"]
+bench = ["pytest-codspeed>=5.0.4,<6"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py313"
 # Keep vendored helpers byte-for-byte identical to upstream.
-extend-exclude = [".sift/gate.py", ".sift/agents.py"]
+extend-exclude = [".sloppatrol/gate.py", ".sloppatrol/agents.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC"]
