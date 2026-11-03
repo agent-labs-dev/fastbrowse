@@ -108,6 +108,8 @@ outside the browse result schema. Client cancellation notifications and abandone
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. Control changes are compared within one document;
 a new document reports its controls instead of treating reused IDs as edits to the page left behind.
+An empty observation waits once per document on loading events before action history and progress are recorded.
+Reloading remains restricted to an untouched opening page, since retrying a later page could repeat a submission.
 `StallRules` has one stall rule: a step that
 changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no
 progress, and `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds

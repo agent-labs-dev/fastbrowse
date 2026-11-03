@@ -527,6 +527,48 @@ async fn whole_loops_match_python() {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_blank_navigation_waits_for_its_content_before_asking_jev() {
+    let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+    case["name"] = "a blank navigation waits for its content".into();
+    case["calls"] = serde_json::json!([]);
+    case["limits"]["max_steps"] = 2.into();
+    case["jev"]["pick"] = serde_json::json!({"operation": "click", "click_target": ["go", "next"]});
+    let mut home = case["site"]["screens"]["home"].clone();
+    home["observation"]["controls"] = serde_json::json!([
+        {"id": "go", "frame_id": null, "role": "button", "label": "Go", "operations": ["click"]}
+    ]);
+    let mut loading = case["site"]["screens"]["blank"].clone();
+    loading["observation"]["url"] = "https://books.test/catalogue".into();
+    loading["observation"]["page_key"] = "loading".into();
+    loading["observation"]["document_key"] = "catalogue".into();
+    loading["settles"] = serde_json::json!({"after": 1, "to": "catalogue"});
+    let mut catalogue = home.clone();
+    catalogue["observation"]["url"] = "https://books.test/catalogue".into();
+    catalogue["observation"]["page_key"] = "catalogue-ready".into();
+    catalogue["observation"]["document_key"] = "catalogue".into();
+    catalogue["observation"]["controls"] = serde_json::json!([
+        {"id": "next", "frame_id": null, "role": "button", "label": "Next", "operations": ["click"]}
+    ]);
+    case["site"] = serde_json::json!({
+        "start": "home", "urls": {"https://books.test/": "home"},
+        "screens": {"home": home, "loading": loading, "catalogue": catalogue},
+        "actions": [{"screen": "home", "operation": "click", "target": "go", "next": "loading"}]
+    });
+    let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let (outcome, _) = play(&case, Some(log.clone())).await;
+    assert_eq!(outcome["status"], "budget_exceeded");
+    let log = log.lock().unwrap();
+    for call in log.iter().filter(|call| call["jev"].is_object()) {
+        let questions: Value = serde_json::from_str(call["jev"]["questions"].as_str().unwrap()).unwrap();
+        if questions.get("operation").is_some() {
+            let state: Value = serde_json::from_str(call["jev"]["state"].as_str().unwrap()).unwrap();
+            assert!(!state["elements"].as_array().unwrap().is_empty(), "Jev was asked on the loading document");
+        }
+    }
+    assert_eq!(outcome["steps"][1]["target"], "Next");
+}
+
 /// Transient site failures, each a scripted site run from its script alone and checked against what it must do: the
 /// status it ends with, the steps it must take in order, the address it ends on and the words its error must carry.
 #[tokio::test(start_paused = true)]

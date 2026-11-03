@@ -47,7 +47,6 @@ impl Agent {
             if state.first_url.is_none() {
                 state.first_url = Some(observation.url.clone());
             }
-            self.note_effect(state, &observation);
             // An error page is Jev's to act on, told its status in the step's page facts. Code only waits out a
             // status that can clear by itself, once per document, and stops a list walk that reached one.
             if let Some(status) = observation.response_status
@@ -69,11 +68,12 @@ impl Agent {
                     continue;
                 }
             }
-            self.settle(state, &observation).await?;
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            if !drew_something(&raw) && self.settle_blank_opening(state, &raw).await? {
+            if !drew_something(&raw) && self.settle_blank(state, &raw).await? {
                 continue;
             }
+            self.note_effect(state, &observation);
+            self.settle(state, &observation).await?;
             let origin = origin_of(&raw.url);
             let page = (raw.url.clone(), raw.document_key.clone());
             let secrets = self.secret_names(&origin);
@@ -365,14 +365,19 @@ impl Agent {
         }
     }
 
-    pub(super) async fn settle_blank_opening(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+    pub(super) async fn settle_blank(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let document =
+            if observation.document_key.is_empty() { &observation.page_key } else { &observation.document_key };
+        if !state.blank_waited.insert((observation.url.clone(), document.clone())) {
+            return Ok(false);
+        }
+        if self.outwait(observation).await? {
+            return Ok(true);
+        }
         if state.blank_opening_checked || state.history.iter().any(|entry| entry.operation.is_some()) {
             return Ok(false);
         }
         state.blank_opening_checked = true;
-        if self.outwait(observation).await? {
-            return Ok(true);
-        }
         // A cold app can leave the first document blank after the loading wait. Reloading once gives its scripts
         // another chance, but doing so after an interaction could discard a form or repeat a submission.
         if state.started_url.is_none()

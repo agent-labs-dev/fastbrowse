@@ -211,6 +211,8 @@ pub(crate) struct RunState {
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
     pub blank_opening_checked: bool,
+    /// A blank document is waited out once before its state can renew recovery or reach a decision.
+    pub blank_waited: HashSet<(String, String)>,
     pub last_page: Option<(String, String)>,
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
     /// since is going round, not forward.
@@ -361,6 +363,7 @@ impl RunState {
             written: HashMap::new(),
             recoveries: 0,
             blank_opening_checked: false,
+            blank_waited: HashSet::new(),
             last_page: None,
             reached: HashMap::new(),
             evidence_reads: 0,

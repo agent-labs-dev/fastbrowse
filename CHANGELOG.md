@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A blank document after navigation waits on its loading events before it reaches Jev or renews recovery. Only the untouched opening page may be reloaded.
+
 - Action history compares controls within their document, so navigation and reloads do not invent field edits from reused control IDs.
 
 - Composed answers and their support checks use values expressed in descriptions even when no heading names the requested field, instead of treating a missing label as a missing value.
