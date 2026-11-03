@@ -132,6 +132,11 @@ type Drafted = (Option<Vec<String>>, Vec<Claim>);
 
 const CELL: &str = " | ";
 
+fn table_cells<'a>(text: &'a str, columns: &[String]) -> Option<Vec<&'a str>> {
+    let cells: Vec<_> = text.split(CELL).map(str::trim).collect();
+    (columns.len() > 1 && !text.contains('\n') && cells.len() == columns.len()).then_some(cells)
+}
+
 /// `answer` as the table the task asked for: one row per claim, its citations in a last column. An answer whose claims
 /// do not each split into one cell per column stays as written.
 fn tabled(columns: Option<Vec<String>>, answer: ComposedAnswer) -> ComposedAnswer {
@@ -144,9 +149,9 @@ fn tabled(columns: Option<Vec<String>>, answer: ComposedAnswer) -> ComposedAnswe
                 .iter()
                 .zip(&lines)
                 .map(|(claim, line)| {
-                    let cells: Vec<&str> = claim.text.split(CELL).map(str::trim).collect();
+                    let cells = table_cells(&claim.text, &columns)?;
                     let links = line.strip_prefix(claim.text.as_str())?.trim();
-                    (!claim.text.contains('\n') && cells.len() == columns.len()).then_some((cells, links))
+                    Some((cells, links))
                 })
                 .collect()
         })
@@ -342,29 +347,40 @@ async fn supported_claims(
     if claims.is_empty() {
         return Ok((claims, Some("The composer returned no supported claims.".into())));
     }
-    let questions: IndexMap<String, Question> = claims
-        .iter()
-        .enumerate()
-        .filter_map(|(index, claim)| {
-            let sources: Vec<_> = notes
-                .expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))
-                .iter()
-                .filter_map(|id| notes.facts_by_id().get(id))
-                .filter_map(|fact| fact.evidence.as_ref())
-                .map(|evidence| json!(evidence))
-                .collect();
-            if sources.is_empty() {
-                return None;
-            }
-            let cited = json!({"columns": columns, "claim": claim.text, "quotes": sources});
+    let mut questions = IndexMap::new();
+    let mut required = vec![Vec::new(); claims.len()];
+    for (index, claim) in claims.iter().enumerate() {
+        let sources: Vec<_> = notes
+            .expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))
+            .iter()
+            .filter_map(|id| notes.facts_by_id().get(id))
+            .filter_map(|fact| fact.evidence.as_ref())
+            .map(|evidence| json!(evidence))
+            .collect();
+        if sources.is_empty() {
+            continue;
+        }
+        let cited = json!({"columns": columns, "claim": claim.text, "quotes": sources});
+        let checks: Vec<_> = match columns.and_then(|columns| table_cells(&claim.text, columns).map(|cells| (columns, cells))) {
+            Some((columns, cells)) => columns.iter().zip(cells).enumerate().map(|(cell, (column, value))| {
+                (format!("claim{index}/cell{cell}"), format!("Judge only the cell for field {} with value {} in this row. Use the whole row to identify which record it belongs to.", text::repr(column), text::repr(value)))
+            }).collect(),
+            None => vec![(format!("claim{index}"), "Judge every assertion in this claim.".into())],
+        };
+        for (key, focus) in checks {
             let question = NoulQuestion::new(
-                format!("{UNTRUSTED}\nDoes this claim follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record.\n{cited}"),
-                Some("Every assertion is supported by these quotes."),
-                Some("An assertion changes a value, belongs to another record, or has no support in these quotes."),
+                format!(
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record.\n{cited}"
+                ),
+                Some("Every assertion being judged is supported by these quotes."),
+                Some(
+                    "An assertion being judged changes a value, belongs to another record, or has no support in these quotes.",
+                ),
             );
-            Some((format!("claim{index}"), Question::Noul(question)))
-        })
-        .collect();
+            required[index].push(key.clone());
+            questions.insert(key, Question::Noul(question));
+        }
+    }
     // A known citation can still be attached to another record's value, so Jev judges the original quotes after
     // every packing round has finished, rather than the intermediate prose those rounds wrote.
     let tokens = jev.profile().fit(None).tokens;
@@ -382,14 +398,19 @@ async fn supported_claims(
         .into_iter()
         .enumerate()
         .filter_map(|(index, claim)| {
-            let answer = answered.as_ref()?.answers.get(&format!("claim{index}"))?;
-            matches!(answer, Answer::Noul(answer) if answer.probability > 0.5).then_some(claim)
+            let answers = &answered.as_ref()?.answers;
+            let keys = &required[index];
+            (!keys.is_empty()
+                && keys
+                    .iter()
+                    .all(|key| matches!(answers.get(key), Some(Answer::Noul(answer)) if answer.probability > 0.5)))
+            .then_some(claim)
         })
         .collect::<Vec<_>>();
     let problem = failure.or_else(|| {
         if oversized {
             Some("A composed claim's quotes exceed the decision model's input limits.".into())
-        } else if questions.len() != count {
+        } else if required.iter().any(Vec::is_empty) {
             Some("A composed claim has no retained source quote.".into())
         } else if missing {
             Some("Jev left a composed claim's support unanswered.".into())
@@ -611,12 +632,13 @@ mod tests {
     struct Support {
         accept: Option<bool>,
         fail: bool,
+        rejected: Option<String>,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
     }
 
     impl Support {
         fn new(accept: bool) -> Self {
-            Self { accept: Some(accept), fail: false, asked: Mutex::new(Vec::new()) }
+            Self { accept: Some(accept), fail: false, rejected: None, asked: Mutex::new(Vec::new()) }
         }
     }
 
@@ -641,6 +663,7 @@ mod tests {
                         .keys()
                         .filter_map(|key| {
                             self.accept.map(|accept| {
+                                let accept = accept && self.rejected.as_deref() != Some(key.as_str());
                                 (
                                     key.clone(),
                                     Answer::Noul(NoulAnswer {
@@ -700,6 +723,25 @@ mod tests {
         assert!(question.instructions.contains("Record A: 99"));
         assert!(question.instructions.contains("Record B: 34"));
         assert!(question.instructions.contains("right panel"));
+    }
+
+    #[tokio::test]
+    async fn a_table_row_is_withheld_when_one_cell_is_unsupported() {
+        let notes = Notes::new([fact(0, "Record A: regular fit".into())]);
+        let mut jev = Support::new(true);
+        jev.rejected = Some("claim0/cell1".into());
+        let columns = vec!["Record".into(), "Shape".into()];
+        let source = notes.facts_by_id().keys().next().unwrap().clone();
+        let claims = vec![Claim::new("Record A | not shown", vec![source])];
+        let (claims, problem) =
+            supported_claims(&jev, "Report each record and shape", Some(&columns), claims, &notes, None).await.unwrap();
+        assert!(claims.is_empty());
+        assert!(problem.unwrap().contains("unsupported"));
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(shape) = &asked[0]["claim0/cell1"] else { panic!("cell support is yes-or-no") };
+        assert!(shape.instructions.contains("Shape"));
+        assert!(shape.instructions.contains("regular fit"));
+        assert!(shape.instructions.contains("Record A | not shown"));
     }
 
     #[tokio::test]

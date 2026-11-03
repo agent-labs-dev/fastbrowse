@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A composed table is checked one cell at a time against its cited quotes. A row is withheld when any cell changes a value or reports a field unavailable despite its quote stating that field.
+
 - **A synthesis read reports the source material it kept.** After collecting notes for a composed answer, the next decision was told that nothing answered the task. The read now distinguishes source material awaiting composition from an empty read, leaving Jev to judge whether the task is done.
 
 - **A PDF opened in a new tab is captured before its viewer loads.** Popup adoption waited until after the first response, losing the document text even though direct navigation read it. New pages now wait for download capture before starting; unrelated tabs are resumed and left alone.
