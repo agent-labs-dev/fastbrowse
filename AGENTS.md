@@ -43,7 +43,7 @@ uv run fastbrowse-mcp         # the MCP server, stdio
 uv run fastbrowse serve --stdio   # JSON-RPC for another process; the JavaScript SDK starts this
 ```
 
-The gate, which CI runs in this order on Python 3.13 and 3.14 (the browser, sift and SDK checks on 3.13):
+The gate, which CI runs in this order on Python 3.13 and 3.14 (the browser, project-rules and SDK checks on 3.13):
 
 ```sh
 uv run ruff check . && uv run ruff format --check .
@@ -67,8 +67,8 @@ FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml ver
 python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
 cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx; cd ..
 uv run actionlint
-uv run python .sift/agents.py check
-uv run python .sift/gate.py --base origin/main
+uv run python .sloppatrol/agents.py check
+uv run python .sloppatrol/gate.py --base origin/main
 just rust                                           # the Rust workspace (docs/adr/0001, 0004); needs cargo and just
 ```
 
@@ -89,7 +89,7 @@ in `crates/fastbrowse-browser/tests/capture.rs`; `FASTBROWSE_UPDATE_GOLDEN=1` re
 behaviour change) and timed by CodSpeed
 (`.github/workflows/codspeed.yml`, locally `uv run --group bench pytest benchmarks --codspeed`).
 
-The [sift project skill](.agents/skills/sift-project/SKILL.md) records audit commands, live roots and generated files.
+The [Sloppatrol project skill](.agents/skills/sloppatrol-project/SKILL.md) records audit commands, live roots and generated files.
 
 ## Pull requests and branches
 
@@ -109,7 +109,8 @@ Entire links each commit made in an agent session to that session, locally only;
 ## Evals
 
 Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated
-against `dev` only**, and `heldout` is run before and after a round and never debugged. Read
+against `dev` only**, and `core` is run before and after a round. The held-out suite is gone: Parallax moved its
+tasks into `dev`, so any dev task may be one a fix was designed against. Read
 [docs/agents/evals.md](docs/agents/evals.md) before changing agent behaviour or a task, or spending on a paid
 run: it has the commands, keys, task versions, what to check before spending, the CI campaign gotchas and where
 evidence is kept.
@@ -200,7 +201,7 @@ is stale there too. A doc found trailing the code is fixed on its own, not left 
 not whether a sentence is true. When you write or review prose, check each claim against the code, put the
 useful point first, and keep prerequisites, limits and recovery steps.
 
-**Agent instructions stay short.** `.sift/agents.py check` holds this file to 300 lines. Detail only some tasks
+**Agent instructions stay short.** `.sloppatrol/agents.py check` holds this file to 300 lines. Detail only some tasks
 need goes in `docs/agents/` behind a line here that says when to read it.
 
 ## Agent skills

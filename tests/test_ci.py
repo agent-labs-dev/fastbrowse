@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
-RESULTS = ("GATE_RESULT", "SIFT_RESULT", "SDK_RESULT", "RUST_RESULT", "SECRETS_RESULT", "CHANGES_RESULT")
+RESULTS = ("GATE_RESULT", "PROJECT_RULES_RESULT", "SDK_RESULT", "RUST_RESULT", "SECRETS_RESULT", "CHANGES_RESULT")
 # Left unbuilt by a change that cannot alter them, which is a pass.
 OPTIONAL = ("BINARIES_RESULT", "AUR_RESULT")
 
@@ -129,8 +129,10 @@ def test_a_campaign_takes_only_a_json_boolean_for_smoke(payload: str, passes: bo
 @pytest.mark.parametrize(
     ("suites", "passes"),
     [
-        ("core dev heldout stretch-dev stretch-heldout", True),
+        ("core dev stretch-dev", True),
         ("stretch-dev", True),
+        # A suite the catalog no longer carries, because Parallax moved its tasks into dev.
+        ("core dev heldout", False),
         ("   ", False),
         ("core --output /tmp/elsewhere", False),
         ("core,dev", False),

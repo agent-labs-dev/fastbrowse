@@ -67,7 +67,7 @@ jobs:
         env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
-  sift:
+  project-rules:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
@@ -81,13 +81,13 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check:browser
       - run: uv run --no-sync actionlint
-      - run: uv run --no-sync python .sift/agents.py check
+      - run: uv run --no-sync python .sloppatrol/agents.py check
       - env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
-        run: uv run --no-sync python .sift/gate.py --base "origin/$BASE"
+        run: uv run --no-sync python .sloppatrol/gate.py --base "origin/$BASE"
       # The Jev review's base-only pull_request_target use needs human review of zizmor's warning.
       - name: Zizmor (advisory)
         continue-on-error: true
-        run: uvx zizmor==1.31.1 --offline .github/workflows
+        run: uvx zizmor==1.32.0 --offline .github/workflows
 
   sdk:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -147,7 +147,7 @@ jobs:
       # The suites are where this job's time goes: measured on four cores over the same 985 tests, `cargo test
       # --workspace` spent 382 s running them and `cargo nextest run --workspace` 161 s, because nextest
       # schedules every test binary at once instead of one after another. It runs the same binaries.
-      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with: {tool: nextest@0.9.150}
       - run: cargo nextest run --workspace --locked --no-fail-fast
       # nextest does not run doctests.
@@ -175,7 +175,7 @@ jobs:
       - run: python3 scripts/java_types.py && git diff --exit-code -- java && test -z "$(git status --porcelain -- java)"
       - run: FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify
       # The .NET client against the same binary, its types written from protocol/schema.json and committed too.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with: {dotnet-version: "10.0.x"}
       - run: python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
       # From dotnet/, whose global.json picks the test runner xunit.v3 needs.
@@ -241,16 +241,16 @@ jobs:
     uses: ./.github/workflows/aur.yml
 
   # `check` is the required status check, so its name must not move when the matrix gains a version.
-  # It passes only when the Python matrix, secret scan, sift, SDK and Rust checks pass, and the binaries and the
+  # It passes only when the Python matrix, secret scan, project rules, SDK and Rust checks pass, and the binaries and the
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    needs: [gate, sift, sdk, rust, secrets, changes, binaries, aur]
+    needs: [gate, project-rules, sdk, rust, secrets, changes, binaries, aur]
     if: always()
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
-          SIFT_RESULT: ${{ needs.sift.result }}
+          PROJECT_RULES_RESULT: ${{ needs.project-rules.result }}
           SDK_RESULT: ${{ needs.sdk.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           SECRETS_RESULT: ${{ needs.secrets.result }}
@@ -259,7 +259,7 @@ jobs:
           AUR_RESULT: ${{ needs.aur.result }}
         run: |
           test "$GATE_RESULT" = success
-          test "$SIFT_RESULT" = success
+          test "$PROJECT_RULES_RESULT" = success
           test "$SDK_RESULT" = success
           test "$RUST_RESULT" = success
           test "$SECRETS_RESULT" = success
