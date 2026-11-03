@@ -195,27 +195,3 @@ fn find_answer_link(text: &str) -> Option<(usize, usize, usize)> {
     }
     None
 }
-
-/// A live control matched by a recorded recipe still passes through the ordinary action gates.
-pub(crate) fn code_decision(operation: Operation, target: Option<Control>) -> crate::policy::Decision {
-    crate::policy::Decision {
-        operation,
-        url: None,
-        target_confidence: target.as_ref().map(|_| 1.0),
-        target,
-        tab_id: None,
-        operation_confidence: 1.0,
-        login_required: None,
-        offered_controls: 0,
-        reduction: crate::policy::Reduction::None,
-        cost: Vec::new(),
-        input_tokens: 0,
-        bot_check: None,
-        shows_answer: None,
-        site_failure: None,
-        destination: None,
-        replayed: false,
-        offered: Vec::new(),
-        ahead: indexmap::IndexMap::new(),
-    }
-}

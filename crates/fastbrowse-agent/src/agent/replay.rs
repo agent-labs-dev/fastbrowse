@@ -5,10 +5,9 @@ use fastbrowse_core::models::Operation;
 use fastbrowse_core::page::{Action, Control};
 use fastbrowse_core::recipe::{self, Recipe, RecipePage, RecipeStep, RecipeTarget, RecipeText};
 
-use super::helpers::code_decision;
 use crate::policy::Decision;
 
-/// A live Jev decision may match a later saved step when earlier controls are no longer present.
+/// A live Jev decision may match a later saved step when the current page needs a different order.
 pub(crate) struct Replay {
     steps: Vec<RecipeStep>,
     next: usize,
@@ -32,19 +31,13 @@ impl Replay {
         if !recorded(decision.operation) {
             return;
         }
-        if let Some(saved) = self.decision(url, offered) {
-            if saved.operation == decision.operation
-                && saved.target.as_ref().map(|target| &target.id) == decision.target.as_ref().map(|target| &target.id)
-            {
-                decision.replayed = true;
-            } else {
-                self.replaced();
-            }
+        if self.matching_step(url, offered, decision).is_some() {
+            decision.replayed = true;
         }
     }
 
-    /// The decision for the first of the next recipe steps this page offers, or None for the agent to decide.
-    fn decision(&mut self, url: &str, offered: &[Control]) -> Option<Decision> {
+    /// Match the live choice against remaining saved steps, even when earlier controls are still offered.
+    fn matching_step(&mut self, url: &str, offered: &[Control], chosen: &Decision) -> Option<usize> {
         self.pending.take();
         if !self.active() {
             return None;
@@ -55,21 +48,22 @@ impl Replay {
         };
         for index in self.next..self.steps.len() {
             let step = &self.steps[index];
-            if !step.replayable() || !step.page.matches(&page) {
+            if !step.replayable() || !step.page.matches(&page) || step.operation != chosen.operation {
                 continue;
             }
             let target = match &step.target {
                 Some(target) => match recipe::find(target, offered, url) {
-                    Some(control) if control.operations.contains(&step.operation) => Some(control.clone()),
+                    Some(control) if control.operations.contains(&step.operation) => Some(control),
                     Some(_) => continue,
                     None => continue,
                 },
                 None => None,
             };
+            if target.as_ref().map(|control| &control.id) != chosen.target.as_ref().map(|control| &control.id) {
+                continue;
+            }
             self.pending = Some(index);
-            let mut decision = code_decision(step.operation, target);
-            decision.replayed = true;
-            return Some(decision);
+            return Some(index);
         }
         self.fell_back += 1;
         None
@@ -236,6 +230,7 @@ pub(crate) fn safe_steps(steps: Vec<RecipeStep>, reveals: impl Fn(&str) -> bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::tests::code_decision;
     use fastbrowse_core::recipe::RecipeTarget;
 
     const URL: &str = "https://shop.test/p/pico";
@@ -278,12 +273,41 @@ mod tests {
     }
 
     #[test]
+    fn a_live_fill_can_reuse_a_later_value_after_an_unneeded_scroll() {
+        let email = Control::new("email", "textbox", "Email", [Operation::Fill]);
+        let (mut decision, action) = fill(email.clone(), "ada@example.test", false);
+        let saved = step_of(URL, &decision, &action, None, |_| false).unwrap();
+        let scroll = RecipeStep { operation: Operation::Scroll, target: None, text: None, ..saved.clone() };
+        let mut replay = replay(vec![scroll, saved]);
+        replay.confirm(URL, &[email], &mut decision);
+        assert!(decision.replayed);
+        assert_eq!(replay.text(), Some(&RecipeText::Literal("ada@example.test".into())));
+        replay.settled(true);
+        assert!(!replay.active());
+    }
+
+    #[test]
+    fn a_live_fill_matches_its_value_when_an_earlier_field_is_also_offered() {
+        let name = Control::new("name", "textbox", "Name", [Operation::Fill]);
+        let email = Control::new("email", "textbox", "Email", [Operation::Fill]);
+        let (name_decision, name_action) = fill(name.clone(), "Ada", false);
+        let (mut decision, email_action) = fill(email.clone(), "ada@example.test", false);
+        let mut replay = replay(vec![
+            step_of(URL, &name_decision, &name_action, None, |_| false).unwrap(),
+            step_of(URL, &decision, &email_action, None, |_| false).unwrap(),
+        ]);
+        replay.confirm(URL, &[name, email], &mut decision);
+        assert!(decision.replayed);
+        assert_eq!(replay.text(), Some(&RecipeText::Literal("ada@example.test".into())));
+    }
+
+    #[test]
     fn a_matching_step_is_a_replayed_decision_on_the_live_control() {
         let mut replay = replay(vec![click("Add to cart", "/p/pico")]);
         let page = [button("new:4", "Add to cart")];
-        let decision = replay.decision(URL, &page).unwrap();
-        assert!(decision.replayed);
-        assert_eq!(decision.target.unwrap().id, "new:4");
+        let decision =
+            replay.matching_step(URL, &page, &code_decision(Operation::Click, Some(page[0].clone()))).unwrap();
+        assert_eq!(decision, 0);
         replay.settled(true);
         assert_eq!((replay.replayed, replay.active()), (1, false));
     }
@@ -294,8 +318,9 @@ mod tests {
         steps.push(click("Add to cart", "/p/pico"));
         let mut replay = replay(steps);
         let page = [button("n:1", "Add to cart")];
-        let decision = replay.decision(URL, &page).unwrap();
-        assert_eq!(decision.target.unwrap().label, "Add to cart");
+        let decision =
+            replay.matching_step(URL, &page, &code_decision(Operation::Click, Some(page[0].clone()))).unwrap();
+        assert_eq!(decision, 8);
         replay.settled(true);
         assert!(!replay.active());
     }
@@ -305,19 +330,49 @@ mod tests {
         let mut replay = replay(vec![click("Add to cart", "/p/pico"), click("Cart", "/p/pico")]);
         let add = button("n:1", "Add to cart");
         replay.followed(URL, &code_decision(Operation::Click, Some(add.clone())));
-        let decision = replay.decision(URL, &[add, button("n:2", "Cart")]).unwrap();
-        assert_eq!(decision.target.unwrap().label, "Cart");
+        let decision = replay
+            .matching_step(
+                URL,
+                &[add, button("n:2", "Cart")],
+                &code_decision(Operation::Click, Some(button("n:2", "Cart"))),
+            )
+            .unwrap();
+        assert_eq!(decision, 1);
     }
 
     #[test]
     fn missing_pages_do_not_abandon_replay() {
         let mut replay = replay(vec![click("Add to cart", "/p/pico")]);
-        assert!(replay.decision("https://shop.test/p/other", &[button("n:1", "Add to cart")]).is_none());
+        assert!(
+            replay
+                .matching_step(
+                    "https://shop.test/p/other",
+                    &[button("n:1", "Add to cart")],
+                    &code_decision(Operation::Click, Some(button("n:1", "Add to cart")))
+                )
+                .is_none()
+        );
         for _ in 1..8 {
-            assert!(replay.decision(URL, &[button("n:1", "Checkout")]).is_none());
+            assert!(
+                replay
+                    .matching_step(
+                        URL,
+                        &[button("n:1", "Checkout")],
+                        &code_decision(Operation::Click, Some(button("n:1", "Checkout")))
+                    )
+                    .is_none()
+            );
         }
         assert!(replay.active());
-        assert!(replay.decision(URL, &[button("n:1", "Add to cart")]).is_some());
+        assert!(
+            replay
+                .matching_step(
+                    URL,
+                    &[button("n:1", "Add to cart")],
+                    &code_decision(Operation::Click, Some(button("n:1", "Add to cart")))
+                )
+                .is_some()
+        );
         assert_eq!(replay.fell_back, 8);
     }
 
@@ -325,9 +380,9 @@ mod tests {
     fn a_step_not_carried_out_is_offered_again() {
         let mut replay = replay(vec![click("Add to cart", "/p/pico")]);
         let page = [button("n:1", "Add to cart")];
-        assert!(replay.decision(URL, &page).is_some());
+        assert!(replay.matching_step(URL, &page, &code_decision(Operation::Click, Some(page[0].clone()))).is_some());
         replay.settled(false);
-        assert!(replay.decision(URL, &page).is_some());
+        assert!(replay.matching_step(URL, &page, &code_decision(Operation::Click, Some(page[0].clone()))).is_some());
         // Offered again is not a step the agent decided.
         assert_eq!(replay.fell_back, 0);
     }
@@ -336,7 +391,15 @@ mod tests {
     fn an_operation_the_live_control_does_not_offer_is_left_to_jev() {
         let mut replay = replay(vec![click("Add to cart", "/p/pico")]);
         let control = Control::new("new:4", "button", "Add to cart", [Operation::Hover]);
-        assert!(replay.decision(URL, &[control]).is_none());
+        assert!(
+            replay
+                .matching_step(
+                    URL,
+                    std::slice::from_ref(&control),
+                    &code_decision(Operation::Click, Some(control.clone()))
+                )
+                .is_none()
+        );
     }
 
     #[test]

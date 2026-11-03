@@ -191,7 +191,7 @@ fn button(label: &str) -> Control {
     Control::new(&label.to_lowercase(), "button", label, [Operation::Click])
 }
 
-fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
+pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         replayed: false,
         operation,
@@ -714,7 +714,7 @@ async fn an_ordinary_masked_username_replays_named_input_without_password_policy
     let mut state = run_state();
     state.inputs.insert("username".into(), "ada@example.test".into());
     state.replay = Some(super::replay::Replay::new(recipe));
-    let mut decision = super::helpers::code_decision(Operation::Fill, Some(username.clone()));
+    let mut decision = code_decision(Operation::Fill, Some(username.clone()));
     state.replay.as_mut().unwrap().confirm(url, &controls, &mut decision);
     assert!(decision.replayed);
     let value = agent.text(&mut state, &page, &decision, &username).await.unwrap();

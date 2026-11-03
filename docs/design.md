@@ -197,7 +197,7 @@ and selectors are not stored. Query strings, fragments and generated path segmen
 have identical controls without being the same order. A missing or ambiguous control is left to Jev.
 
 Jev decides each action and judges the current page for answers, errors and sign-in walls. When its action agrees
-with a matching recipe step, the fill can reuse the saved value and the step reports
+with a matching remaining recipe step, even if an earlier action is still offered, the fill can reuse the saved value and the step reports
 `decided_by: "recipe"`. Freshness checks, hit testing, authorization and secret handling still apply. Password
 fields always use the live credential checks. A stored secret is kept only by name, caller inputs by name, and
 ordinary task text as a literal. Values taken from page evidence, values written by the LLM and select options are decided live on every run. Recipes can

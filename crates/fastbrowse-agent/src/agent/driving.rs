@@ -1093,7 +1093,7 @@ mod recipe_tests {
             }))
             .unwrap();
             let masked = Control { label: redactor.mask(label), ..target };
-            let decision = super::super::helpers::code_decision(Operation::Click, Some(masked));
+            let decision = super::super::tests::code_decision(Operation::Click, Some(masked));
             let action = Action::new(Operation::Click);
             assert!(
                 super::super::replay::step_of(&redactor.mask(url), &decision, &action, None, |text| redactor
@@ -1114,7 +1114,7 @@ mod recipe_tests {
             "controls": [target.dump()], "viewport_text": "", "tabs": [],
         }))
         .unwrap();
-        let decision = super::super::helpers::code_decision(Operation::Fill, Some(target));
+        let decision = super::super::tests::code_decision(Operation::Fill, Some(target));
         let action = Action { text: Some("hunter2".into()), secret: true, ..Action::new(Operation::Fill) };
         let source = RecipeText::Secret("account".into());
         let step = recipe_step(&decision, &raw, &action, Some(source.clone()), |text| redactor.reveals(text)).unwrap();
