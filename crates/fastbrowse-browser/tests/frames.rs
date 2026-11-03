@@ -252,6 +252,34 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_stalled_frame_ack_does_not_block_delivery_or_tab_input() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.screencastFrameAck");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let on_frame: FrameHandler = Arc::new({
+        let calls = calls.clone();
+        move |_frame| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    settle(&session).await;
+    emit_frame(&session, 1, b"jpeg", "session");
+    fake.sent("Page.screencastFrameAck").await;
+    emit_frame(&session, 2, b"next jpeg", "session");
+    testing::settle_delivery(&session).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    session.switch_tab("owned").await.unwrap();
+    settle(&session).await;
+    assert_eq!(testing::background_len(&session), 0);
+    let client = session.client().unwrap();
+    session.close().await.unwrap();
+    assert_eq!(client.pending(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_stalled_screencast_does_not_delay_switching_tabs() {
     let fake = FakeChrome::start().await;
     fake.block("Page.startScreencast");
