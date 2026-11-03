@@ -423,7 +423,10 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
 
 
 @pytest.mark.usefixtures("rust_core")
-async def test_cancellation_before_success_delivery_keeps_the_completed_receipt(monkeypatch) -> None:
+@pytest.mark.parametrize("cancel_before_result", [True, False])
+async def test_cancellation_before_success_delivery_keeps_the_completed_receipt(
+    monkeypatch, cancel_before_result
+) -> None:
     counted = Counted()
     loop = asyncio.get_running_loop()
     schedule = loop.call_soon_threadsafe
@@ -437,8 +440,11 @@ async def test_cancellation_before_success_delivery_keeps_the_completed_receipt(
             def deliver():
                 assert execution is not None
                 intercepted.append(True)
-                execution.cancel()
+                if cancel_before_result:
+                    execution.cancel()
                 callback()
+                if not cancel_before_result:
+                    execution.cancel()
 
             return schedule(deliver, **kwargs)
         return schedule(callback, *args, **kwargs)

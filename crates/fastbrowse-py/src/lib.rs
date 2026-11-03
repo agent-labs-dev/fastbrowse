@@ -98,7 +98,7 @@ impl Run {
     }
 
     /// An asyncio future that resolves once the run has returned and its browser is closed: with the
-    /// `CancellationReceipt` as JSON for a cancelled run, and None for any other.
+    /// `CancellationReceipt` as JSON for a completed or cancelled run, and None for a refusal.
     #[getter]
     fn finished(&self, py: Python<'_>) -> Py<PyAny> {
         self.finished.clone_ref(py)
@@ -300,7 +300,6 @@ fn run_task(
                 PyCFunction::new_closure(py, None, None, move |args: &Bound<'_, PyTuple>, _| -> PyResult<()> {
                     let py = args.py();
                     let result = result.bind(py);
-                    let cancelled = result.call_method0("cancelled")?.is_truthy()?;
                     if !result.call_method0("done")?.is_truthy()? {
                         // A callback that failed stopped the run, though the run may have ended on its own in the
                         // same moment; the callback's exception is what the caller hears either way.
@@ -323,11 +322,11 @@ fn run_task(
                             result.call_method1("set_exception", (error.value(py),))?;
                         }
                     }
-                    // Python can cancel after Rust finishes but before this callback delivers the result, so
-                    // either outcome retains what the run did and spent for the cancelled caller.
+                    // Python can cancel before delivery or after it while the awaiting task has not resumed,
+                    // so every finished outcome keeps its receipt until the caller has heard it.
                     let receipt = match &outcome {
                         Err(RunError::Cancelled(receipt)) => receipt.dump_json().into_pyobject(py)?.into_any(),
-                        Ok(answered) if cancelled => CancellationReceipt {
+                        Ok(answered) => CancellationReceipt {
                             steps: answered.steps.clone(),
                             cost: answered.cost.clone(),
                             recordings: answered.recordings.clone(),
