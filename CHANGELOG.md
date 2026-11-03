@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- MCP cancellation releases the answered request ID before cleanup, so cleanup cannot disable cancellation of a later call reusing that ID.
+
 - Field-value selection keeps every part of a long source available within the provider's choice limit. Jev can refuse a source that gives no value.
 
 - An explicit proxy country or cloud extension starts the cloud browser before reading a page, so those settings also apply to read-only tasks.

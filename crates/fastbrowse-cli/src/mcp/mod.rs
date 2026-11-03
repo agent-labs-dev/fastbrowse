@@ -766,12 +766,13 @@ impl McpServer {
                         () = cancel.tripped() => {
                             // The response is immediate, but keep the run future alive so it can close its browser.
                             run_stop.trip();
+                            // Remove before replying so cleanup cannot remove a newer request reusing this id.
+                            session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
                             outbox(error_response(&id, 0, "Request cancelled", None));
                             let _ = tokio::time::timeout(
                                 Duration::from_secs_f64(server.config.grace_seconds.max(0.0)),
                                 &mut call,
                             ).await;
-                            session.in_flight.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
                             return;
                         }
                         outcome = &mut call => outcome,

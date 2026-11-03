@@ -5,7 +5,7 @@ mod common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -573,6 +573,50 @@ async fn test_an_external_cancel_replies_immediately_and_keeps_cleanup_running()
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(2), cleaned.notified()).await.expect("run cleanup completed");
     assert!(completed.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn test_a_cancelled_cleanup_cannot_remove_a_reused_request_id() {
+    let first_started = Arc::new(Notify::new());
+    let second_started = Arc::new(Notify::new());
+    let release_first = Arc::new(Notify::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runner = runner({
+        let first_started = first_started.clone();
+        let second_started = second_started.clone();
+        let release_first = release_first.clone();
+        let calls = calls.clone();
+        move |args: Call| {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            let first_started = first_started.clone();
+            let second_started = second_started.clone();
+            let release_first = release_first.clone();
+            async move {
+                if n == 0 {
+                    first_started.notify_one();
+                    args.host.cancel.tripped().await;
+                    release_first.notified().await;
+                } else {
+                    second_started.notify_one();
+                    args.host.cancel.tripped().await;
+                }
+                Err(RunError::Cancelled(CancellationReceipt::default()))
+            }
+        }
+    });
+    let mut client = Client::new(ServerConfig::default(), runner);
+    let first = client.start_call(json!({"task": "first", "start": START}));
+    assert_eq!(first, 1);
+    tokio::time::timeout(Duration::from_secs(2), first_started.notified()).await.expect("first run started");
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":1}}));
+    assert_eq!(client.reply(1, &mut Vec::new()).await["error"]["message"], "Request cancelled");
+
+    // Reuse id 1 while the first call is still inside its cleanup grace.
+    client.send(json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"browse", "arguments":{"task":"second", "start":START}}}));
+    release_first.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), second_started.notified()).await.expect("second run started");
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":1}}));
+    assert_eq!(client.reply(1, &mut Vec::new()).await["error"]["message"], "Request cancelled");
 }
 
 #[tokio::test]

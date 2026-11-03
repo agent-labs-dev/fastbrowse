@@ -1,5 +1,5 @@
 //! The CDP connection: one reader task owns the websocket's read half, one writer task its write half, and
-//! `send` is `session.py`'s `_BrowserClient.send_raw`, with its liveness probe and command deadlines.
+//! commands use a liveness probe and deadlines to detect an unresponsive browser.
 //!
 //! Replies route to callers by id through oneshot channels, so any number of calls are in flight at once. Events
 //! go to handlers synchronously and in socket order, so a handler sees every event before the reply that follows
@@ -51,7 +51,7 @@ const OPEN_SECONDS: f64 = 10.0;
 const PING_SECONDS: f64 = 20.0;
 /// cdp-use's frame bound: a full-page screenshot or a large document's evaluation fits under it.
 const MAX_MESSAGE_BYTES: usize = 100 * 1024 * 1024;
-/// Statuses that say nothing about the request, so a repeat can clear them (`clients/validation.py`).
+/// Transient response statuses permit retrying a failed handshake or cloud browser request.
 pub const RETRYABLE_STATUS: [u16; 12] = [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529];
 
 pub fn secs(seconds: f64) -> Duration {
