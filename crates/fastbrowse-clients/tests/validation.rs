@@ -261,6 +261,30 @@ async fn test_cancelled_dispatched_request_retains_estimated_input_cost() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn text_cancellation_preserves_trace_tokens_without_a_price() {
+    for unpriced in [false, true] {
+        let script = Script::new([common::Step::Cancel]);
+        let trace = Trace::collecting();
+        let mut client = direct(script.traced(&trace));
+        if unpriced {
+            client = client.unpriced();
+        }
+        let page = json!("page");
+        let questions = one();
+        tokio::select! {
+            _ = client.evaluate(&page, &questions) => panic!("cancelled"),
+            _ = script.cancel.notified() => {}
+        }
+        let body = script.bodies().remove(0);
+        let tokens = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
+        let receipts = events(&trace, "cancelled_request_cost");
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0]["estimated_input_tokens"], tokens);
+        assert!(receipts[0].get("cost").is_none());
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn test_split_cancellation_retains_answered_and_cancelled_costs_once() {
     // Python drives asking_split with a fake ask; it is crate-private here, so a real batch splits instead: two 503s,
     // the first single answers, and the second is cancelled in flight.

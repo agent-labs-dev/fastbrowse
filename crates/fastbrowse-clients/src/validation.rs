@@ -470,6 +470,7 @@ fn dumped_chars(body: &Value) -> usize {
 struct CancelledJev<'a> {
     spend: Option<JevSpend>,
     cost: CostLine,
+    image_input: bool,
     price: Option<f64>,
     usage: &'a Usage,
     trace: &'a Trace,
@@ -491,7 +492,7 @@ impl Drop for CancelledJev<'_> {
                 let mut fields = Map::new();
                 fields.insert("call".into(), "jev".into());
                 fields.insert("requests".into(), unaccounted.into());
-                if self.cost.basis == CostBasis::Estimated {
+                if !self.image_input {
                     fields.insert("estimated_input_tokens".into(), self.cost.input_tokens.into());
                 } else {
                     fields.insert("cost".into(), serde_json::to_value(&self.cost).unwrap());
@@ -540,7 +541,15 @@ pub(crate) async fn post(
         start_attempt,
         split_batch,
     };
-    let mut cancelled = CancelledJev { spend: spend.clone(), cost, price, usage, trace: &http.trace, armed: true };
+    let mut cancelled = CancelledJev {
+        spend: spend.clone(),
+        cost,
+        image_input: image_context.is_some(),
+        price,
+        usage,
+        trace: &http.trace,
+        armed: true,
+    };
     let sent = post_with_retry(http, url, body, &auth, &attempts, usage).await;
     cancelled.armed = false;
     let response = match sent {
