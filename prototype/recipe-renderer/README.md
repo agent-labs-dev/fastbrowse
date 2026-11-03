@@ -14,7 +14,7 @@ Open `http://localhost:8765/?variant=a`. Use the bottom switcher or the left and
 - `b`: run timeline, best for explaining replay and healing over time
 - `c`: studio split, best for pairing the recording with a selected step
 
-The page contains a privacy-safe synthetic fallback dataset. A production viewer should accept recipe JSON and run-result JSON through a local file picker or API, then match recording timestamps to step metadata. The current run JSON has durations but no absolute video timestamps, so the prototype keeps the player surface honest instead of inventing synchronization.
+The page contains a clearly labelled, privacy-safe synthetic fallback dataset. Import JSON opens a local multi-file picker for recipe and run-result files, Import video attaches a local HTML video player, and Export JSON downloads the current review bundle. Selecting a step updates the inspector and exact JSON view. Files are not uploaded. The current run JSON has durations but no absolute video timestamps, so the prototype keeps the player surface honest instead of inventing synchronization.
 
 ## Library notes
 
