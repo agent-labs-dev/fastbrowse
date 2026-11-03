@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Focusable menu triggers remain available when their label is wrapped in child elements and their links are hidden. Their label uses visible text; a container holding visible controls leaves actions to those controls.
+
 - A composed table is checked one cell at a time against its cited quotes. A row is withheld when any cell changes a value or reports a field unavailable despite its quote stating that field.
 
 - **A synthesis read reports the source material it kept.** After collecting notes for a composed answer, the next decision was told that nothing answered the task. The read now distinguishes source material awaiting composition from an empty read, leaving Jev to judge whether the task is done.

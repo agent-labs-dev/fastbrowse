@@ -888,6 +888,37 @@ async fn test_a_text_page_number_with_a_tabindex_is_offered_and_pressed() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_focusable_menu_with_a_child_label_is_offered_and_opens() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/").await;
+    eval_active(
+        &h,
+        r#"document.body.innerHTML = '<nav><ul><li id="menu" tabindex="0"><div>Projects</div><ul hidden><li><a href="/wind">Wind</a></li></ul></li></ul></nav>';
+        document.getElementById('menu').addEventListener('click', event => {
+            event.currentTarget.querySelector('ul').hidden = false;
+        });"#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let menu = obs.controls.iter().find(|control| control.label == "Projects").expect("menu label is offered");
+    assert!(menu.operations.contains(&Operation::Click));
+    assert!(!obs.controls.iter().any(|control| control.label == "Wind"));
+    eval_active(&h, "document.getElementById('menu').setAttribute('aria-label', 'Project categories')").await;
+    let named = h.observe().await;
+    assert!(named.controls.iter().any(|control| control.label == "Project categories"));
+    eval_active(&h, "document.getElementById('menu').removeAttribute('aria-label')").await;
+    let fresh = h.observe().await;
+    let menu = fresh.controls.iter().find(|control| control.label == "Projects").unwrap();
+    let result = h.page.act(&click(menu), &fresh).await.unwrap();
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|control| control.label == "Wind"));
+    assert!(!after.controls.iter().any(|control| control.label == "Projects"));
+    h.close().await;
+}
+
 /// Unassociated sibling labels left todo toggles absent from the choices offered to the policy.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_transparent_native_choices_keep_todo_context_and_change_only_state() {

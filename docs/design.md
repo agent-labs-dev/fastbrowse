@@ -51,9 +51,9 @@ Fetched documents have no pixels, so optional screenshots and step frames are sk
 
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step. A page number drawn as text rather than a link or a button is offered
-when it is focusable and its own text is all it holds, because that is how a script-built pager exposes it; an element
-with element children, or one already inside a control, is left out, so a focusable scroll container is not mistaken
-for a control.
+when it is focusable and has visible text, including a label wrapped in child elements. Hidden menu links do not
+exclude the trigger that reveals them. An element already inside a control, or holding visible controls, leaves
+actions to those controls.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
