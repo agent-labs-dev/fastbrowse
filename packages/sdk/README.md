@@ -80,7 +80,7 @@ wrapped by `@valibot/to-json-schema`, typed as the schema's output. Data the sch
 any other keyword by name, but a run fills only a flat object of required string, number, integer and boolean
 fields. With any other field it ends `unverified` with no data.
 
-`run` also takes `context`, `inputs`, `attachments` as bytes, `downloads`, `record`, `onFrame` (JPEG frames of the
+`run` also takes `context`, `inputs`, `attachments` as bytes, `downloads`, `record`, `recipe`, `saveRecipe`, `onFrame` (JPEG frames of the
 active tab; none are sent without it), and the browser choices `chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`,
 `attach`, `targetMatch`, `foreground`, `proxyCountry`, `viewport`, `cloudExtensions` and `cloudTimeoutMinutes`.
 `Fastbrowse.start` takes the browser choices as defaults for every run, and a run passes `null` for one to go
@@ -92,6 +92,8 @@ may open, read and control to those exact origins: navigations, redirects, frame
 before they are sent, so a sign-in that redirects through another origin needs it listed too. It scopes documents,
 not the network, and a scoped run sends no frames and cannot `record`.
 `env` in `Fastbrowse.start` adds to the environment the process inherits.
+Recipe paths name files on the server running fastbrowse. `saveRecipe` writes after a completed run;
+`recipe` reuses saved values for matching live actions with the same task.
 
 ## Platforms
 

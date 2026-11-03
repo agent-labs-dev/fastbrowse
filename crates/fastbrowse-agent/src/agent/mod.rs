@@ -11,6 +11,7 @@ mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
+mod replay;
 mod seeing;
 pub(crate) mod state;
 
@@ -72,7 +73,19 @@ pub struct RunOptions {
     pub until: Option<UntilCheck>,
     /// The run a page without a browser ended, which this one carries on from where it stopped.
     pub resume: Option<Resume>,
+    pub recipe: Option<fastbrowse_core::recipe::Recipe>,
+    pub recipe_sink: Option<RecipeSink>,
 }
+
+/// The executed steps and replay accounting, returned after a run ends.
+#[derive(Clone)]
+pub struct RecipeOutcome {
+    pub recipe: fastbrowse_core::recipe::Recipe,
+    pub replayed: usize,
+    pub fell_back: usize,
+}
+
+pub type RecipeSink = Arc<Mutex<Option<RecipeOutcome>>>;
 
 /// A run that ended on a page without a browser: what it knew, and where it stood.
 pub struct Resume {
@@ -249,6 +262,18 @@ impl Agent {
             requested_frame = slot.as_ref().is_some_and(|state| {
                 matches!(state.output_intent, state::OutputIntent::Image | state::OutputIntent::TextAndImage)
             });
+            if let (Some(sink), Some(state)) = (&options.recipe_sink, &slot) {
+                let recipe = fastbrowse_core::recipe::Recipe {
+                    version: fastbrowse_core::recipe::RECIPE_VERSION,
+                    task: self.redact(&state.task),
+                    start: state.started_url.as_deref().map(|url| self.redact(url)),
+                    steps: state.recipe_log.clone(),
+                };
+                let (replayed, fell_back) =
+                    state.replay.as_ref().map_or((0, 0), |replay| (replay.replayed, replay.fell_back));
+                *sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(RecipeOutcome { recipe, replayed, fell_back });
+            }
             if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
                 self.seen().resume = Some(Resume { state, url: page.url });
             }
@@ -322,6 +347,7 @@ impl Agent {
             options.authorization.clone().unwrap_or_default(),
             ledger.clone(),
         );
+        state.replay = options.recipe.clone().map(replay::Replay::new);
         state.context = options.context.clone();
         state.started_url = opening.clone();
         state.caller_start = start.map(String::from);

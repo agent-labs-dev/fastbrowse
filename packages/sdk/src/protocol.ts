@@ -21,9 +21,9 @@ export type Operation =
   | 'done'
   | 'navigate';
 /**
- * Who chose a step: Jev, or a rule in code, such as the next page of a list.
+ * Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
  */
-export type Decider = 'jev' | 'code';
+export type Decider = 'jev' | 'code' | 'recipe';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
 export type FactReader = 'jev_choice' | 'llm_image';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
@@ -366,6 +366,8 @@ export interface RunParams {
   } | null;
   downloads?: string | null;
   record?: string | null;
+  recipe?: string | null;
+  save_recipe?: string | null;
   cursor?: boolean | null;
   local?: boolean;
   chrome?: LocalChrome | null;

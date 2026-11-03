@@ -28,6 +28,8 @@ public record RunParams(
     @JsonProperty("output_schema") JsonNode outputSchema,
     @JsonProperty("downloads") String downloads,
     @JsonProperty("record") String record,
+    @JsonProperty("recipe") String recipe,
+    @JsonProperty("save_recipe") String saveRecipe,
     @JsonProperty("cursor") Boolean cursor,
     @JsonProperty("local") Boolean local,
     @JsonProperty("chrome") LocalChrome chrome,
@@ -66,6 +68,8 @@ public record RunParams(
         private JsonNode outputSchema;
         private String downloads;
         private String record;
+        private String recipe;
+        private String saveRecipe;
         private Boolean cursor;
         private Boolean local;
         private LocalChrome chrome;
@@ -155,6 +159,16 @@ public record RunParams(
             return this;
         }
 
+        public Builder recipe(String recipe) {
+            this.recipe = recipe;
+            return this;
+        }
+
+        public Builder saveRecipe(String saveRecipe) {
+            this.saveRecipe = saveRecipe;
+            return this;
+        }
+
         public Builder cursor(Boolean cursor) {
             this.cursor = cursor;
             return this;
@@ -236,7 +250,7 @@ public record RunParams(
         }
 
         public RunParams build() {
-            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser);
+            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser);
         }
     }
 }

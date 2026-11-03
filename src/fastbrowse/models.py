@@ -96,10 +96,11 @@ class Operation(StrEnum):
 
 
 class Decider(StrEnum):
-    """Who chose a step: Jev, or a rule in code, such as the next page of a list."""
+    """Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev."""
 
     JEV = "jev"
     CODE = "code"
+    RECIPE = "recipe"
 
 
 class StepOutcome(StrEnum):

@@ -50,6 +50,8 @@ public record RunOptions(
         JsonNode outputSchema,
         String downloads,
         String record,
+        String recipe,
+        String saveRecipe,
         Boolean cursor,
         List<String> allowedOrigins,
         boolean fetch,
@@ -79,6 +81,8 @@ public record RunOptions(
         private JsonNode outputSchema;
         private String downloads;
         private String record;
+        private String recipe;
+        private String saveRecipe;
         private Boolean cursor;
         private List<String> allowedOrigins;
         private boolean fetch;
@@ -141,6 +145,10 @@ public record RunOptions(
             return this;
         }
 
+        public Builder recipe(String recipe) { this.recipe = recipe; return this; }
+
+        public Builder saveRecipe(String saveRecipe) { this.saveRecipe = saveRecipe; return this; }
+
         public Builder cursor(Boolean cursor) {
             this.cursor = cursor;
             return this;
@@ -184,8 +192,8 @@ public record RunOptions(
 
         public RunOptions build() {
             return new RunOptions(browser, start, context, inputs, attachments, limits, authorization, outputSchema,
-                    downloads, record, cursor, allowedOrigins, fetch, browserFirst, secrets, resolver, until, onEvent,
-                    onFrame);
+                    downloads, record, recipe, saveRecipe, cursor, allowedOrigins, fetch, browserFirst, secrets,
+                    resolver, until, onEvent, onFrame);
         }
     }
 }

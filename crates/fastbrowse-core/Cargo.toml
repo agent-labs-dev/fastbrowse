@@ -19,3 +19,6 @@ serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtr
 sha2 = { version = "0.11.1", default-features = false }
 thiserror = "2.0.21"
 serde_path_to_error = "0.1.20"
+
+# Publish recipes only after the complete JSON has reached disk.
+tempfile = "3.27.0"

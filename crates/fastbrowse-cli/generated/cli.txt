@@ -5,7 +5,7 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--proxy-country CC] [--viewport WIDTHxHEIGHT] [--authorize]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
                   [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
-                  [--downloads DOWNLOADS] [--json] [--record FILE] [--fetch]
+                  [--downloads DOWNLOADS] [--json] [--record FILE] [--recipe FILE] [--save-recipe FILE] [--fetch]
                   [--browser] [--trace FILE] [--cursor | --no-cursor]
                   task
 
@@ -61,6 +61,8 @@ options:
   --downloads DOWNLOADS
                         directory for downloaded files
   --json                print the full result as JSON
+  --recipe FILE         reuse saved values for matching actions confirmed by Jev
+  --save-recipe FILE    save the steps of a completed run as recipe JSON
   --record FILE         save a video of the run, ending on its answer (needs
                         ffmpeg)
   --fetch               never start a browser: a step that needs one ends the

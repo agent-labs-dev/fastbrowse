@@ -193,6 +193,7 @@ fn button(label: &str) -> Control {
 
 fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
+        replayed: false,
         operation,
         url: None,
         target_confidence: target.as_ref().map(|_| 1.0),

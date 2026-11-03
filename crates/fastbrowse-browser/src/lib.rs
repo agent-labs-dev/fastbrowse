@@ -12,6 +12,7 @@ pub mod error;
 pub mod helper;
 pub mod page;
 mod pdf;
+pub mod pointer;
 #[cfg(feature = "recording")]
 pub mod recording;
 pub mod session;

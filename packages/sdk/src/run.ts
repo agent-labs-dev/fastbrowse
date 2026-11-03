@@ -82,6 +82,10 @@ export interface RunOptions extends PerRun<BrowserOptions> {
   downloads?: string;
   /** Where to write a video of the run. The server needs ffmpeg for it. */
   record?: string;
+  /** Replay a recipe file and heal unmatched steps. */
+  recipe?: string;
+  /** Save completed steps to a recipe file. */
+  saveRecipe?: string;
   /** The agent's cursor over visible local Chrome on Linux X11 with Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off. */
   cursor?: boolean;
   /**
@@ -173,6 +177,8 @@ export function runParams(runId: string, task: string, defaults: Partial<RunPara
       output_schema: options.output && wireSchema(options.output),
       downloads: options.downloads,
       record: options.record,
+      recipe: options.recipe,
+      save_recipe: options.saveRecipe,
       cursor: options.cursor,
       allowed_origins: options.allowedOrigins,
       fetch: options.fetch,

@@ -184,7 +184,7 @@ public sealed record CostLine
 }
 
 /// <summary>
-/// Who chose a step: Jev, or a rule in code, such as the next page of a list.
+/// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<Decider>))]
 public enum Decider
@@ -193,6 +193,8 @@ public enum Decider
     Jev,
     [JsonStringEnumMemberName("code")]
     Code,
+    [JsonStringEnumMemberName("recipe")]
+    Recipe,
 }
 
 public sealed record Evidence
@@ -479,6 +481,12 @@ public sealed record RunParams
 
     [JsonPropertyName("record")]
     public string? Record { get; init; }
+
+    [JsonPropertyName("recipe")]
+    public string? Recipe { get; init; }
+
+    [JsonPropertyName("save_recipe")]
+    public string? SaveRecipe { get; init; }
 
     [JsonPropertyName("cursor")]
     public bool? Cursor { get; init; }

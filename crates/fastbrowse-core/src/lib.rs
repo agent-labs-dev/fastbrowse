@@ -23,6 +23,7 @@ pub mod output_schema;
 pub mod page;
 pub mod protocol;
 pub mod py;
+pub mod recipe;
 pub mod safety;
 pub mod schema;
 pub mod telemetry;

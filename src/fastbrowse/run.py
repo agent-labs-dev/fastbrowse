@@ -96,6 +96,8 @@ async def run_task(
     http: httpx.AsyncClient | None = None,
     record: Path | None = None,
     cursor: bool | None = None,
+    recipe: Path | None = None,
+    save_recipe: Path | None = None,
     fetch: bool = False,
     browser: bool = False,
     open_browser: Callable[[], Awaitable[str]] | None = None,
@@ -155,6 +157,9 @@ async def run_task(
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
     an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
+    `recipe` reuses saved values when Jev selects a matching action on the same page, through the same
+    authorization and secret gates. The task must match the recorded task. `save_recipe`
+    writes the run's steps as a recipe when it ends `complete`; it may name the `recipe` file, to repair it.
     `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after delivery, with no fixed
     frame rate; only the latest pending frame is kept. Handler failures are logged without interrupting the run.
     A handler still running when the run ends is cancelled, and the run waits at most two seconds for it to stop.

@@ -122,6 +122,8 @@ def run_task_json(task: str, arguments: dict[str, Any]) -> str:
             "authorization": _dumped(arguments["authorization"]),
             "downloads": None if arguments["downloads"] is None else str(arguments["downloads"]),
             "record": None if arguments["record"] is None else str(arguments["record"]),
+            "recipe": None if arguments["recipe"] is None else str(arguments["recipe"]),
+            "save_recipe": None if arguments["save_recipe"] is None else str(arguments["save_recipe"]),
         }
     )
 

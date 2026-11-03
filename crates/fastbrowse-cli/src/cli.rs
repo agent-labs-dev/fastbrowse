@@ -133,6 +133,8 @@ pub fn parser(build: &Build) -> Parser {
             Opt::value("--downloads"),
             Opt::flag("--json"),
             Opt::value("--record"),
+            Opt::value("--recipe"),
+            Opt::value("--save-recipe"),
             Opt::flag("--fetch"),
             Opt::flag("--browser"),
             Opt::value("--trace"),
@@ -169,6 +171,8 @@ pub struct Args {
     pub downloads: Option<PathBuf>,
     pub json: bool,
     pub record: Option<PathBuf>,
+    pub recipe: Option<PathBuf>,
+    pub save_recipe: Option<PathBuf>,
     pub fetch: bool,
     pub browser: bool,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
@@ -229,6 +233,8 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         downloads: path("--downloads"),
         json: parsed.flag("--json"),
         record: path("--record"),
+        recipe: path("--recipe"),
+        save_recipe: path("--save-recipe"),
         fetch: parsed.flag("--fetch"),
         browser: parsed.flag("--browser"),
         trace: text("--trace"),
@@ -403,6 +409,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         authorization: Some(Authorization { irreversible_actions: args.authorize }),
         downloads: args.downloads.clone(),
         record: args.record.clone(),
+        recipe: args.recipe.clone(),
+        save_recipe: args.save_recipe.clone(),
         cursor: args.cursor,
         local: args.local,
         chrome,
@@ -419,7 +427,10 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         ..RunTask::default()
     };
     fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;
+    let recipe_sink =
+        (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
     let host = Host {
+        recipe_sink: recipe_sink.clone(),
         browser_api_key: options::environment(&task, &settings)?,
         secrets: secrets.map(|secrets| Arc::new(secrets) as _),
         on_event: Some(progress(context.streams.clone())),
@@ -431,6 +442,14 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         Err(RunError::AfterSpending { error, receipt }) => options::cancelled_result(error.to_string(), receipt),
         Err(error) => return Err(ConfigurationError(error.to_string())),
     };
+    if let Some(sink) = recipe_sink
+        && let Some(outcome) = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
+    {
+        context.streams.eprint(&format!(
+            "  recipe: {} actions reused, {} unmatched observations",
+            outcome.replayed, outcome.fell_back
+        ));
+    }
     if result.status == Status::NeedsLogin {
         result.error = Some(format!(
             "{}. Pass --secret NAME=ENV_VAR@https://host with the password in that environment variable; credentials \

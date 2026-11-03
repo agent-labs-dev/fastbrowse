@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use fastbrowse_agent::agent::{Agent, Resume, RunOptions};
+use fastbrowse_agent::agent::{Agent, RecipeSink, Resume, RunOptions};
 use fastbrowse_agent::verification::RecordSchema;
 use fastbrowse_browser::adapters::browser_use_cloud::{BrowserUseCloudBrowser, BrowserUseCloudOptions};
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
@@ -127,6 +127,7 @@ pub struct Host {
     pub on_event: Option<EventHandler>,
     pub on_frame: Option<FrameHandler>,
     pub until: Option<UntilCheck>,
+    pub recipe_sink: Option<RecipeSink>,
     /// The caller's browser, opened only if the run reaches a step that needs one: it answers the address to attach
     /// to, and the caller closes it after the run.
     pub open_browser: Option<OpenBrowser>,
@@ -249,6 +250,8 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("viewport", task.viewport.is_some()),
             ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
             ("record", task.record.is_some()),
+            ("recipe", task.recipe.is_some()),
+            ("save_recipe", task.save_recipe.is_some()),
             ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
         ]);
@@ -589,6 +592,8 @@ fn reads_first(task: &RunTask, chrome: &LocalChrome) -> bool {
     task.fetch
         || !(task.browser
             || task.record.is_some()
+            || task.recipe.is_some()
+            || task.save_recipe.is_some()
             || task.attach
             || task.target_match.is_some()
             || task.cdp_url.is_some()
@@ -718,6 +723,14 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     if host.open_browser.is_some() && task.viewport.is_some() {
         return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
     }
+    let recipe =
+        task.recipe.as_deref().map(fastbrowse_core::recipe::Recipe::load).transpose().map_err(RunError::Invalid)?;
+    if recipe.as_ref().is_some_and(|recipe| recipe.task != task.task) {
+        return Err(RunError::Invalid(
+            "the recipe task differs from this task; record a new recipe for changed instructions".into(),
+        ));
+    }
+    let recipe_sink = host.recipe_sink.clone().or_else(|| task.save_recipe.is_some().then(RecipeSink::default));
     if task.fetch && host.browser_api_key.is_some() {
         return Err(RunError::Invalid("fetch starts no browser, so it cannot be combined with browser_api_key".into()));
     }
@@ -752,7 +765,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     let mut limits = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
-    if reads_first(&task, &chrome) {
+    if task.recipe.is_none() && task.save_recipe.is_none() && reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
         let clients = (jev.clone(), llm.clone());
@@ -831,9 +844,14 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             && is_loopback(&opened.connection().cdp_url)
             && (task.cdp_url.is_some() || task.cdp_port.is_some() || chrome.headed);
         feedback = cursor_feedback(shown).await.map(Arc::new);
-        let page: Arc<dyn Page> = Arc::new(CdpPage::new(opened.clone(), config.clone()).with_cursor(feedback.clone()));
+        let pointer_marks = Arc::new(std::sync::Mutex::new(Vec::<fastbrowse_browser::pointer::PointerMark>::new()));
+        let mut cdp = CdpPage::new(opened.clone(), config.clone()).with_cursor(feedback.clone());
+        if task.record.is_some() {
+            cdp = cdp.with_pointer_marks(pointer_marks.clone());
+        }
+        let page: Arc<dyn Page> = Arc::new(cdp);
         if let Some(path) = &task.record {
-            match Recording::start(opened.clone(), path).await {
+            match Recording::start_with_marks(opened.clone(), path, pointer_marks).await {
                 Ok(started) => *recording.lock().await = Some(started),
                 Err(error) => {
                     recording_failed = Some(error.0.clone());
@@ -862,6 +880,8 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             authorization: task.authorization.clone(),
             until: host.until.clone(),
             resume: resume.take(),
+            recipe: recipe.clone(),
+            recipe_sink: recipe_sink.clone(),
         };
         let result = agent.run(&task.task, run).await.map_err(|error| refused(&error.to_string()))?;
         // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
@@ -938,6 +958,19 @@ fn finish(
     result.recordings = recordings;
     if let Some(message) = recording_failed {
         return Err(RunError::Recording(message).after(told, result.cost.lines, result.recordings));
+    }
+    if result.status == Status::Complete
+        && let (Some(path), Some(sink)) = (&task.save_recipe, &recipe_sink)
+    {
+        let outcome = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        if let Some(outcome) = outcome {
+            if let Err(error) = outcome.recipe.save(path) {
+                fastbrowse_browser::warn(&format!(
+                    "the run completed but its recipe could not be written to {}: {error}",
+                    path.display()
+                ));
+            }
+        }
     }
     Ok(result)
 }
@@ -1056,6 +1089,8 @@ async fn fetched(
         authorization: task.authorization.clone(),
         until: host.until.clone(),
         resume: None,
+        recipe: None,
+        recipe_sink: None,
     };
     let Ok(outcome) = host.cancel.guard(agent.run(&task.task, run)).await else {
         return Err(cancelled(told, ledger.breakdown().lines, Vec::new()));

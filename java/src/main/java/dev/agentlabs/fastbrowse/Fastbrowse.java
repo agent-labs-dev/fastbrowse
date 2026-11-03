@@ -370,6 +370,8 @@ public final class Fastbrowse implements AutoCloseable {
                 .until(options.until() != null ? true : null)
                 .downloads(options.downloads())
                 .record(options.record())
+                .recipe(options.recipe())
+                .saveRecipe(options.saveRecipe())
                 .cursor(options.cursor())
                 .allowedOrigins(options.allowedOrigins())
                 .fetch(options.fetch() ? true : null)

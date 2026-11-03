@@ -294,6 +294,9 @@ pub struct Decision {
     /// Drop target of a drag: the control the element Jev chose to drag is released onto.
     #[serde(default)]
     pub destination: Option<Control>,
+    /// A recipe step carried out again: no model chose it in this run, so no model's confidence vouches for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replayed: bool,
     /// The controls Jev chose among, kept only when `Config.step_choices` asks for them.
     #[serde(skip)]
     pub offered: Vec<Control>,
@@ -1117,6 +1120,7 @@ async fn evaluate(
         shows_answer: noul_probability(&evaluation, keys::SHOWS_ANSWER),
         site_failure: noul_probability(&evaluation, "site_failure"),
         destination,
+        replayed: false,
         offered: Vec::new(),
         ahead,
     })

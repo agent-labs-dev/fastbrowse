@@ -100,10 +100,11 @@ impl Operation {
 
 str_enum! {
     /// Who chose a step: Jev, or a rule in code.
-    doc: "Who chose a step: Jev, or a rule in code, such as the next page of a list.";
+    doc: "Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.";
     pub enum Decider {
         Jev = "jev",
         Code = "code",
+        Recipe = "recipe",
     }
 }
 

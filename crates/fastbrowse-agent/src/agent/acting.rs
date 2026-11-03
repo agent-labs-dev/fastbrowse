@@ -8,6 +8,7 @@ use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
+use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password,
     may_be_irreversible, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
@@ -232,8 +233,18 @@ impl Agent {
                     }
                     return Err(Unsure { reason, gives_up_as: Status::Stuck }.into());
                 }
-                let question = format!("Which option should {} be set to?", text::repr(&target.label));
-                let option = self.choose(state, observation, &question, &raw.options).await?;
+                let recorded = decision
+                    .replayed
+                    .then(|| state.replay.as_ref().and_then(super::replay::Replay::option))
+                    .flatten()
+                    .map(str::to_string);
+                let option = match recorded.filter(|option| raw.options.contains(option)) {
+                    Some(option) => option,
+                    None => {
+                        let question = format!("Which option should {} be set to?", text::repr(&target.label));
+                        self.choose(state, observation, &question, &raw.options).await?
+                    }
+                };
                 Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
             }
             Operation::Upload => {
@@ -319,7 +330,7 @@ impl Agent {
             Some(self.redact(&label)),
             confidence,
             Some(false),
-            Decider::Jev,
+            if decision.replayed { Decider::Recipe } else { Decider::Jev },
         )
         .await?;
         Err(Unsure::new(redacted).into())
@@ -403,7 +414,7 @@ impl Agent {
             Some(self.redact(label)),
             confidence,
             Some(false),
-            Decider::Jev,
+            if decision.replayed { Decider::Recipe } else { Decider::Jev },
         )
         .await?;
         Err(Stop::new(Status::NeedsConfirmation, reason).into())
@@ -418,7 +429,34 @@ impl Agent {
         target: &Control,
     ) -> Step<String> {
         let origin = self.target_origin(target);
-        if is_password(target) {
+        state.text_source = None;
+        let recorded = (decision.replayed
+            && !state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone())))
+        .then(|| state.replay.as_ref().and_then(super::replay::Replay::text).cloned())
+        .flatten();
+        if let Some(source) = recorded {
+            match source {
+                RecipeText::Literal(text) if !target.sensitive && !is_password(target) => return Ok(text),
+                RecipeText::Input(name) if !target.sensitive && !is_password(target) => {
+                    let value = state
+                        .inputs
+                        .get(&name)
+                        .cloned()
+                        .ok_or_else(|| Stop::new(Status::NeedsInput, format!("the recipe needs input {name}")))?;
+                    state.text_source = Some(RecipeText::Input(name));
+                    return Ok(value);
+                }
+                RecipeText::Secret(name) if !target.sensitive && !is_password(target) => {
+                    let value = self
+                        .secret(&name, &origin, target.sensitive || asks_for_credentials(&self.raw_target(target)))
+                        .await?;
+                    state.text_source = Some(RecipeText::Secret(name));
+                    return Ok(value);
+                }
+                RecipeText::Literal(_) | RecipeText::Input(_) | RecipeText::Secret(_) | RecipeText::Live => {}
+            }
+        }
+        if target.sensitive || is_password(target) {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
@@ -447,6 +485,7 @@ impl Agent {
             };
         }
         if source == IN_READ {
+            state.text_source = Some(RecipeText::Live);
             task = read;
             group = words(&task, target.max_length);
             group = self.narrowed(state, observation, &task, &label, group).await?;
@@ -466,9 +505,11 @@ impl Agent {
             picks.extend(self.ask_choices(state, Some(observation), asked).await?);
         }
         if let Some(input) = source.strip_prefix("input:") {
+            state.text_source = Some(RecipeText::Input(input.to_string()));
             return Ok(state.inputs.get(input).cloned().unwrap_or_default());
         }
         if let Some(name) = source.strip_prefix("secret:") {
+            state.text_source = Some(RecipeText::Secret(name.to_string()));
             return self.secret(name, &origin, asks_for_credentials(&self.raw_target(target))).await;
         }
         let word = |key: &str| {
@@ -667,6 +708,7 @@ impl Agent {
                 )
                 .into());
             }
+            state.text_source = Some(RecipeText::Secret("new_password".into()));
             return self.secret("new_password", origin, false).await;
         }
         let secrets: Vec<String> = secrets.into_iter().filter(|name| name != "new_password").collect();
@@ -676,7 +718,10 @@ impl Agent {
                 format!("{} wants a secret and none is stored", text::repr(&target.label)),
             )
             .into()),
-            [only] => self.secret(only, origin, true).await,
+            [only] => {
+                state.text_source = Some(RecipeText::Secret(only.clone()));
+                self.secret(only, origin, true).await
+            }
             _ => {
                 let criteria: IndexMap<String, JsonValue> = secrets
                     .iter()
@@ -684,6 +729,7 @@ impl Agent {
                     .collect();
                 let question = format!("Which stored secret belongs in {}?", text::repr(&target.label));
                 let name = self.ask_choice(state, observation, &question, criteria).await?;
+                state.text_source = Some(RecipeText::Secret(name.clone()));
                 self.secret(&name, origin, true).await
             }
         }

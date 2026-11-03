@@ -93,13 +93,23 @@ impl Agent {
                 .filter(|picked| {
                     picked.target.as_ref().is_none_or(|target| observation.controls.iter().any(|c| c.id == target.id))
                 });
-            let decision = match picked {
+            if picked.is_some()
+                && let Some(replay) = state.replay.as_mut()
+            {
+                replay.replaced();
+            }
+            let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+            context.screenshot = self.drawn_viewport(&observation).await?;
+            let mut offered = observation.clone();
+            leave_out_idle(state, &mut offered, &mut context);
+            let replayed = if picked.is_none() {
+                state.replay.as_mut().and_then(|replay| replay.decision(&offered.url, &offered.controls))
+            } else {
+                None
+            };
+            let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
-                    let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
-                    context.screenshot = self.drawn_viewport(&observation).await?;
-                    let mut offered = observation.clone();
-                    leave_out_idle(state, &mut offered, &mut context);
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
                         let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
@@ -108,15 +118,27 @@ impl Agent {
                     });
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(decision) = decided else {
+                        if let Some(replay) = state.replay.as_mut() {
+                            replay.replaced();
+                        }
                         self.redecide(state, &observation);
                         continue;
                     };
-                    // Only an answered decision has asked the page's sign-in and bot questions; a dropped one asked
-                    // nothing.
                     state.last_page = Some(page);
                     decision
                 }
             };
+            // A saved step cannot replace the live page's wall, evidence or action judgement.
+            if let Some(saved) = replayed {
+                if saved.operation == decision.operation
+                    && saved.target.as_ref().map(|target| &target.id)
+                        == decision.target.as_ref().map(|target| &target.id)
+                {
+                    decision.replayed = true;
+                } else if let Some(replay) = state.replay.as_mut() {
+                    replay.replaced();
+                }
+            }
             self.record_page(state, &observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
@@ -467,6 +489,21 @@ impl Agent {
                 result = clicked;
             }
             let executed = result.outcome == StepOutcome::Executed;
+            if let Some(replay) = state.replay.as_mut() {
+                if decision.replayed {
+                    replay.settled(executed);
+                } else if executed {
+                    replay.followed(&observation.url, decision);
+                }
+            }
+            let source = state.text_source.take();
+            if executed
+                && super::replay::recorded(decision.operation)
+                && let Some(step) =
+                    super::replay::step_of(&observation.url, decision, &action, source, |text| self.reveals_text(text))
+            {
+                state.recipe_log.push(step);
+            }
             if action.operation == Operation::Navigate
                 && result.outcome == StepOutcome::Failed
                 && let (Some(url), Some(error)) = (&action.url, &result.detail)
@@ -570,7 +607,7 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: decision.operation,
-            decided_by: Decider::Jev,
+            decided_by: if decision.replayed { Decider::Recipe } else { Decider::Jev },
             outcome: act.outcome,
             url: observation.url.clone(),
             target: label,

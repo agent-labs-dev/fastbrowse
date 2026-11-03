@@ -115,6 +115,12 @@ public sealed record RunOptions
     /// <summary>Where to write a video of the run. The server needs ffmpeg for it.</summary>
     public string? Record { get; init; }
 
+    /// <summary>Replay a recipe file and heal unmatched steps.</summary>
+    public string? Recipe { get; init; }
+
+    /// <summary>Save completed steps to a recipe file.</summary>
+    public string? SaveRecipe { get; init; }
+
     /// <summary>The agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off.</summary>
     public bool? Cursor { get; init; }
 

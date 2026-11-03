@@ -108,12 +108,13 @@ type CostLine struct {
 	Seconds *float64 `json:"seconds"`
 }
 
-// Who chose a step: Jev, or a rule in code, such as the next page of a list.
+// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
 type Decider string
 
 const (
-	DeciderJev  Decider = "jev"
-	DeciderCode Decider = "code"
+	DeciderJev    Decider = "jev"
+	DeciderCode   Decider = "code"
+	DeciderRecipe Decider = "recipe"
 )
 
 type Error struct {
@@ -310,6 +311,8 @@ type RunParams struct {
 	OutputSchema        json.RawMessage   `json:"output_schema,omitempty"`
 	Downloads           *string           `json:"downloads,omitempty"`
 	Record              *string           `json:"record,omitempty"`
+	Recipe              *string           `json:"recipe,omitempty"`
+	SaveRecipe          *string           `json:"save_recipe,omitempty"`
 	Cursor              *bool             `json:"cursor,omitempty"`
 	Local               bool              `json:"local,omitempty"`
 	Chrome              *LocalChrome      `json:"chrome,omitempty"`

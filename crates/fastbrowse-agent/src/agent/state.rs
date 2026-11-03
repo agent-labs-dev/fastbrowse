@@ -194,6 +194,12 @@ impl SiteFailure {
 
 pub(crate) struct RunState {
     pub task: String,
+    /// The recipe this run replays, while it has steps left to offer.
+    pub replay: Option<super::replay::Replay>,
+    /// The steps this run carried out, kept as a recipe a later run can replay.
+    pub recipe_log: Vec<fastbrowse_core::recipe::RecipeStep>,
+    /// Where the text of the fill being built came from, when a caller input or a stored secret gave it.
+    pub text_source: Option<fastbrowse_core::recipe::RecipeText>,
     /// The caller's background: shown beside the task, never read as what it asks for.
     pub context: Option<String>,
     pub inputs: IndexMap<String, String>,
@@ -362,6 +368,9 @@ impl RunState {
     ) -> RunState {
         RunState {
             task,
+            replay: None,
+            recipe_log: Vec::new(),
+            text_source: None,
             context: None,
             inputs,
             attachments,

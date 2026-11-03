@@ -172,6 +172,13 @@ asyncio.run(main())
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
 
+**Recipes and recordings.** `save_recipe=Path("recipe.json")` stores the actions of a completed run.
+Pass `recipe=Path("recipe.json")` with the same task to reuse values when Jev selects a matching live action.
+A changed page or control falls back to the agent. Reading and completion are always checked live.
+Naming the same file for both arguments saves the healed sequence after another completed run.
+Recipes can contain personal information from ordinary fields; stored secrets are kept only by name.
+`record=Path("run.mp4")` writes captioned and plain videos with an action cursor, and needs ffmpeg.
+
 **Your own script on the page.** `connect_cdp()` hands you the attached page without the agent:
 
 ```python

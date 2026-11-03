@@ -276,6 +276,10 @@ pub struct RunTask {
     pub downloads: Option<PathBuf>,
     #[serde(default)]
     pub record: Option<PathBuf>,
+    #[serde(default)]
+    pub recipe: Option<PathBuf>,
+    #[serde(default)]
+    pub save_recipe: Option<PathBuf>,
     /// Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. Unset draws it wherever
     /// it can be placed, true also brings the window to the front for it, false turns it off.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
@@ -615,6 +619,8 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("output_schema", Ty::optional(Ty::map(Ty::Any)), none()),
         Field::default("downloads", path(), none()),
         Field::default("record", path(), none()),
+        Field::default("recipe", path(), none()),
+        Field::default("save_recipe", path(), none()),
         Field::default("cursor", Ty::optional(Ty::Bool), none()),
         Field::default("local", Ty::Bool, false),
         Field::default("chrome", Ty::optional(LocalChrome::ty()), none()),

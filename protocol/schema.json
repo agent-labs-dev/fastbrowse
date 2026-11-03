@@ -309,10 +309,11 @@
       "type": "object"
     },
     "Decider": {
-      "description": "Who chose a step: Jev, or a rule in code, such as the next page of a list.",
+      "description": "Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.",
       "enum": [
         "jev",
-        "code"
+        "code",
+        "recipe"
       ],
       "title": "Decider",
       "type": "string"
@@ -1021,6 +1022,32 @@
           ],
           "default": null,
           "title": "Record"
+        },
+        "recipe": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recipe"
+        },
+        "save_recipe": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Save Recipe"
         },
         "cursor": {
           "anyOf": [

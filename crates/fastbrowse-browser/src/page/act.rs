@@ -242,6 +242,30 @@ impl CdpPage {
         {
             cursor.follow(self.cursor_geometry(target.0.clone(), observation.document_key.clone()), (x, y));
         }
+        if !action.secret
+            && let (Some(marks), Point::At(x, y)) = (&self.pointer_marks, point)
+            && target.as_ref().is_some_and(|target| target.0 == active)
+            && matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover | Operation::Drag)
+            && let Ok(viewport) = self.evaluate(&active, "[window.innerWidth, window.innerHeight]").await
+        {
+            if let (Some(width), Some(height)) = (
+                viewport.get(0).and_then(serde_json::Value::as_f64),
+                viewport.get(1).and_then(serde_json::Value::as_f64),
+            ) && width.is_finite()
+                && height.is_finite()
+                && width > 0.0
+                && height > 0.0
+            {
+                marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(crate::pointer::PointerMark {
+                    at: std::time::Instant::now(),
+                    x,
+                    y,
+                    operation: action.operation,
+                    width,
+                    height,
+                });
+            }
+        }
         let popups = self.session.popups();
         // A dialog blocks the page, and an observation taken under it reads no document, so the mark taken before the
         // action that opened it stands: accepting a confirm that navigates is a move the run made, and without a mark

@@ -10,7 +10,6 @@ pub mod scripts;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-#[cfg(feature = "cursor")]
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -264,6 +263,7 @@ pub struct CdpPage {
     capture_js: String,
     pub(crate) fingerprint_js: String,
     pub(crate) state: Mutex<PageState>,
+    pub(crate) pointer_marks: Option<Arc<Mutex<Vec<crate::pointer::PointerMark>>>>,
     #[cfg(feature = "cursor")]
     cursor: Option<Arc<crate::cursor::CursorFeedback>>,
     #[cfg(feature = "cursor")]
@@ -430,11 +430,17 @@ impl CdpPage {
             capture_js,
             fingerprint_js,
             state: Mutex::default(),
+            pointer_marks: None,
             #[cfg(feature = "cursor")]
             cursor: None,
             #[cfg(feature = "cursor")]
             cursor_pid: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn with_pointer_marks(mut self, marks: Arc<Mutex<Vec<crate::pointer::PointerMark>>>) -> Self {
+        self.pointer_marks = Some(marks);
+        self
     }
 
     #[cfg(feature = "cursor")]

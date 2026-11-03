@@ -185,6 +185,27 @@ the agent, and handler failures are logged. A handler must honour cancellation: 
 loop, so one that swallows `CancelledError` keeps that loop alive and `asyncio.run` waits for it at shutdown. Live images and MP4 recordings are held back from the moment a secret is typed, and whenever the page is read showing one, until a reading shows none;
 a recording holds its last clean frame meanwhile.
 
+## Recipes
+
+A recipe is the steps a `complete` run took, stored as JSON. `--save-recipe FILE` writes one and `--recipe FILE`
+loads it. The task must match the recorded task. Naming the same file for both flags replaces it atomically after
+another completed run, including actions the agent chose when a saved step no longer matched.
+
+A step identifies its full page address and a control's role, label, context, link and input attributes. Node ids
+and selectors are not stored. Query strings, fragments and generated path segments must match too: two orders can
+have identical controls without being the same order. A missing or ambiguous control is left to Jev.
+
+Jev decides each action and judges the current page for answers, errors and sign-in walls. When its action agrees
+with a matching recipe step, the fill or select can reuse the saved value and the step reports
+`decided_by: "recipe"`. Freshness checks, hit testing, authorization and secret handling still apply. Password
+fields always use the live credential checks. A stored secret is kept only by name, caller inputs by name, and
+ordinary task text as a literal. Values taken from page evidence are decided live on every run. Recipes can
+contain personal information from ordinary fields, so keep them private like the task that produced them.
+
+Reading, answering and the check for `complete` always run live. A recipe is not evidence that the present task
+has succeeded. After a mismatch, live actions can advance the saved sequence; repeated mismatches leave the rest
+to the agent. A recipe save failure is reported as a warning without losing the completed run's result.
+
 ## Cursor feedback
 
 The run shows where the agent is about to act, through the Cua Driver's synthetic cursor, whenever its tab is on
@@ -193,7 +214,8 @@ window to the front so it always can be, and `--no-cursor` (`cursor=False`) turn
 works in a background tab behind `about:blank`, so the default draws nothing there; nothing of the run is on
 screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
 retried. The page hook is in `CdpPage.act`, where the hit-tested point is known; a secret's field is never
-marked. `browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
+marked. MP4 recordings draw a timed cursor at those points, with a glide between actions and a pulse on clicks.
+`browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
 when the run ends, including on cancellation. The driver's `move_cursor` is sent in `window` scope only, so the
 real pointer and focus never move.
 
@@ -225,10 +247,10 @@ value is sent with `set_agent_cursor_motion` only when it changes, and a driver 
 it was started with.
 
 Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
-0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The driver offers no click
-pulse through `move_cursor`, so only the glide is shown. A docked DevTools panel or a pinch zoom hides the cursor,
-and a window partly covered by another counts as covered. The overlay is a separate window, so CDP screenshots and
-recordings do not show it.
+0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The desktop cursor has no
+click pulse through `move_cursor`; recordings add one in the video. A docked DevTools panel or a pinch zoom hides
+the desktop cursor, and a window partly covered by another counts as covered. CDP screenshots do not show the
+desktop cursor.
 
 ## Browser capabilities over plain CDP
 

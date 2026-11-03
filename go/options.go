@@ -89,6 +89,10 @@ type RunOptions struct {
 	Downloads string
 	// Record is where to write a video of the run. The server needs ffmpeg for it.
 	Record string
+	// Recipe replays a recipe file and heals unmatched steps.
+	Recipe string
+	// SaveRecipe writes completed steps to a recipe file.
+	SaveRecipe string
 	// Cursor is the agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: nil draws it
 	// wherever it can be placed, true also brings the window to the front for it, false turns it off.
 	Cursor *bool
@@ -137,6 +141,8 @@ func runParams(runID, task string, browser BrowserOptions, options RunOptions) (
 		Authorization: options.Authorization,
 		Downloads:     optional(options.Downloads),
 		Record:        optional(options.Record),
+		Recipe:        optional(options.Recipe),
+		SaveRecipe:    optional(options.SaveRecipe),
 		Cursor:        options.Cursor,
 		Fetch:         options.Fetch,
 		Browser:       options.BrowserFirst,

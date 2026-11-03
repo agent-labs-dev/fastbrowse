@@ -308,6 +308,8 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Until = options.Until is not null ? true : null,
         Downloads = options.Downloads,
         Record = options.Record,
+        Recipe = options.Recipe,
+        SaveRecipe = options.SaveRecipe,
         Cursor = options.Cursor,
         AllowedOrigins = options.AllowedOrigins,
         Fetch = options.Fetch ? true : null,
