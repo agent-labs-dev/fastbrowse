@@ -283,16 +283,26 @@ async fn compose_part(
     Ok((draft.data.columns, claims))
 }
 
+/// How much composing a packing still needs: its requests, then the bytes of the notes they carry. A round may shorten
+/// its claims by less than one request's worth, so the bytes are what show it made progress.
+fn packed_size(parts: &[Vec<ComposeItem>]) -> (usize, usize) {
+    (parts.len(), parts.iter().flatten().map(|item| line_bytes(&item.label, &item.text)).sum())
+}
+
+/// Composes notes too large for one request in rounds, each round's claims becoming the next round's notes, until one
+/// request writes the answer. A composer can reword its claims every round without shortening them, so a round must
+/// pack smaller than the one before it, in fewer requests or as many carrying fewer bytes: that size cannot fall
+/// forever, so the rounds end. When a round's claims pack no smaller, they are returned as written with `false`, since
+/// no single request saw them all.
 async fn compose_packed(
     llm: &dyn LLMClient,
     task: &str,
-    mut items: Vec<ComposeItem>,
+    items: Vec<ComposeItem>,
     limit: usize,
     ledger: Option<&Ledger>,
-) -> Result<Drafted> {
-    let mut seen: HashSet<Vec<Claim>> = HashSet::new();
+) -> Result<(Option<Vec<String>>, Vec<Claim>, bool)> {
+    let mut parts = pack_items(task, &items, limit)?;
     loop {
-        let parts = pack_items(task, &items, limit)?;
         let mut claims = Vec::new();
         let mut columns = None;
         for part in &parts {
@@ -300,20 +310,31 @@ async fn compose_packed(
             columns = columns.or(part_columns);
             claims.extend(part_claims);
         }
-        if parts.len() == 1 || claims.len() <= 1 || !seen.insert(claims.clone()) {
-            return Ok((columns, claims));
+        if parts.len() == 1 {
+            return Ok((columns, claims, true));
         }
-        items = claims
-            .into_iter()
+        // Rewording a lone claim cannot recover the notes other requests omitted.
+        if claims.len() <= 1 {
+            return Ok((columns, claims, false));
+        }
+        let items: Vec<ComposeItem> = claims
+            .iter()
             .enumerate()
             .map(|(index, claim)| ComposeItem {
                 label: format!("c{index}"),
-                text: claim.text,
-                sources: claim.evidence_ids,
+                text: claim.text.clone(),
+                sources: claim.evidence_ids.clone(),
             })
             .collect();
+        let next = pack_items(task, &items, limit)?;
+        if packed_size(&next) >= packed_size(&parts) {
+            return Ok((columns, claims, false));
+        }
+        parts = next;
     }
 }
+
+const UNREDUCED: &str = "The composed claims did not reduce to one request within the composing model's context window, so no single composition saw every note.";
 
 /// The answer Jev said must be composed, written from the notes. Jev judges the final claims against their original
 /// quotes; rejected or unjudged claims are withheld, and `problem` prevents an unverified answer ending complete.
@@ -328,13 +349,18 @@ pub async fn compose(
     let items = initial_items(&facts);
     let written: Vec<String> = items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect();
     let messages = compose_messages(task, &written);
-    let (columns, claims) = match llm.context_tokens(LLMPurpose::Compose).await {
+    let (columns, claims, reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
         Some(context) if estimated_context_bytes(&messages) > context_limit(context)? => {
             compose_packed(llm, task, items, context_limit(context)?, ledger).await?
         }
-        _ => compose_part(llm, task, &items, ledger).await?,
+        _ => {
+            let (columns, claims) = compose_part(llm, task, &items, ledger).await?;
+            (columns, claims, true)
+        }
     };
     let (claims, problem) = supported_claims(jev, task, columns.as_deref(), claims, notes, ledger).await?;
+    // Each claim was still judged against its quotes, but a count or comparison across requests is not established.
+    let problem = problem.or_else(|| (!reduced).then(|| UNREDUCED.to_string()));
     Ok(tabled(columns, ComposedAnswer { problem, ..assemble_answer(&claims, notes) }))
 }
 
@@ -858,5 +884,131 @@ mod tests {
         assert_eq!(prompt_ids, ["e0", "e1", "e2", "e3"].into_iter().map(String::from).collect());
         let answer_ids: HashSet<String> = answer.claims.iter().flat_map(|claim| claim.evidence_ids.clone()).collect();
         assert_eq!(answer_ids, notes.facts().iter().map(|fact| fact_id(fact)).collect());
+    }
+
+    /// A composer that rewords every note it is given into a claim `shorten` bytes shorter, never the same words
+    /// twice, and yields before answering so a test deadline can fire on a loop of it. It records how many notes each
+    /// request held.
+    struct Rewording {
+        context: Option<i64>,
+        shorten: usize,
+        first_only: bool,
+        requests: Mutex<Vec<usize>>,
+    }
+
+    impl LLMClient for Rewording {
+        fn generate_value<'a>(
+            &'a self,
+            _: LLMPurpose,
+            messages: &'a [Message],
+            schema: &'a dyn ResponseSchema,
+            _: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+            let notes = messages[1].content.split_once("# Notes\n").map_or("", |(_, notes)| notes).to_string();
+            let round = {
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(notes.lines().count());
+                requests.len()
+            };
+            let shorten = self.shorten;
+            let emit = !self.first_only || round == 1;
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+                let claims: Vec<Claim> = notes
+                    .lines()
+                    .filter(|_| emit)
+                    .filter_map(|line| line.split_once(": "))
+                    .map(|(id, text)| {
+                        Claim::new(&format!("{round:08}{}", &text[8..text.len() - shorten]), vec![id.to_string()])
+                    })
+                    .collect();
+                let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+                Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+            })
+        }
+
+        fn context_tokens(&self, _: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+            let context = self.context;
+            Box::pin(async move { context })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_composer_that_never_shortens_its_notes_ends_unverified_with_every_source() {
+        let notes = Notes::new((0..4).map(|index| fact(index, format!("00000000 fact {index} {}", "x".repeat(100)))));
+        let facts = notes.facts();
+        // Room for any one note's request, never two.
+        let limit = initial_items(&facts)
+            .iter()
+            .map(|item| {
+                estimated_context_bytes(&compose_messages("Find it", &[format!("{}: {}", item.label, item.text)]))
+            })
+            .max()
+            .unwrap()
+            + 8;
+        let llm =
+            Rewording { context: Some(limit as i64), shorten: 0, first_only: false, requests: Mutex::new(Vec::new()) };
+        let jev = Support::new(true);
+        let composed =
+            tokio::time::timeout(std::time::Duration::from_secs(5), compose(&jev, &llm, "Find it", &notes, None)).await;
+        let calls = llm.requests.lock().unwrap().len();
+        let answer = composed.unwrap_or_else(|_| panic!("compose did not converge after {calls} calls")).unwrap();
+        // One request per note, whose reworded claims still need four requests, so no second round is spent.
+        assert_eq!(calls, 4);
+        assert_eq!(answer.problem.as_deref(), Some(UNREDUCED));
+        assert_eq!(answer.claims.len(), 4);
+        let cited: HashSet<String> = answer.claims.iter().flat_map(|claim| claim.evidence_ids.clone()).collect();
+        assert_eq!(cited, facts.iter().map(|fact| fact_id(fact)).collect());
+    }
+
+    #[tokio::test]
+    async fn a_composer_that_shortens_its_claims_a_little_each_round_reaches_one_request_with_every_source() {
+        let notes = Notes::new((0..2).map(|index| fact(index, format!("00000000 fact {index} {}", "x".repeat(200)))));
+        let facts = notes.facts();
+        // Room for one note's request, never two, until rounds of 20 bytes shorter claims fit together.
+        let limit = initial_items(&facts)
+            .iter()
+            .map(|item| {
+                estimated_context_bytes(&compose_messages("Find it", &[format!("{}: {}", item.label, item.text)]))
+            })
+            .max()
+            .unwrap()
+            + 8;
+        let llm =
+            Rewording { context: Some(limit as i64), shorten: 20, first_only: false, requests: Mutex::new(Vec::new()) };
+        let jev = Support::new(true);
+        let composed =
+            tokio::time::timeout(std::time::Duration::from_secs(5), compose(&jev, &llm, "Find it", &notes, None)).await;
+        let requests = llm.requests.lock().unwrap().clone();
+        let answer = composed.unwrap_or_else(|_| panic!("compose did not converge after {requests:?}")).unwrap();
+        // Several rounds still need two requests while their claims shrink, then one request writes both claims.
+        assert!(requests.len() > 4, "{requests:?}");
+        assert!(requests[..requests.len() - 1].iter().all(|&notes| notes == 1), "{requests:?}");
+        assert_eq!(requests.last(), Some(&2));
+        assert_eq!(answer.problem, None);
+        assert_eq!(answer.claims.len(), 2);
+        let cited: HashSet<String> = answer.claims.iter().flat_map(|claim| claim.evidence_ids.clone()).collect();
+        assert_eq!(cited, facts.iter().map(|fact| fact_id(fact)).collect());
+    }
+
+    #[tokio::test]
+    async fn one_claim_from_separate_requests_is_kept_without_claiming_a_whole_answer() {
+        let notes = Notes::new((0..2).map(|index| fact(index, format!("00000000 fact {index} {}", "x".repeat(100)))));
+        let facts = notes.facts();
+        let limit = initial_items(&facts)
+            .iter()
+            .map(|item| {
+                estimated_context_bytes(&compose_messages("Find it", &[format!("{}: {}", item.label, item.text)]))
+            })
+            .max()
+            .unwrap()
+            + 8;
+        let llm =
+            Rewording { context: Some(limit as i64), shorten: 0, first_only: true, requests: Mutex::new(Vec::new()) };
+        let answer = compose(&Support::new(true), &llm, "Find it", &notes, None).await.unwrap();
+        assert_eq!(llm.requests.lock().unwrap().len(), 2);
+        assert_eq!(answer.claims.len(), 1);
+        assert_eq!(answer.claims[0].evidence_ids, vec![fact_id(facts[0])]);
+        assert_eq!(answer.problem.as_deref(), Some(UNREDUCED));
     }
 }
