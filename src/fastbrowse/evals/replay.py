@@ -17,6 +17,7 @@ A miss is the signal that two runs asked different questions. Each is logged wit
 unified diff against the nearest body recorded on the same path.
 """
 
+import contextlib
 import difflib
 import gzip
 import hashlib
@@ -64,7 +65,7 @@ _NEWLINE = r"(?:\n|\\+n)"
 """A line break as it reads in a plain string or inside JSON a prompt carries as text."""
 
 CANONICAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    # Fixture sites are served on fixed ports, but a port is never what tells two questions apart.
+    # Fixture sites may use different loopback ports, but a port is never what tells two questions apart.
     (re.compile(r"(?<=//127\.0\.0\.1:)\d{1,5}|(?<=//localhost:)\d{1,5}|(?<=//\[::1\]:)\d{1,5}"), "<port>"),
     (re.compile(r"(?<=\b127\.0\.0\.1:)\d{1,5}|(?<=\blocalhost:)\d{1,5}"), "<port>"),
     # `Observation.today`: the capture date, its weekday and the calendar under it.
@@ -169,6 +170,48 @@ def translate_targets(response: str, recorded: Any, requested: Any) -> str:
     return TARGET_ID.sub(lambda match: swaps.get(match.group(), match.group()), response)
 
 
+def translate_origin(response: str, recorded_origin: str | None, requested_origin: str | None) -> str:
+    """Replace the exact fixture origin in a recorded response, without touching other URLs or port-shaped text."""
+    if not recorded_origin or not requested_origin or recorded_origin == requested_origin:
+        return response
+    escaped = re.escape(recorded_origin)
+    return re.sub(rf"(?<![\w.@-]){escaped}(?![\w@])", requested_origin, response)
+
+
+def translate_response_origin(response: str, recorded_origin: str | None, requested_origin: str | None) -> str:
+    """Translate fixture URLs in JSON string values, retaining the original body when nothing changes."""
+    try:
+        decoded = json.loads(response)
+    except (TypeError, ValueError):
+        return translate_origin(response, recorded_origin, requested_origin)
+
+    def visit(value: Any) -> tuple[Any, bool]:
+        if isinstance(value, str):
+            translated = translate_origin(value, recorded_origin, requested_origin)
+            changed = translated != value
+            try:
+                embedded = json.loads(translated)
+            except ValueError:
+                return translated, changed
+            if not isinstance(embedded, (dict, list)):
+                return translated, changed
+            nested, nested_changed = visit(embedded)
+            if nested_changed:
+                translated = json.dumps(nested, ensure_ascii=False, separators=(",", ":"))
+                changed = True
+            return translated, changed
+        if isinstance(value, list):
+            values = [visit(item) for item in value]
+            return [item for item, _ in values], any(changed for _, changed in values)
+        if isinstance(value, dict):
+            values = {key: visit(item) for key, item in value.items()}
+            return {key: item for key, (item, _) in values.items()}, any(changed for _, changed in values.values())
+        return value, False
+
+    translated, changed = visit(decoded)
+    return json.dumps(translated, ensure_ascii=False, separators=(",", ":")) if changed else response
+
+
 def request_key(path: str, body: bytes | str | Any) -> str:
     return hashlib.sha256(f"{path}\n{canonical_json(body)}".encode()).hexdigest()
 
@@ -236,6 +279,7 @@ class Exchange:
     body: str
     latency: float
     cost: float | None = None
+    fixture_origin: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -249,6 +293,7 @@ class Exchange:
             "cost": self.cost,
             "request": self.request,
             "body": self.body,
+            "fixture_origin": self.fixture_origin,
         }
 
     @classmethod
@@ -264,6 +309,7 @@ class Exchange:
             body=data["body"],
             latency=data["latency"],
             cost=data.get("cost"),
+            fixture_origin=data.get("fixture_origin"),
         )
 
 
@@ -383,6 +429,20 @@ class Proxy:
         self.requests = 0
         self.forwarded = 0
         self._server: ThreadingHTTPServer | None = None
+        self._fixture_origin: tuple[str, str] | None = None
+        self._requested_origin: str | None = None
+        self._recording = forward is not None and not replay
+
+    def set_fixture_origin(self, requested_origin: str) -> None:
+        """Set the live fixture origin used when translating URLs in recorded model responses."""
+        self._requested_origin = requested_origin
+        if self._recording:
+            with contextlib.suppress(ValueError, IndexError):
+                self.cassette.meta["port"] = int(requested_origin.rsplit(":", 1)[1])
+            return
+        recorded_port = self.cassette.meta.get("recorded_port", self.cassette.meta.get("port"))
+        if isinstance(recorded_port, int) and 0 < recorded_port <= 65535:
+            self._fixture_origin = (f"http://127.0.0.1:{recorded_port}", requested_origin)
 
     def answer(self, path: str, raw: bytes) -> tuple[int, str, str, float]:
         """The response to one request, and how long to hold it before sending."""
@@ -401,6 +461,12 @@ class Proxy:
                 exchange = stored[min(index, len(stored) - 1)]
                 hold = exchange.latency if self._latency is Latency.RECORDED else 0.0
                 text = translate_targets(exchange.body, exchange.request, body)
+                if exchange.fixture_origin and self._requested_origin:
+                    recorded, requested = exchange.fixture_origin, self._requested_origin
+                    text = translate_response_origin(text, recorded, requested)
+                elif self._fixture_origin:
+                    recorded, requested = self._fixture_origin
+                    text = translate_response_origin(text, recorded, requested)
                 return exchange.status, exchange.content_type, text, hold
         if self._replay:
             nearest = nearest_body(body, (e.request for e in self.cassette.exchanges if e.path == path))
@@ -423,6 +489,7 @@ class Proxy:
             body=text,
             latency=time.monotonic() - started,
             cost=response_cost(text),
+            fixture_origin=self._requested_origin,
         )
         with self._lock:
             self.forwarded += 1

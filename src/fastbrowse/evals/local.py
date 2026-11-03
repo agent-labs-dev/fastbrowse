@@ -63,8 +63,7 @@ def _handler(recorder: Recorder, roots: tuple[Path, ...]) -> type[BaseHTTPReques
 def fixture_server(port: int = 0, roots: tuple[Path, ...] = (FIXTURES,)) -> Generator[tuple[str, Recorder]]:
     """Serve the pages in `roots`, the first holding a name winning, and record every POST.
 
-    A page is served as HTML; any other file is offered as a download. `port` 0 takes a free one; the benchmark
-    names its own, since the address reaches the model's prompts."""
+    A page is served as HTML; any other file is offered as a download. `port` 0 takes a free one."""
     recorder = Recorder()
     server = ThreadingHTTPServer(("127.0.0.1", port), _handler(recorder, roots))
     threading.Thread(target=server.serve_forever, daemon=True).start()

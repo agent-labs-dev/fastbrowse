@@ -1116,7 +1116,7 @@ def _looks_like_postcode(value: str) -> bool:
 def mock_server(port: int = 0) -> Generator[tuple[str, Callable[[], Site]]]:
     """Keep an address alive while sequential attempts each receive fresh fixture state.
 
-    `port` 0 takes a free one; the benchmark names its own, since the address reaches the model's prompts."""
+    `port` 0 takes a free one; the benchmark uses this default to avoid unrelated loopback sockets."""
     handler = type("Handler", (_Handler,), {"site": Site()})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
 

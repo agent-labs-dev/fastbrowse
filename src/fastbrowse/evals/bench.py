@@ -8,9 +8,9 @@
 
 The harness speaks to the agent over the protocol alone, as the JavaScript SDK does, so the same commands measure
 the Python package today and a Rust binary later (`--agent "target/release/fastbrowse serve --stdio"`). For every
-task it serves the fixture site on a fixed port, starts one headless Chrome and hands it over by `cdp_url`, starts
-the record or replay proxy (`replay.py`), and starts one agent process. Chrome belongs to the harness, so the agent's
-CPU time and peak RSS are its own.
+task it serves the fixture site on an ephemeral loopback port, starts one headless Chrome and hands it over by
+`cdp_url`, starts the record or replay proxy (`replay.py`), and starts one agent process. Chrome belongs to the
+harness, so the agent's CPU time and peak RSS are its own.
 
 What is measured per task: spawn to the `initialize` reply (startup), spawn to the `run` reply (wall), the agent
 process's user and system CPU and peak RSS (from `wait4`, so only that process and what it waited for), and the
@@ -56,7 +56,16 @@ from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
 from fastbrowse.evals.mock_tasks import MockTask
-from fastbrowse.evals.replay import JEV_MOUNT, LLM_MOUNT, Cassette, Exchange, Latency, Proxy, openrouter_forward
+from fastbrowse.evals.replay import (
+    JEV_MOUNT,
+    LLM_MOUNT,
+    Cassette,
+    Exchange,
+    Latency,
+    Proxy,
+    openrouter_forward,
+    translate_origin,
+)
 from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
 from fastbrowse.evals.tasks import LocalTask
@@ -66,10 +75,6 @@ from fastbrowse.protocol import PROTOCOL_VERSION
 ROOT = Path(__file__).resolve().parents[3]
 CASSETTES = ROOT / "bench" / "cassettes"
 ARTIFACTS = ROOT / "artifacts" / "bench"
-
-PORT_BASE = 47300
-"""Task n's site is served on PORT_BASE + n. The address reaches the model's prompts, and a URL the model writes
-back (a shortcut, a link it chose) has to lead to the same site when the run is replayed."""
 
 TIMING_SENSITIVE = {
     "mock-support-portal": "the page shows its modal 1.2 s after load, and the step it lands on depends on agent speed",
@@ -122,19 +127,15 @@ def agent_environment(proxy: str) -> dict[str, str]:
 class BenchTask:
     suite: str
     task: LocalTask | MockTask
-    port: int
 
     @property
     def id(self) -> str:
         return self.task.id
 
 
-def corpus(port_base: int = PORT_BASE) -> list[BenchTask]:
+def corpus() -> list[BenchTask]:
     tasks: list[LocalTask | MockTask] = [*LOCAL_TASKS, *MOCK_TASKS]
-    return [
-        BenchTask("local" if isinstance(task, LocalTask) else "mock", task, port_base + index)
-        for index, task in enumerate(tasks)
-    ]
+    return [BenchTask("local" if isinstance(task, LocalTask) else "mock", task) for task in tasks]
 
 
 type Grader = Callable[[RunResult], Awaitable[tuple[str | None, dict[str, Any]]]]
@@ -155,7 +156,7 @@ def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
     """The task's site on its own port, and the suite's grader bound to what that site records."""
     if isinstance(task.task, LocalTask):
         local = task.task
-        with fixture_server(task.port) as (base_url, recorder):
+        with fixture_server() as (base_url, recorder):
 
             async def grade_local(result: RunResult) -> tuple[str | None, dict[str, Any]]:
                 failure = local.check(result, recorder.snapshot())
@@ -174,7 +175,7 @@ def fixture_site(task: BenchTask, proxy: str) -> Generator[tuple[str, Grader]]:
             yield base_url, grade_local
         return
     mock = task.task
-    with mock_site(task.port) as (base_url, site):
+    with mock_site() as (base_url, site):
 
         async def grade_mock(result: RunResult) -> tuple[str | None, dict[str, Any]]:
             extra = {
@@ -405,21 +406,38 @@ async def drive_in_process(task: BenchTask, base_url: str, cdp_url: str, seconds
     return Drive(None, time.perf_counter() - started, result, error, events)
 
 
-def normalized(result: RunResult | None, error: dict[str, Any] | None, grade: dict[str, Any]) -> dict[str, Any]:
+def _canonicalize_fixture(value: Any, origin: str | None) -> Any:
+    if not origin:
+        return value
+    if isinstance(value, str):
+        return translate_origin(value, origin, "<fixture-origin>")
+    if isinstance(value, list):
+        return [_canonicalize_fixture(item, origin) for item in value]
+    if isinstance(value, dict):
+        return {key: _canonicalize_fixture(item, origin) for key, item in value.items()}
+    return value
+
+
+def normalized(
+    result: RunResult | None, error: dict[str, Any] | None, grade: dict[str, Any], fixture_origin: str | None = None
+) -> dict[str, Any]:
     """What two runs given the same model responses must agree on. Timings and costs are left out."""
     if result is None:
         return {"protocol_error": (error or {}).get("message"), "grade": grade}
     return {
         "status": result.status.value,
-        "answer": result.answer,
-        "data": result.data,
+        "answer": _canonicalize_fixture(result.answer, fixture_origin),
+        "data": _canonicalize_fixture(result.data, fixture_origin),
         "error": result.error,
-        "final_url": result.final_url,
-        "citations": [{"url": c.url, "quote": c.quote, "text": c.text} for c in result.citations],
+        "final_url": _canonicalize_fixture(result.final_url, fixture_origin),
+        "citations": [
+            {"url": _canonicalize_fixture(c.url, fixture_origin), "quote": c.quote, "text": c.text}
+            for c in result.citations
+        ],
         "steps": [
             {
                 "operation": s.operation.value,
-                "target": s.target,
+                "target": _canonicalize_fixture(s.target, fixture_origin),
                 "outcome": s.outcome.value,
                 "detail": s.note,
             }
@@ -448,6 +466,7 @@ async def bench_task(
         chrome() as cdp_url,
         tempfile.TemporaryDirectory(prefix="fastbrowse-bench-") as cwd,
     ):
+        proxy.set_fixture_origin(base_url)
         params = run_params(task, base_url, cdp_url, f"bench-{task.id}")
         secrets = dict(task.task.secrets) if isinstance(task.task, MockTask) else {}
         exit_code: int | None
@@ -484,7 +503,7 @@ async def bench_task(
     entry = {
         "task": task.id,
         "suite": task.suite,
-        "port": task.port,
+        "fixture_origin": base_url,
         "exit_code": exit_code,
         "metrics": {
             "startup_s": None if driven.startup is None else round(driven.startup, 4),
@@ -499,7 +518,7 @@ async def bench_task(
         },
         "cost_usd": None if result is None else run_dollars(result.cost),
         "unknown_cost": result is not None and result.cost.has_unknown,
-        "result": normalized(result, driven.error, grade_record)
+        "result": normalized(result, driven.error, grade_record, base_url)
         | {"misses": sorted(f"{m.purpose} {m.model}" for m in proxy.misses)},
         "misses": [m.to_json() for m in proxy.misses],
         "forwarded": proxy.forwarded,
@@ -539,8 +558,8 @@ def _write(path: Path, run: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
-def _select(only: list[str], port_base: int) -> list[BenchTask]:
-    tasks = corpus(port_base)
+def _select(only: list[str]) -> list[BenchTask]:
+    tasks = corpus()
     if only:
         unknown = sorted(set(only) - {t.id for t in tasks})
         if unknown:
@@ -563,7 +582,7 @@ async def run_suite(args: argparse.Namespace) -> int:
             raise SystemExit(f"{mode} needs OPENROUTER_API_KEY in the environment; only the proxy is given it")
         forward = openrouter_forward(key)
     latency = Latency.ZERO if mode == "record" else args.latency
-    tasks = _select(args.only, args.port_base)
+    tasks = _select(args.only)
     run: dict[str, Any] = {"meta": _meta(mode, args.agent, None if mode == "record" else latency), "tasks": []}
     logs = args.out.with_suffix("") / "logs"
     logs.mkdir(parents=True, exist_ok=True)
@@ -580,7 +599,6 @@ async def run_suite(args: argparse.Namespace) -> int:
                     "recorded_at": datetime.now(UTC).date().isoformat(),
                     "agent_fastbrowse": version("fastbrowse"),
                     "models": {"llm": LLM, "jev": "openrouter"},
-                    "port": task.port,
                 },
             )
         elif path.exists():
@@ -660,8 +678,15 @@ def load_run(path: Path) -> dict[str, Any]:
 
 def compare_runs(a: dict[str, Any], b: dict[str, Any]) -> dict[str, list[str]]:
     """Per task, the unified diff of the normalized results; a task whose results agree is absent."""
-    left = {entry["task"]: entry["result"] for entry in a["tasks"]}
-    right = {entry["task"]: entry["result"] for entry in b["tasks"]}
+
+    def comparable(entry: dict[str, Any]) -> dict[str, Any]:
+        origin = entry.get("fixture_origin")
+        if not origin and isinstance(entry.get("port"), int):
+            origin = f"http://127.0.0.1:{entry['port']}"
+        return _canonicalize_fixture(entry["result"], origin)
+
+    left = {entry["task"]: comparable(entry) for entry in a["tasks"]}
+    right = {entry["task"]: comparable(entry) for entry in b["tasks"]}
     differences: dict[str, list[str]] = {}
     for task in sorted(left.keys() | right.keys()):
         if task not in left or task not in right:
@@ -900,7 +925,6 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument("--only", nargs="*", default=[], help="task ids; every fixture task when absent")
         sub.add_argument("--cassettes", type=Path, default=CASSETTES)
         sub.add_argument("--out", type=Path, default=ARTIFACTS / f"{mode}-{_stamp()}.json")
-        sub.add_argument("--port-base", type=int, default=PORT_BASE)
 
     rec = commands.add_parser("record", help="run every task against the real models and keep their responses")
     common(rec, "record")

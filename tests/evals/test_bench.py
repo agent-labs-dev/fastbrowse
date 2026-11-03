@@ -6,7 +6,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from fastbrowse.evals.bench import agent_environment, compare_runs, corpus, load_run, priced, run_dollars, run_params
+from fastbrowse.evals.bench import (
+    agent_environment,
+    compare_runs,
+    corpus,
+    load_run,
+    priced,
+    run_dollars,
+    run_params,
+)
 from fastbrowse.evals.replay import (
     EMBEDDED_JSON,
     MISS_STATUS,
@@ -19,6 +27,8 @@ from fastbrowse.evals.replay import (
     miss_diff,
     nearest_body,
     request_key,
+    translate_origin,
+    translate_response_origin,
 )
 from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
 
@@ -179,6 +189,157 @@ def test_replay_ignores_the_bearer_token_and_serves_duplicates_in_order() -> Non
     assert served == [1, 2, 2, 2]
 
 
+def test_replay_translates_only_the_recorded_fixture_origin() -> None:
+    cassette = Cassette(task="t", meta={"port": 47334})
+    cassette.exchanges.append(
+        _exchange(
+            JEV, {"q": 1}, '{"url":"http://127.0.0.1:47334/item","port":47334,"external":"https://example.test:47334"}'
+        )
+    )
+    proxy = Proxy(cassette)
+    proxy.set_fixture_origin("http://127.0.0.1:39123")
+    with proxy as base:
+        response = _post(base, JEV, {"q": 1})
+    assert response.json() == {
+        "url": "http://127.0.0.1:39123/item",
+        "port": 47334,
+        "external": "https://example.test:47334",
+    }
+
+
+def test_translate_origin_requires_exact_origins() -> None:
+    response = (
+        "http://127.0.0.1:47334/x http://127.0.0.1:473340 http://127.0.0.1:4733/x 47334 "
+        "https://example.test:47334 user@http://127.0.0.1:47334"
+    )
+    assert translate_origin(response, "http://127.0.0.1:47334", "http://127.0.0.1:39123") == (
+        "http://127.0.0.1:39123/x http://127.0.0.1:473340 http://127.0.0.1:4733/x 47334 "
+        "https://example.test:47334 user@http://127.0.0.1:47334"
+    )
+
+
+def test_translate_origin_handles_escaped_json_and_punctuation() -> None:
+    response = r'"http://127.0.0.1:47334" (http://127.0.0.1:47334). http://127.0.0.1:47334, http://127.0.0.1:47334].'
+    assert translate_origin(response, "http://127.0.0.1:47334", "http://127.0.0.1:39123") == (
+        r'"http://127.0.0.1:39123" (http://127.0.0.1:39123). http://127.0.0.1:39123, http://127.0.0.1:39123].'
+    )
+
+
+def test_translate_origin_does_not_rewrite_authority_suffixes() -> None:
+    response = "http://127.0.0.1:47334@evil.test http://127.0.0.1:47334."
+    assert translate_origin(response, "http://127.0.0.1:47334", "http://127.0.0.1:39123") == (
+        "http://127.0.0.1:47334@evil.test http://127.0.0.1:39123."
+    )
+
+
+def test_translate_response_origin_decodes_escaped_nested_json_strings() -> None:
+    inner = json.dumps({"answer": "Sources:\nhttp://127.0.0.1:47334/a\thttp://127.0.0.1:47334/b"})
+    response = json.dumps(
+        {"choices": [{"message": {"content": inner}}], "external": "http://127.0.0.1:47334@evil.test"}
+    )
+    translated = translate_response_origin(response, "http://127.0.0.1:47334", "http://127.0.0.1:39123")
+    assert json.loads(translated)["choices"][0]["message"]["content"] == json.dumps(
+        {"answer": "Sources:\nhttp://127.0.0.1:39123/a\thttp://127.0.0.1:39123/b"},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def test_translate_response_origin_translates_non_json_body() -> None:
+    response = "not json http://127.0.0.1:47334"
+    assert (
+        translate_response_origin(response, "http://127.0.0.1:47334", "http://127.0.0.1:39123")
+        == "not json http://127.0.0.1:39123"
+    )
+
+
+def test_compare_runs_migrates_legacy_ports_and_all_result_fields() -> None:
+    legacy = {
+        "task": "t",
+        "port": 47334,
+        "result": {
+            "protocol_error": "http://127.0.0.1:47334/error",
+            "error": "http://127.0.0.1:47334/error",
+            "citations": [{"url": "http://127.0.0.1:47334/c", "quote": "http://127.0.0.1:47334/q", "text": "x"}],
+            "steps": [{"detail": "http://127.0.0.1:47334/detail"}],
+            "grade": {"failure": "http://127.0.0.1:47334/grade"},
+        },
+    }
+    current = {
+        "task": "t",
+        "fixture_origin": "http://127.0.0.1:51234",
+        "result": {
+            "protocol_error": "http://127.0.0.1:51234/error",
+            "error": "http://127.0.0.1:51234/error",
+            "citations": [{"url": "http://127.0.0.1:51234/c", "quote": "http://127.0.0.1:51234/q", "text": "x"}],
+            "steps": [{"detail": "http://127.0.0.1:51234/detail"}],
+            "grade": {"failure": "http://127.0.0.1:51234/grade"},
+        },
+    }
+    assert compare_runs({"tasks": [legacy]}, {"tasks": [current]}) == {}
+
+
+def test_replay_origin_roundtrip_preserves_response_contract() -> None:
+    cassette = Cassette(task="t", meta={"port": 47334})
+    cassette.exchanges.append(_exchange(JEV, {"q": 1}, '{"url":"http://127.0.0.1:47334/item","port":47334}'))
+    proxy = Proxy(cassette)
+    proxy.set_fixture_origin("http://127.0.0.1:39123")
+    with proxy as base:
+        response = _post(base, JEV, {"q": 1})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {"url": "http://127.0.0.1:39123/item", "port": 47334}
+    assert cassette.meta == {"port": 47334}
+
+
+def test_recording_saves_actual_origin_and_replays_at_two_new_ports(tmp_path: Path) -> None:
+    cassette = Cassette(task="t", meta={"port": 47334})
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        return 201, "application/custom", '{"url":"http://127.0.0.1:39123/item","port":39123}'
+
+    recording = Proxy(cassette, forward=forward, replay=False)
+    recording.set_fixture_origin("http://127.0.0.1:39123")
+    with recording as base:
+        response = _post(base, JEV, {"q": 1})
+    assert response.status_code == 201 and response.headers["content-type"] == "application/custom"
+    cassette.save(tmp_path / "cassette.jsonl.gz")
+    loaded = Cassette.load(tmp_path / "cassette.jsonl.gz")
+    assert loaded.meta == {"port": 39123}
+
+    for port in (40234, 41234):
+        replay = Proxy(loaded)
+        replay.set_fixture_origin(f"http://127.0.0.1:{port}")
+        with replay as base:
+            response = _post(base, JEV, {"q": 1})
+        assert response.status_code == 201
+        assert response.headers["content-type"] == "application/custom"
+        assert response.json() == {"url": f"http://127.0.0.1:{port}/item", "port": 39123}
+        assert loaded.meta == {"port": 39123}
+
+
+def test_fill_records_live_origin_per_exchange_before_replay_at_another_port(tmp_path: Path) -> None:
+    cassette = Cassette(task="t", meta={"port": 47334})
+    cassette.exchanges.append(_exchange(JEV, {"q": "old"}, '{"url":"http://127.0.0.1:47334/old"}'))
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        return 200, "application/json", '{"url":"http://127.0.0.1:39123/new"}'
+
+    filling = Proxy(cassette, forward=forward)
+    filling.set_fixture_origin("http://127.0.0.1:39123")
+    with filling as base:
+        assert _post(base, JEV, {"q": "new"}).json()["url"].endswith(":39123/new")
+    cassette.save(tmp_path / "filled.jsonl.gz")
+
+    loaded = Cassette.load(tmp_path / "filled.jsonl.gz")
+    assert loaded.exchanges[-1].fixture_origin == "http://127.0.0.1:39123"
+    replay = Proxy(loaded)
+    replay.set_fixture_origin("http://127.0.0.1:41234")
+    with replay as base:
+        response = _post(base, JEV, {"q": "new"})
+    assert response.json() == {"url": "http://127.0.0.1:41234/new"}
+
+
 def test_replay_miss_is_an_error_with_a_diff() -> None:
     cassette = Cassette(task="t")
     cassette.exchanges.append(_exchange(LLM, {"model": "m", "x": 1}, "{}"))
@@ -225,10 +386,26 @@ def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert env["FASTBROWSE_LLM_BASE_URL"] == "http://127.0.0.1:9/llm"
 
 
-def test_every_task_has_its_own_fixed_port() -> None:
-    tasks = corpus(47300)
-    assert len({t.port for t in tasks}) == len(tasks) == len({t.id for t in tasks})
-    assert [t.port for t in tasks] == [t.port for t in corpus(47300)]
+def test_corpus_task_ids_are_unique() -> None:
+    tasks = corpus()
+    assert len({t.id for t in tasks}) == len(tasks)
+
+
+def test_normalized_results_ignore_only_the_live_fixture_origin() -> None:
+    first = {"final_url": "http://127.0.0.1:41001/page", "answer": "port 41001", "other": "41001"}
+    second = {"final_url": "http://127.0.0.1:42002/page", "answer": "port 42002", "other": "42002"}
+    from fastbrowse.evals.bench import _canonicalize_fixture
+
+    assert _canonicalize_fixture(first, "http://127.0.0.1:41001") == {
+        "final_url": "<fixture-origin>/page",
+        "answer": "port 41001",
+        "other": "41001",
+    }
+    assert _canonicalize_fixture(second, "http://127.0.0.1:42002") == {
+        "final_url": "<fixture-origin>/page",
+        "answer": "port 42002",
+        "other": "42002",
+    }
 
 
 def test_run_params_hand_over_chrome_and_scope_secrets() -> None:

@@ -9,8 +9,7 @@ reaches the same results, and how much time, CPU and memory it takes to get ther
 
 For each task the harness:
 
-1. serves the fixture site on a fixed port (47300 plus the task's position in the suite), because the address
-   reaches the prompts and the model writes it back;
+1. serves the fixture site on an ephemeral loopback port, because the address reaches the prompts and the model writes it back;
 2. starts one headless Chrome and hands it to the agent as `cdp_url`, so Chrome's CPU and memory are not counted
    against the agent;
 3. starts a proxy on a free port and points the agent at it with `FASTBROWSE_DECISION_BASE_URL` and

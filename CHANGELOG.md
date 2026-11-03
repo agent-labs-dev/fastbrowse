@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Benchmark fixture sites use ephemeral loopback ports, while replay keeps recorded model answers tied to the live fixture origin. An unrelated socket can no longer prevent a replay from starting.
+
 - Covered actions are offered again after a performed action changes the page. Focus changes during a refused click no longer count as that click working, and stale actions remain available on the next page state. Recovery states whether the browser performed an action without claiming that the last action changed nothing.
 
 - **Local runs can set their CSS viewport.** `--viewport WIDTHxHEIGHT` applies reversible desktop viewport emulation before the first observation on an owned local Chrome; handed browsers reject it and cloud runs keep their existing screen-size behaviour.
