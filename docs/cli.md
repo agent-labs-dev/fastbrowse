@@ -70,7 +70,9 @@ fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 ```
 
 To change a password, add the replacement as an origin-scoped secret named `new_password`, refer to it in the
-task, and pass `--authorize`. fastbrowse never generates a password or reuses the old one.
+task, and pass `--authorize`. fastbrowse never generates a password or reuses the old one. A single field marked
+`autocomplete=new-password` can also appear on a sign-in page. Jev uses the task and form context to choose its
+role; when the role is unclear, the run stops at `needs_input`.
 
 ## Open windows and Electron apps
 

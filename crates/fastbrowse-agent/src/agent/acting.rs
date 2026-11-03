@@ -460,6 +460,9 @@ impl Agent {
                 IndexMap::new(),
             );
             asked.retain(|(key, ..)| *key != "source");
+            if asked.is_empty() {
+                return Err(self.missing(state, observation, target));
+            }
             picks.extend(self.ask_choices(state, observation, asked).await?);
         }
         if let Some(input) = source.strip_prefix("input:") {
@@ -617,15 +620,44 @@ impl Agent {
         secrets: Vec<String>,
         origin: &str,
     ) -> Step<String> {
-        let Some(replacement) = sets_new_password(&observation.controls, target) else {
-            return Err(Stop::new(
-                Status::NeedsInput,
-                format!(
-                    "{} is one of several password fields outside a form, so whether it takes the current password or a new one is unclear",
-                    text::repr(&target.label)
-                ),
-            )
-            .into());
+        let replacement = match sets_new_password(&observation.controls, target) {
+            Some(replacement) => replacement,
+            None => {
+                let criteria = IndexMap::from([
+                    (
+                        "current".into(),
+                        JsonValue::from(
+                            "The field takes the account's existing password for signing in or confirming identity.",
+                        ),
+                    ),
+                    (
+                        "replacement".into(),
+                        JsonValue::from("The field sets a new account password or confirms that new password."),
+                    ),
+                    (
+                        "unclear".into(),
+                        JsonValue::from("The task and form do not establish which password the field takes."),
+                    ),
+                ]);
+                let question = format!(
+                    "Which password role does {} have for this task? Consider the task, field context and form controls. A sign-in page may mark its password field new-password to prevent autofill, so that marker alone does not establish a replacement. Choose unclear when the role cannot be established.",
+                    text::repr(&target.label),
+                );
+                match self.ask_choice(state, observation, &question, criteria).await?.as_str() {
+                    "replacement" => true,
+                    "current" => false,
+                    _ => {
+                        return Err(Stop::new(
+                            Status::NeedsInput,
+                            format!(
+                                "{} does not establish whether it takes the current password or a replacement",
+                                text::repr(&target.label),
+                            ),
+                        )
+                        .into());
+                    }
+                }
+            }
         };
         if replacement {
             if !secrets.iter().any(|name| name == "new_password") {

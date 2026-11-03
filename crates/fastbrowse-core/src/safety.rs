@@ -192,17 +192,17 @@ fn form_passwords<'a>(controls: &'a [Control], control: &Control) -> Option<Vec<
 
 /// Whether a password field takes a replacement password, on the page's own structure rather than its wording.
 ///
-/// Only a form holding more than one password field sets one: the current password and a new one, or a new one and
+/// A form holding more than one password field can distinguish the current password and a new one, or a new one and
 /// its confirmation. There `autocomplete` says which is which when the page marks it, a form that marks another field
 /// `current-password` leaves the rest new, and otherwise the first takes the current password and the rest the new
 /// one: a change-password form far more often leaves its fields unmarked than a sign-up form does. The only password
-/// field of a form takes the account's password whatever its `autocomplete` says: sign-in pages mark their one field
-/// `new-password` to keep browsers from filling it. None when the structure cannot tell: a field outside any form on a
-/// page with other password fields, which must not be given the stored current password on a guess.
+/// field marked `new-password` is ambiguous: a reset form can have one field, while a sign-in page can use that
+/// marker to prevent autofill. None leaves that role to a decision using the task and form, as for a field outside
+/// any form on a page with other password fields.
 pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> {
     let passwords = form_passwords(controls, field);
     if passwords.as_ref().is_some_and(|passwords| passwords.len() < 2) {
-        return Some(false);
+        return (!autocompletes(field, "new-password")).then_some(false);
     }
     if autocompletes(field, "new-password") {
         return Some(true);
@@ -878,7 +878,7 @@ mod tests {
         let sign_in = password("p", Some("f"), None);
         assert_eq!(sets_new_password(std::slice::from_ref(&sign_in), &sign_in), Some(false));
         let marked = password("p", Some("f"), Some("new-password"));
-        assert_eq!(sets_new_password(std::slice::from_ref(&marked), &marked), Some(false));
+        assert_eq!(sets_new_password(std::slice::from_ref(&marked), &marked), None);
         let (first, second) = (password("n", Some("f"), Some("new-password")), password("c", Some("f"), None));
         assert_eq!(sets_new_password(&[first.clone(), second.clone()], &first), Some(true));
         // A current and a new password, as change-password forms usually leave them: unmarked, in that order.
@@ -907,16 +907,16 @@ mod tests {
         assert_ne!(credential_field(&username), Some(CredentialField::Password));
     }
 
-    /// A sign-in form whose one password field is marked new-password, as pages do to keep browsers from filling it.
+    /// One new-password field can mean a reset or a sign-in page preventing autofill.
     #[test]
-    fn a_sign_in_form_marking_its_one_password_new_takes_the_current_password() {
+    fn one_password_marked_new_leaves_its_role_undecided() {
         let mut username = Control::new("u", "textbox", "Username", [Operation::Fill]);
         (username.form_id, username.autocomplete) = (Some("f".into()), Some("off".into()));
         let password = password("p", Some("f"), Some("new-password"));
         let mut login = button("Login");
         login.form_id = Some("f".into());
         let form = [username, password.clone(), login.clone()];
-        assert_eq!(sets_new_password(&form, &password), Some(false));
+        assert_eq!(sets_new_password(&form, &password), None);
         assert!(!changes_credentials(&form, &login, Operation::Click));
     }
 

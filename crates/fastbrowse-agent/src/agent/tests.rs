@@ -2592,3 +2592,124 @@ async fn test_a_long_source_can_be_refused_without_typing_an_unrelated_value() {
         .expect_err("no value");
     assert!(format!("{error:?}").contains("NeedsInput"), "{error:?}");
 }
+
+struct PasswordRole(Answers);
+
+impl DecisionClient for PasswordRole {
+    fn evaluate<'a>(
+        &'a self,
+        page: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let question = questions["pick"].dump_json();
+        assert!(question.contains("marker alone does not establish a replacement"));
+        assert!(question.contains("Choose unclear when the role cannot be established"));
+        let context = format!("{page}{question}");
+        assert!(context.contains("New password"));
+        assert!(!context.contains("old-fixture-value"));
+        assert!(!context.contains("replacement-fixture-value"));
+        self.0.evaluate(page, questions)
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_reset_form_with_one_password_field_uses_the_replacement_secret() {
+    for (task, role, expected) in [
+        (
+            "Set a new account password using the supplied replacement secret.",
+            "replacement",
+            Some("replacement-fixture-value"),
+        ),
+        ("Sign in to the existing account.", "current", Some("old-fixture-value")),
+        ("Continue on this page.", "unclear", None),
+    ] {
+        let mut password = Control::new("pw", "textbox", "New password", [Operation::Fill]);
+        password.input_type = Some("password".into());
+        password.autocomplete = Some("new-password".into());
+        password.form_id = Some("reset".into());
+        password.frame_origin = Some("https://b.test".into());
+        let stored = fastbrowse_core::safety::ScopedSecrets::per_secret([
+            (
+                "password".into(),
+                (fastbrowse_core::models::SecretValue::from("old-fixture-value"), vec!["https://b.test".into()]),
+            ),
+            (
+                "new_password".into(),
+                (
+                    fastbrowse_core::models::SecretValue::from("replacement-fixture-value"),
+                    vec!["https://b.test".into()],
+                ),
+            ),
+        ]);
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(PasswordRole(Answers(Some(role)))), Arc::new(ScriptedLLM))
+            .with_secrets(Some(Arc::new(stored)));
+        let page = at("https://b.test/reset", std::slice::from_ref(&password));
+        agent.seen().raw = Some(page.clone());
+        let mut state = run_state();
+        state.task = task.into();
+        let value = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &password).await;
+        match expected {
+            Some(expected) => assert_eq!(value.expect("a password"), expected),
+            None => assert!(format!("{:?}", value.expect_err("unclear role")).contains("NeedsInput")),
+        }
+    }
+}
+
+struct RefusedRead(std::sync::atomic::AtomicUsize);
+
+impl DecisionClient for RefusedRead {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        assert!(!questions.is_empty(), "a refused source must not cause an empty paid request");
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let answers = questions
+            .keys()
+            .map(|key| {
+                let choice = match key.as_str() {
+                    "source" => "read",
+                    "pick" => "none",
+                    _ => "0",
+                };
+                (
+                    key.clone(),
+                    Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: choice.into(),
+                        probabilities: IndexMap::new(),
+                        confidence: 1.0,
+                    }),
+                )
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::unknown()
+    }
+}
+
+#[tokio::test]
+async fn test_refusing_a_long_read_source_does_not_send_an_empty_request() {
+    let reader = Arc::new(RefusedRead(std::sync::atomic::AtomicUsize::new(0)));
+    let agent = Agent::new(Arc::new(NoPage), reader.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Fill reference".into();
+    let text = vec!["context"; 1001].join(" ");
+    let page = capture(&[(BlockKind::Paragraph, &text)]);
+    state.notes.add(Fact::read(&text, block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let error = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Reference"))
+        .await
+        .expect_err("no value");
+    assert!(format!("{error:?}").contains("NeedsInput"), "{error:?}");
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
