@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Partial split-batch receipts are recorded once, including through failover and cancellation. Custom decision clients retain their returned partial costs.
+
+- Screenshot-selected clicks are refused when the viewport image changes while Jev chooses the coordinates.
+
 - A supplied browser callback honors options that require a browser from the first step, including `browser: true`.
 
 - Downloading identical file bytes again no longer counts as new progress.

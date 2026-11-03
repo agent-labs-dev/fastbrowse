@@ -1292,7 +1292,7 @@ impl LLMClient for EmptyImageLLM {
 #[tokio::test]
 async fn test_a_null_image_read_is_not_repeated_for_identical_pixels_in_one_run() {
     let llm = Arc::new(EmptyImageLLM::default());
-    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let screenshots = Arc::new(Screenshots::default());
     let agent = Agent::new(screenshots.clone(), jev, llm.clone());
     let page = Observation { visual_content: true, ..observation(&[]) };
@@ -1311,7 +1311,7 @@ async fn test_a_null_image_read_is_not_repeated_for_identical_pixels_in_one_run(
 #[tokio::test]
 async fn test_a_failed_image_read_can_be_retried_for_identical_pixels() {
     let llm = Arc::new(EmptyImageLLM(Default::default(), true));
-    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
     let page = Observation { visual_content: true, ..observation(&[]) };
     let mut state = run_state();
@@ -1382,7 +1382,7 @@ async fn test_past_the_recovery_budget_the_run_ends_with_the_reason() {
 async fn test_a_drawn_page_is_read_before_a_stalled_run_gives_up() {
     // A Street View run turned the map for a price only the pixels showed, and stalled before `conclude`, so the read
     // added there never ran and the stop carried no answer. The give-up now reads the screenshot first.
-    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ImageLLM));
     let mut state = run_state();
     state.recoveries = agent.config.stall.max_recoveries;
@@ -1463,6 +1463,7 @@ struct Seeing {
     images: bool,
     shown: f64,
     asked: std::sync::Mutex<Vec<Asked>>,
+    on_evaluate: Option<Arc<Screenshots>>,
 }
 
 /// A state, its questions and the images it refers to.
@@ -1484,6 +1485,9 @@ impl DecisionClient for Seeing {
         images: &'a Images,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.asked.lock().unwrap().push((state.clone(), questions.clone(), images.clone()));
+        if let Some(page) = &self.on_evaluate {
+            *page.2.lock().unwrap() = Some(png(640, 480));
+        }
         let answers = IndexMap::from([
             ("shown".to_string(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.shown })),
             (
@@ -1506,7 +1510,7 @@ impl DecisionClient for Seeing {
 
 async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
     let page = Arc::new(Screenshots(Default::default(), moved, Default::default()));
-    let jev = Arc::new(Seeing { images, shown, asked: Default::default() });
+    let jev = Arc::new(Seeing { images, shown, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
     let target = button("Pick a date");
@@ -1518,7 +1522,7 @@ async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActR
 #[tokio::test]
 async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
     let page = Arc::new(Screenshots(Default::default(), false, Default::default()));
-    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     // A map or a photograph has none of its content in the DOM: the screenshot is the page.
     let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
@@ -1531,7 +1535,7 @@ async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
 #[tokio::test]
 async fn test_a_route_that_takes_no_images_is_sent_none_even_on_a_drawn_page() {
     let page = Arc::new(Screenshots(Default::default(), false, Default::default()));
-    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
     assert_eq!(agent.drawn_viewport(&drawn).await.expect("no image"), None);
@@ -1563,6 +1567,19 @@ async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
 async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_screenshot() {
     let (clicked, page, jev) = click_where_seen(true, 0.9, true).await;
     assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && !jev.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_a_covered_control_is_not_clicked_when_pixels_change_while_jev_answers() {
+    let page = Arc::new(Screenshots(Default::default(), false, std::sync::Mutex::new(Some(png(1280, 900)))));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: Some(page.clone()) });
+    let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let target = button("Pick a date");
+    let seen = observation(std::slice::from_ref(&target));
+    let result = agent.click_where_seen(&mut state, &seen, &target).await.expect("asked");
+    assert!(result.is_none());
+    assert!(page.0.lock().unwrap().is_empty());
 }
 
 /// A Jev swayed by page text: it calls anything reversible when the words reach it, and irreversible otherwise.
@@ -2460,7 +2477,7 @@ async fn an_executed_action_without_a_page_change_keeps_covered_actions_withheld
 #[tokio::test]
 async fn test_the_llm_image_reader_does_not_require_decision_model_images() {
     let llm = Arc::new(EmptyImageLLM::default());
-    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
     let page = Observation { visual_content: true, ..observation(&[]) };
     agent.read_drawn_page(&mut run_state(), &page).await.expect("LLM image reading");
@@ -2470,7 +2487,7 @@ async fn test_the_llm_image_reader_does_not_require_decision_model_images() {
 #[tokio::test]
 async fn test_the_llm_image_reader_withholds_a_screenshot_while_a_secret_shows() {
     let llm = Arc::new(EmptyImageLLM::default());
-    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
     agent.seen().secret_on_screen = true;
     let page = Observation { visual_content: true, ..observation(&[]) };
@@ -2481,7 +2498,7 @@ async fn test_the_llm_image_reader_withholds_a_screenshot_while_a_secret_shows()
 #[tokio::test]
 async fn test_the_llm_image_reader_checks_for_a_secret_with_a_fresh_glance() {
     let llm = Arc::new(EmptyImageLLM::default());
-    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
     agent.redactor().register("credential", "private-token", None);
     assert!(!agent.seen().secret_on_screen);
@@ -2492,7 +2509,7 @@ async fn test_the_llm_image_reader_checks_for_a_secret_with_a_fresh_glance() {
 
 #[tokio::test]
 async fn test_image_read_text_is_masked_before_becoming_evidence() {
-    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default() });
+    let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ImageLLM));
     agent.redactor().register("credential", "3.459", None);
     let page = Observation { visual_content: true, ..observation(&[]) };

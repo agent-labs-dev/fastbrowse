@@ -44,15 +44,16 @@ impl Agent {
             ),
         ]);
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let evaluation = match self.jev.evaluate_images(&seen, &questions, &Images::from([(reference, png)])).await {
-            Ok(evaluation) => evaluation,
-            Err(error @ DecisionError::Budget(_)) => return Err(error.into()),
-            // Box is experimental at TypeSafe; a refused question leaves the click as the hit test left it.
-            Err(error) => {
-                self.event("covered_box_failed", || Map::from_iter([("error".into(), error.to_string().into())]));
-                return Ok(None);
-            }
-        };
+        let evaluation =
+            match self.jev.evaluate_images(&seen, &questions, &Images::from([(reference, png.clone())])).await {
+                Ok(evaluation) => evaluation,
+                Err(error @ DecisionError::Budget(_)) => return Err(error.into()),
+                // Box is experimental at TypeSafe; a refused question leaves the click as the hit test left it.
+                Err(error) => {
+                    self.event("covered_box_failed", || Map::from_iter([("error".into(), error.to_string().into())]));
+                    return Ok(None);
+                }
+            };
         state.ledger.record([evaluation.cost.clone()])?;
         let (Some(Answer::Noul(shown)), Some(Answer::Box(found))) =
             (evaluation.answers.get("shown"), evaluation.answers.get("where"))
@@ -68,6 +69,11 @@ impl Agent {
         if self.page.document_changed(observation).await?
             || self.page.redrawn(observation, 0.0, Some(&target.id)).await?
         {
+            return Ok(None);
+        }
+        // Coordinates belong to the pixels Jev saw; scrolling and layout can change without semantic guards changing.
+        let Some(current) = self.viewport().await? else { return Ok(None) };
+        if current != png {
             return Ok(None);
         }
         let (x, y) = found.edges.centre();

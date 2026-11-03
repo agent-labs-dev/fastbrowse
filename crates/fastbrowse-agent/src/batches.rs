@@ -2,6 +2,7 @@
 
 use std::sync::{Mutex, MutexGuard};
 
+use fastbrowse_clients::validation::{Lines, Paid, jev_spend};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Question};
@@ -34,6 +35,7 @@ type BatchAnswers = Option<IndexMap<String, Answer>>;
 #[derive(Default)]
 struct Spent {
     paid: Vec<CostLine>,
+    receipts: Vec<Paid>,
     input_tokens: i64,
     requests: i64,
 }
@@ -49,9 +51,12 @@ struct Billing<'a> {
 
 impl Drop for Billing<'_> {
     fn drop(&mut self) {
+        let mut spent = lock(self.spent);
+        for receipt in std::mem::take(&mut spent.receipts) {
+            spent.paid.extend(receipt.lines());
+        }
         if let Some(ledger) = self.ledger {
-            let paid = lock(self.spent).paid.clone();
-            ledger.state().lines.extend(paid);
+            ledger.state().lines.extend(spent.paid.clone());
         }
     }
 }
@@ -123,13 +128,18 @@ pub async fn evaluate_batches(
     let spent = Mutex::new(Spent::default());
     let mut tasks: Vec<BoxFuture<'_, Result<BatchAnswers>>> = Vec::new();
     for questions in &batches {
+        let receipt = Paid::default();
+        lock(&spent).receipts.push(receipt.clone());
         let spent = &spent;
         tasks.push(Box::pin(async move {
-            let evaluation = match jev.evaluate(state, questions).await {
+            let evaluation = match jev_spend(Lines::Paid(receipt.clone()), None, jev.evaluate(state, questions)).await {
                 Ok(evaluation) => evaluation,
                 Err(error) => {
-                    // Singles a split batch had answered were paid for even though the batch as a whole failed.
-                    if let DecisionError::RetriesExhausted(exhausted) = &error {
+                    // Provider adapters retain partial receipts in the batch's spend scope. Custom clients can
+                    // return answered singles without recording them, so only those need the error's fallback.
+                    if receipt.is_empty()
+                        && let DecisionError::RetriesExhausted(exhausted) = &error
+                    {
                         lock(spent).paid.extend(exhausted.answered.iter().map(|single| single.cost.clone()));
                     }
                     if !allow_failed_batches {

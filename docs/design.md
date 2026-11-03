@@ -118,6 +118,9 @@ stops browsing a tenth of its time limit (at most 60 s) early to write that part
 active work; the return also waits for owned requests and browser cleanup. Injected clients must honor
 cancellation and finish their cleanup. Returning while a paid request still runs would lose its cost receipt.
 
+Split batches collect provider receipts once. Custom decision clients that return partial answers without recording
+receipts retain those answers' costs through the error.
+
 Cancellation returns a receipt of reported steps, cost lines and finished recordings after cleanup. Protocol 2
 keeps error code `-32002` and adds the optional `error.data` receipt; other errors omit it. Rust returns
 `RunError::Cancelled(receipt)`. A cancelled cloud start keeps known charges as `unsettled`, or an `unknown`
@@ -287,7 +290,8 @@ replacement control must match the original semantics and receiving document; am
 refused. A target covered by a band fixed to the window (an anchored ad, a sticky footer) is scrolled clear of
 it, and one the band still covers is focused and pressed or typed into from the keyboard, so the band is never
 clicked. Any other cover, such as a dialog, an open menu or popover, or a full-window backdrop, is reported as
-`covered`. When focus is in a suggesting field, it leaves that field first, which presses nothing, and the control
+`covered`. The screenshot fallback clicks only while a fresh viewport still matches the pixels Jev used to choose
+its coordinates. When focus is in a suggesting field, it leaves that field first, which presses nothing, and the control
 is checked again, so a list the field left open does not hold up the next one. Focus and the receiving field are checked before typing. Settling waits for an interactive
 document and a quiet DOM. It does not guess at loading indicators by class name: a page still loading is read as
 it stands, and the reader and Jev judge from its text whether to look again.
