@@ -104,7 +104,18 @@ test('a run hands each event to onEvent, in order, before it resolves', async ()
 test('a RunCancel stops the run, which settles with the cancelled error once it has closed', async () => {
   const cancel = new core.RunCancel();
   const reply = scripted('never_ends').runTask(params(), { onEvent: async () => (cancel.cancel(), '{"ok":null}') }, cancel);
-  assert.deepEqual(JSON.parse(await reply), { error: { code: -32002, message: "run 'r' was cancelled" } });
+  const { error } = JSON.parse(await reply);
+  assert.equal(error.code, -32002);
+  assert.equal(error.message, "run 'r' was cancelled");
+  // What the run did and spent before it stopped, the unpriced browser left unpriced.
+  assert.equal(error.data.steps.length, 1);
+  assert.deepEqual(error.data.cost.lines.map((line: { dollars: number | null }) => line.dollars), [0.004, null]);
+  assert.deepEqual(error.data.recordings, []);
+});
+
+test('an error other than a cancellation has no data', async () => {
+  const reply = JSON.parse(await core.runTask(params({ tsak: 1 })));
+  assert.equal('data' in reply.error, false);
 });
 
 test('until and resolveSecret answer the run, and a failed one ends it as an error that hides what was thrown', async () => {

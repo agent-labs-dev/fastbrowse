@@ -226,12 +226,36 @@ func TestCancellingTheContextStopsTheRunAfterItsBrowserCloses(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err: %v", err)
 	}
+	// What the run did and spent before it stopped, with the unpriced browser left unpriced.
+	var stopped *CancelledError
+	if !errors.As(err, &stopped) {
+		t.Fatalf("err: %T %v", err, err)
+	}
+	lines := stopped.Receipt.Cost.Lines
+	if len(stopped.Receipt.Steps) != 1 || len(lines) != 2 || lines[0].Basis != CostBasisMetered ||
+		*lines[0].Dollars != 0.004 || lines[1].Basis != CostBasisUnknown || lines[1].Dollars != nil {
+		t.Fatalf("receipt: %+v", stopped.Receipt)
+	}
 	if _, err := os.Stat(closed); err != nil {
 		t.Fatal("Run returned before the browser closed")
 	}
 	// The process is still there for the next run.
 	if result := run(t, client, "t", RunOptions{}); result.Status != StatusComplete {
 		t.Fatalf("next run: %s", result.Status)
+	}
+}
+
+func TestARunAFailedCallbackStoppedKeepsWhatItDidAndSpent(t *testing.T) {
+	client := scripted(t, "until_cancelled", Options{})
+	result := run(t, client, "t", RunOptions{
+		Inputs:  map[string]string{"closed": filepath.Join(t.TempDir(), "closed")},
+		OnEvent: func(Event) error { return errors.New("full disk") },
+	})
+	if result.Status != StatusError || *result.Error != "run/event: full disk" {
+		t.Fatalf("got %s %v", result.Status, result.Error)
+	}
+	if len(result.Steps) != 1 || len(result.Cost.Lines) != 2 || result.Cost.Lines[1].Dollars != nil {
+		t.Fatalf("steps %d, cost %+v", len(result.Steps), result.Cost)
 	}
 }
 

@@ -49,6 +49,7 @@ from fastbrowse.models import (
     Limits,
     LLMPurpose,
     RecordingError,
+    RunCancelled,
     RunResult,
     SecretResolver,
     StepEvent,
@@ -70,6 +71,7 @@ from fastbrowse.page import (
     SiteUnreachable,
     _ScriptError,
 )
+from fastbrowse.protocol import CancellationReceipt
 from fastbrowse.telemetry import BudgetExceeded, collecting
 
 _EVENT: TypeAdapter[StepEvent | BrowserEvent] = TypeAdapter(StepEvent | BrowserEvent)
@@ -425,11 +427,17 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     try:
         payload, frame = await native
     except core.RunRefused as exc:
-        raise _refusal(exc, raised) from None
-    except asyncio.CancelledError:
-        # The browser is closed before the cancellation reaches the caller.
-        await asyncio.shield(native.finished)
-        raise
+        refusal = _refusal(exc, raised)
+        if isinstance(refusal, asyncio.CancelledError):
+            # Settled in the same moment as the refusal, so this does not wait.
+            refusal = _cancelled(refusal, await native.finished)
+        raise refusal from None
+    except asyncio.CancelledError as exc:
+        # The browser is closed before the cancellation reaches the caller, and what the run spent comes with it.
+        receipt = await asyncio.shield(native.finished)
+        if receipt is None:
+            raise
+        raise _cancelled(exc, receipt) from None
     finally:
         if events is not None:
             events.extend(_on_this_clock(json.loads(native.trace_events()), time.monotonic() - core.monotonic()))
@@ -449,6 +457,13 @@ def _refusal(exc: Exception, raised: _Raised) -> BaseException:
     if kind == "callback" and raised.first is not None:
         return raised.first
     return ValueError(message)
+
+
+def _cancelled(exc: asyncio.CancelledError, receipt: str | None) -> asyncio.CancelledError:
+    """`exc` as a `RunCancelled` carrying the core's receipt, or as it is when the core sent none."""
+    if receipt is None:
+        return exc
+    return RunCancelled(*exc.args, receipt=CancellationReceipt.model_validate_json(receipt))
 
 
 def _on_this_clock(events: list[dict[str, Any]], offset: float) -> list[dict[str, Any]]:

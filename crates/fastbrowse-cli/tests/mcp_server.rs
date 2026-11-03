@@ -15,6 +15,7 @@ use fastbrowse_cli::mcp::{
 use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_clients::environment::{DecisionSource, Settings};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status};
+use fastbrowse_core::protocol::CancellationReceipt;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, mpsc};
@@ -308,6 +309,29 @@ async fn test_a_configuration_error_in_a_run_is_a_tool_error() {
         Client::new(ServerConfig::default(), missing_key).call(json!({"task": "t", "start": START})).await;
     assert_eq!(result["isError"], true);
     assert!(text(&result).contains("OPENROUTER_API_KEY"));
+}
+
+#[tokio::test]
+async fn test_a_cancelled_run_keeps_its_receipt_beside_the_tool_error() {
+    let receipt = CancellationReceipt {
+        steps: vec![step(0)],
+        cost: answered(Status::Complete).cost,
+        recordings: vec![PathBuf::from("run.mp4")],
+    };
+    let spent = receipt.clone();
+    let stopped = runner(move |_| {
+        let spent = spent.clone();
+        async move { Err(RunError::Cancelled(spent)) }
+    });
+    let (result, _) = Client::new(ServerConfig::default(), stopped).call(json!({"task": "t", "start": START})).await;
+    assert_eq!(result["isError"], true);
+    assert_eq!(text(&result), "Error executing tool browse: the run was cancelled");
+    // Not structured content: that is checked against the browse output schema, which a receipt is not.
+    assert!(result.get("structuredContent").is_none());
+    let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/cancellation"].clone());
+    assert_eq!(kept, receipt);
+    // The unpriced browser stays unpriced rather than becoming $0.
+    assert_eq!(result["_meta"]["fastbrowse.ai/cancellation"]["cost"]["lines"][1]["dollars"], Value::Null);
 }
 
 fn settings(change: impl Fn(&mut Settings)) -> Settings {

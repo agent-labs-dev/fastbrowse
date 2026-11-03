@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_core::models::{CostBreakdown, LocalChrome, RunResult, SecretValue, Status, StepResult};
-use fastbrowse_core::protocol::RunTask;
+use fastbrowse_core::protocol::{CancellationReceipt, RunTask};
 use fastbrowse_core::py::{self, text};
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -175,6 +175,13 @@ pub fn error_result(error: impl Into<String>) -> RunResult {
         recordings: Vec::new(),
         wall: None,
     }
+}
+
+/// The `error` result of a cancelled run that is reported as a failure, with the steps, cost and videos its receipt
+/// holds: a run a failing callback stopped had spent and done all of that.
+pub fn cancelled_result(error: impl Into<String>, receipt: CancellationReceipt) -> RunResult {
+    let CancellationReceipt { steps, cost, recordings } = receipt;
+    RunResult { steps, cost, recordings, ..error_result(error) }
 }
 
 /// One step as a line: what was done, and to what.

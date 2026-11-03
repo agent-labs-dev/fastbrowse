@@ -4,6 +4,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
+import dev.agentlabs.fastbrowse.protocol.CancellationReceipt;
 import dev.agentlabs.fastbrowse.protocol.Protocol;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -110,13 +111,27 @@ final class Connection {
         JsonNode error = message.get("error");
         // After the notifications before it, so a run's events have all been delivered when its reply is.
         if (error != null && !error.isNull()) {
-            RpcException refused = new RpcException(error.path("code").asInt(), error.path("message").asString());
-            delivery.execute(() -> waiting.completeExceptionally(refused));
+            FastbrowseException refused;
+            try {
+                refused = refusal(error);
+            } catch (JacksonException e) {
+                // A receipt that cannot be read is reported as that, not dropped: it holds what the run spent.
+                refused = new FastbrowseException("the cancellation receipt could not be read", e);
+            }
+            FastbrowseException answered = refused;
+            delivery.execute(() -> waiting.completeExceptionally(answered));
         } else {
             JsonNode result = message.path("result");
             delivery.execute(() -> waiting.complete(result));
         }
         return true;
+    }
+
+    /** An error reply as an exception, with the receipt a {@code cancelled} one carries as its {@code data}. */
+    private RpcException refusal(JsonNode error) {
+        JsonNode data = error.get("data");
+        CancellationReceipt receipt = data == null || data.isNull() ? null : json.treeToValue(data, CancellationReceipt.class);
+        return new RpcException(error.path("code").asInt(), error.path("message").asString(), receipt);
     }
 
     private void answer(JsonNode id, String method, JsonNode params) {

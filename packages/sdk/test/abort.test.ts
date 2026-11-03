@@ -58,9 +58,30 @@ test('aborting mid-run rejects with an AbortError once the browser of the run ha
       assert.ok(error instanceof AbortError);
       assert.ok(error instanceof FastbrowseError);
       assert.equal(error.name, 'AbortError');
+      // What the run did and spent before it stopped, with the unpriced browser left unpriced.
+      assert.equal(error.receipt?.steps.length, 1);
+      assert.deepEqual(
+        error.receipt?.cost.lines.map(line => [line.basis, line.dollars]),
+        [
+          ['metered', 0.004],
+          ['unknown', null],
+        ],
+      );
+      assert.deepEqual(error.receipt?.recordings, []);
       return true;
     });
     assert.equal(closed(), true);
+  });
+});
+
+test('an abort that comes before the run starts has no receipt', async () => {
+  await withServer(async fb => {
+    const signal = AbortSignal.abort(new Error('stopped first'));
+    await assert.rejects(fb.run('Add the kettle to the cart', { ...ownBrowser, signal }), (error: unknown) => {
+      assert.ok(error instanceof AbortError);
+      assert.equal(error.receipt, undefined);
+      return true;
+    });
   });
 });
 

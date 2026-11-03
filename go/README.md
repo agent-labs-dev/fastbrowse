@@ -41,6 +41,10 @@ A run ends in a `Status`; a run that needs a login or got stuck is read from the
 Cancelling `ctx` stops a run, and `Run` returns once its browser has closed. One `Client` runs one task at a time:
 a second `Run` while one is active gets an `*RPCError` with `ErrorCodeBusy`. Start one client per concurrent run.
 
+A cancelled context returns `*CancelledError`. Its `Receipt` keeps reported steps, known cost lines and finished
+recordings; `errors.Is` still matches the context cause. A server-side cancellation has its receipt on
+`*RPCError`. Neither receipt asserts success, and an unpriced charge remains `unknown`.
+
 `RunOptions` carries the rest: `OutputSchema` for structured data, read back with `result.DecodeData`; `Secrets`,
 whose values stay in your process and are asked for as they are typed; `Until`, a check on the address a run ends on;
 and `OnEvent` and `OnFrame` to follow a run as it goes. The

@@ -120,7 +120,7 @@ impl Embedded {
 }
 
 fn refusal(message: String) -> Refused {
-    Refused { code: ErrorCode::InvalidParams, message }
+    Refused { code: ErrorCode::InvalidParams, message, data: None }
 }
 
 /// The first callback the host failed, which stops the run.

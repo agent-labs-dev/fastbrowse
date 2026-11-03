@@ -79,6 +79,26 @@ public sealed record BudgetStop
     public required double Limit { get; init; }
 }
 
+/// <summary>
+/// What a cancelled run did before it stopped: the <c>data</c> of its <c>cancelled</c> error.
+///
+/// A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+/// whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+/// <c>unknown</c> line, and the videos finished before its browser closed. A step cut off before its event was sent
+/// was never reported, so it is not among the steps.
+/// </summary>
+public sealed record CancellationReceipt
+{
+    [JsonPropertyName("steps")]
+    public required IReadOnlyList<StepResult> Steps { get; init; }
+
+    [JsonPropertyName("cost")]
+    public required CostBreakdown Cost { get; init; }
+
+    [JsonPropertyName("recordings")]
+    public required IReadOnlyList<string> Recordings { get; init; }
+}
+
 public sealed record Citation
 {
     /// <summary>

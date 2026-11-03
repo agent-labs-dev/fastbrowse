@@ -14,6 +14,7 @@ export type {
   Artifact,
   BrowserEvent,
   BudgetStop,
+  CancellationReceipt,
   Citation,
   CostBreakdown,
   CostLine,

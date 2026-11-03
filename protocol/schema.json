@@ -130,6 +130,36 @@
       "title": "BudgetStop",
       "type": "object"
     },
+    "CancellationReceipt": {
+      "description": "What a cancelled run did before it stopped: the `data` of its `cancelled` error.\n\nA cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed\nwhatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an\n`unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent\nwas never reported, so it is not among the steps.",
+      "properties": {
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/StepResult"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "cost": {
+          "$ref": "#/$defs/CostBreakdown"
+        },
+        "recordings": {
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "title": "Recordings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps",
+        "cost",
+        "recordings"
+      ],
+      "title": "CancellationReceipt",
+      "type": "object"
+    },
     "Citation": {
       "additionalProperties": false,
       "properties": {
@@ -294,6 +324,17 @@
         "message": {
           "title": "Message",
           "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CancellationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

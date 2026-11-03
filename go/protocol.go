@@ -52,6 +52,18 @@ type BudgetStop struct {
 	Limit    float64 `json:"limit"`
 }
 
+// What a cancelled run did before it stopped: the `data` of its `cancelled` error.
+//
+// A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+// whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+// `unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent
+// was never reported, so it is not among the steps.
+type CancellationReceipt struct {
+	Steps      []StepResult  `json:"steps"`
+	Cost       CostBreakdown `json:"cost"`
+	Recordings []string      `json:"recordings"`
+}
+
 type Citation struct {
 	// The number used by this fact's links in the answer, stable within a run.
 	ID       int64  `json:"id"`
@@ -104,8 +116,9 @@ const (
 )
 
 type Error struct {
-	Code    ErrorCode `json:"code"`
-	Message string    `json:"message"`
+	Code    ErrorCode            `json:"code"`
+	Message string               `json:"message"`
+	Data    *CancellationReceipt `json:"data,omitempty"`
 }
 
 // Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.

@@ -142,6 +142,11 @@ async def run_task(
     needs that origin listed too. Service workers are bypassed so every navigation meets the gate. A scoped run
     delivers no live frames or screenshots and cannot `record`, since pixels cannot be attributed to a document.
 
+    Cancelling the task that awaits `run_task` stops the run, and it raises once the run's browser has closed:
+    with `fastbrowse.models.RunCancelled`, a `CancelledError` whose `receipt` holds the steps the run reported,
+    every known charge (an unpriced one as an `unknown` line) and its finished videos, when the core had
+    started the run.
+
     `check_access` is awaited before browser startup and every observation, capture, screenshot, address, navigation
     and action, scoped or not. If it raises, `run_task` returns a `RunResult` with status `error` and `connect_cdp`
     raises a `BrowserError`; either error names only the exception's type, and its text is not kept.

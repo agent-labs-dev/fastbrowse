@@ -35,6 +35,7 @@ from fastbrowse.models import (
     Limits,
     LLMPurpose,
     LocalChrome,
+    RunCancelled,
     SecretRef,
     Status,
     StepEvent,
@@ -412,9 +413,12 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
         )
         await asyncio.wait_for(reading_started.wait(), 10)
         run.cancel()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(RunCancelled) as stopped:
             await run
         assert cleanup == ["recorded"]
+    # The charge the dropped call recorded reaches the caller once, and unpriced, never as $0.
+    assert stopped.value.receipt.cost.lines.count(UNKNOWN) == 1
+    assert all(line.dollars is None for line in stopped.value.receipt.cost.lines if line.component == CostComponent.LLM)
 
 
 @pytest.mark.usefixtures("rust_core")

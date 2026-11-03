@@ -32,6 +32,10 @@ A run ends in a `Status`; a run that needs a login or got stuck is read from the
 client runs one task at a time: a second `RunAsync` while one is active throws an `RpcException` whose `Code` is
 `ProtocolConstants.ErrorBusy`. Start one client per concurrent run.
 
+Token cancellation throws `RunCancelledException`, an `OperationCanceledException` carrying a `Receipt` of
+reported steps, known cost lines and finished recordings. A server-side cancellation carries it on
+`RpcException.Receipt`. The receipt has no status or answer, and an unpriced charge remains `unknown`.
+
 `RunOptions` carries the rest: `OutputSchema` for structured data, read back from `result.Data`; `Secrets` and
 `ResolveSecret`, whose values stay in your process and are asked for as they are typed; `Until`, a check on the address
 a run ends on; and `OnEvent` and `OnFrame` to follow a run as it goes. The

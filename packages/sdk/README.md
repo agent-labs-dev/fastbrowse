@@ -56,6 +56,10 @@ with `ProcessExitedError` when the process is gone. It also rejects with `Output
 finished but its data fails the `output` schema. A run that fails after it starts, including one whose
 callback throws, resolves with status `error`.
 
+An `AbortError` carries `receipt` once the server has closed the browser: the steps it reported, known cost
+lines and finished recordings. A cancelled `RpcError` carries the same receipt. A cancellation before the run
+starts has none. The receipt has no status or answer, and an unpriced charge remains `unknown`.
+
 ## Options
 
 The result is the `RunResult` the Python library returns. Its fields keep their Python names, such as

@@ -29,9 +29,9 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
-    ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BudgetResource, BudgetStop, Bytes, CostBreakdown,
-    CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, UntilCheck,
-    WallKind,
+    ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BudgetResource, BudgetStop, Bytes, CostBasis,
+    CostBreakdown, CostComponent, CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome, RunResult,
+    SecretResolver, Status, StepResult, UntilCheck, WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
@@ -51,8 +51,9 @@ pub enum RunError {
     Configuration(String),
     /// `record` could not start, so the run stopped with its browser closed.
     Recording(String),
-    /// [`Host::cancel`] was tripped; the browser was closed before this returned.
-    Cancelled,
+    /// [`Host::cancel`] was tripped; the browser was closed before this returned. The receipt is what the run did
+    /// until then, which is never a result: a cancelled run proved nothing.
+    Cancelled(CancellationReceipt),
 }
 
 impl std::fmt::Display for RunError {
@@ -62,7 +63,7 @@ impl std::fmt::Display for RunError {
             | RunError::UnsupportedSchema(message)
             | RunError::Configuration(message)
             | RunError::Recording(message) => f.write_str(message),
-            RunError::Cancelled => f.write_str("the run was cancelled"),
+            RunError::Cancelled(_) => f.write_str("the run was cancelled"),
         }
     }
 }
@@ -76,7 +77,7 @@ impl From<ConfigurationError> for RunError {
 }
 
 pub use fastbrowse_browser::adapters::local_chrome::which;
-pub use fastbrowse_core::protocol::RunTask;
+pub use fastbrowse_core::protocol::{CancellationReceipt, RunTask};
 
 /// What a run is given besides its arguments: the caller's own objects, which no wire carries.
 #[derive(Clone, Default)]
@@ -141,11 +142,12 @@ impl Cancel {
         }
     }
 
-    /// `work`, unless the run is stopped first.
+    /// `work`, unless the run is stopped first. The receipt is empty: a caller that did or spent something before it
+    /// was stopped builds its own.
     pub async fn guard<T>(&self, work: impl std::future::Future<Output = T>) -> Result<T, RunError> {
         tokio::select! {
             biased;
-            () = self.tripped() => Err(RunError::Cancelled),
+            () = self.tripped() => Err(RunError::Cancelled(CancellationReceipt::default())),
             done = work => Ok(done),
         }
     }
@@ -446,6 +448,33 @@ fn is_loopback(cdp_url: &str) -> bool {
 /// The run's recording, held outside the run so teardown finishes it however the run ends.
 type Filming = Arc<tokio::sync::Mutex<Option<Recording>>>;
 
+/// The steps a run has told, held outside the run so a cancelled one can still report them.
+type Told = Arc<std::sync::Mutex<Vec<StepResult>>>;
+
+/// Keep each step as it is told, before the caller's handler is awaited: a run stopped while that handler runs, or
+/// by it, still reports the step it was telling. The agent redacted the step before telling it.
+fn noting(on_event: Option<EventHandler>, told: &Told) -> EventHandler {
+    let told = told.clone();
+    Arc::new(move |event: Event| {
+        if let Event::Step(step) = &event {
+            told.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(step.step.clone());
+        }
+        let on_event = on_event.clone();
+        Box::pin(async move {
+            if let Some(on_event) = on_event {
+                on_event(event).await;
+            }
+        })
+    })
+}
+
+/// What a run stopped by [`Host::cancel`] did: the steps it told and every cost line its phases left. Read once the
+/// run's work is dropped, so a request it had in flight has recorded what it is owed.
+fn cancelled(told: &Told, lines: Vec<CostLine>, recordings: Vec<PathBuf>) -> RunError {
+    let steps = told.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    RunError::Cancelled(CancellationReceipt { steps, cost: CostBreakdown { lines }, recordings })
+}
+
 /// Pass each step to the recording as well, which captions it.
 fn captioned(on_event: Option<EventHandler>, recording: &Filming) -> Option<EventHandler> {
     let recording = recording.clone();
@@ -541,6 +570,7 @@ async fn browser(
     host: &Host,
     chrome: &LocalChrome,
     http: &Http,
+    starting: &mut Option<BrowserUseCloudBrowser>,
 ) -> Result<(BrowserConnection, Owned), Refused> {
     let key = host.browser_api_key.as_deref();
     let lazily = host.open_browser.is_some();
@@ -593,9 +623,34 @@ async fn browser(
         unavailable: error.is_unavailable(),
         message: error.to_string(),
     };
-    let mut remote = BrowserUseCloudBrowser::new(key, options).map_err(cloud)?;
+    // Held by the caller while it starts, so a start that fails or is cancelled still reports the browser it billed.
+    let remote = starting.insert(BrowserUseCloudBrowser::new(key, options).map_err(cloud)?);
     let connection = remote.start().await.map_err(cloud)?;
+    let remote = starting.take().expect("the cloud browser was put there above");
     Ok((connection, Owned::Cloud(Box::new(remote))))
+}
+
+/// What a cloud browser whose start never finished is known to have cost. A start that failed stopped its browser
+/// and read the final figure. A cancelled one leaves the browser to be stopped behind the run, so its reading is the
+/// service's figure so far, and with no reading at all a browser may still have been created and billed: unknown.
+fn unfinished_start(remote: BrowserUseCloudBrowser, cancelled: bool) -> Vec<CostLine> {
+    let lines = remote.cost();
+    // Dropped here, as the start's own future would have dropped it: that is what stops a browser left running.
+    drop(remote);
+    if !cancelled {
+        return lines;
+    }
+    if lines.is_empty() {
+        return vec![CostLine::new(CostComponent::Browser, CostBasis::Unknown, None)];
+    }
+    lines.into_iter().map(read_too_early).collect()
+}
+
+/// `line` as a reading taken before the service finished metering: a priced line can only grow, and an unpriced
+/// one stays unknown.
+fn read_too_early(line: CostLine) -> CostLine {
+    let basis = if line.dollars.is_some() { CostBasis::Unsettled } else { CostBasis::Unknown };
+    CostLine { basis, ..line }
 }
 
 /// Stop what the run started, keeping the cloud browser's last reported cost.
@@ -648,10 +703,13 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
     let mut fetch_spent: Vec<CostLine> = Vec::new();
     let mut limits = task.limits.clone();
     let mut resume = None;
+    let told: Told = Arc::default();
     if host.open_browser.is_some() || reads_first(&task) {
+        let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
+        let clients = (jev.clone(), llm.clone());
         let read =
-            fetched(&task, &host, schema.clone(), &config, http.clone(), jev.clone(), llm.clone(), origins.clone())
+            fetched(&task, &host, schema.clone(), &config, http.clone(), clients, origins.clone(), on_event, &told)
                 .await?;
         if task.fetch || !read.needs_browser {
             return Ok(read.result);
@@ -677,16 +735,19 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         host.browser_api_key = Some(settings.browser_key()?.to_string());
     }
     let mut browser_cost: Vec<CostLine> = Vec::new();
+    // Held here rather than by the agent, so what the browser run spent is still read when it is cancelled.
+    let ledger = Arc::new(Ledger::new(limits.clone().unwrap_or_default()));
     let scratch = Scratch::new().map_err(|error| RunError::Invalid(error.to_string()))?;
     let mut session: Option<BrowserSession> = None;
     let mut owned: Option<Owned> = None;
+    let mut starting: Option<BrowserUseCloudBrowser> = None;
     // Kept outside the run so each is closed however the run ends, before the browser is.
     let recording: Filming = Arc::default();
     let mut recording_failed: Option<String> = None;
     let mut feedback: Option<Arc<CursorFeedback>> = None;
     let work = async {
         check_browser_access(host.check_access.as_ref()).await?;
-        let (connection, started) = browser(&task, &host, &chrome, &http).await?;
+        let (connection, started) = browser(&task, &host, &chrome, &http, &mut starting).await?;
         owned = Some(started);
         let connection = BrowserConnection { allowed_origins: origins.clone(), ..connection };
         if let Some(on_event) = &host.on_event {
@@ -731,7 +792,7 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             .with_config(config.clone())
             .with_secrets(host.secrets.clone())
             .with_trace(http.trace.clone())
-            .with_events(captioned(host.on_event.clone(), &recording))
+            .with_events(Some(noting(captioned(host.on_event.clone(), &recording), &told)))
             .with_page_ready(host.page_ready.clone());
         let run = RunOptions {
             start: task.start.clone(),
@@ -742,8 +803,8 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
             inputs: task.inputs.clone().unwrap_or_default(),
             attachments: attachments(&task),
             output_schema: schema.clone(),
-            limits: limits.clone(),
-            ledger: None,
+            limits: None,
+            ledger: Some(ledger.clone()),
             authorization: task.authorization.clone(),
             until: host.until.clone(),
             resume: resume.take(),
@@ -758,6 +819,9 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         Ok(result)
     };
     let outcome: Option<Result<RunResult, Refused>> = host.cancel.guard(work).await.ok();
+    if let Some(remote) = starting.take() {
+        browser_cost = unfinished_start(remote, outcome.is_none());
+    }
     // Read after the run either way: a failed result card still leaves the finished videos.
     let filming = recording.lock().await.take();
     let recordings = match filming {
@@ -774,7 +838,13 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
         stop(owned, &mut browser_cost).await;
     }
     let mut result = match outcome {
-        None => return Err(RunError::Cancelled),
+        None => {
+            // In the order a finished run's lines are: the fetched read, the browser run, then the browser itself.
+            let mut lines = fetch_spent;
+            lines.extend(ledger.breakdown().lines);
+            lines.extend(browser_cost);
+            return Err(cancelled(&told, lines, recordings));
+        }
         Some(Ok(result)) => result,
         Some(Err(refusal)) => {
             // A cloud browser that cannot be started is an outage, not a failed run.
@@ -785,7 +855,8 @@ pub async fn run_task(task: RunTask, mut host: Host) -> Result<RunResult, RunErr
                 data: Value::Null,
                 evidence: Vec::new(),
                 steps: Vec::new(),
-                cost: CostBreakdown { lines: Vec::new() },
+                // What the browser run spent before it failed, which is nothing when it never started.
+                cost: ledger.breakdown(),
                 artifacts: session.as_ref().map(BrowserSession::artifacts).unwrap_or_default(),
                 citations: Vec::new(),
                 error: Some(refusal.message),
@@ -869,9 +940,10 @@ async fn fetched(
     schema: Option<Arc<RecordSchema>>,
     config: &Config,
     http: Http,
-    jev: Arc<dyn DecisionClient>,
-    llm: Arc<dyn LLMClient>,
+    (jev, llm): (Arc<dyn DecisionClient>, Arc<dyn LLMClient>),
     origins: Option<Vec<String>>,
+    on_event: EventHandler,
+    told: &Told,
 ) -> Result<Read, RunError> {
     if check_browser_access(host.check_access.as_ref()).await.is_err() {
         // The caller's own gate refused the run, which is an error result, not an error to the embedder. Python reports
@@ -904,7 +976,7 @@ async fn fetched(
         .with_config(config.clone())
         .with_secrets(host.secrets.clone())
         .with_trace(trace)
-        .with_events(host.on_event.clone());
+        .with_events(Some(on_event));
     let run = RunOptions {
         start: task.start.clone(),
         // With no page named, the first address is worked out from the task, the same way a browser run with no
@@ -920,7 +992,9 @@ async fn fetched(
         until: host.until.clone(),
         resume: None,
     };
-    let outcome = host.cancel.guard(agent.run(&task.task, run)).await?;
+    let Ok(outcome) = host.cancel.guard(agent.run(&task.task, run)).await else {
+        return Err(cancelled(told, ledger.breakdown().lines, Vec::new()));
+    };
     let result = outcome.map_err(|error| RunError::Invalid(error.to_string()))?;
     // Read from the page rather than the message: a refusal the page itself raised means the task needs a browser. It
     // ends the run blocked, or unverified when the refusal was the screenshot an ending frame asked for. A bot check Jev
@@ -934,9 +1008,87 @@ async fn fetched(
 
 #[cfg(test)]
 mod tests {
-    use fastbrowse_core::models::{CostBasis, CostComponent};
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::*;
+
+    /// A stand-in Browser Use Cloud that creates a browser at `$0.01` so far, with a DevTools address that never
+    /// answers, so a start against it stays unfinished until it is cancelled.
+    async fn a_cloud_that_never_finishes_starting() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let devtools = origin.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let devtools = devtools.clone();
+                tokio::spawn(async move {
+                    let mut asked = vec![0; 8192];
+                    let read = socket.read(&mut asked).await.unwrap_or(0);
+                    if !String::from_utf8_lossy(&asked[..read]).starts_with("POST /api/v4/browsers") {
+                        // The DevTools address and the stop behind a cancelled start: held open, never answered.
+                        return tokio::time::sleep(Duration::from_secs(60)).await;
+                    }
+                    let body = format!(r#"{{"id":"b1","cdpUrl":"{devtools}","browserCost":"0.01"}}"#);
+                    let reply = format!(
+                        "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        origin
+    }
+
+    fn cloud(origin: &str) -> BrowserUseCloudBrowser {
+        let clock: fastbrowse_browser::adapters::browser_use_cloud::Clock = Arc::new(|| 0.0);
+        let sleep: fastbrowse_browser::adapters::browser_use_cloud::Sleep = Arc::new(|_| Box::pin(async {}));
+        let options = BrowserUseCloudOptions { timeout_minutes: 15, ..BrowserUseCloudOptions::default() };
+        BrowserUseCloudBrowser::with_seams("key", options, origin, clock, sleep).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_start_cancelled_after_the_browser_was_created_keeps_the_figure_so_far_as_unsettled() {
+        let origin = a_cloud_that_never_finishes_starting().await;
+        let mut starting = Some(cloud(&origin));
+        let start = starting.as_mut().unwrap().start();
+        // Cancelled while it waits on the browser's DevTools address, after the service answered the create.
+        assert!(tokio::time::timeout(Duration::from_millis(500), start).await.is_err());
+        let lines = unfinished_start(starting.take().unwrap(), true);
+        assert_eq!(
+            lines.iter().map(|line| (line.component, line.basis, line.dollars)).collect::<Vec<_>>(),
+            [
+                (CostComponent::Browser, CostBasis::Unsettled, Some(0.01)),
+                (CostComponent::Proxy, CostBasis::Unknown, None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_start_cancelled_before_the_service_answered_is_an_unknown_charge_not_a_free_one() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let mut starting = Some(cloud(&origin));
+        let start = starting.as_mut().unwrap().start();
+        assert!(tokio::time::timeout(Duration::from_millis(200), start).await.is_err());
+        let lines = unfinished_start(starting.take().unwrap(), true);
+        assert_eq!(lines, [CostLine::new(CostComponent::Browser, CostBasis::Unknown, None)]);
+        drop(listener);
+    }
+
+    #[test]
+    fn a_figure_read_too_early_can_only_grow_and_a_start_never_made_has_no_line() {
+        let metered = CostLine::new(CostComponent::Browser, CostBasis::Metered, Some(0.02));
+        assert_eq!(read_too_early(metered.clone()).basis, CostBasis::Unsettled);
+        assert_eq!(read_too_early(CostLine::new(CostComponent::Proxy, CostBasis::Unknown, None)).dollars, None);
+        // A start that never reached the service billed nothing that can be known, and is not a line at all.
+        let never_sent = cloud("http://127.0.0.1:9");
+        assert!(unfinished_start(never_sent, false).is_empty());
+    }
 
     #[test]
     fn a_fetched_attempt_spends_from_the_browser_runs_limits() {

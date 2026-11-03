@@ -5,12 +5,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import dev.agentlabs.fastbrowse.protocol.CancellationReceipt;
+import dev.agentlabs.fastbrowse.protocol.CostBasis;
+import dev.agentlabs.fastbrowse.protocol.CostLine;
 import dev.agentlabs.fastbrowse.protocol.Limits;
 import dev.agentlabs.fastbrowse.protocol.Protocol;
 import dev.agentlabs.fastbrowse.protocol.RunResult;
@@ -235,6 +239,49 @@ class FastbrowseTest {
         // The stand-in answers with how many runs the server was sent: the first and this one.
         RunResult third = fastbrowse.run("t", RunOptions.defaults()).get(15, TimeUnit.SECONDS);
         assertEquals(2, third.data().asInt());
+        // Never sent, so it did and spent nothing.
+        assertEquals(Optional.empty(), Fastbrowse.cancellation(second).get(15, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void aCancelledRunsReceiptArrivesOnceItsBrowserHasClosed(@TempDir Path directory) throws Exception {
+        Fastbrowse fastbrowse = scripted("until_cancelled");
+        Path closed = directory.resolve("closed");
+        CountDownLatch started = new CountDownLatch(1);
+        CompletableFuture<RunResult> run = fastbrowse.run("t", RunOptions.builder()
+                .inputs(Map.of("closed", closed.toString()))
+                .onEvent(event -> started.countDown())
+                .build());
+        assertTrue(started.await(10, TimeUnit.SECONDS));
+        assertTrue(run.cancel(true));
+        CancellationReceipt receipt = Fastbrowse.cancellation(run).get(15, TimeUnit.SECONDS).orElseThrow();
+        assertTrue(Files.exists(closed), "the receipt arrived before the browser closed");
+        // What the run did and spent before it stopped, with the unpriced browser left unpriced.
+        assertEquals(1, receipt.steps().size());
+        assertEquals(List.of(CostBasis.METERED, CostBasis.UNKNOWN),
+                receipt.cost().lines().stream().map(CostLine::basis).toList());
+        assertEquals(Double.valueOf(0.004), receipt.cost().lines().get(0).dollars());
+        assertNull(receipt.cost().lines().get(1).dollars());
+        assertEquals(List.of(), receipt.recordings());
+    }
+
+    @Test
+    void aRunAThrowingCallbackStoppedKeepsWhatItDidAndSpent(@TempDir Path directory) {
+        RunResult result = scripted("until_cancelled").run("t", RunOptions.builder()
+                .inputs(Map.of("closed", directory.resolve("closed").toString()))
+                .onEvent(event -> {
+                    throw new IllegalStateException("full disk");
+                })
+                .build()).join();
+        assertEquals(Status.ERROR, result.status());
+        assertEquals("run/event: full disk", result.error());
+        assertEquals(1, result.steps().size());
+        assertEquals(2, result.cost().lines().size());
+    }
+
+    @Test
+    void aFutureNotFromRunHasNoReceipt() {
+        assertThrows(IllegalArgumentException.class, () -> Fastbrowse.cancellation(new CompletableFuture<>()));
     }
 
     @Test

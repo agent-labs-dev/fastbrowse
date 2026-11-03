@@ -10,7 +10,17 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from fastbrowse.models import Authorization, BrowserEvent, Image, Limits, LocalChrome, SecretRef, StepEvent
+from fastbrowse.models import (
+    Authorization,
+    BrowserEvent,
+    CostBreakdown,
+    Image,
+    Limits,
+    LocalChrome,
+    SecretRef,
+    StepEvent,
+    StepResult,
+)
 
 # Changes only when the wire format does, so it is not the package version: a release that leaves the
 # messages alone leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
@@ -70,9 +80,26 @@ class Response(BaseModel):
     result: Any
 
 
+class CancellationReceipt(BaseModel):
+    """What a cancelled run did before it stopped: the `data` of its `cancelled` error.
+
+    A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+    whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+    `unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent
+    was never reported, so it is not among the steps.
+    """
+
+    # Redacted as the step events were.
+    steps: tuple[StepResult, ...]
+    cost: CostBreakdown
+    recordings: tuple[Path, ...]
+
+
 class Error(BaseModel):
     code: ErrorCode
     message: str
+    # What a cancelled run had done, on the `cancelled` error only; absent from every other.
+    data: CancellationReceipt | None = Field(default=None, exclude_if=lambda data: data is None)
 
 
 class ErrorResponse(BaseModel):

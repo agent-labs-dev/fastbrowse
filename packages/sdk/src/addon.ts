@@ -8,7 +8,7 @@ import { Callbacks } from './callbacks.ts';
 import { abortable } from './abort.ts';
 import { platformPackage } from './binary.ts';
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
-import { ErrorCode, type RunParams, type RunResult } from './protocol.ts';
+import { ErrorCode, type RunParams, type RunResult, type Error as WireError } from './protocol.ts';
 import type { RunOptions } from './run.ts';
 
 /** A host function of the addon. It answers `{"ok": value}` or `{"error": message}` as JSON, and never rejects. */
@@ -30,7 +30,7 @@ export interface Addon {
   Core: new (
     env?: Record<string, string>,
   ) => {
-    /** Resolves with `{"result": RunResult}` or `{"error": {"code", "message"}}` as JSON. */
+    /** Resolves with `{"result": RunResult}` or `{"error": {"code", "message", "data"?}}` as JSON. */
     runTask(params: string, host?: AddonHost, cancel?: AddonCancel): Promise<string>;
   };
   RunCancel: new () => AddonCancel;
@@ -97,13 +97,13 @@ export class InProcess {
       }
       const done = this.#core.runTask(JSON.stringify(params), host, cancel);
       this.#active = { runId, cancel, done };
-      let reply: { result?: RunResult; error?: { code: number; message: string } };
+      let reply: { result?: RunResult; error?: WireError };
       try {
         reply = JSON.parse(await done);
       } finally {
         this.#active = undefined;
       }
-      if (reply.error) throw new RpcError(reply.error.code, reply.error.message);
+      if (reply.error) throw new RpcError(reply.error.code, reply.error.message, reply.error.data ?? undefined);
       return reply.result as RunResult;
     };
     const stop = () => cancel.cancel();

@@ -88,6 +88,13 @@ stops browsing a tenth of its time limit (at most 60 s) early to write that part
 active work; the return also waits for owned requests and browser cleanup. Injected clients must honor
 cancellation and finish their cleanup. Returning while a paid request still runs would lose its cost receipt.
 
+Cancellation returns a receipt of reported steps, cost lines and finished recordings after cleanup. Protocol 2
+keeps error code `-32002` and adds the optional `error.data` receipt; other errors omit it. Rust returns
+`RunError::Cancelled(receipt)`. A cancelled cloud start keeps known charges as `unsettled`, or an `unknown`
+browser charge when the provider has not answered. A failed start retains its final known charges.
+An MCP browse error caused by runner cancellation puts the receipt in `_meta["fastbrowse.ai/cancellation"]`,
+outside the browse result schema. Client cancellation notifications and abandoned overruns have no receipt.
+
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. `StallRules` has one stall rule: a step that
 changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no

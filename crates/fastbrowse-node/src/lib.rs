@@ -119,12 +119,12 @@ impl RunHost {
     }
 }
 
-/// `{"result": RunResult}`, or `{"error": {"code", "message"}}` for a run refused before it began: a JSON-RPC
-/// reply without its id.
+/// `{"result": RunResult}`, or `{"error": {"code", "message"}}` for a run refused before it began, with `data` for a
+/// cancelled one: a JSON-RPC reply without its id.
 fn reply(outcome: std::result::Result<fastbrowse_core::models::RunResult, fastbrowse_cli::serve::Refused>) -> String {
     match outcome {
         Ok(result) => json!({"result": result.dump()}).to_string(),
-        Err(refused) => json!({"error": {"code": refused.code.code(), "message": refused.message}}).to_string(),
+        Err(refused) => json!({"error": refused.error().dump()}).to_string(),
     }
 }
 

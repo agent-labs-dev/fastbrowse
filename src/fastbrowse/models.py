@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer
+
+if TYPE_CHECKING:
+    from fastbrowse.protocol import CancellationReceipt
 
 
 class Frozen(BaseModel):
@@ -52,6 +56,17 @@ class ConfigurationError(RuntimeError):
 
 class RecordingError(RuntimeError):
     """ffmpeg is missing. Later failures are logged instead: a video is never worth a run's result."""
+
+
+class RunCancelled(asyncio.CancelledError):
+    """A run that was cancelled, raised once its browser has closed. It is a `CancelledError`, so `asyncio`
+    treats it as one, and `receipt` holds what the run did and spent before it stopped: the steps it reported,
+    every known charge, an unpriced one as an `unknown` line, and its finished videos. A cancelled run proved
+    nothing, so the receipt has no status and no answer."""
+
+    def __init__(self, *args: object, receipt: CancellationReceipt) -> None:
+        super().__init__(*args)
+        self.receipt = receipt
 
 
 class Operation(StrEnum):

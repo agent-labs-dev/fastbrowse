@@ -11,6 +11,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{
     BrowserEvent, BrowserTag, Decider, Event, Operation, RunResult, Status, StepEvent, StepOutcome, StepResult, StepTag,
 };
+use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::safety::{origin_of, resolve_secret};
 use serde_json::{Value, json};
 
@@ -73,7 +74,21 @@ async fn until_stopped(host: &Host, closed: Option<String>) -> Outcome {
     if let Some(path) = closed {
         let _ = std::fs::write(path, "closed");
     }
-    Err(RunError::Cancelled)
+    Err(RunError::Cancelled(stopped()))
+}
+
+/// What a stand-in run stopped by its caller reports having done: one step, a priced Jev call and a browser nobody
+/// priced, so a client can tell the receipt reached it whole.
+fn stopped() -> CancellationReceipt {
+    let Event::Step(event) = step(0) else { unreachable!("step() makes a step event") };
+    CancellationReceipt {
+        steps: vec![event.step],
+        cost: parsed(json!({"lines": [
+            {"component": "jev", "basis": "metered", "dollars": 0.004},
+            {"component": "browser", "basis": "unknown"},
+        ]})),
+        recordings: Vec::new(),
+    }
 }
 
 async fn run(name: &str, task: RunTask, host: Host, requests: Requests) -> Outcome {
@@ -158,7 +173,7 @@ async fn run(name: &str, task: RunTask, host: Host, requests: Requests) -> Outco
             let first = host.cancel.guard(resolve_secret(secrets.as_ref(), &name, &origin)).await?;
             let second = host.cancel.guard(resolve_secret(secrets.as_ref(), &name, &origin)).await?;
             if host.cancel.is_tripped() {
-                return Err(RunError::Cancelled);
+                return Err(RunError::Cancelled(Default::default()));
             }
             Ok(RunResult { data: json!([first, second]), ..result(Status::Complete) })
         }
@@ -168,7 +183,7 @@ async fn run(name: &str, task: RunTask, host: Host, requests: Requests) -> Outco
                 Some(until) => host.cancel.guard(until("https://shop.example/orders/17".into())).await?,
             };
             if host.cancel.is_tripped() {
-                return Err(RunError::Cancelled);
+                return Err(RunError::Cancelled(Default::default()));
             }
             Ok(result(if passed { Status::Complete } else { Status::Unverified }))
         }

@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use common::{CHROME, Call, Recorder, binary, browser_event, result, run_params, runner, serving, settings};
 use fastbrowse_cli::runner::{RunError, Runner};
-use fastbrowse_core::models::{RunResult, Status};
+use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
+use fastbrowse_core::protocol::CancellationReceipt;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
 
@@ -86,6 +87,65 @@ async fn closing(browsing: &Browsing) {
 }
 
 const KETTLE: &str = "Add the kettle to the cart";
+
+/// What the stand-in below did before it was stopped: a step, a priced call, a browser nobody priced and a video.
+fn receipt() -> CancellationReceipt {
+    CancellationReceipt {
+        steps: vec![common::step(1)],
+        cost: CostBreakdown {
+            lines: vec![
+                CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.004)),
+                CostLine::new(CostComponent::Browser, CostBasis::Unknown, None),
+            ],
+        },
+        recordings: vec!["run.mp4".into()],
+    }
+}
+
+/// A run that opens its browser, asks `run/until` when the params set it, and reports [`receipt`] once stopped.
+fn stopping() -> Arc<dyn Runner> {
+    runner(|args: Call| async move {
+        (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+        if let Some(until) = &args.host.until {
+            let _ = args.host.cancel.guard(until("https://shop.example/orders".into())).await;
+        }
+        args.host.cancel.tripped().await;
+        Err(RunError::Cancelled(receipt()))
+    })
+}
+
+#[tokio::test]
+async fn test_a_cancelled_reply_carries_what_the_run_did_and_spent() {
+    let mut client = serving(stopping(), settings());
+    let run = under_way(&mut client, "run-1", json!({})).await;
+    client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
+    let reply = client.reply(run).await;
+    assert_eq!(reply["error"]["code"], CANCELLED);
+    assert_eq!(reply["error"]["data"], serde_json::to_value(receipt()).unwrap());
+    // The browser's charge stays unknown rather than becoming a free one.
+    assert_eq!(reply["error"]["data"]["cost"]["lines"][1]["basis"], "unknown");
+    assert_eq!(reply["error"]["data"]["cost"]["lines"][1]["dollars"], Value::Null);
+    assert!(reply["error"].get("status").is_none() && reply.get("result").is_none());
+    // Every other error has no data member at all.
+    let unknown = client.request("nonsense", None).await;
+    assert!(unknown["error"].get("data").is_none(), "{unknown}");
+}
+
+#[tokio::test]
+async fn test_a_run_a_failed_callback_stopped_reports_what_it_did_and_spent() {
+    let mut client = serving(stopping(), settings());
+    let run = under_way(&mut client, "run-1", json!({"until": true})).await;
+    let question = client.receive().await;
+    assert_eq!(question["method"], "run/until");
+    client.refuse(&question, -32603, "the check threw");
+    let reply = client.reply(run).await;
+    let result = &reply["result"];
+    assert_eq!(result["status"], "error", "{reply}");
+    assert!(result["error"].as_str().unwrap().contains("the check threw"), "{reply}");
+    assert_eq!(result["steps"], serde_json::to_value(receipt().steps).unwrap());
+    assert_eq!(result["cost"], serde_json::to_value(receipt().cost).unwrap());
+    assert_eq!(result["recordings"], json!(["run.mp4"]));
+}
 
 #[tokio::test]
 async fn test_cancelling_the_active_run_ends_it_with_the_cancelled_error() {
@@ -317,7 +377,7 @@ async fn test_cancelling_a_run_that_is_waiting_on_a_secret_ends_it_and_the_late_
                 .guard(fastbrowse_core::safety::resolve_secret(&*secrets, "SHOP_PASSWORD", "https://shop.example.com"))
                 .await?;
             resolved.lock().unwrap().push(value);
-            Err::<RunResult, _>(RunError::Cancelled)
+            Err::<RunResult, _>(RunError::Cancelled(Default::default()))
         }
     });
     let mut client = serving(typist, settings());

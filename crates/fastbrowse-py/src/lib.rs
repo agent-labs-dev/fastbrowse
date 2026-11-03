@@ -94,7 +94,8 @@ impl Run {
         serde_json::Value::Array(self.trace.events()).to_string()
     }
 
-    /// An asyncio future that resolves with None once the run has returned and its browser is closed.
+    /// An asyncio future that resolves once the run has returned and its browser is closed: with the
+    /// `CancellationReceipt` as JSON for a cancelled run, and None for any other.
     #[getter]
     fn finished(&self, py: Python<'_>) -> Py<PyAny> {
         self.finished.clone_ref(py)
@@ -307,7 +308,7 @@ fn run_task(
                                 result.call_method1("set_result", ((answered.dump_json(), frame),))?;
                                 None
                             }
-                            Err(RunError::Cancelled) => Some(refused("cancelled", "the run was cancelled".into())),
+                            Err(RunError::Cancelled(_)) => Some(refused("cancelled", "the run was cancelled".into())),
                             Err(RunError::Invalid(message) | RunError::UnsupportedSchema(message)) => {
                                 Some(refused("invalid", message.clone()))
                             }
@@ -318,9 +319,15 @@ fn run_task(
                             result.call_method1("set_exception", (error.value(py),))?;
                         }
                     }
+                    // A cancelled run's receipt resolves `finished`, so a caller whose own cancellation already
+                    // settled `result` still hears what the run did and spent.
+                    let receipt = match &outcome {
+                        Err(RunError::Cancelled(receipt)) => receipt.dump_json().into_pyobject(py)?.into_any(),
+                        _ => py.None().into_bound(py),
+                    };
                     let finished = finished.bind(py);
                     if !finished.call_method0("done")?.is_truthy()? {
-                        finished.call_method1("set_result", (py.None(),))?;
+                        finished.call_method1("set_result", (receipt,))?;
                     }
                     Ok(())
                 });

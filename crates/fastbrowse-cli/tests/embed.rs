@@ -82,7 +82,7 @@ async fn a_secret_is_asked_only_where_its_ref_reaches_and_a_failure_hides_what_t
         let mut answered = result(Status::Complete);
         answered.data = json!([elsewhere, here]);
         if args.host.cancel.is_tripped() {
-            return Err(fastbrowse_cli::runner::RunError::Cancelled);
+            return Err(fastbrowse_cli::runner::RunError::Cancelled(Default::default()));
         }
         Ok(answered)
     });

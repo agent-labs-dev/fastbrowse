@@ -2,24 +2,6 @@
 // Do not edit: change the types there, then run `npm run generate:sdk`.
 
 export type ArtifactKind = 'download';
-export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
-export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
-export type LLMPurpose = 'start' | 'compose' | 'fill';
-/**
- * Who chose a step: Jev, or a rule in code, such as the next page of a list.
- */
-export type Decider = 'jev' | 'code';
-/**
- * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
- */
-export type ErrorCode = -32700 | -32600 | -32601 | -32602 | -32603 | -32001 | -32002 | -32003 | -32004;
-export type RequestId = number | string;
-export type FactReader = 'jev_choice';
-export type JsonValue = unknown;
-/**
- * What the server sends without being asked.
- */
-export type ServerMethod = 'run/event' | 'run/frame' | 'run/until' | 'secrets/resolve';
 export type Operation =
   | 'click'
   | 'hover'
@@ -37,7 +19,25 @@ export type Operation =
   | 'read'
   | 'done'
   | 'navigate';
+/**
+ * Who chose a step: Jev, or a rule in code, such as the next page of a list.
+ */
+export type Decider = 'jev' | 'code';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
+export type FactReader = 'jev_choice';
+export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
+export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
+export type LLMPurpose = 'start' | 'compose' | 'fill';
+/**
+ * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
+ */
+export type ErrorCode = -32700 | -32600 | -32601 | -32602 | -32603 | -32001 | -32002 | -32003 | -32004;
+export type RequestId = number | string;
+export type JsonValue = unknown;
+/**
+ * What the server sends without being asked.
+ */
+export type ServerMethod = 'run/event' | 'run/frame' | 'run/until' | 'secrets/resolve';
 export type Status =
   | 'complete'
   | 'unverified'
@@ -90,15 +90,71 @@ export interface BudgetStop {
   resource: 'steps' | 'dollars' | 'seconds' | 'jev_calls' | 'llm_calls';
   limit: number;
 }
-export interface Citation {
-  /**
-   * The number used by this fact's links in the answer, stable within a run.
-   */
-  id: number;
-  text: string;
+/**
+ * What a cancelled run did before it stopped: the `data` of its `cancelled` error.
+ *
+ * A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+ * whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+ * `unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent
+ * was never reported, so it is not among the steps.
+ */
+export interface CancellationReceipt {
+  steps: StepResult[];
+  cost: CostBreakdown;
+  recordings: string[];
+}
+export interface StepResult {
+  index: number;
+  operation: Operation;
+  decided_by: Decider;
+  outcome: StepOutcome;
   url: string;
-  quote: string;
-  deep_link: string;
+  /**
+   * Human-readable label of the chosen element; never contains a secret value.
+   */
+  target: string | null;
+  confidence: number | null;
+  note: string | null;
+  /**
+   * Facts added to the notes by this step, with resolved secrets redacted.
+   */
+  facts: StepFact[];
+  /**
+   * Whether the page's fingerprint changed; None for steps that do not act (read).
+   */
+  page_changed: boolean | null;
+  duration_ms: number;
+  /**
+   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+   */
+  choices?: StepChoice[];
+}
+export interface StepFact {
+  text: string;
+  /**
+   * None for a count, total or winner derived from other facts rather than read from the page.
+   */
+  quote: string | null;
+  url: string | null;
+  reader: FactReader;
+  deep_link: string | null;
+}
+export interface StepChoice {
+  id: string;
+  role: string;
+  /**
+   * The label as Jev read it, with resolved secrets masked.
+   */
+  label: string;
+  /**
+   * The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+   */
+  context: string | null;
+  operations: Operation[];
+  /**
+   * Whether Jev chose this control: the target, and for a drag the destination too.
+   */
+  chosen: boolean;
 }
 export interface CostBreakdown {
   lines: CostLine[];
@@ -115,9 +171,20 @@ export interface CostLine {
    */
   seconds: number | null;
 }
+export interface Citation {
+  /**
+   * The number used by this fact's links in the answer, stable within a run.
+   */
+  id: number;
+  text: string;
+  url: string;
+  quote: string;
+  deep_link: string;
+}
 export interface Error {
   code: ErrorCode;
   message: string;
+  data?: CancellationReceipt | null;
 }
 export interface ErrorResponse {
   jsonrpc: '2.0';
@@ -265,59 +332,6 @@ export interface StepEvent {
    * and also when a resolved secret was showing as page text: pixels cannot be masked the way text is.
    */
   frame: string | null;
-}
-export interface StepResult {
-  index: number;
-  operation: Operation;
-  decided_by: Decider;
-  outcome: StepOutcome;
-  url: string;
-  /**
-   * Human-readable label of the chosen element; never contains a secret value.
-   */
-  target: string | null;
-  confidence: number | null;
-  note: string | null;
-  /**
-   * Facts added to the notes by this step, with resolved secrets redacted.
-   */
-  facts: StepFact[];
-  /**
-   * Whether the page's fingerprint changed; None for steps that do not act (read).
-   */
-  page_changed: boolean | null;
-  duration_ms: number;
-  /**
-   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
-   */
-  choices?: StepChoice[];
-}
-export interface StepFact {
-  text: string;
-  /**
-   * None for a count, total or winner derived from other facts rather than read from the page.
-   */
-  quote: string | null;
-  url: string | null;
-  reader: FactReader;
-  deep_link: string | null;
-}
-export interface StepChoice {
-  id: string;
-  role: string;
-  /**
-   * The label as Jev read it, with resolved secrets masked.
-   */
-  label: string;
-  /**
-   * The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
-   */
-  context: string | null;
-  operations: Operation[];
-  /**
-   * Whether Jev chose this control: the target, and for a drag the destination too.
-   */
-  chosen: boolean;
 }
 /**
  * The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`.

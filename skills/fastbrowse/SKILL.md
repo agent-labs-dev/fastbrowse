@@ -85,4 +85,8 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 Retry only after a concrete change, such as corrected input, a completed sign-in, a resolved provider outage, or a
 site's transient error (a 5xx, a 429, a maintenance page) clearing.
 Before repeating a write, inspect whether it already happened to avoid sending or purchasing twice.
+When an SDK cancellation error carries a receipt, preserve its reported steps, cost lines and recordings.
+A receipt has no success status or answer; unpriced charges remain `unknown`. An MCP runner cancellation
+may carry it in `_meta["fastbrowse.ai/cancellation"]`; client cancellation notifications have none.
+
 CLI usage errors may have no JSON result. Check the error and `--help` rather than inventing a status or answer.

@@ -207,6 +207,10 @@ scrolls to the quote; it may not resolve on a page that changes or needs a sessi
   a run should have used was there to pick. Off, a step has no `choices` key.
 - `on_frame=` gets JPEG frames of the active tab as they render. The handler runs on your event loop, so it
   must honour cancellation: one that swallows `CancelledError` keeps `asyncio.run` waiting at shutdown.
+
+  A cancelled `run_task` raises `fastbrowse.models.RunCancelled`, an `asyncio.CancelledError` with a `receipt`
+  of reported steps, known cost lines and finished recordings once the browser closes. A cancellation before
+  the core starts may have no receipt. The receipt has no status or answer; unpriced charges stay `unknown`.
 - `with traced() as events:` collects the run's trace in-process, as `--trace` writes it.
 
 No frame or screenshot is sent while a resolved secret may show on the page.

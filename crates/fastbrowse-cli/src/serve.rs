@@ -17,9 +17,9 @@ use fastbrowse_core::models::{
     Event, EventHandler, FrameHandler, Image, RunResult, SecretRef, SecretResolver, UntilCheck,
 };
 use fastbrowse_core::protocol::{
-    Error, ErrorCode, ErrorResponse, InitializeParams, InitializeResult, JsonRpc, Method, NoParams, Notification,
-    PROTOCOL_VERSION, Request, RequestId, Response, RunCancelParams, RunEvent, RunFrame, RunParams, RunUntilParams,
-    SecretsResolveParams, ServerMethod, ServerRequest,
+    CancellationReceipt, Error, ErrorCode, ErrorResponse, InitializeParams, InitializeResult, JsonRpc, Method,
+    NoParams, Notification, PROTOCOL_VERSION, Request, RequestId, Response, RunCancelParams, RunEvent, RunFrame,
+    RunParams, RunUntilParams, SecretsResolveParams, ServerMethod, ServerRequest,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text::repr;
@@ -99,14 +99,23 @@ impl Transport for StdioTransport {
 }
 
 /// A request that gets an error reply, raised wherever the reason is found.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Refused {
     pub code: ErrorCode,
     pub message: String,
+    /// The receipt of a cancelled run, which its `cancelled` error carries as `data`.
+    pub data: Option<CancellationReceipt>,
 }
 
 fn refused(code: ErrorCode, message: impl Into<String>) -> Refused {
-    Refused { code, message: message.into() }
+    Refused { code, message: message.into(), data: None }
+}
+
+impl Refused {
+    /// The reply's `error` member.
+    pub fn error(self) -> Error {
+        Error { code: self.code, message: self.message, data: self.data }
+    }
 }
 
 impl From<ConfigurationError> for Refused {
@@ -213,7 +222,7 @@ impl Server {
         let payload: Value = match serde_json::from_slice(line) {
             Ok(payload) => payload,
             Err(error) => {
-                let error = Error { code: ErrorCode::ParseError, message: error.to_string() };
+                let error = refused(ErrorCode::ParseError, error.to_string()).error();
                 return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: None, error }).await;
             }
         };
@@ -226,7 +235,7 @@ impl Server {
         let request: Request = match serde_json::from_value(payload.clone()) {
             Ok(request) => request,
             Err(error) => {
-                let error = Error { code: ErrorCode::InvalidRequest, message: error.to_string() };
+                let error = refused(ErrorCode::InvalidRequest, error.to_string()).error();
                 return self.write(&ErrorResponse { jsonrpc: JsonRpc, id: id_of(&payload), error }).await;
             }
         };
@@ -289,8 +298,7 @@ impl Server {
         // Named in the log as well as the reply, since a notification that was refused has no reply.
         log::warning(&format!("serve: {}", refusal.message));
         if let Some(id) = id {
-            let error = Error { code: refusal.code, message: refusal.message };
-            self.write(&ErrorResponse { jsonrpc: JsonRpc, id: Some(id.clone()), error }).await;
+            self.write(&ErrorResponse { jsonrpc: JsonRpc, id: Some(id.clone()), error: refusal.error() }).await;
         }
     }
 
@@ -526,11 +534,14 @@ pub fn reply(
     match outcome {
         Ok(result) => Ok(result),
         Err(RunError::Configuration(message)) => Err(refused(ErrorCode::Configuration, message)),
-        // A callback's failure stopped the run, and the reply says what the client failed. What the
-        // run did before then is in the events.
-        Err(RunError::Cancelled) => match failure {
-            Some(failure) => Ok(options::error_result(failure.to_string())),
-            None => Err(refused(ErrorCode::Cancelled, format!("run {} was cancelled", repr(run_id)))),
+        // A callback's failure stopped the run, and the reply says what the client failed, with what the run did and
+        // spent before then.
+        Err(RunError::Cancelled(receipt)) => match failure {
+            Some(failure) => Ok(options::cancelled_result(failure.to_string(), receipt)),
+            None => Err(Refused {
+                data: Some(receipt),
+                ..refused(ErrorCode::Cancelled, format!("run {} was cancelled", repr(run_id)))
+            }),
         },
         Err(RunError::UnsupportedSchema(message)) => Err(refused(ErrorCode::UnsupportedSchema, message)),
         Err(RunError::Invalid(message) | RunError::Recording(message)) => {

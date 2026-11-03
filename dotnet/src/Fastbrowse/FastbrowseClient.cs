@@ -141,8 +141,9 @@ public sealed class FastbrowseClient : IAsyncDisposable
     /// </exception>
     /// <exception cref="ProcessExitedException">The fastbrowse process is gone.</exception>
     /// <exception cref="OperationCanceledException">
-    /// <paramref name="cancellationToken"/> stopped the run. It is thrown once the run's browser has closed. A token that
-    /// is already cancelled starts no run.
+    /// <paramref name="cancellationToken"/> stopped the run. It is thrown once the run's browser has closed, as a
+    /// <see cref="RunCancelledException"/> carrying what the run did and spent. A token that is already cancelled
+    /// starts no run.
     /// </exception>
     public async Task<RunResult> RunAsync(string task, RunOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -161,22 +162,31 @@ public sealed class FastbrowseClient : IAsyncDisposable
             {
                 try
                 {
-                    JsonElement result = await reply.ConfigureAwait(false);
+                    JsonElement answered = await reply.ConfigureAwait(false);
+                    RunResult result = answered.Deserialize<RunResult>(Json.Options)
+                        ?? throw new FastbrowseException("the server answered the run with null");
                     if (served.Failure is { } failed)
                     {
                         // A run can finish before the cancellation reaches it, and its callback failed all the same.
-                        return EndedBy(failed);
+                        return EndedBy(failed, new CancellationReceipt
+                        {
+                            Steps = result.Steps,
+                            Cost = result.Cost,
+                            Recordings = result.Recordings,
+                        });
                     }
-                    return result.Deserialize<RunResult>(Json.Options)
-                        ?? throw new FastbrowseException("the server answered the run with null");
+                    return result;
                 }
                 catch (RpcException refused) when (refused.Code == ProtocolConstants.ErrorCancelled)
                 {
                     if (served.Failure is { } failed)
                     {
-                        return EndedBy(failed);
+                        return EndedBy(failed, refused.Receipt);
                     }
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        throw new RunCancelledException(refused.Receipt, refused, cancellationToken);
+                    }
                     throw;
                 }
             }
@@ -311,16 +321,19 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Viewport = browser.Viewport is var (width, height) ? new List<long> { width, height } : null,
     };
 
-    /// <summary>The result of a run that a throwing callback ended, in the shape the server gives one.</summary>
-    private static RunResult EndedBy(string failure) => new()
+    /// <summary>
+    /// The result of a run that a throwing callback ended, in the shape the server gives one, with the steps, cost and
+    /// videos of what it did when the reply carried them.
+    /// </summary>
+    private static RunResult EndedBy(string failure, CancellationReceipt? spent) => new()
     {
         Status = Status.Error,
         Evidence = [],
-        Steps = [],
-        Cost = new CostBreakdown { Lines = [] },
+        Steps = spent?.Steps ?? [],
+        Cost = spent?.Cost ?? new CostBreakdown { Lines = [] },
         Artifacts = [],
         Citations = [],
         Error = failure,
-        Recordings = [],
+        Recordings = spent?.Recordings ?? [],
     };
 }

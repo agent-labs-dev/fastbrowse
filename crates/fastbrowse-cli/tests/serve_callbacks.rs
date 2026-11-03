@@ -46,7 +46,7 @@ impl Browsing {
                         Some(until) => args.host.cancel.guard(until(ORDERS.into())).await?,
                     };
                     if args.host.cancel.is_tripped() {
-                        return Err(RunError::Cancelled);
+                        return Err(RunError::Cancelled(Default::default()));
                     }
                     let status = if accepted { Status::Complete } else { Status::Unverified };
                     Ok(RunResult { final_url: Some(ORDERS.into()), ..result(status) })
@@ -166,7 +166,7 @@ fn typist() -> Arc<dyn Runner> {
             .guard(fastbrowse_core::safety::resolve_secret(&*secrets, "SHOP_PASSWORD", "https://shop.example.com"))
             .await?;
         if args.host.cancel.is_tripped() {
-            return Err(RunError::Cancelled);
+            return Err(RunError::Cancelled(Default::default()));
         }
         Ok(RunResult { answer: Some(format!("typed {}", value.is_some())), ..result(Status::Complete) })
     })

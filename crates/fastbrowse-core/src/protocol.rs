@@ -9,7 +9,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::models::{Authorization, Event, Image, Limits, LocalChrome, RunResult, SecretRef};
+use crate::models::{
+    Authorization, CostBreakdown, Event, Image, Limits, LocalChrome, RunResult, SecretRef, StepResult,
+};
 use crate::py::{base64, lax};
 use crate::schema::{Field, Mode, ModelTy, Schema, Ty, definitions};
 
@@ -161,6 +163,23 @@ pub struct Response {
 pub struct Error {
     pub code: ErrorCode,
     pub message: String,
+    /// What a cancelled run had done, on the `cancelled` error only; absent from every other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<CancellationReceipt>,
+}
+
+/// What a cancelled run did before it stopped: the `data` of its `cancelled` error.
+///
+/// A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed whatever the
+/// run became: the steps it reported, every charge known when it stopped, an unpriced one as an `unknown` line, and
+/// the videos finished before its browser closed. A step cut off before its event was sent was never reported, so it
+/// is not among the steps.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CancellationReceipt {
+    /// Redacted as the step events were.
+    pub steps: Vec<StepResult>,
+    pub cost: CostBreakdown,
+    pub recordings: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -488,7 +507,33 @@ impl Schema for Response {
 
 impl Schema for Error {
     fn ty() -> Ty {
-        message("Error", None, vec![Field::required("code", ErrorCode::ty()), Field::required("message", Ty::Str)]).ty()
+        message(
+            "Error",
+            None,
+            vec![
+                Field::required("code", ErrorCode::ty()),
+                Field::required("message", Ty::Str),
+                Field::default("data", Ty::optional(CancellationReceipt::ty()), Value::Null).omitted_when_empty(),
+            ],
+        )
+        .ty()
+    }
+}
+
+impl Schema for CancellationReceipt {
+    fn ty() -> Ty {
+        message(
+            "CancellationReceipt",
+            Some(
+                "What a cancelled run did before it stopped: the `data` of its `cancelled` error.\n\nA cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed\nwhatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an\n`unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent\nwas never reported, so it is not among the steps.",
+            ),
+            vec![
+                Field::required("steps", Ty::list(StepResult::ty())),
+                Field::required("cost", CostBreakdown::ty()),
+                Field::required("recordings", Ty::list(Ty::Path)),
+            ],
+        )
+        .ty()
     }
 }
 
@@ -743,6 +788,7 @@ pub fn schema() -> Value {
         written(Request::ty()),
         written(Response::ty()),
         written(Error::ty()),
+        written(CancellationReceipt::ty()),
         written(ErrorResponse::ty()),
         written(InitializeParams::ty()),
         written(InitializeResult::ty()),
@@ -785,9 +831,34 @@ mod tests {
         let reply = ErrorResponse {
             jsonrpc: JsonRpc,
             id: None,
-            error: Error { code: ErrorCode::ParseError, message: "bad".into() },
+            error: Error { code: ErrorCode::ParseError, message: "bad".into(), data: None },
         };
         assert_eq!(reply.dump_json(), r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"bad"}}"#);
+    }
+
+    #[test]
+    fn only_a_cancelled_error_carries_a_receipt() {
+        let receipt = CancellationReceipt {
+            cost: CostBreakdown {
+                lines: vec![crate::models::CostLine::new(
+                    crate::models::CostComponent::Jev,
+                    crate::models::CostBasis::Unknown,
+                    None,
+                )],
+            },
+            ..CancellationReceipt::default()
+        };
+        let error = Error { code: ErrorCode::Cancelled, message: "stopped".into(), data: Some(receipt.clone()) };
+        let written = serde_json::to_value(&error).unwrap();
+        assert_eq!(written["data"]["steps"], json!([]));
+        assert_eq!(written["data"]["recordings"], json!([]));
+        // An unpriced charge stays unpriced on the wire: no dollars are made up for it.
+        assert_eq!(written["data"]["cost"]["lines"][0]["basis"], "unknown");
+        assert_eq!(written["data"]["cost"]["lines"][0]["dollars"], Value::Null);
+        assert_eq!(serde_json::from_value::<Error>(written).unwrap(), error);
+        // A client on this protocol that reads no data, and one that is sent none, see the reply as before.
+        let read: Error = serde_json::from_value(json!({"code": -32002, "message": "stopped"})).unwrap();
+        assert_eq!(read.data, None);
     }
 
     #[test]

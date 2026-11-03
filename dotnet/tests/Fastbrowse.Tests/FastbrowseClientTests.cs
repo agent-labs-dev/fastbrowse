@@ -209,15 +209,39 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
         var client = await Scripted("until_cancelled");
         string closed = Path.Combine(Path.GetTempPath(), $"fastbrowse-{Guid.NewGuid():N}");
         using var cancellation = new CancellationTokenSource();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.RunAsync("t", new RunOptions
+        var stopped = await Assert.ThrowsAsync<RunCancelledException>(() => client.RunAsync("t", new RunOptions
         {
             Inputs = new Dictionary<string, string> { ["closed"] = closed },
             OnEvent = _ => cancellation.Cancel(),
         }, cancellation.Token));
         Assert.True(File.Exists(closed), "the run returned before its browser closed");
+        Assert.Equal(cancellation.Token, stopped.CancellationToken);
+        // What the run did and spent before it stopped, with the unpriced browser left unpriced.
+        CancellationReceipt receipt = stopped.Receipt!;
+        Assert.Single(receipt.Steps);
+        Assert.Equal([CostBasis.Metered, CostBasis.Unknown], receipt.Cost.Lines.Select(line => line.Basis));
+        Assert.Equal([0.004, null], receipt.Cost.Lines.Select(line => line.Dollars));
+        Assert.Empty(receipt.Recordings);
         // The process is still there for the next run.
         RunResult next = await client.RunAsync("t", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(Status.Complete, next.Status);
+        File.Delete(closed);
+    }
+
+    [Fact]
+    public async Task ARunAThrowingCallbackStoppedKeepsWhatItDidAndSpent()
+    {
+        var client = await Scripted("until_cancelled");
+        string closed = Path.Combine(Path.GetTempPath(), $"fastbrowse-{Guid.NewGuid():N}");
+        RunResult result = await client.RunAsync("t", new RunOptions
+        {
+            Inputs = new Dictionary<string, string> { ["closed"] = closed },
+            OnEvent = _ => throw new InvalidOperationException("full disk"),
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(Status.Error, result.Status);
+        Assert.Equal("run/event: full disk", result.Error);
+        Assert.Single(result.Steps);
+        Assert.Equal([0.004, null], result.Cost.Lines.Select(line => line.Dollars));
         File.Delete(closed);
     }
 

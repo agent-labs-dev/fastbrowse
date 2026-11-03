@@ -105,7 +105,19 @@ internal sealed class Connection
         // After the notifications before it, so a run's events have all been delivered when its reply is.
         if (message.TryGetProperty("error", out JsonElement error) && error.ValueKind == JsonValueKind.Object)
         {
-            var refused = new RpcException(error.GetProperty("code").GetInt32(), error.GetProperty("message").GetString() ?? "");
+            FastbrowseException refused;
+            try
+            {
+                CancellationReceipt? receipt = error.TryGetProperty("data", out JsonElement data) && data.ValueKind == JsonValueKind.Object
+                    ? data.Deserialize<CancellationReceipt>(Json.Options)
+                    : null;
+                refused = new RpcException(error.GetProperty("code").GetInt32(), error.GetProperty("message").GetString() ?? "", receipt);
+            }
+            catch (JsonException e)
+            {
+                // A receipt that cannot be read is reported as that, not dropped: it holds what the run spent.
+                refused = new FastbrowseException("the cancellation receipt could not be read", e);
+            }
             _delivery.Writer.TryWrite(() => waiting.TrySetException(refused));
         }
         else

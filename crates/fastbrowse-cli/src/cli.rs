@@ -386,7 +386,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     };
     let mut result = match context.runner.run(task, host).await {
         Ok(result) => result,
-        Err(RunError::Cancelled) => options::error_result("the run was cancelled"),
+        Err(RunError::Cancelled(receipt)) => options::cancelled_result("the run was cancelled", receipt),
         Err(error) => return Err(ConfigurationError(error.to_string())),
     };
     if result.status == Status::NeedsLogin {

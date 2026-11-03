@@ -7,7 +7,8 @@ use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
-use fastbrowse_core::models::{LLMPurpose, Status};
+use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status};
+use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::telemetry::Ledger;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask, on_cloud, run_task};
 use indexmap::IndexMap;
@@ -219,7 +220,7 @@ async fn a_cancelled_run_closes_its_connection_before_it_returns() {
     let mut socket = connected.await.unwrap();
     cancel.trip();
     let refused = running.await.unwrap().unwrap_err();
-    assert_eq!(refused, RunError::Cancelled);
+    assert_eq!(refused, RunError::Cancelled(CancellationReceipt::default()));
     // The run has returned, so its end of the connection is closed: what is left to read ends.
     let mut rest = Vec::new();
     let read = tokio::time::timeout(std::time::Duration::from_secs(5), socket.read_to_end(&mut rest)).await;
@@ -334,4 +335,192 @@ async fn test_a_run_takes_a_bot_check_jev_saw_in_the_document_to_the_browser() {
     let result = run(options).await.unwrap();
     assert_eq!(result.status, Status::Error, "{:?}", result.error);
     assert!(result.error.as_deref().is_some_and(|error| error.contains("no browser here")), "{:?}", result.error);
+}
+
+/// Jev as `0` answers it, each call billed a cent, so a test can count what reached the receipt.
+struct Priced<J>(J);
+
+impl<J: DecisionClient> DecisionClient for Priced<J> {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let evaluation = self.0.evaluate(state, questions).await?;
+            Ok(Evaluation { cost: CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.01)), ..evaluation })
+        })
+    }
+}
+
+fn priced(script: Vec<fastbrowse_agent::scripted::Step>) -> Arc<dyn DecisionClient> {
+    Arc::new(Priced(fastbrowse_agent::scripted::ScriptedJev::new(script)))
+}
+
+fn read_step() -> fastbrowse_agent::scripted::Step {
+    fastbrowse_agent::scripted::Step {
+        operation: fastbrowse_core::models::Operation::Read,
+        label: String::new(),
+        pick: None,
+    }
+}
+
+/// A fetched page whose text answers the task.
+fn documented() -> Http {
+    Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+        Box::pin(async {
+            Ok(Response::new(200, "<p>The documented value is 34.</p>").with_header("content-type", "text/html"))
+        })
+    }))
+}
+
+fn cancelled(outcome: Result<fastbrowse_core::models::RunResult, RunError>) -> CancellationReceipt {
+    match outcome {
+        Err(RunError::Cancelled(receipt)) => receipt,
+        other => panic!("the run was not cancelled: {other:?}"),
+    }
+}
+
+fn billed(receipt: &CancellationReceipt) -> usize {
+    receipt.cost.lines.iter().filter(|line| line.basis == CostBasis::Metered && line.dollars == Some(0.01)).count()
+}
+
+#[tokio::test]
+async fn a_run_cancelled_inside_its_event_handler_keeps_the_step_and_what_it_spent() {
+    // The caller's handler never returns from the step event, so the run is stopped while the step is being told.
+    let stepped = Arc::new(tokio::sync::Notify::new());
+    let told = stepped.clone();
+    let cancel = Cancel::default();
+    let options = task(|o, h| {
+        o.fetch = true;
+        o.start = Some("https://docs.example.test/value".into());
+        h.http = Some(documented());
+        h.jev = Some(priced(vec![read_step()]));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.cancel = cancel.clone();
+        h.on_event = Some(Arc::new(move |event| {
+            let told = told.clone();
+            Box::pin(async move {
+                if matches!(event, Event::Step(_)) {
+                    told.notify_one();
+                    std::future::pending::<()>().await;
+                }
+            })
+        }));
+    });
+    let running = tokio::spawn(run(options));
+    stepped.notified().await;
+    cancel.trip();
+    let receipt = cancelled(running.await.unwrap());
+    assert_eq!(receipt.steps.len(), 1, "{:?}", receipt.steps);
+    assert_eq!(receipt.steps[0].operation, fastbrowse_core::models::Operation::Read);
+    assert!(billed(&receipt) > 0, "{:?}", receipt.cost);
+    assert!(receipt.recordings.is_empty());
+}
+
+/// Jev as `inner` answers it until a step has been told, and then a request that never returns. Dropped, that
+/// request records the charge nobody priced, as a provider client records a request it had sent.
+struct HangsAfterAStep {
+    inner: Arc<dyn DecisionClient>,
+    stepped: Arc<std::sync::atomic::AtomicBool>,
+    asked: Arc<tokio::sync::Notify>,
+}
+
+struct Unpriced(Option<fastbrowse_clients::validation::JevSpend>);
+
+impl Drop for Unpriced {
+    fn drop(&mut self) {
+        if let Some(spend) = &self.0 {
+            spend.record([CostLine::new(CostComponent::Jev, CostBasis::Unknown, None)]);
+        }
+    }
+}
+
+impl DecisionClient for HangsAfterAStep {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.inner.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if !self.stepped.load(std::sync::atomic::Ordering::SeqCst) {
+            return self.inner.evaluate(state, questions);
+        }
+        Box::pin(async move {
+            let _sent = Unpriced(fastbrowse_clients::validation::JevSpend::current());
+            self.asked.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_request_dropped_by_cancellation_keeps_its_unknown_charge() {
+    let stepped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let asked = Arc::new(tokio::sync::Notify::new());
+    let cancel = Cancel::default();
+    let jev = HangsAfterAStep { inner: priced(vec![read_step()]), stepped: stepped.clone(), asked: asked.clone() };
+    let options = task(|o, h| {
+        o.fetch = true;
+        o.start = Some("https://docs.example.test/value".into());
+        h.http = Some(documented());
+        h.jev = Some(Arc::new(jev));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.cancel = cancel.clone();
+        h.on_event = Some(Arc::new(move |event| {
+            if matches!(event, Event::Step(_)) {
+                stepped.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Box::pin(async {})
+        }));
+    });
+    let running = tokio::spawn(run(options));
+    asked.notified().await;
+    cancel.trip();
+    let receipt = cancelled(running.await.unwrap());
+    assert_eq!(receipt.steps.len(), 1);
+    assert!(billed(&receipt) > 0, "{:?}", receipt.cost);
+    // The dropped request is counted once, and as unknown: nothing priced it.
+    let unknown: Vec<_> = receipt.cost.lines.iter().filter(|line| line.basis == CostBasis::Unknown).collect();
+    assert_eq!(unknown.len(), 1, "{:?}", receipt.cost);
+    assert_eq!(unknown[0].dollars, None);
+}
+
+#[tokio::test]
+async fn a_run_cancelled_while_its_browser_opens_keeps_what_the_fetched_read_spent() {
+    let http = Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+        let wall = "<html><body><h1>Just a moment...</h1><p>Checking your browser.</p></body></html>";
+        Box::pin(async move { Ok(Response::new(200, wall).with_header("content-type", "text/html")) })
+    }));
+    let opening = Arc::new(tokio::sync::Notify::new());
+    let asked = opening.clone();
+    let cancel = Cancel::default();
+    let options = task(|o, h| {
+        h.jev = Some(Arc::new(Priced(SeesBotCheck(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new())))));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        o.start = Some("https://shop.example/app".into());
+        h.http = Some(http);
+        h.cancel = cancel.clone();
+        // The caller's browser never opens, so the run is stopped after the read and before any browser step.
+        h.open_browser = Some(Arc::new(move || {
+            let asked = asked.clone();
+            Box::pin(async move {
+                asked.notify_one();
+                std::future::pending().await
+            })
+        }));
+    });
+    let running = tokio::spawn(run(options));
+    opening.notified().await;
+    cancel.trip();
+    let receipt = cancelled(running.await.unwrap());
+    assert!(billed(&receipt) > 0, "the fetched read's spend was lost: {:?}", receipt.cost);
+    assert!(receipt.recordings.is_empty());
 }

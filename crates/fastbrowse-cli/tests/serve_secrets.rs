@@ -52,7 +52,7 @@ impl Typist {
                         .guard(fastbrowse_core::safety::resolve_secret(&*secrets, name, origin))
                         .await?;
                     if args.host.cancel.is_tripped() {
-                        return Err(RunError::Cancelled);
+                        return Err(RunError::Cancelled(Default::default()));
                     }
                     typist.resolved.lock().unwrap().push(value);
                     (args.host.on_event.as_ref().unwrap())(step_event(index as i64 + 1, None)).await;

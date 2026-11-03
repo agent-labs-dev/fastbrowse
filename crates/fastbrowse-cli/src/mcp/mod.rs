@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
 use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, RunResult, SecretRef, SecretValue, Status};
+use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Floats, Style};
 use fastbrowse_core::py::text::{self, repr};
@@ -602,7 +603,25 @@ enum ToolFailure {
     /// `ToolError` and every other exception in the tool, which FastMCP prefixes with the tool's name.
     Tool(String),
     Unknown(String),
+    /// A run that stopped before it finished, with what it did and spent.
+    Cancelled(CancellationReceipt),
 }
+
+impl From<String> for ToolFailure {
+    fn from(message: String) -> ToolFailure {
+        ToolFailure::Tool(message)
+    }
+}
+
+impl From<&str> for ToolFailure {
+    fn from(message: &str) -> ToolFailure {
+        ToolFailure::Tool(message.into())
+    }
+}
+
+/// Where a failed `browse` call keeps the receipt of a run that was cancelled. A namespaced `_meta` key, since an
+/// SDK client checks `structuredContent` against the tool's `outputSchema`, and a receipt is not a browse result.
+const RECEIPT_META: &str = "fastbrowse.ai/cancellation";
 
 impl McpServer {
     pub fn new(config: ServerConfig, runner: Arc<dyn Runner>) -> Arc<McpServer> {
@@ -757,11 +776,18 @@ impl McpServer {
                             response(&id, result)
                         }
                         Some(Err(failure)) => {
-                            let text = match failure {
-                                ToolFailure::Tool(message) => format!("Error executing tool browse: {message}"),
-                                ToolFailure::Unknown(name) => format!("Unknown tool: {name}"),
+                            let (text, receipt) = match failure {
+                                ToolFailure::Tool(message) => (format!("Error executing tool browse: {message}"), None),
+                                ToolFailure::Unknown(name) => (format!("Unknown tool: {name}"), None),
+                                ToolFailure::Cancelled(receipt) => {
+                                    ("Error executing tool browse: the run was cancelled".to_string(), Some(receipt))
+                                }
                             };
-                            response(&id, json!({"content": [{"type": "text", "text": text}], "isError": true}))
+                            let mut result = json!({"content": [{"type": "text", "text": text}], "isError": true});
+                            if let Some(receipt) = receipt {
+                                result["_meta"] = json!({RECEIPT_META: receipt.dump()});
+                            }
+                            response(&id, result)
                         }
                     };
                     outbox(reply);
@@ -784,7 +810,7 @@ impl McpServer {
             return Err(ToolFailure::Unknown(name.to_string()));
         }
         let arguments = Browse::read(arguments).map_err(ToolFailure::Tool)?;
-        self.browse(arguments, token, cancel, outbox).await.map_err(ToolFailure::Tool)
+        self.browse(arguments, token, cancel, outbox).await
     }
 
     async fn browse(
@@ -793,7 +819,7 @@ impl McpServer {
         token: Option<Value>,
         cancel: crate::runner::Cancel,
         outbox: &Outbox,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, ToolFailure> {
         let config = &self.config;
         let origin = arguments.start.as_deref().map(start_origin).transpose()?;
         if arguments.authorize && !config.allow_authorize {
@@ -874,14 +900,14 @@ impl McpServer {
                 Err(_) => {
                     cancel.trip();
                     let seconds = json::float(limits.max_seconds.unwrap_or_default(), Floats::Repr);
-                    return Err(format!("the run overran max_seconds={seconds} and was abandoned"));
+                    return Err(format!("the run overran max_seconds={seconds} and was abandoned").into());
                 }
             },
         };
         let result = match outcome {
             Ok(result) => result,
-            Err(RunError::Cancelled) => return Err("the run was cancelled".into()),
-            Err(error) => return Err(error.to_string()),
+            Err(RunError::Cancelled(receipt)) => return Err(ToolFailure::Cancelled(receipt)),
+            Err(error) => return Err(error.to_string().into()),
         };
         let live_url = live_url.lock().unwrap_or_else(|p| p.into_inner()).clone();
         Ok(browse_result(&result, live_url.as_deref(), config))
