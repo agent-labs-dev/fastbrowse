@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A composed answer keeps only claims Jev judges supported by their cited quotes, including which record each value belongs to. A claim with no support or no judgment is withheld, and the answer ends `unverified` rather than `complete`.
+
 - A read that adds evidence renews recovery even when it happens before an action. Reading the same evidence again does not renew it.
 
 - **A slow page is waited for instead of restarted.** Behind Browser Use's proxy, DTE Energy's scripts took 35 s each and its page became ready after 45 s, while each of the four navigation tries waited 15 s and then loaded the page again from the start, so no try ever finished and every attempt at the task ended `unavailable` before its first step. Each try now waits twice as long as the one before, so a page that is slow rather than stuck is ready on a later try.

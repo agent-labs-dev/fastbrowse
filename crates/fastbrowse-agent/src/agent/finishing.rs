@@ -152,20 +152,23 @@ impl Agent {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             match self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await? {
                 Some(chosen) => Some(chosen),
-                None => Some(self.trace.phase("compose", compose(&*self.llm, &task, &notes, Some(&ledger))).await?),
+                None => Some(
+                    self.trace.phase("compose", compose(&*self.jev, &*self.llm, &task, &notes, Some(&ledger))).await?,
+                ),
             }
         } else {
             draft_answer(&state.notes)
         };
         let mut answer_text = None;
         let mut citations = Vec::new();
+        let answer_problem = answered.as_ref().and_then(|answer| answer.problem.clone());
         if let Some(composed) = answered {
             let (text, cited) = self.public_answer(&composed);
-            answer_text = Some(text);
+            answer_text = (!text.is_empty()).then_some(text);
             citations = cited;
         }
         let mut data = Value::Null;
-        let mut status = Status::Complete;
+        let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
         if let Some(extraction) = extraction {
             data = extraction.data.unwrap_or(Value::Null);
             evidence.extend(extraction.evidence);
@@ -180,6 +183,7 @@ impl Agent {
             cited.entry((item.url.clone(), item.quote.clone())).or_insert(item);
         }
         let outcome = Outcome {
+            error: answer_problem,
             answer: answer_text,
             data,
             evidence: cited.into_values().collect(),

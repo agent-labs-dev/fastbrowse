@@ -4,7 +4,7 @@ fastbrowse splits a browser agent into three owners:
 
 - **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled ends `unverified`.
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled or a composed claim that cannot be supported ends `unverified`.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
@@ -62,9 +62,11 @@ with all their source contexts. When Jev says the answer must be composed, every
 answer is written once, when the run ends.
 
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
-text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes, and a claim
-citing nothing the notes hold is dropped, so every claim stands on its quotes. Otherwise the answer is drafted from
-the facts Jev picked.
+text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
+each final claim against its original cited quotes, including record identity and values, after any packing rounds.
+A claim with no cited quote, no support or no judgment is withheld, and the answer ends `unverified` rather than
+`complete`. A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev
+picked.
 
 ## Prompt limits and progress
 

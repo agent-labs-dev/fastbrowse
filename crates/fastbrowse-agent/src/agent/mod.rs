@@ -343,7 +343,9 @@ impl Agent {
                 let notes = if state.compose { state.notes_to_compose() } else { state.notes.clone() };
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 if state.compose
-                    && let Ok(composed) = compose(&*self.llm, &state.task, &notes, Some(&state.ledger)).await
+                    && let Ok(composed) =
+                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&state.ledger)).await
+                    && !composed.claims.is_empty()
                 {
                     let partial = marked_partial(composed);
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);

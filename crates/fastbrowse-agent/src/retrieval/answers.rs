@@ -6,6 +6,8 @@ use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
 use fastbrowse_core::models::{Citation, CostComponent, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::py::dump::Dump;
+use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use fastbrowse_core::telemetry::Ledger;
@@ -13,6 +15,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 use crate::memory::{Notes, fact_id};
 use crate::support::generate;
@@ -39,6 +42,9 @@ pub struct ComposedAnswer {
     pub claims: Vec<Claim>,
     #[serde(default)]
     pub citations: Vec<Citation>,
+    /// A composed claim lacked support, or its support could not be judged.
+    #[serde(skip)]
+    pub problem: Option<String>,
 }
 
 impl Schema for Claim {
@@ -95,6 +101,7 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes) -> ComposedAnswer {
         answer: claims.iter().map(|claim| claim.text.as_str()).collect::<Vec<_>>().join("\n\n"),
         linked_answer: linked.join("\n\n"),
         claims: claims.to_vec(),
+        problem: None,
         citations: known.iter().filter(|(key, _)| cited.contains(key)).map(|(_, citation)| citation.clone()).collect(),
     }
 }
@@ -256,14 +263,14 @@ async fn compose_part(
         .data
         .claims
         .into_iter()
-        .filter_map(|claim| {
+        .map(|claim| {
             let cited: Vec<String> = claim
                 .evidence_ids
                 .iter()
                 .filter_map(|id| items.iter().find(|item| item.label == *id))
                 .flat_map(|item| item.sources.iter().cloned())
                 .collect();
-            (!cited.is_empty()).then(|| Claim::new(&claim.text, cited))
+            Claim::new(&claim.text, cited)
         })
         .collect();
     Ok((draft.data.columns, claims))
@@ -301,9 +308,10 @@ async fn compose_packed(
     }
 }
 
-/// The answer Jev said must be composed, written by the LLM from the notes. A claim citing nothing the notes hold is
-/// dropped: every claim stands on its quotes.
+/// The answer Jev said must be composed, written from the notes. Jev judges the final claims against their original
+/// quotes; rejected or unjudged claims are withheld, and `problem` prevents an unverified answer ending complete.
 pub async fn compose(
+    jev: &dyn DecisionClient,
     llm: &dyn LLMClient,
     task: &str,
     notes: &Notes,
@@ -319,7 +327,79 @@ pub async fn compose(
         }
         _ => compose_part(llm, task, &items, ledger).await?,
     };
-    Ok(tabled(columns, assemble_answer(&claims, notes)))
+    let (claims, problem) = supported_claims(jev, task, columns.as_deref(), claims, notes, ledger).await?;
+    Ok(tabled(columns, ComposedAnswer { problem, ..assemble_answer(&claims, notes) }))
+}
+
+async fn supported_claims(
+    jev: &dyn DecisionClient,
+    task: &str,
+    columns: Option<&[String]>,
+    claims: Vec<Claim>,
+    notes: &Notes,
+    ledger: Option<&Ledger>,
+) -> Result<(Vec<Claim>, Option<String>)> {
+    if claims.is_empty() {
+        return Ok((claims, Some("The composer returned no supported claims.".into())));
+    }
+    let questions: IndexMap<String, Question> = claims
+        .iter()
+        .enumerate()
+        .filter_map(|(index, claim)| {
+            let sources: Vec<_> = notes
+                .expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))
+                .iter()
+                .filter_map(|id| notes.facts_by_id().get(id))
+                .filter_map(|fact| fact.evidence.as_ref())
+                .map(|evidence| json!(evidence))
+                .collect();
+            if sources.is_empty() {
+                return None;
+            }
+            let cited = json!({"columns": columns, "claim": claim.text, "quotes": sources});
+            let question = NoulQuestion::new(
+                format!("{UNTRUSTED}\nDoes this claim follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record.\n{cited}"),
+                Some("Every assertion is supported by these quotes."),
+                Some("An assertion changes a value, belongs to another record, or has no support in these quotes."),
+            );
+            Some((format!("claim{index}"), Question::Noul(question)))
+        })
+        .collect();
+    // A known citation can still be attached to another record's value, so Jev judges the original quotes after
+    // every packing round has finished, rather than the intermediate prose those rounds wrote.
+    let tokens = jev.profile().fit(None).tokens;
+    let state = json!({"task": task});
+    let state_chars = text::len(&dumps(&state)) as i64;
+    let oversized = questions.values().any(|question| state_chars > tokens.input_chars(&[question.dump_json()]));
+    let (answered, failure) = match evaluate_batches(jev, &state, &questions, &tokens, ledger, None, false).await {
+        Ok(answered) => (answered, None),
+        Err(AgentError::Jev(error)) => (None, Some(format!("Jev could not judge composed claims: {error}"))),
+        Err(error) => return Err(error),
+    };
+    let count = claims.len();
+    let missing = questions.keys().any(|key| answered.as_ref().is_none_or(|pass| !pass.answers.contains_key(key)));
+    let supported = claims
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, claim)| {
+            let answer = answered.as_ref()?.answers.get(&format!("claim{index}"))?;
+            matches!(answer, Answer::Noul(answer) if answer.probability > 0.5).then_some(claim)
+        })
+        .collect::<Vec<_>>();
+    let problem = failure.or_else(|| {
+        if oversized {
+            Some("A composed claim's quotes exceed the decision model's input limits.".into())
+        } else if questions.len() != count {
+            Some("A composed claim has no retained source quote.".into())
+        } else if missing {
+            Some("Jev left a composed claim's support unanswered.".into())
+        } else if supported.len() != count {
+            Some("A composed claim is unsupported by its cited quotes.".into())
+        } else {
+            None
+        }
+    });
+    Ok((supported, problem))
 }
 
 fn initial_items(facts: &[&crate::memory::Fact]) -> Vec<ComposeItem> {
@@ -449,6 +529,8 @@ pub fn draft_answer(notes: &Notes) -> Option<ComposedAnswer> {
 mod tests {
     use std::sync::Mutex;
 
+    use serde_json::Value;
+
     use fastbrowse_core::BoxFuture;
     use fastbrowse_core::llm::{Generation, LLMError, ResponseSchema};
     use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Evidence, FactReader};
@@ -459,7 +541,13 @@ mod tests {
     fn answer(claims: &[&str]) -> ComposedAnswer {
         let claims: Vec<Claim> = claims.iter().map(|text| Claim::new(text, vec!["f".into()])).collect();
         let linked = claims.iter().map(|claim| format!("{} [1](<https://shop.test/>)", claim.text)).collect::<Vec<_>>();
-        ComposedAnswer { answer: String::new(), linked_answer: linked.join("\n\n"), claims, citations: Vec::new() }
+        ComposedAnswer {
+            answer: String::new(),
+            linked_answer: linked.join("\n\n"),
+            claims,
+            citations: Vec::new(),
+            problem: None,
+        }
     }
 
     #[test]
@@ -476,11 +564,12 @@ mod tests {
     struct RecordingLlm {
         context: Option<i64>,
         calls: Mutex<Vec<Vec<Message>>>,
+        claims: Option<Vec<Claim>>,
     }
 
     impl RecordingLlm {
         fn new(context: Option<i64>) -> RecordingLlm {
-            RecordingLlm { context, calls: Mutex::new(Vec::new()) }
+            RecordingLlm { context, calls: Mutex::new(Vec::new()), claims: None }
         }
 
         fn calls(&self) -> Vec<Vec<Message>> {
@@ -504,8 +593,10 @@ mod tests {
                 .filter_map(|line| line.split_once(": ").map(|(id, _)| id.to_string()))
                 .filter(|id| id.starts_with('e') || id.starts_with('c'))
                 .collect();
+            let reply = self.claims.clone();
             Box::pin(async move {
-                let claims = ids.into_iter().map(|id| json!({"text": id, "evidence_ids": [id]})).collect::<Vec<_>>();
+                let claims =
+                    reply.unwrap_or_else(|| ids.into_iter().map(|id| Claim::new(&id, vec![id.clone()])).collect());
                 let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
                 Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
             })
@@ -514,6 +605,60 @@ mod tests {
         fn context_tokens(&self, _: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
             let context = self.context;
             Box::pin(async move { context })
+        }
+    }
+
+    struct Support {
+        accept: Option<bool>,
+        fail: bool,
+        asked: Mutex<Vec<IndexMap<String, Question>>>,
+    }
+
+    impl Support {
+        fn new(accept: bool) -> Self {
+            Self { accept: Some(accept), fail: false, asked: Mutex::new(Vec::new()) }
+        }
+    }
+
+    impl DecisionClient for Support {
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            use fastbrowse_core::decision::{Evaluation, NoulAnswer, NoulTag};
+            self.asked.lock().unwrap().push(questions.clone());
+            Box::pin(async move {
+                if self.fail {
+                    return Err(fastbrowse_core::decision::DecisionError::Failed("support unavailable".into()));
+                }
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers: questions
+                        .keys()
+                        .filter_map(|key| {
+                            self.accept.map(|accept| {
+                                (
+                                    key.clone(),
+                                    Answer::Noul(NoulAnswer {
+                                        kind: NoulTag,
+                                        probability: if accept { 0.9 } else { 0.1 },
+                                    }),
+                                )
+                            })
+                        })
+                        .collect(),
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
         }
     }
 
@@ -534,12 +679,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compose_does_not_publish_a_claim_its_citation_does_not_state() {
+        let mut source = fact(0, "Record B: 34".into());
+        source.evidence.as_mut().unwrap().control_context = Some(fastbrowse_core::models::SourceControl {
+            role: "button".into(),
+            label: "Record B".into(),
+            context: Some("right panel".into()),
+        });
+        let notes = Notes::new([source]);
+        let llm = RecordingLlm {
+            claims: Some(vec![Claim::new("Record A: 99", vec!["e0".into()])]),
+            ..RecordingLlm::new(None)
+        };
+        let jev = Support::new(false);
+        let answer = compose(&jev, &llm, "Report each record's value", &notes, None).await.unwrap();
+        assert!(answer.claims.is_empty());
+        assert!(answer.problem.is_some());
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(question) = &asked[0]["claim0"] else { panic!("support is a yes-or-no question") };
+        assert!(question.instructions.contains("Record A: 99"));
+        assert!(question.instructions.contains("Record B: 34"));
+        assert!(question.instructions.contains("right panel"));
+    }
+
+    #[tokio::test]
+    async fn a_claim_with_no_known_source_is_unverified_even_if_jev_would_accept_it() {
+        let notes = Notes::new([fact(0, "Record B: 34".into())]);
+        let llm = RecordingLlm {
+            claims: Some(vec![Claim::new("Record A: 99", vec!["unknown".into()])]),
+            ..RecordingLlm::new(None)
+        };
+        let jev = Support::new(true);
+        let answer = compose(&jev, &llm, "Report each record's value", &notes, None).await.unwrap();
+        assert!(answer.claims.is_empty());
+        assert!(answer.problem.is_some());
+        assert!(jev.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_support_question_withholds_the_claim() {
+        let notes = Notes::new([fact(0, "Record B: 34".into())]);
+        let llm = RecordingLlm::new(None);
+        let mut jev = Support::new(true);
+        jev.accept = None;
+        let answer = compose(&jev, &llm, "Report each record's value", &notes, None).await.unwrap();
+        assert!(answer.claims.is_empty());
+        assert!(answer.problem.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_claim_over_the_decision_models_limit_reports_why_it_was_unjudged() {
+        let text = "x".repeat(fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4);
+        let notes = Notes::new([fact(0, text)]);
+        let llm = RecordingLlm::new(None);
+        let jev = Support::new(true);
+        let answer = compose(&jev, &llm, "Report the source", &notes, None).await.unwrap();
+        assert!(answer.claims.is_empty());
+        assert!(answer.problem.unwrap().contains("input limits"));
+        assert!(jev.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_support_call_reports_the_provider_error() {
+        let notes = Notes::new([fact(0, "Record B: 34".into())]);
+        let llm = RecordingLlm::new(None);
+        let mut jev = Support::new(true);
+        jev.fail = true;
+        let answer = compose(&jev, &llm, "Report the source", &notes, None).await.unwrap();
+        assert!(answer.claims.is_empty());
+        assert!(answer.problem.unwrap().contains("support unavailable"));
+    }
+
+    #[tokio::test]
     async fn compose_keeps_the_fitting_request_unchanged() {
         let notes = Notes::new([fact(0, "A fact".into())]);
         let unconstrained = RecordingLlm::new(None);
-        compose(&unconstrained, "Find it", &notes, None).await.unwrap();
+        compose(&Support::new(true), &unconstrained, "Find it", &notes, None).await.unwrap();
         let constrained = RecordingLlm::new(Some(i64::MAX));
-        compose(&constrained, "Find it", &notes, None).await.unwrap();
+        compose(&Support::new(true), &constrained, "Find it", &notes, None).await.unwrap();
         assert_eq!(unconstrained.calls(), constrained.calls());
     }
 
@@ -564,7 +781,13 @@ mod tests {
         );
 
         let llm = RecordingLlm::new(Some(limit as i64));
-        let answer = compose(&llm, "Find it", &notes, None).await.unwrap();
+        let jev = Support::new(true);
+        let answer = compose(&jev, &llm, "Find it", &notes, None).await.unwrap();
+        assert!(answer.problem.is_none());
+        let checked = serde_json::to_string(&*jev.asked.lock().unwrap()).unwrap();
+        for index in 0..4 {
+            assert!(checked.contains(&format!("fact {index}")));
+        }
         let calls = llm.calls();
         assert!(calls.len() > 1);
         assert!(calls.iter().all(|messages| estimated_context_bytes(messages) <= limit));

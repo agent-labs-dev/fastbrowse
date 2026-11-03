@@ -1509,6 +1509,80 @@ async fn test_a_winner_jev_picks_from_the_notes_needs_no_composing() {
     assert!(answer.answer.contains("Shop A") && !answer.answer.contains("Shop B"));
 }
 
+/// Jev asks for composition, then rejects the composer's claim.
+struct RejectComposed;
+
+impl DecisionClient for RejectComposed {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let answer = match question {
+                    Question::Choice(_) => Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "work".into(),
+                        probabilities: IndexMap::new(),
+                        confidence: 1.0,
+                    }),
+                    _ => Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.0 }),
+                };
+                (key.clone(), answer)
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+struct WrongRecord;
+
+impl LLMClient for WrongRecord {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            let data = schema
+                .validate_json(&json!({"claims": [{"text": "Record A: 99", "evidence_ids": ["e0"]}]}).to_string())
+                .map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_rejected_composed_claims_cannot_end_complete() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(RejectComposed), Arc::new(WrongRecord));
+    let mut state = run_state();
+    state.compose = true;
+    let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
+    state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let result = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
+    assert_eq!(result.status, Status::Unverified);
+    assert!(!result.answer.unwrap_or_default().contains("Record A: 99"));
+    assert!(result.citations.is_empty());
+    assert!(result.error.unwrap().contains("unsupported"));
+    let ledger = state.ledger.clone();
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    assert_eq!(stopped.status, Status::Stuck);
+    assert_eq!(stopped.error.as_deref(), Some("no_progress (3)"));
+    assert!(!stopped.answer.unwrap_or_default().contains("Record A: 99"));
+    assert!(!stopped.evidence.is_empty());
+}
+
 #[test]
 fn test_a_control_that_added_and_stays_may_hold_more() {
     let click = |added| {
