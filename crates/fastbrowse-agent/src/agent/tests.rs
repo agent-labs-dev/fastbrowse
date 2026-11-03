@@ -1722,3 +1722,15 @@ async fn test_a_step_limited_composing_run_reports_what_it_read() {
     assert_eq!(ledger.state().llm_calls, 1);
     assert_eq!(ledger.check(0.0).unwrap_err().budget.resource, fastbrowse_core::models::BudgetResource::Steps);
 }
+
+#[test]
+fn test_a_synthesis_read_reports_the_source_material_it_kept() {
+    let mut state = run_state();
+    state.compose = true;
+    let page = capture(&[(BlockKind::Paragraph, "Elapsed time 0:03")]);
+    state.notes.add(Fact::read("Elapsed time 0:03", block_evidence(&page, "s0"), FactReader::JevChoice));
+    assert_eq!(
+        state.read_note(),
+        "Read this content. The notes hold source material for an answer that still needs composing."
+    );
+}

@@ -407,11 +407,7 @@ impl Agent {
                 self.trace.phase("read", Box::pin(self.read(state, capture, observation, false))).await?;
             progressed = Some(read_progress);
             changed = false;
-            let text = if state.notes.answered() {
-                "Read this content. The notes hold evidence that answers the task."
-            } else {
-                "Read this content. The notes hold nothing that answers the task."
-            };
+            let text = state.read_note();
             let text = self.redact(text);
             effect_now = Some(text.clone());
             act = ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: Some(text), moved: false };

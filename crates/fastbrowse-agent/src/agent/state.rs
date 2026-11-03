@@ -272,7 +272,16 @@ impl RunState {
         self.site_failure.as_ref().filter(|failure| failure.url == url && failure.transient()).map(|f| f.url.clone())
     }
 
-    /// This run on a new page under `ledger`: everything it learned, and nothing about an action still in flight.
+    pub fn read_note(&self) -> &'static str {
+        if self.notes.answered() {
+            "Read this content. The notes hold evidence that answers the task."
+        } else if self.compose && (!self.notes.evidence().is_empty() || !self.read_whole.is_empty()) {
+            "Read this content. The notes hold source material for an answer that still needs composing."
+        } else {
+            "Read this content. The notes hold nothing that answers the task."
+        }
+    }
+
     /// The notes with the pages read for one fact whole.
     pub fn notes_to_compose(&self) -> Notes {
         let mut notes = self.notes.clone();

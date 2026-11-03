@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A synthesis read reports the source material it kept.** After collecting notes for a composed answer, the next decision was told that nothing answered the task. The read now distinguishes source material awaiting composition from an empty read, leaving Jev to judge whether the task is done.
+
 - **A PDF opened in a new tab is captured before its viewer loads.** Popup adoption waited until after the first response, losing the document text even though direct navigation read it. New pages now wait for download capture before starting; unrelated tabs are resumed and left alone.
 
 - **A step-limited run can report the notes it collected.** A task needing a composed answer returned no answer when its browser steps ran out. Final reporting now uses those notes while keeping the original budget status and enforcing the remaining dollar, time and model-call limits.
