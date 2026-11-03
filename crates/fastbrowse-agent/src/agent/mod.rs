@@ -212,15 +212,16 @@ impl Agent {
         let mut slot: Option<RunState> = None;
         let resume = options.resume.take();
         let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
-            let running = async {
-                match self.body(task, &options, resume, &ledger, &mut slot).await {
+            let running = Box::pin(async {
+                let body = Box::pin(self.body(task, &options, resume, &ledger, &mut slot));
+                match body.await {
                     Ok(result) => (result, true, false),
                     Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
                         (blocked_without_browser(message), false, true)
                     }
                     Err(flow) => (self.stopped(flow, slot.as_mut(), &ledger).await, false, false),
                 }
-            };
+            });
             // Reporting can await providers too, so the same deadline must cover the stop path.
             let outcome = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline.into(), running).await.ok(),
