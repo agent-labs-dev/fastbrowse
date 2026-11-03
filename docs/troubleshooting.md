@@ -130,7 +130,7 @@ A local Chrome that fastbrowse starts itself picks its own DevTools port and wri
 `DevToolsActivePort` in its profile directory, which the run reads. If Chrome exits first, or does not write
 a port it then answers on within 90 seconds, the run fails before any status is reported, with
 `Chrome exited with status <code> before DevTools started` or `Chrome did not start DevTools within 90s`.
-Both messages end with Chrome's own last output, which names the cause; fix that and run again.
+Both messages end with Chrome's complete diagnostic output, which names the cause; fix that and run again.
 
 ## budget_exceeded (exit 7)
 

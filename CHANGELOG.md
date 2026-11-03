@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Local Chrome startup errors preserve the complete diagnostic, so a crash stack cannot hide the cause.
+
 - A blank document after navigation waits on its loading events before it reaches Jev or renews recovery. Only the untouched opening page may be reloaded.
 
 - Action history compares controls within their document, so navigation and reloads do not invent field edits from reused control IDs.
