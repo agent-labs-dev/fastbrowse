@@ -137,7 +137,10 @@ impl Agent {
                         continue;
                     };
                     if let Some(replay) = state.replay.as_mut() {
-                        replay.confirm(&offered.url, &offered.controls, &mut decision);
+                        let missing = decision.target.as_ref().is_some_and(|target| {
+                            state.missing.contains(&(offered.url.clone(), target.label.clone(), target.context.clone()))
+                        });
+                        replay.confirm(&offered.url, &offered.controls, &mut decision, missing);
                     }
                     state.last_page = Some(page);
                     decision

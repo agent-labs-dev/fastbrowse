@@ -4,6 +4,7 @@
 use fastbrowse_core::models::Operation;
 use fastbrowse_core::page::{Action, Control};
 use fastbrowse_core::recipe::{self, Recipe, RecipePage, RecipeStep, RecipeTarget, RecipeText};
+use fastbrowse_core::safety::is_password;
 
 use crate::policy::Decision;
 
@@ -27,11 +28,18 @@ impl Replay {
     }
 
     /// Reads and completion stay live without consuming a saved browser action.
-    pub fn confirm(&mut self, url: &str, offered: &[Control], decision: &mut Decision) {
+    pub fn confirm(&mut self, url: &str, offered: &[Control], decision: &mut Decision, missing: bool) {
         if !recorded(decision.operation) {
             return;
         }
         if self.matching_step(url, offered, decision).is_some() {
+            if decision.operation == Operation::Fill
+                && decision.target.as_ref().and_then(|target| self.text_for(target, missing)).is_none()
+            {
+                self.pending.take();
+                self.fell_back += 1;
+                return;
+            }
             decision.replayed = true;
         }
     }
@@ -94,6 +102,17 @@ impl Replay {
     /// The text a replayed fill types, from the step being carried out.
     pub fn text(&self) -> Option<&RecipeText> {
         self.pending.and_then(|index| self.steps[index].text.as_ref())
+    }
+
+    pub fn text_for(&self, target: &Control, missing: bool) -> Option<&RecipeText> {
+        if missing || is_password(target) {
+            return None;
+        }
+        match self.text()? {
+            RecipeText::Literal(_) if target.sensitive => None,
+            RecipeText::Live => None,
+            source => Some(source),
+        }
     }
 
     /// The decision handed out was carried out, or was not.
@@ -261,15 +280,44 @@ mod tests {
         let page = [button("new:4", "Continue")];
         for _ in 0..8 {
             let mut read = code_decision(Operation::Read, None);
-            replay.confirm(URL, &page, &mut read);
+            replay.confirm(URL, &page, &mut read, false);
             assert!(!read.replayed);
         }
         let mut click = code_decision(Operation::Click, Some(page[0].clone()));
-        replay.confirm(URL, &page, &mut click);
+        replay.confirm(URL, &page, &mut click, false);
         assert!(click.replayed);
         replay.settled(true);
         assert_eq!(replay.replayed, 1);
         assert!(!replay.active());
+    }
+
+    #[test]
+    fn a_saved_literal_is_not_reused_when_the_live_field_becomes_sensitive() {
+        let mut email = Control::new("email", "textbox", "Email", [Operation::Fill]);
+        let (decision, action) = fill(email.clone(), "ada@example.test", false);
+        let saved = step_of(URL, &decision, &action, None, |_| false).unwrap();
+        email.sensitive = true;
+        let (mut decision, _) = fill(email.clone(), "", false);
+        let mut replay = replay(vec![saved]);
+        replay.confirm(URL, &[email], &mut decision, false);
+        assert!(!decision.replayed);
+        assert!(replay.text().is_none());
+        replay.settled(true);
+        assert_eq!(replay.replayed, 0);
+    }
+
+    #[test]
+    fn a_missing_field_uses_a_live_value_without_counting_reuse() {
+        let email = Control::new("email", "textbox", "Email", [Operation::Fill]);
+        let (mut decision, action) = fill(email.clone(), "ada@example.test", false);
+        let saved = step_of(URL, &decision, &action, None, |_| false).unwrap();
+        let mut replay = replay(vec![saved]);
+        replay.confirm(URL, &[email], &mut decision, true);
+        assert!(!decision.replayed);
+        assert!(replay.text().is_none());
+        replay.followed(URL, &decision);
+        assert!(!replay.active());
+        assert_eq!((replay.replayed, replay.fell_back), (0, 1));
     }
 
     #[test]
@@ -279,7 +327,7 @@ mod tests {
         let saved = step_of(URL, &decision, &action, None, |_| false).unwrap();
         let scroll = RecipeStep { operation: Operation::Scroll, target: None, text: None, ..saved.clone() };
         let mut replay = replay(vec![scroll, saved]);
-        replay.confirm(URL, &[email], &mut decision);
+        replay.confirm(URL, &[email], &mut decision, false);
         assert!(decision.replayed);
         assert_eq!(replay.text(), Some(&RecipeText::Literal("ada@example.test".into())));
         replay.settled(true);
@@ -296,7 +344,7 @@ mod tests {
             step_of(URL, &name_decision, &name_action, None, |_| false).unwrap(),
             step_of(URL, &decision, &email_action, None, |_| false).unwrap(),
         ]);
-        replay.confirm(URL, &[name, email], &mut decision);
+        replay.confirm(URL, &[name, email], &mut decision, false);
         assert!(decision.replayed);
         assert_eq!(replay.text(), Some(&RecipeText::Literal("ada@example.test".into())));
     }

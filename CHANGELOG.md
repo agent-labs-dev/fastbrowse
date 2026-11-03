@@ -106,6 +106,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Local Chrome startup errors preserve the complete diagnostic, so a crash stack cannot hide the cause.
 - Cancelled Jev image requests retain a documented request-cost bound instead of counting base64 as text tokens. Budget admission uses the same bound; answered requests keep their reported usage.
 - Jev cost receipts identify action selection, authorization, relevance, reads, verification and visual location separately from LLM planning, composing and filling.
+- Recipe replay counts a fill as reused only when its saved value can be used on the live field. Missing values and fields whose sensitivity changed keep live attribution.
+
+- Jev cost receipts identify action selection, authorization, relevance, reads, verification and visual location separately from LLM planning, composing and filling.
 
 - Cancelled Jev image requests retain a documented request-cost bound instead of counting base64 as text tokens. Budget admission uses the same bound; answered requests keep their reported usage.
 

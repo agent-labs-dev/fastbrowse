@@ -422,17 +422,18 @@ impl Agent {
     ) -> Step<String> {
         let origin = self.target_origin(target);
         state.text_source = Some(RecipeText::Live);
-        let recorded = (decision.replayed
-            && !state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone())))
-        .then(|| state.replay.as_ref().and_then(super::replay::Replay::text).cloned())
-        .flatten();
+        let missing = state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone()));
+        let recorded = decision
+            .replayed
+            .then(|| state.replay.as_ref().and_then(|replay| replay.text_for(target, missing)).cloned())
+            .flatten();
         if let Some(source) = recorded {
             match source {
-                RecipeText::Literal(text) if !target.sensitive && !is_password(target) => {
+                RecipeText::Literal(text) => {
                     state.text_source = Some(RecipeText::Literal(text.clone()));
                     return Ok(text);
                 }
-                RecipeText::Input(name) if !is_password(target) => {
+                RecipeText::Input(name) => {
                     let value = state
                         .inputs
                         .get(&name)
@@ -441,14 +442,14 @@ impl Agent {
                     state.text_source = Some(RecipeText::Input(name));
                     return Ok(value);
                 }
-                RecipeText::Secret(name) if !is_password(target) => {
+                RecipeText::Secret(name) => {
                     let value = self
                         .secret(&name, &origin, target.sensitive || asks_for_credentials(&self.raw_target(target)))
                         .await?;
                     state.text_source = Some(RecipeText::Secret(name));
                     return Ok(value);
                 }
-                RecipeText::Literal(_) | RecipeText::Input(_) | RecipeText::Secret(_) | RecipeText::Live => {}
+                RecipeText::Live => {}
             }
         }
         if is_password(target) {
