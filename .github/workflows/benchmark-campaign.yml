@@ -86,7 +86,7 @@ on:
       suites:
         description: Space separated Parallax suites
         required: true
-        default: "core dev heldout stretch-dev stretch-heldout"
+        default: "core dev stretch-dev"
       smoke:
         description: One repeat to find bugs from traces. Never publishable; with groups all it runs the head-to-head group
         required: true
@@ -112,7 +112,7 @@ concurrency:
 
 env:
   UV_PYTHON: "3.13"
-  SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev heldout stretch-dev stretch-heldout' }}
+  SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev stretch-dev' }}
   # A smoke run has one repeat whatever `repeat` says.
   REPEAT: ${{ (inputs.smoke || github.event.client_payload.smoke == true) && '1' || inputs.repeat || github.event.client_payload.repeat || '3' }}
   BUDGET: ${{ inputs.budget || github.event.client_payload.budget || '300' }}
@@ -155,8 +155,8 @@ jobs:
           test "${#chosen[@]}" -gt 0 || { echo "::error::suites names no suite"; exit 1; }
           for suite in "${chosen[@]}"; do
             case "$suite" in
-              core|dev|heldout|stretch-dev|stretch-heldout) ;;
-              *) echo "::error::suites must be core, dev, heldout, stretch-dev or stretch-heldout, got '$suite'"; exit 1 ;;
+              core|dev|stretch-dev) ;;
+              *) echo "::error::suites must be core, dev or stretch-dev, got '$suite'"; exit 1 ;;
             esac
           done
           for key in groups suites; do

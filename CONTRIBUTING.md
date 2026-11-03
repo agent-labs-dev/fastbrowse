@@ -66,8 +66,8 @@ FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml ver
 python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
 (cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx)
 uv run actionlint
-uv run python .sift/agents.py check
-uv run python .sift/gate.py --base origin/main
+uv run python .sloppatrol/agents.py check
+uv run python .sloppatrol/gate.py --base origin/main
 just rust
 ```
 
@@ -75,7 +75,7 @@ The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-
 `packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. The Go, Java and .NET tests run
 against the binary from `cargo build -p fastbrowse-cli --features scripted`, and need Go, Java 17 or newer with
 Maven, and .NET 10. Audit evidence commands and tool limits are in the
-[sift project skill](.agents/skills/sift-project/SKILL.md).
+[Sloppatrol project skill](.agents/skills/sloppatrol-project/SKILL.md).
 
 The protocol's messages are the types in `crates/fastbrowse-core/src/protocol.rs` and the models those use, and
 `protocol/schema.json` is their JSON Schema. After changing one, run
@@ -106,18 +106,21 @@ not have.
 Unit tests cannot tell whether the agent still browses well, so a change to prompts, choices, recovery or
 verification needs eval results in the PR, in this order:
 
-1. Run `heldout` on `main` before changing anything. That is the baseline.
+1. Run `core` on `main` before changing anything. That is the baseline.
 2. Make and iterate on the change against `dev` only.
-3. Run `heldout` again on the finished change, and never tune against it.
+3. Run `core` again on the finished change, and never tune against it.
+
+The held-out suite this used to name is gone: Parallax moved its tasks into `dev`, so a dev task may be one the
+fix was designed against. Say so in the PR when that is true.
 
 Run these commands in the maintainer's Parallax checkout:
 
 ```sh
-uv run --extra browser parallax browser internal --arms fastbrowse --suite heldout --repeat 3
+uv run --extra browser parallax browser internal --arms fastbrowse --suite core --repeat 3
 uv run --extra browser parallax browser internal --arms fastbrowse --suite dev --repeat 3
 ```
 
-Paste the pass counts, time and cost from the final `dev` run and both `heldout` runs. A handful of runs on one site shows the change can
+Paste the pass counts, time and cost from the final `dev` run and both `core` runs. A handful of runs on one site shows the change can
 help; the suites show it does not hurt elsewhere.
 
 The agent must work on any site, so a rule written for one site, such as matching a label only Google uses,
