@@ -226,16 +226,12 @@ pub(crate) fn step_of(
         },
         _ => None,
     };
-    let option = (decision.operation == Operation::Select).then(|| action.text.clone()).flatten();
-    if option.as_deref().is_some_and(&reveals) {
-        return None;
-    }
     Some(RecipeStep {
         operation: decision.operation,
         page,
         target: saved_target,
         text,
-        option,
+        option: None,
         read_first: decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS),
         replay,
     })
@@ -404,6 +400,20 @@ mod tests {
         let (decision, action) = fill(password, "must not be recorded", false);
         let step = step_of(URL, &decision, &action, None, |_| false).unwrap();
         assert!(step.text.is_none());
+        assert!(!step.replayable());
+    }
+
+    #[test]
+    fn live_select_choices_are_not_saved_as_recipe_values() {
+        let target = Control::new("shipping", "combobox", "Shipping", [Operation::Select]);
+        let decision = code_decision(Operation::Select, Some(target.clone()));
+        let action = Action {
+            target_id: Some(target.id),
+            text: Some("current cheapest".into()),
+            ..Action::new(Operation::Select)
+        };
+        let step = step_of(URL, &decision, &action, None, |_| false).unwrap();
+        assert!(step.option.is_none());
         assert!(!step.replayable());
     }
 

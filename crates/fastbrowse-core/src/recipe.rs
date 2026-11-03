@@ -223,7 +223,6 @@ impl RecipeStep {
             && (!self.operation.is_targeted() || self.target.is_some())
             && (self.operation != Operation::Fill
                 || self.text.as_ref().is_some_and(|text| !matches!(text, RecipeText::Live)))
-            && (self.operation != Operation::Select || self.option.is_some())
     }
 }
 
