@@ -1022,6 +1022,23 @@ async fn test_a_value_whose_end_is_picked_before_its_beginning_asks_for_the_end_
 }
 
 #[tokio::test]
+async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
+    let field = "Capacity: 12";
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = 1;
+    state.unchanged = 2;
+    let page = capture(&[(BlockKind::Paragraph, field)]);
+    assert!(agent.read(&mut state, page.clone(), &observation(&[]), true).await.expect("new evidence"));
+    assert_eq!((state.unchanged, state.recoveries), (0, 0));
+
+    state.recoveries = 1;
+    state.unchanged = 2;
+    assert!(!agent.read(&mut state, page, &observation(&[]), true).await.expect("repeated evidence"));
+    assert_eq!((state.unchanged, state.recoveries), (2, 1));
+}
+
+#[tokio::test]
 async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
     let field = "Date Picker 2: 27/12/2026";
     let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));

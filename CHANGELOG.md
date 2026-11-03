@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A read that adds evidence renews recovery even when it happens before an action. Reading the same evidence again does not renew it.
+
 - **A slow page is waited for instead of restarted.** Behind Browser Use's proxy, DTE Energy's scripts took 35 s each and its page became ready after 45 s, while each of the four navigation tries waited 15 s and then loaded the page again from the start, so no try ever finished and every attempt at the task ended `unavailable` before its first step. Each try now waits twice as long as the one before, so a page that is slow rather than stuck is ready on a later try.
 - **Eval attempts have no time limit.** Publication required every attempt to have stopped at 10 minutes and scored one still running then as DNF, a failure. That limit was set by the eval harness, not by any benchmark or provider: a Zara listing task that reached 600 s with its answer half composed counted as failed. Publication now refuses a run that records any time, step or spend limit, as Parallax sets none.
 - **A PDF is read as the text it holds.** Chrome draws a PDF in its own viewer, whose text never reaches the page, so a run on DTE Energy that opened its renewable project map read only the viewer's toolbar and switched between tabs until it stopped with no answer, though every wind and solar farm on the map is text in the file. A PDF, whether shown in a tab or downloaded, is now read as a downloaded text file is: the run sees its text and cites the file. A scanned PDF, which holds only images, still reads as empty.

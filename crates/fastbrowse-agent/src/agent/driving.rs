@@ -406,9 +406,6 @@ impl Agent {
             let read_progress =
                 self.trace.phase("read", Box::pin(self.read(state, capture, observation, false))).await?;
             progressed = Some(read_progress);
-            if read_progress {
-                renew(state);
-            }
             changed = false;
             let text = if state.notes.answered() {
                 "Read this content. The notes hold evidence that answers the task."
@@ -658,7 +655,7 @@ impl Agent {
             {
                 state.site_failure = None;
             }
-            renew(state);
+            state.recoveries = 0;
         }
         if let Some(stalled) = state.landing.take() {
             let progressed = last.is_none_or(|seen_at| seen_at < state.evidence_reads);
@@ -940,11 +937,6 @@ impl Agent {
         self.page.withhold_frames(revealed);
         revealed
     }
-}
-
-/// A new page state or new evidence restores the recovery budget.
-fn renew(state: &mut RunState) {
-    state.recoveries = 0;
 }
 
 /// Rewriting the observed field value vetoes progress even when the page changes, and the first new value a field

@@ -75,6 +75,8 @@ impl Agent {
         });
         if progressed {
             state.evidence_reads += 1;
+            state.unchanged = 0;
+            state.recoveries = 0;
         }
         Ok(progressed)
     }
