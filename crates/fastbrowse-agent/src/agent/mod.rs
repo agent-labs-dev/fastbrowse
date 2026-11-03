@@ -325,16 +325,24 @@ impl Agent {
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
     async fn stopped(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+        let (flow, exhausted) = match flow {
+            Flow::Agent(AgentError::Budget(error)) => {
+                (Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.to_string())), Some(error.budget))
+            }
+            flow => (flow, None),
+        };
         if let Flow::Stop(stop) = &flow
             && let Some(state) = state
         {
             // A stop's message can quote the page, such as a field's label, and a page can echo a typed secret there;
             // redacting at each raise missed one, so every stop is redacted here before the caller sees it.
             let error = stop.error.as_deref().map(|error| self.redact(error));
-            // Only a stop on the clock is a budget stop; spend limits raise their own error.
-            let budget = (stop.status == Status::BudgetExceeded).then(|| BudgetStop {
-                resource: BudgetResource::Seconds,
-                limit: ledger.limits.max_seconds.unwrap_or_default(),
+            // Loop clock stops have no typed budget error; other limits retain their original resource.
+            let budget = exhausted.or_else(|| {
+                (stop.status == Status::BudgetExceeded).then(|| BudgetStop {
+                    resource: BudgetResource::Seconds,
+                    limit: ledger.limits.max_seconds.unwrap_or_default(),
+                })
             });
             if matches!(stop.status, Status::Stuck | Status::Unverified | Status::BudgetExceeded)
                 && !state.notes.evidence().is_empty()
@@ -342,9 +350,9 @@ impl Agent {
                 // What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
                 let notes = if state.compose { state.notes_to_compose() } else { state.notes.clone() };
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
+                let reporting = ledger.for_answer();
                 if state.compose
-                    && let Ok(composed) =
-                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&state.ledger)).await
+                    && let Ok(composed) = compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting)).await
                     && !composed.claims.is_empty()
                 {
                     let partial = marked_partial(composed);
@@ -366,17 +374,9 @@ impl Agent {
                     state,
                     ledger,
                     stop.status,
-                    Outcome { error, evidence: stop.evidence, wall, ..Outcome::default() },
+                    Outcome { error, evidence: stop.evidence, wall, budget: exhausted, ..Outcome::default() },
                 )
             }
-            Flow::Agent(AgentError::Budget(error)) => self.partial_result(
-                &notes(),
-                state,
-                ledger,
-                Status::BudgetExceeded,
-                Some(error.to_string()),
-                Some(error.budget),
-            ),
             Flow::Agent(AgentError::NotesTooLarge(message)) => {
                 let message = self.redact(&message);
                 self.partial_result(&notes(), state, ledger, Status::ObservationLimit, Some(message), None)

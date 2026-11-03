@@ -1509,10 +1509,10 @@ async fn test_a_winner_jev_picks_from_the_notes_needs_no_composing() {
     assert!(answer.answer.contains("Shop A") && !answer.answer.contains("Shop B"));
 }
 
-/// Jev asks for composition, then rejects the composer's claim.
-struct RejectComposed;
+/// A composer claim can be accepted or rejected without a paid decision.
+struct ComposeSupport(bool);
 
-impl DecisionClient for RejectComposed {
+impl DecisionClient for ComposeSupport {
     fn evaluate<'a>(
         &'a self,
         _: &'a serde_json::Value,
@@ -1528,7 +1528,10 @@ impl DecisionClient for RejectComposed {
                         probabilities: IndexMap::new(),
                         confidence: 1.0,
                     }),
-                    _ => Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.0 }),
+                    _ => Answer::Noul(NoulAnswer {
+                        kind: Default::default(),
+                        probability: if self.0 { 1.0 } else { 0.0 },
+                    }),
                 };
                 (key.clone(), answer)
             })
@@ -1551,9 +1554,12 @@ impl LLMClient for WrongRecord {
         _: LLMPurpose,
         _: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        _: Option<&'a Ledger>,
+        ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
+            if let Some(ledger) = ledger {
+                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
+            }
             let data = schema
                 .validate_json(&json!({"claims": [{"text": "Record A: 99", "evidence_ids": ["e0"]}]}).to_string())
                 .map_err(LLMError::Failed)?;
@@ -1564,7 +1570,7 @@ impl LLMClient for WrongRecord {
 
 #[tokio::test]
 async fn test_rejected_composed_claims_cannot_end_complete() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(RejectComposed), Arc::new(WrongRecord));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(ComposeSupport(false)), Arc::new(WrongRecord));
     let mut state = run_state();
     state.compose = true;
     let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
@@ -1695,4 +1701,24 @@ async fn test_a_run_the_clock_stopped_answers_from_what_it_read() {
     assert_eq!(result.status, Status::BudgetExceeded);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Pine capacity 10")));
     assert_eq!(result.budget.map(|budget| budget.limit), Some(100.0));
+}
+
+#[tokio::test]
+async fn test_a_step_limited_composing_run_reports_what_it_read() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(ComposeSupport(true)), Arc::new(WrongRecord));
+    let mut state = run_state();
+    state.compose = true;
+    state.ledger = Arc::new(Ledger::new(Limits { max_steps: Some(1), ..Limits::default() }));
+    state.ledger.state().steps = 1;
+    let page = capture(&[(BlockKind::Paragraph, "Record A: 99")]);
+    state.notes.add(Fact::read("Record A: 99", block_evidence(&page, "s0"), FactReader::JevChoice));
+    let ledger = state.ledger.clone();
+    let error = ledger.check(0.0).unwrap_err();
+    let result = agent.stopped(Flow::Agent(error.into()), Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert_eq!(result.budget.unwrap().resource, fastbrowse_core::models::BudgetResource::Steps);
+    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record A: 99")));
+    assert!(!result.evidence.is_empty());
+    assert_eq!(ledger.state().llm_calls, 1);
+    assert_eq!(ledger.check(0.0).unwrap_err().budget.resource, fastbrowse_core::models::BudgetResource::Steps);
 }

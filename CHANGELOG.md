@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A step-limited run can report the notes it collected.** A task needing a composed answer returned no answer when its browser steps ran out. Final reporting now uses those notes while keeping the original budget status and enforcing the remaining dollar, time and model-call limits.
+
 - Fetch-only runs can finish with cited text when step frames are enabled. A fetched document has no screenshot, so optional frames are skipped.
 
 - A composed answer keeps only claims Jev judges supported by their cited quotes, including which record each value belongs to. A claim with no support or no judgment is withheld, and the answer ends `unverified` rather than `complete`.

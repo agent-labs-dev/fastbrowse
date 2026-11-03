@@ -76,10 +76,10 @@ step request shows Jev the whole viewport, working notes and history; one that d
 oldest actions first and then has its long texts cut, each cut saying what it left out. Cut page text carries a marker
 when there is room for one; an excerpt too small to carry the marker is empty.
 
-A money or time limit keeps collected facts and their citations in a partial answer. The status stays
-`budget_exceeded`, and producing the partial answer makes no additional model calls, with one exception: a run
-whose answer must be composed stops browsing a tenth of its time limit (at most 60 s) early, and composes the
-partial answer from its notes within the limit. A time budget stops
+A money, time or step limit keeps collected facts and their citations in a partial answer. The status stays
+`budget_exceeded`. A run whose answer must be composed can make reporting calls after its last browser step;
+these calls share the run's receipts and still obey its dollar, time and model-call limits. A composing run
+stops browsing a tenth of its time limit (at most 60 s) early to write that partial answer within the limit. A time budget stops
 active work; the return also waits for owned requests and browser cleanup. Injected clients must honor
 cancellation and finish their cleanup. Returning while a paid request still runs would lose its cost receipt.
 

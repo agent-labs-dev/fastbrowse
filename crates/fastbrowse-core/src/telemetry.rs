@@ -67,13 +67,26 @@ pub struct Ledger {
     pub limits: Limits,
     /// When the run's clock started; None while it has not, so no call can run over a time limit before the run
     /// takes the ledger over.
-    started: Mutex<Option<Instant>>,
-    state: Mutex<LedgerState>,
+    started: Arc<Mutex<Option<Instant>>>,
+    state: Arc<Mutex<LedgerState>>,
 }
 
 impl Ledger {
     pub fn new(limits: Limits) -> Ledger {
-        Ledger { limits, started: Mutex::new(Some(Instant::now())), state: Mutex::new(LedgerState::default()) }
+        Ledger {
+            limits,
+            started: Arc::new(Mutex::new(Some(Instant::now()))),
+            state: Arc::new(Mutex::new(LedgerState::default())),
+        }
+    }
+
+    /// Final reporting spends calls and dollars but performs no further browser steps.
+    pub fn for_answer(&self) -> Ledger {
+        Ledger {
+            limits: Limits { max_steps: None, ..self.limits.clone() },
+            started: self.started.clone(),
+            state: self.state.clone(),
+        }
     }
 
     pub fn started(&self) -> Option<Instant> {
@@ -412,6 +425,28 @@ mod tests {
         assert_eq!(error.budget.resource, BudgetResource::Steps);
         assert_eq!(error.budget.limit, 1.0);
         assert_eq!(error.status(), Status::BudgetExceeded);
+    }
+
+    #[test]
+    fn final_reporting_shares_receipts_and_keeps_spend_and_call_limits() {
+        let ledger = Ledger::new(Limits {
+            max_steps: Some(1),
+            max_dollars: Some(1.0),
+            max_llm_calls: Some(1),
+            ..Limits::default()
+        });
+        ledger.state().steps = 1;
+        let reporting = ledger.for_answer();
+        reporting.reserve(CostComponent::Llm, 0.25, 1).unwrap();
+        reporting.record([CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.25))]).unwrap();
+        assert_eq!(ledger.breakdown().known_dollars(), 0.25);
+        assert_eq!(ledger.state().llm_calls, 1);
+        assert_eq!(
+            reporting.reserve(CostComponent::Llm, 0.0, 1).unwrap_err().budget.resource,
+            BudgetResource::LlmCalls
+        );
+        assert_eq!(reporting.reserve(CostComponent::Jev, 1.0, 1).unwrap_err().budget.resource, BudgetResource::Dollars);
+        assert_eq!(ledger.check(0.0).unwrap_err().budget.resource, BudgetResource::Steps);
     }
 
     #[test]
