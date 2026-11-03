@@ -178,9 +178,11 @@ struct ComposeItem {
 
 const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and write each claim as one row: its cells in column order, separated by \" | \", with no other text. Otherwise set columns to null.\n\n# Trust\n";
 
+const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
+
 fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
     [
-        Message::system(format!("{COMPOSER}{UNTRUSTED}")),
+        Message::system(format!("{DESCRIPTIVE_VALUES}\n\n{COMPOSER}{UNTRUSTED}")),
         Message::user(format!("# Task\n{task}\n\n# Notes\n{}", written.join("\n"))),
     ]
 }
@@ -370,7 +372,7 @@ async fn supported_claims(
         for (key, focus) in checks {
             let question = NoulQuestion::new(
                 format!(
-                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record.\n{cited}"
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record.\n{cited} {DESCRIPTIVE_VALUES}"
                 ),
                 Some("Every assertion being judged is supported by these quotes."),
                 Some(
@@ -742,6 +744,17 @@ mod tests {
         assert!(shape.instructions.contains("Shape"));
         assert!(shape.instructions.contains("regular fit"));
         assert!(shape.instructions.contains("Record A | not shown"));
+        assert!(shape.instructions.contains("A value stated in descriptive prose counts"));
+        assert!(shape.instructions.contains("A statement that a value is not shown contradicts such a value"));
+        assert!(shape.instructions.contains("do not infer a value from a merely related detail"));
+    }
+
+    #[test]
+    fn composition_uses_descriptive_values_without_requiring_field_labels() {
+        let messages = compose_messages("Report each record's dimensions", &[]);
+        assert!(messages[0].content.contains("Interpret the requested field by its meaning"));
+        assert!(messages[0].content.contains("A value stated in descriptive prose counts"));
+        assert!(messages[0].content.contains("do not infer a value from a merely related detail"));
     }
 
     #[tokio::test]

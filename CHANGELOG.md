@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Composed answers and their support checks use values expressed in descriptions even when no heading names the requested field, instead of treating a missing label as a missing value.
+
 - Jev can leave a focused editable field with `blur`, without pressing another control, so it can observe the page's field-leaving validation. Observations expose optional `Control.focused`, and the operation enum adds `blur`; strict clients must update before reading these new fields and steps. A changed focus is reported without claiming a value was accepted.
 
 - Earlier typing is reported as an attempt, without assuming the page rejected it. Field-value selection can restore a requested value that the page changed, while rewriting an unchanged value still counts as no progress.

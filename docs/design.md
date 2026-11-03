@@ -78,6 +78,8 @@ Answer claims use numbered Markdown links built from those notes. `RunResult.cit
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.
+The composer and support check interpret a requested field by its meaning: descriptive prose can supply its
+value without a matching heading, and that value contradicts a claim that the field was not shown.
 A claim with no cited quote, no support or no judgment is withheld, and the answer ends `unverified` rather than
 `complete`. A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev
 picked.
