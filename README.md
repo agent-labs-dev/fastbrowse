@@ -177,6 +177,8 @@ Pass `recipe=Path("recipe.json")` with the same task to reuse values when Jev se
 A changed page or control falls back to the agent. Reading and completion are always checked live.
 Naming the same file for both arguments saves the healed sequence after another completed run.
 Recipes can contain personal information from ordinary fields; stored secrets are kept only by name.
+`fastbrowse.recipes.validate_recipe()` checks recipe JSON with the same Rust parser as the file loader;
+`recipe_schema()` exports its JSON Schema for client validation.
 `record=Path("run.mp4")` writes captioned and plain videos with an action cursor, and needs ffmpeg.
 
 **Your own script on the page.** `connect_cdp()` hands you the attached page without the agent:

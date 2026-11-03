@@ -10,6 +10,7 @@ use url::Url;
 
 use crate::models::Operation;
 use crate::page::Control;
+use crate::schema::{Field, ModelTy, Schema, Ty};
 
 pub const RECIPE_VERSION: u32 = 1;
 
@@ -96,19 +97,19 @@ pub struct RecipeStep {
 }
 
 impl Recipe {
+    /// Validate the same document before accepting an upload or opening a recipe file.
+    pub fn from_json(text: &str) -> Result<Recipe, String> {
+        let recipe: Recipe = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        if recipe.version != RECIPE_VERSION {
+            return Err(format!("recipe version {}; this fastbrowse reads version {RECIPE_VERSION}", recipe.version));
+        }
+        Ok(recipe)
+    }
+
     /// Read a recipe file, refusing one written in a format this version does not know.
     pub fn load(path: &std::path::Path) -> Result<Recipe, String> {
         let text = std::fs::read_to_string(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        let recipe: Recipe =
-            serde_json::from_str(&text).map_err(|error| format!("{} is not a recipe: {error}", path.display()))?;
-        if recipe.version != RECIPE_VERSION {
-            return Err(format!(
-                "{} is recipe version {}; this fastbrowse reads version {RECIPE_VERSION}",
-                path.display(),
-                recipe.version
-            ));
-        }
-        Ok(recipe)
+        Self::from_json(&text).map_err(|error| format!("{} is not a recipe: {error}", path.display()))
     }
 
     /// Refuse an unwritable destination before a browser run can change the site.
@@ -126,6 +127,81 @@ impl Recipe {
         file.persist(path).map_err(|error| error.error)?;
         Ok(())
     }
+}
+
+/// The file contract, shared by embedders and client generators.
+pub fn schema() -> serde_json::Value {
+    crate::schema::json_schema(&Recipe::ty())
+}
+
+impl Schema for Recipe {
+    fn ty() -> Ty {
+        recipe_model(
+            "Recipe",
+            vec![
+                Field::required("version", Ty::Literal(vec![RECIPE_VERSION.into()])),
+                Field::required("task", Ty::Str),
+                Field::default("start", Ty::optional(Ty::Str), serde_json::Value::Null),
+                Field::required("steps", Ty::list(RecipeStep::ty())),
+            ],
+        )
+    }
+}
+
+impl Schema for RecipePage {
+    fn ty() -> Ty {
+        let mut fields = vec![Field::required("origin", Ty::Str), Field::required("path", Ty::Str)];
+        fields.extend(optional_text(&["query", "fragment"]));
+        recipe_model("RecipePage", fields)
+    }
+}
+
+impl Schema for RecipeTarget {
+    fn ty() -> Ty {
+        let mut fields = vec![Field::required("role", Ty::Str), Field::required("label", Ty::Str)];
+        fields.extend(optional_text(&["context", "href", "input_type", "input_name", "frame_origin"]));
+        recipe_model("RecipeTarget", fields)
+    }
+}
+
+impl Schema for RecipeText {
+    fn ty() -> Ty {
+        Ty::Union(vec![
+            Ty::literal("live"),
+            ModelTy::frozen("RecipeLive", vec![Field::required("live", Ty::Null)]).ty(),
+            ModelTy::frozen("RecipeLiteral", vec![Field::required("literal", Ty::Str)]).ty(),
+            ModelTy::frozen("RecipeInput", vec![Field::required("input", Ty::Str)]).ty(),
+            ModelTy::frozen("RecipeSecret", vec![Field::required("secret", Ty::Str)]).ty(),
+        ])
+    }
+}
+
+impl Schema for RecipeStep {
+    fn ty() -> Ty {
+        recipe_model(
+            "RecipeStep",
+            vec![
+                Field::required("operation", Operation::ty()),
+                Field::required("page", RecipePage::ty()),
+                Field::default("target", Ty::optional(RecipeTarget::ty()), serde_json::Value::Null),
+                Field::default("text", Ty::optional(RecipeText::ty()), serde_json::Value::Null),
+                Field::default("option", Ty::optional(Ty::Str), serde_json::Value::Null),
+                Field::default("read_first", Ty::Bool, false),
+                Field::default("replay", Ty::Bool, true),
+            ],
+        )
+    }
+}
+
+fn recipe_model(name: &str, fields: Vec<Field>) -> Ty {
+    // Serde also reads structs as positional arrays, with defaults for omitted trailing fields.
+    let required = fields.iter().rposition(|field| field.default.is_none()).map_or(0, |index| index + 1);
+    let sequence = Ty::Tuple(fields.iter().map(|field| field.ty.clone()).collect()).constrained("minItems", required);
+    Ty::Union(vec![ModelTy::frozen(name, fields).ty(), sequence])
+}
+
+fn optional_text(names: &[&str]) -> Vec<Field> {
+    names.iter().map(|name| Field::default(name, Ty::optional(Ty::Str), serde_json::Value::Null)).collect()
 }
 
 fn temporary(path: &std::path::Path) -> std::io::Result<tempfile::NamedTempFile> {

@@ -409,6 +409,19 @@ fn monotonic() -> f64 {
     fastbrowse_core::telemetry::monotonic()
 }
 
+/// Validate and normalize a recipe using the file loader's own parser.
+#[pyfunction]
+fn validate_recipe(text: &str) -> PyResult<String> {
+    let recipe = fastbrowse_core::recipe::Recipe::from_json(text).map_err(PyValueError::new_err)?;
+    serde_json::to_string(&recipe).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// The recipe file schema, described by the Rust types.
+#[pyfunction]
+fn recipe_schema() -> String {
+    fastbrowse_core::recipe::schema().to_string()
+}
+
 /// `fastbrowse.origins.origin_of`: the origin the document grant compares, or None for no http(s) address.
 #[pyfunction]
 fn origin_of(url: &str) -> Option<String> {
@@ -490,6 +503,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;
     m.add_function(wrap_pyfunction!(monotonic, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_recipe, m)?)?;
+    m.add_function(wrap_pyfunction!(recipe_schema, m)?)?;
     m.add_function(wrap_pyfunction!(origin_of, m)?)?;
     m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
     m.add_function(wrap_pyfunction!(secret_origin, m)?)?;

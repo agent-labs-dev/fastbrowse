@@ -206,6 +206,12 @@ Reading, answering and the check for `complete` always run live. A recipe is not
 has succeeded. After a mismatch, live actions can advance the saved sequence; repeated mismatches leave the rest
 to the agent. A recipe save failure is written to server stderr without losing the completed run's result. SDK responses do not carry that warning; callers that require the file should check it exists on the server.
 
+The public Python `fastbrowse.recipes.validate_recipe()` accepts a JSON string, UTF-8 bytes or a dictionary
+and returns the normalized recipe, including defaults. Unsupported versions and invalid fields raise
+`ValueError` before a browser opens. `recipe_schema()` exports the Rust-owned file schema, also kept in
+`protocol/recipe.schema.json`. Format validation does not prove that a control exists or authorize an action.
+To regenerate the schema, run `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrowse-core --test recipe_schema`.
+
 ## Cursor feedback
 
 The run shows where the agent is about to act, through the Cua Driver's synthetic cursor, whenever its tab is on
