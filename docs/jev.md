@@ -103,15 +103,19 @@ LLM uses `FASTBROWSE_LLM_BASE_URL` when it is set, otherwise OpenRouter when key
 OpenRouter and direct TypeSafe use the gateway as backup when keyed; the gateway uses OpenRouter
 when keyed, otherwise direct TypeSafe. A selected source without its key is a configuration error.
 
-If a retryable HTTP status outlasts the first provider's retry budget, the client repeats the evaluation through the backup
+For Jev, if a retryable HTTP status outlasts the first provider's retry budget, the client repeats the evaluation through the backup
 provider and stays there for the rest of the run. A second outage raises; providers never alternate.
 Concurrent evaluations already in flight may finish on the first provider.
 
-Request and authentication errors, malformed answers, transport failures without a final retryable HTTP
+For Jev, request and authentication errors, malformed answers, transport failures without a final retryable HTTP
 status, and cancellation do not switch providers. Without a configured backup, exhausted retries raise an error.
 `FASTBROWSE_DECISION_BASE_URL` or an explicit `FASTBROWSE_DECISION_MODEL` disables automatic failover: a backup
 must not bypass a proxy or silently replace a pinned model. Default backups use their own public endpoint,
 key and model (`jev-1.14` on OpenRouter, `jev-1.14.0` on direct TypeSafe, `typesafe-ai/jev-1.14.0` through the gateway).
+
+For the LLM, an automatically selected OpenRouter route with `AI_GATEWAY_API_KEY` beside it switches to the
+gateway when OpenRouter refuses its API key, and stays there for the rest of the run. Other errors do not trigger
+this switch. An explicit `FASTBROWSE_LLM_PROVIDER` or `FASTBROWSE_LLM_BASE_URL` disables this automatic backup.
 
 OpenRouter's `usage.cost` and the gateway's reported cost are metered dollars. Missing cost, or $0 with
 input tokens, uses Jev's list-price estimate. Direct TypeSafe responses without cost keep that estimate.

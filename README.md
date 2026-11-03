@@ -56,8 +56,9 @@ uvx fastbrowse "What is the title of the top story right now?" --start https://n
 
 With a Browser Use key the cloud browser is the default, because it passes bot checks a fresh local Chrome fails;
 it also prints a URL to watch the run live. Without the key or `--local`, the command stops and asks for one.
-`AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. Jev can also run
-through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
+`AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. With both keys,
+the automatically selected OpenRouter LLM moves to the gateway for the rest of the run if OpenRouter refuses its key.
+Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
 [Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
 
 Keys can live in a `.env` file in the working directory ([`.env.example`](.env.example) lists every setting), but
