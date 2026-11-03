@@ -60,3 +60,10 @@ def test_a_doubt_warns_and_never_fails() -> None:
     )
     assert warnings == ["::warning file=docs/x.md,title=Jev review::prose not supported by diff (p=0.80)"]
     assert "| `README.md`: prose not supported by diff | 0.10 | ok |" in text
+
+
+def test_files_a_tool_wrote_are_not_judged() -> None:
+    assert jev_review._generated("crates/fastbrowse-agent/tests/golden/agent.json")
+    assert jev_review._generated("Cargo.lock")
+    assert jev_review._generated("docs/results/evidence.public.json")
+    assert not jev_review._generated("crates/fastbrowse-agent/src/agent/mod.rs")

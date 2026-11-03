@@ -37,6 +37,12 @@ _PROSE_CHARS = 6_000
 _DOUBT = 0.5
 # Generated from the code or the published rows, and checked by tests: nothing for a model to judge.
 _GENERATED = ("docs/results/",)
+# Recorded fixtures and lockfiles a tool writes: a refreshed golden is megabytes of one-line JSON that no prose
+# describes line by line, and judging it sent thousands of requests at once.
+_RECORDED = ("/tests/golden/",)
+_LOCKFILES = ("Cargo.lock", "uv.lock", "package-lock.json", "pnpm-lock.yaml", "go.sum")
+# Requests in flight at once, so a large diff queues at the provider's pace instead of all timing out together.
+_CONCURRENT = 8
 # What a user of the package or its CLI can notice: the code, and the metadata that names its entry points and
 # the Pythons and dependencies it installs with.
 _USER_VISIBLE = ("src/", "crates/", "packages/sdk/", "go/", "java/", "dotnet/", "pyproject.toml")
@@ -132,10 +138,15 @@ def report(answers: Mapping[str, NoulAnswer]) -> tuple[str, list[str]]:
     return "\n".join(lines) + "\n", warnings
 
 
+def _generated(path: str) -> bool:
+    """Whether a tool, not a person, wrote this file."""
+    return path.startswith(_GENERATED) or any(part in f"/{path}" for part in _RECORDED) or Path(path).name in _LOCKFILES
+
+
 def changes(span: str) -> tuple[str, bool, dict[str, str]]:
     """Over a `base...head` span: the diff of everything but docs, whether a user could notice it, and the
     prose each changed doc adds. Prose about CI or scripts is judged against those files too, not only `src`."""
-    changed = [p for p in _git("diff", "--name-only", span).split() if not p.startswith(_GENERATED)]
+    changed = [p for p in _git("diff", "--name-only", span).split() if not _generated(p)]
     docs = [p for p in changed if p.endswith(".md") and p != "CHANGELOG.md"]
     docs += [p for p in changed if p == "CHANGELOG.md"]
     code = [p for p in changed if not p.endswith(".md")]
@@ -171,9 +182,13 @@ async def review(base: str, head: str = "HEAD") -> str:
             return "### Jev review (advisory)\n\nNothing to judge: the change touches no prose and no code.\n"
         diffs = [part or "(no code changes)" for part in parts(code_diff, _CODE_CHARS)]
         cells = [(key, row, diff) for key, rows in asked.items() for row in rows for diff in diffs]
-        results = await asyncio.gather(
-            *(_ask(jev, {"code_diff": diff}, key, question) for key, question, diff in cells)
-        )
+        slots = asyncio.Semaphore(_CONCURRENT)
+
+        async def ask(key: str, question: NoulQuestion, diff: str) -> NoulAnswer | None:
+            async with slots:
+                return await _ask(jev, {"code_diff": diff}, key, question)
+
+        results = await asyncio.gather(*(ask(key, question, diff) for key, question, diff in cells))
     answers = {}
     for key in asked:
         found = [answer for (asked_key, _, _), answer in zip(cells, results, strict=True) if asked_key == key]
