@@ -104,7 +104,11 @@ fn shows(control: &Control, choice: &str) -> bool {
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as
 /// a value set: an autocomplete choice can leave the text that was typed exactly as it was.
 pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control>) -> Effect {
-    let old: IndexMap<&str, &Control> = before.controls.iter().map(|c| (c.id.as_str(), c)).collect();
+    let replaced = before.document_key != after.document_key;
+    // Each document starts its control ids again. Matching those ids after navigation invents edits to controls
+    // that belonged to the page left behind, even when a reload kept the same address and field labels.
+    let old: IndexMap<&str, &Control> =
+        before.controls.iter().filter(|_| !replaced).map(|c| (c.id.as_str(), c)).collect();
     let new: IndexMap<&str, &Control> = after.controls.iter().map(|c| (c.id.as_str(), c)).collect();
     let mut parts = Vec::new();
     let navigated = before.url != after.url;
@@ -120,7 +124,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     // element before and after. A control unmatched by id is compared with the one earlier control sharing its role
     // and label, if exactly one did.
     let mut by_name: IndexMap<(&str, &str), Vec<&Control>> = IndexMap::new();
-    for control in &before.controls {
+    for control in old.values() {
         by_name.entry((control.role.as_str(), text::strip(&control.label))).or_default().push(control);
     }
     for (key, now) in &new {
@@ -166,15 +170,16 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         parts.push(format!("changed {}", changes.join("; ")));
     }
     let shown: Vec<&Control> = new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect();
-    let hidden: Vec<&Control> = old.iter().filter(|(key, _)| !new.contains_key(*key)).map(|(_, c)| *c).collect();
-    let stayed_whole = !navigated && hidden.is_empty();
+    let hidden: Vec<&Control> =
+        before.controls.iter().filter(|c| replaced || !new.contains_key(c.id.as_str())).collect();
+    let stayed_whole = !navigated && !replaced && hidden.is_empty();
     if !shown.is_empty() {
         parts.push(format!("showed {}", listed(&shown)));
     }
     if !hidden.is_empty() {
         parts.push(format!("removed {}", listed(&hidden)));
     }
-    if let Some(chosen) = chosen {
+    if let Some(chosen) = chosen.filter(|_| !replaced) {
         let choice = plain(&chosen.label);
         setting =
             setting || after.controls.iter().any(|c| !SETTING_ROLES.contains(&c.role.as_str()) && shows(c, &choice));
@@ -270,6 +275,36 @@ mod tests {
         let done = effect(&before, &after, None);
         assert!(done.set_something);
         assert!(done.summary.contains("Ticket type value: Round trip -> One way"));
+    }
+
+    #[test]
+    fn test_control_ids_do_not_survive_a_new_document_at_the_same_address() {
+        let mut before = observation(vec![trigger()]);
+        before.document_key = "first".into();
+        let mut after = observation(vec![with(&trigger(), |c| c.value = Some("One way".into()))]);
+        after.document_key = "second".into();
+        let done = effect(&before, &after, None);
+        assert!(!done.set_something, "a different document did not edit the old field");
+        assert!(!done.added);
+        assert!(done.changed);
+        assert!(!done.summary.contains("changed Ticket type"), "{}", done.summary);
+        assert!(done.summary.contains("showed 1 control: Ticket type"));
+        assert!(done.summary.contains("removed 1 control: Ticket type"));
+        assert!(!effect(&before, &after, Some(&options()[0])).set_something);
+    }
+
+    #[test]
+    fn test_new_documents_do_not_match_fields_by_name() {
+        let mut before = observation(vec![trigger()]);
+        before.document_key = "first".into();
+        let mut after = observation(vec![with(&trigger(), |c| {
+            c.id = "another".into();
+            c.value = Some("One way".into());
+        })]);
+        after.document_key = "second".into();
+        let done = effect(&before, &after, None);
+        assert!(!done.set_something);
+        assert!(!done.summary.contains("changed Ticket type"), "{}", done.summary);
     }
 
     #[test]
