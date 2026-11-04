@@ -669,9 +669,11 @@ fn count_question(claim: &Claim, quotes: &[serde_json::Value]) -> Option<Questio
 }
 
 const ONE_RECORD: &str = "1";
+const STATED_TOTAL: &str = "total";
 
 /// How many records Jev says the claim's cited quotes hold toward the count it states, a record repeated by a later
-/// quote counted once. None when a quote holds several records, or Jev leaves a quote unanswered, so code cannot count.
+/// quote counted once. None when a quote holds several records or states the claim's number as its own total, or Jev
+/// leaves a quote unanswered, so code cannot count and the claim's support check decides it.
 async fn counted_records(
     jev: &dyn DecisionClient,
     task: &str,
@@ -688,6 +690,7 @@ async fn counted_records(
                 ("0".to_string(), json!("None: it holds no record the count includes, or only records an earlier quote holds.")),
                 (ONE_RECORD.to_string(), json!("Exactly one record the count includes.")),
                 ("several".to_string(), json!("More than one record the count includes.")),
+                (STATED_TOTAL.to_string(), json!(format!("It states {stated} itself as a total, such as a number of results, rather than holding the records it counts."))),
             ]);
             let instructions = format!("{UNTRUSTED}\nThe claim states {stated} as the number of records it counted from its quotes. How many of the records that count includes does quote {index} hold, leaving out any record an earlier quote in the list already holds?");
             (format!("quote{index}"), Question::Choice(ChoiceQuestion::new(instructions, criteria)))
@@ -1293,9 +1296,11 @@ mod tests {
         }
     }
 
-    /// Jev supports every claim, reads `stated` as the count a claim states, and finds one record in every quote.
+    /// Jev supports every claim, reads `stated` as the count a claim states, and answers `per_quote` for every quote
+    /// when that answer is offered, `0` otherwise.
     struct Counting {
         stated: &'static str,
+        per_quote: &'static str,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
     }
 
@@ -1312,7 +1317,13 @@ mod tests {
             self.asked.lock().unwrap().push(questions.clone());
             let answer = |question: &Question| match question {
                 Question::Choice(choice) => {
-                    let pick = if choice.criteria.contains_key("none") { self.stated } else { "1" };
+                    let pick = if choice.criteria.contains_key("none") {
+                        self.stated
+                    } else if choice.criteria.contains_key(self.per_quote) {
+                        self.per_quote
+                    } else {
+                        "0"
+                    };
                     Answer::Choice(ChoiceAnswer {
                         kind: ChoiceTag,
                         choice: pick.into(),
@@ -1347,7 +1358,7 @@ mod tests {
         for (stated, rejected) in [("5", true), ("6", false)] {
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(vec![Claim::new(&format!("There are {stated} quotes by J.K. Rowling."), ids.clone())]);
-            let jev = Counting { stated, asked: Mutex::new(Vec::new()) };
+            let jev = Counting { stated, per_quote: "1", asked: Mutex::new(Vec::new()) };
             let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None).await.unwrap();
             assert_eq!(reviewed.answer.claims.is_empty(), rejected, "a count of {stated}");
             let Some(rejection) = reviewed.rejection else {
@@ -1361,6 +1372,20 @@ mod tests {
             let Question::Choice(count) = &asked[0]["claim0/count"] else { panic!("the count is a choice") };
             assert_eq!(count.criteria.keys().collect::<Vec<_>>(), ["none", "5"]);
         }
+    }
+
+    /// A results page that states its own total, such as `27 results returned.`, supports a claim of that total even
+    /// when Jev reads the total as a count: the quote states it rather than holding 27 records to count (#720 rerun).
+    #[tokio::test]
+    async fn a_count_a_quote_states_as_its_total_is_not_recounted() {
+        let notes = Notes::new([fact(0, "Search results\n27 results returned.\nCheapest from $766".into())]);
+        let task = "Apply the Nonstop filter and report how many results it shows and the cheapest fare.";
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("The filtered list shows 27 results from $766.", vec!["e0".into()])]);
+        let jev = Counting { stated: "27", per_quote: STATED_TOTAL, asked: Mutex::new(Vec::new()) };
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None).await.unwrap();
+        assert_eq!(reviewed.rejection, None);
+        assert_eq!(reviewed.answer.claims.len(), 1);
     }
 
     #[test]
