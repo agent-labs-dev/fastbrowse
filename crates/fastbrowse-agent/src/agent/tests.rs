@@ -2891,6 +2891,92 @@ async fn an_executed_action_without_a_page_change_keeps_covered_actions_withheld
     assert!(!offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
 }
 
+/// A page every action leaves as it was, which records the label of each control it was sent an action on.
+struct Unmoved {
+    now: Observation,
+    sent: Mutex<Vec<(Operation, Option<String>)>>,
+}
+
+impl Page for Unmoved {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let now = self.now.clone();
+        Box::pin(async move { Ok(now) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Your basket")])) })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        let target = action.target_id.as_ref().and_then(|id| observation.controls.iter().find(|c| c.id == *id));
+        self.sent.lock().unwrap().push((action.operation, target.map(|c| c.label.clone())));
+        Box::pin(async {
+            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(std::future::pending())
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("a scripted page draws nothing".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let url = self.now.url.clone();
+        Box::pin(async move { Ok(url) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(Some(200)) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+#[tokio::test]
+async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again() {
+    // #516: when a submission's effect never shows on the page, Jev picking it again must not send it again. Only the
+    // one stall rule stands between them, so the click is left out of the very next ask, not after three.
+    let page = Arc::new(Unmoved {
+        now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
+        sent: Mutex::new(Vec::new()),
+    });
+    let script = crate::scripted::steps("click Place order; click Place order; click Place order").unwrap();
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/basket".into()),
+        authorization: Some(Authorization { irreversible_actions: true }),
+        limits: Some(Limits { max_steps: Some(3), ..Limits::default() }),
+        ..Default::default()
+    };
+    let _ = agent.run("Place the order for the basket", options).await;
+    let sent = page.sent.lock().unwrap().clone();
+    let placed = sent.iter().filter(|(_, label)| label.as_deref() == Some("Place order")).count();
+    assert_eq!(placed, 1, "{sent:?}");
+}
+
 #[tokio::test]
 async fn test_the_llm_image_reader_does_not_require_decision_model_images() {
     let llm = Arc::new(EmptyImageLLM::default());

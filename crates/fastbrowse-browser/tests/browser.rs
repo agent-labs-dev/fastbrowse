@@ -308,6 +308,50 @@ async fn test_a_click_the_page_answers_over_fetch_is_judged_by_the_response() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_navigation_that_starts_during_the_settle_wait_is_a_change() {
+    // #516: the page reads quiet and unchanged while the action's request is open, then the response starts a
+    // navigation, which destroys every later read's execution context until the deadline. That is a change, not an
+    // action that left the page as it was.
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    let armed = Arc::new(AtomicBool::new(false));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let destroyed = Arc::new(Mutex::new(Vec::<i64>::new()));
+    let (arm, count, ids) = (armed.clone(), reads.clone(), destroyed.clone());
+    let hook: Hook = Arc::new(move |toward, value| {
+        if !arm.load(Ordering::SeqCst) {
+            return Some((value, Duration::ZERO));
+        }
+        let settle_read = method(&value) == "Runtime.evaluate"
+            && value["params"]["expression"].as_str().is_some_and(|e| e.contains("port2.postMessage(0)"));
+        if toward == Toward::Browser && settle_read && count.fetch_add(1, Ordering::SeqCst) > 0 {
+            ids.lock().unwrap().extend(value["id"].as_i64());
+        }
+        if toward == Toward::Client && value["id"].as_i64().is_some_and(|id| ids.lock().unwrap().contains(&id)) {
+            let mut failed =
+                json!({"id": value["id"], "error": {"code": -32000, "message": "Execution context was destroyed."}});
+            if let Some(session) = value.get("sessionId") {
+                failed["sessionId"] = session.clone();
+            }
+            return Some((failed, Duration::ZERO));
+        }
+        Some((value, Duration::ZERO))
+    });
+    let Some(h) = proxied(connection, hook).await else { return };
+    h.goto("/").await;
+    let before = h.page.fingerprint().await.expect("fingerprint");
+    let requests = h.session.requests_mark();
+    // The action's request outlasts the settle; a later, quicker one wakes the settle to read the page again.
+    eval_active(&h, "fetch('/slow?ms=8000'); setTimeout(() => fetch('/slow?ms=100'), 1000); 0").await;
+    wait_until(|| async { h.session.requests_open_since(requests) }).await;
+    armed.store(true, Ordering::SeqCst);
+    let changed = h.page.changed_since(&before, requests).await.expect("settled");
+    assert!(reads.load(Ordering::SeqCst) >= 2, "the settle never read the page again");
+    assert!(changed);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_covered_click_dispatches_nothing() {
     let _turn = turn().await;
     let Some(h) = loaded().await else { return };
