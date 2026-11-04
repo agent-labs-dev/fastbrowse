@@ -474,16 +474,21 @@ jobs:
             exit 0
           fi
           branch="chore/aur-$VERSION"
+          # Branch checkout must start clean, while the renderer's release bytes survive the switch.
+          rendered="$RUNNER_TEMP/aur-package"
+          mkdir -p "$rendered"
+          cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO "$rendered/"
+          git restore --source=HEAD --staged --worktree -- packaging/aur/PKGBUILD packaging/aur/.SRCINFO
           # A rerun after a failure later in this job finds the branch it already pushed, so it is reused rather
           # than pushed over. Rerunning the failed jobs is the documented way to recover a half-finished release.
           git remote set-url origin "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git"
           git fetch --quiet origin "$branch" || true
           if git rev-parse --verify --quiet "origin/$branch" > /dev/null; then
             git checkout --quiet -B "$branch" "origin/$branch"
-            git checkout --quiet "$GITHUB_SHA" -- packaging/aur
           else
             git checkout --quiet -b "$branch"
           fi
+          cp "$rendered/PKGBUILD" "$rendered/.SRCINFO" packaging/aur/
           git add packaging/aur
           if git diff --cached --quiet; then
             echo "the branch already carries this package"

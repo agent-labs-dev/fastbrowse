@@ -54,6 +54,8 @@ keeps its `aur` artifact, and the run says in a warning what did not happen:
   because a PR opened with the run's own token starts no checks, and the required `check` could never report on
   it. When it is unset the job says so and `main` keeps the previous package.
 
+Rerunning `aur-sync` reuses its release PR branch and preserves the rendered package files across the branch switch.
+
 To publish by hand, with the same key:
 
 ```sh
