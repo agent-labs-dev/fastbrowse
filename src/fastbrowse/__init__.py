@@ -1,9 +1,9 @@
 """fastbrowse: Jev picks, an LLM reads, code verifies.
 
-`run_task` is the whole public surface for embedding: it assembles a browser, the model clients and
-the agent, and returns what the run could prove. `traced` collects the trace of the runs made inside it, as
-`--trace` writes it for the command. Everything under them is importable, and stable only in the sense that
-the tests cover it.
+`run_task` is the public surface for embedding: it assembles a browser, the model clients and the agent, and returns
+what the run could prove. `traced` collects the trace of the runs made inside it, as `--trace` writes it for the
+command, and `fastbrowse.cloud` starts a Browser Use Cloud browser that later runs attach to. Everything under them
+is importable, and stable only in the sense that the tests cover it.
 """
 
 from fastbrowse.models import Citation, RunResult

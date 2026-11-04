@@ -192,6 +192,37 @@ async def main() -> None:
         print(await page.observe())
 ```
 
+**One cloud browser for many runs.** `run_task` stops the cloud browser it started when the run ends. To keep one
+browser for a whole session, start it yourself with `fastbrowse.cloud.BrowserUseCloudBrowser` and hand its address to
+each run:
+
+```python
+from fastbrowse import run_task
+from fastbrowse.cloud import BrowserUseCloudBrowser
+
+cloud = BrowserUseCloudBrowser(profile=profile_id, timeout_minutes=60)
+connection = await cloud.start()  # BrowserConnection: cdp_url, live_url, browser_id
+result = await run_task("...", cdp_url=connection.cdp_url, foreground=True)
+await cloud.stop()  # the browser bills until this, or its timeout
+print(cloud.cost)  # metered browser and proxy lines
+```
+
+It is also an async context manager that stops the browser on exit. The key is `api_key=` or
+`BROWSER_USE_API_KEY`; `profile`, `extensions`, `timeout_minutes`, `proxy_country` and `viewport` are `run_task`'s
+`cloud_profile`, `cloud_extensions`, `cloud_timeout_minutes`, `proxy_country` and `viewport`. A browser created by a
+start that fails or is cancelled is stopped before the error is raised. `foreground=True` brings each run's tab to the
+front, which the live view at `connection.live_url` shows; a run that starts its own cloud browser does this already.
+Errors are `BrowserUseCloudError`, and `BrowserUseCloudUnavailable` (with `retry_after`) for an outage.
+
+**Moving from 0.8.** The Python modules that 0.9 removed with the Python core have these replacements:
+
+| 0.8 import | Now |
+|---|---|
+| `fastbrowse.adapters.browser_use_cloud.BrowserUseCloudBrowser` | `fastbrowse.cloud.BrowserUseCloudBrowser`, without the `http=` and `allow_resizing=` arguments, and with `start()` and `stop()` as well as `async with` |
+| `fastbrowse.models.BrowserConnection` | `fastbrowse.models.BrowserConnection`, holding `cdp_url`, `live_url` and `browser_id` |
+| `fastbrowse.clients.environment.Settings` | `run_task(settings={...})`, keyed by the environment variable names |
+| `fastbrowse.adapters.totp` (`TotpError`, `one_time_code`) | `fastbrowse.totp` |
+
 **Access controls:**
 
 - `allowed_origins=["https://app.example.com"]` limits the documents a run may read and control to those exact

@@ -368,6 +368,18 @@ class LocalChrome(Frozen):
     every run starts from a fresh profile that is deleted afterwards."""
 
 
+class BrowserConnection(Frozen):
+    """A browser started outside a run (`fastbrowse.cloud.BrowserUseCloudBrowser`), for runs to attach to."""
+
+    cdp_url: str
+    """Browser-level DevTools WebSocket URL (`ws://` or `wss://`), which `run_task(cdp_url=...)` and `connect_cdp`
+    take."""
+    live_url: str | None = None
+    """The page where a person can watch the browser, when the service gives one."""
+    browser_id: str | None = None
+    """The cloud browser's id, for a caller that has to find or stop it out of band."""
+
+
 class Attachment(Frozen):
     name: str
     mime_type: str

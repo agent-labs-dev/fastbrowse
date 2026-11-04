@@ -24,7 +24,7 @@ use tokio::task::JoinHandle;
 use crate::adapters::http::{self, Response};
 
 pub const API_V4: &str = "https://api.browser-use.com/api/v4";
-const API_ORIGIN: &str = "https://api.browser-use.com";
+pub const API_ORIGIN: &str = "https://api.browser-use.com";
 /// https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
 pub const MAX_EXTENSIONS: usize = 3;
 /// The screen a browser starts on when the caller names none. Left to the service a browser may come up 1920 wide, past
@@ -147,9 +147,14 @@ pub struct BrowserUseCloudBrowser {
 impl BrowserUseCloudBrowser {
     /// Validate the options and build the create body; nothing is sent until `start`.
     pub fn new(api_key: &str, options: BrowserUseCloudOptions) -> Result<Self, BrowserUseCloudError> {
+        Self::at(api_key, options, API_ORIGIN)
+    }
+
+    /// `new` against another origin, with the real clock and sleep: an embedder's test serves the API itself.
+    pub fn at(api_key: &str, options: BrowserUseCloudOptions, origin: &str) -> Result<Self, BrowserUseCloudError> {
         let clock: Clock = Arc::new(fastbrowse_core::telemetry::monotonic);
         let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
-        Self::with_seams(api_key, options, API_ORIGIN, clock, sleep)
+        Self::with_seams(api_key, options, origin, clock, sleep)
     }
 
     /// `new` against another origin, with the clock and sleep swapped, so a five-minute delay the service asks for

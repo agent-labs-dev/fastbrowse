@@ -1,8 +1,10 @@
 //! `fastbrowse._native`: the Rust core in-process for Python.
 //!
-//! `run_task`, `connect_cdp` and `cli_main` are what `fastbrowse.run_task`, `connect_cdp` and the commands run.
+//! `run_task`, `connect_cdp` and `cli_main` are what `fastbrowse.run_task`, `connect_cdp` and the commands run, and
+//! `CloudBrowser` is `fastbrowse.cloud`'s.
 
 mod bridge;
+mod cloud;
 mod connect;
 mod host;
 
@@ -512,6 +514,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(totp_at, m)?)?;
     m.add_function(wrap_pyfunction!(totp_period, m)?)?;
     m.add_class::<connect::Page>()?;
+    m.add_class::<cloud::CloudBrowser>()?;
+    m.add("CloudFailed", m.py().get_type::<cloud::CloudFailed>())?;
     m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
     m.add_class::<Run>()?;
     m.add_class::<Context>()?;
