@@ -518,6 +518,32 @@ async fn test_the_prompt_room_is_the_largest_window_less_its_listed_output_and_i
 }
 
 #[tokio::test(start_paused = true)]
+async fn test_malformed_success_retains_an_unreceipted_physical_request() {
+    for (base, basis) in [("https://llm.test", CostBasis::Unknown), (OPENROUTER, CostBasis::Bounded)] {
+        for body in ["not JSON", "null", "[]"] {
+            let http = answering(move |request| {
+                if request.url.ends_with("/endpoints") {
+                    return ok(Response::json(200, &endpoints()));
+                }
+                ok(Response::new(200, body))
+            });
+            let ledger = capped(None);
+            let llm = client(http, base, LLMPurpose::Start, "writer");
+            let error = generate(&llm, LLMPurpose::Start, &[], Some(&ledger)).await.unwrap_err();
+            assert!(matches!(error, LLMError::Failed(_)), "{error}");
+            let lines = ledger.state().lines.clone();
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].physical_requests, Some(1));
+            assert_eq!(lines[0].basis, basis, "{base}: {body}");
+            assert_eq!(lines[0].dollars.is_none(), basis == CostBasis::Unknown);
+            if let Some(dollars) = lines[0].dollars {
+                assert!(dollars > 0.0);
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn test_a_response_without_cost_or_receipt_is_bounded() {
     let http = answering(|request| {
         if request.url.ends_with("/endpoints") {

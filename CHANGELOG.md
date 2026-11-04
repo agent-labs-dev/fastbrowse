@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Malformed successful model responses retain an unknown or bounded charge instead of a metered zero. Unsettled browser charges mark the total incomplete in Rust, Python and their CLI, MCP and eval consumers.
+
 - Benchmark publication keeps unmeasured-efficiency warnings advisory instead of treating them as regressions.
 
 - Model cost receipts retain physical provider request counts through retries and cancellation. Eval LLM call totals use those counts and stay unknown for historical receipts that lack them. Release comparisons preserve the counting basis and advise when it differs from a baseline.

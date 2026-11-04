@@ -562,6 +562,8 @@ impl OpenAICompatibleLLM {
             return Err(LLMError::Failed(format!("LLM {}", describe(&response))));
         }
         let payload = json_object(&response).map_err(|_| {
+            // A successful response can be billed even when its receipt cannot be parsed.
+            usage.lock().unaccounted_requests += 1;
             LLMError::Failed(format!("Invalid LLM response; HTTP {}: {}", response.status, body_excerpt(&response)))
         })?;
         Ok(match self.wire {

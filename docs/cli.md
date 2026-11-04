@@ -171,7 +171,8 @@ unanswered for 120 seconds returns `unavailable`. Step and dollar limits do not 
 `Limits(max_seconds=...)` does.
 
 A run's `proxy` cost line on a Browser Use Cloud browser has the basis `unsettled`: the service meters proxy data
-about 30 seconds after a browser stops, and a run returns without waiting, so the figure can read low. The
+about 30 seconds after a browser stops, and a run returns without waiting, so the figure can read low. An unsettled
+line makes the total incomplete, even when it carries a provisional dollar figure. The
 `browser_id` in the run's browser event reads the settled figure from `GET /browsers/{id}` once that time has passed.
 
 ## Troubleshooting

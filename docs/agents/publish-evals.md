@@ -63,7 +63,8 @@ passes only by stopping before an unauthorized step, and `jev-ultrafast` and `br
 tasks, so they run 47. The catalog states each reason and the site shows those tasks as not run. Ultrafast returns no
 answer, so on an answer task the judge has only its final page. An arm that did not run has no rows and the site shows it as not measured. An arm
 that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
-"cost not reported"; fastbrowse rows always carry a cost.
+"cost not reported". Fastbrowse receipts retain known dollar figures, but an unknown or unsettled line marks
+the total incomplete. A provisional figure is a lower bound, not a settled bill.
 
 `browser-use` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
 `publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one

@@ -502,7 +502,7 @@ impl CostBreakdown {
     }
 
     pub fn has_unknown(&self) -> bool {
-        self.lines.iter().any(|line| line.basis == CostBasis::Unknown)
+        self.lines.iter().any(|line| matches!(line.basis, CostBasis::Unknown | CostBasis::Unsettled))
     }
 }
 
@@ -1083,6 +1083,21 @@ mod tests {
         };
         assert_eq!(cost.known_dollars(), 0.01);
         assert!(cost.has_unknown());
+    }
+
+    #[test]
+    fn provisional_cost_keeps_the_total_incomplete() {
+        for (basis, incomplete) in [
+            (CostBasis::Metered, false),
+            (CostBasis::Estimated, false),
+            (CostBasis::Bounded, false),
+            (CostBasis::Unsettled, true),
+            (CostBasis::Unknown, true),
+        ] {
+            let cost = CostBreakdown { lines: vec![CostLine::new(CostComponent::Proxy, basis, Some(0.01))] };
+            assert_eq!(cost.known_dollars(), 0.01);
+            assert_eq!(cost.has_unknown(), incomplete, "{basis:?}");
+        }
     }
 
     #[test]

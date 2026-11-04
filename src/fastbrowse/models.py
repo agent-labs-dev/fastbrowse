@@ -261,7 +261,7 @@ class CostBreakdown(Frozen):
 
     @property
     def has_unknown(self) -> bool:
-        return any(line.basis is CostBasis.UNKNOWN for line in self.lines)
+        return any(line.basis in (CostBasis.UNKNOWN, CostBasis.UNSETTLED) for line in self.lines)
 
 
 class StepResult(Frozen):
