@@ -175,9 +175,17 @@ field-writing generation.
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
   `Could not complete the task after HTTP <status> at <url> in this browser session; the cause is unknown.`
+- The page draws what it shows on a canvas, a picture or a video, and the run could not read it. The error
+  then ends with `This page draws what it shows as a canvas, picture or video that its text and controls do
+  not carry, and its screenshot was not read as answering the task.`
 
 **Next step.** Try a `--start` URL closer to the goal, or a narrower task. Name any address the run needs in
-the task or in `--start`. A run that ends `stuck` is a bug report worth having: open an issue with the task,
+the task or in `--start`. On a drawn page, fastbrowse reads the DOM first, so it has two limits: a control that
+exists only in the pixels has no element to act on, and text that exists only in the pixels is not in the
+page text it quotes. The screenshot is the fallback for reading. When Jev's route accepts images, each step
+on a drawn page sends Jev the viewport, and before the run answers or gives up, the LLM reads the screenshot
+for text that answers the task, cited as read from the image. A drawn control still cannot be clicked, so
+start from a page of the site that offers the same action as an HTML control. A run that ends `stuck` is a bug report worth having: open an issue with the task,
 the start page, the status and the `--json` step trace, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes.
 
 ## unverified (exit 10)

@@ -21,6 +21,9 @@ pub(super) type Withheld = Option<(Operation, Option<String>)>;
 /// A refused DONE, withheld from the ask that follows it.
 pub(super) const DONE: Withheld = Some((Operation::Done, None));
 
+/// What a run that gave up on a drawn page says of it.
+pub(super) const DRAWN_UNREAD: &str = "This page draws what it shows as a canvas, picture or video that its text and controls do not carry, and its screenshot was not read as answering the task.";
+
 /// An action the stall rule counted as moving nothing, with the outcome the browser gave it: one it performed, one it
 /// refused because something covered the target, or one whose observed target or page state it could not use.
 #[derive(Debug, Clone, PartialEq)]
@@ -177,6 +180,13 @@ impl Agent {
             if status == Status::Stuck {
                 self.read_drawn_page(state, observation).await?;
             }
+            // A canvas or picture carries what its text layer does not, so a run that gave up on one is told apart
+            // from a stall on a page it could read: a caller otherwise retries the same task on a page it cannot read.
+            let reason = if status == Status::Stuck && observation.visual_content && !state.notes.answered() {
+                format!("{reason} {DRAWN_UNREAD}")
+            } else {
+                reason
+            };
             let reason = match unfilled.as_slice() {
                 [] => reason,
                 [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),

@@ -1841,6 +1841,28 @@ async fn test_a_drawn_page_is_read_before_a_stalled_run_gives_up() {
     assert!(evidence.quote.starts_with("read from the screenshot:"));
 }
 
+/// A canvas app the run could not read ended `stuck` with the same words as a stall on a page it read, so a caller
+/// could not tell a limitation of reading pixels from a task to retry.
+#[tokio::test]
+async fn test_a_run_that_gives_up_on_a_drawn_page_it_could_not_read_says_so() {
+    let gives_up = |visual_content: bool| async move {
+        let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
+        let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(EmptyImageLLM::default()));
+        let mut state = run_state();
+        state.recoveries = agent.config.stall.max_recoveries;
+        let rotate = button("Rotate the view");
+        let page = Observation { visual_content, ..observation(std::slice::from_ref(&rotate)) };
+        let withheld = super::recovery::withheld(&code_decision(Operation::Click, Some(rotate)));
+        match agent.recover(&mut state, &page, "no_progress (3)", Status::Stuck, withheld).await {
+            Err(Flow::Stop(stop)) if stop.status == Status::Stuck => stop.error.unwrap_or_default(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let drawn = gives_up(true).await;
+    assert!(drawn.starts_with("no_progress (3) ") && drawn.contains("draws what it shows as a canvas"), "{drawn}");
+    assert_eq!(gives_up(false).await, "no_progress (3)");
+}
+
 #[tokio::test]
 async fn test_a_page_that_reports_a_failure_ends_as_it_even_when_a_value_is_missing() {
     // USITC's DataWeb said "Http failure response for ...: 0 Unknown Error" on the page the task needed, and the run
