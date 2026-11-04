@@ -89,6 +89,9 @@ writes page text. A span Jev picks becomes a fact, and identical values from the
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
 answer is written once, when the run ends.
 
+A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
+quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.
+
 Jev selects verbatim answers only when every selected note can be repeated as written without unrelated text.
 A value embedded in a broader note needs extraction through the composer and its support check.
 

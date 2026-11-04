@@ -379,15 +379,20 @@ impl Notes {
         self.answering.contains(key)
     }
 
-    /// Once a read of `url` supports the answer, earlier reads of that address whose quote the page no longer shows stop
+    /// Once a read of `url` adds evidence, earlier reads of that address whose quote the page no longer shows stop
     /// supporting it, and stay as context.
     ///
     /// After a date picker's choice was corrected from 31/10 to 28/11, a new read quoted the new date, but the answer
     /// still quoted the old one, since both facts stood. A product page that swaps its name and price together must not
     /// answer with the old name beside the new price either, so a vanished value is retired whatever it was read for.
     pub fn supersede(&mut self, url: &str, sha256: &str, text: &str) {
-        let fresh: Vec<Evidence> =
-            self.supporting_evidence().into_iter().filter(|evidence| evidence.capture_sha256 == sha256).collect();
+        // Synthesis keeps source quotes as context before composing an answer; those reads replace old values too.
+        let fresh: Vec<&Evidence> = self
+            .facts
+            .values()
+            .filter_map(|fact| fact.evidence.as_ref())
+            .filter(|evidence| evidence.capture_sha256 == sha256)
+            .collect();
         if fresh.is_empty() {
             return;
         }
@@ -692,6 +697,28 @@ mod tests {
             notes.supersede(url, "after", &shown);
             assert_eq!(texts(&notes), kept);
             assert_eq!(notes.facts().len(), 2);
+        }
+    }
+
+    #[test]
+    fn a_synthesis_read_retires_vanished_quotes_at_the_same_address() {
+        for answering in [false, true] {
+            for (url, history, retained) in [
+                ("https://example.test", false, false),
+                ("https://example.test", true, true),
+                ("https://example.test/other", false, true),
+            ] {
+                let mut old = quoted("Subtotal: GBP 34.50", "before", "https://example.test");
+                old.answers = answering;
+                let fresh = context(quoted("Subtotal: GBP 43.25", "after", url));
+                let mut notes = Notes::new([old.clone(), fresh.clone()]);
+                let shown = if history { format!("{}\n{}", old.text, fresh.text) } else { fresh.text.clone() };
+                notes.supersede(url, "after", &shown);
+                assert_eq!(notes.current(&fact_id(&old)), retained);
+                assert!(notes.current(&fact_id(&fresh)));
+                assert_eq!(notes.answered(), answering && retained);
+                assert_eq!(notes.facts().len(), 2);
+            }
         }
     }
 

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Fresh synthesis reads retire vanished values from earlier reads of the same address, while preserving quotes still shown and evidence from other pages.
+
 - Pages with too many quoted values for one Jev choice can still be read for synthesis when the page fits Jev's input limit.
 
 - Local MCP HTTP connections accept loopback Host and Origin headers that omit the default port, including bracketed IPv6 hosts.
