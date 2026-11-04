@@ -4076,6 +4076,26 @@ async fn test_composition_repair_cannot_finish_by_dropping_a_requested_value() {
     assert!(state.composition_feedback.as_deref().unwrap().contains("coverage"));
 }
 
+/// On apartments.com every re-read of the reshuffled results added facts, which resets the recovery count, and the
+/// composer wrote the same rejected answer three times while the run went back over the same listings (#760). The
+/// same draft rejected again ends the run with what holds.
+#[tokio::test]
+async fn test_a_draft_rejected_again_unchanged_ends_the_run() {
+    let page = observation(&[]);
+    let jev = repair_jev(vec![(0.0, 1.0), (0.0, 1.0)]);
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev, Arc::new(WrongRecord));
+    let mut state = composition_repair_state();
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    // A read that added facts, as each reshuffled results page did.
+    state.recoveries = 0;
+    let ended = match agent.finish(&mut state, &page, None, None).await {
+        Ok(Some(result)) => result.status,
+        Err(Flow::Stop(stop)) => stop.status,
+        other => panic!("the same rejected draft was sent back to gather again: {:?}", other.map(|r| r.is_some())),
+    };
+    assert_eq!(ended, Status::Unverified);
+}
+
 #[tokio::test]
 async fn test_uncertain_composition_support_is_terminal_without_repair() {
     let page = observation(&[]);

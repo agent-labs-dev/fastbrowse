@@ -246,12 +246,21 @@ impl Agent {
         } else {
             draft_answer(&state.notes)
         };
+        let rejection = rejection.map(|rejection| self.redact(&rejection));
+        // The same draft rejected again: what was gathered since changed nothing that can be written, and reads of a
+        // page that reorders on each load count as progress, so only this ends the loop. The run ends with what holds.
+        let repeated = state
+            .composition_feedback
+            .as_deref()
+            .zip(rejection.as_deref())
+            .is_some_and(|(before, now)| drafted(before).is_some_and(|before| drafted(now) == Some(before)));
         if recover_rejection
             && output_schema.is_none()
+            && !repeated
             && let Some(rejection) = rejection
         {
             let reason = "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.";
-            state.composition_feedback = Some(self.redact(&rejection));
+            state.composition_feedback = Some(rejection);
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
             {
@@ -307,4 +316,11 @@ impl Agent {
         let result = self.result(Some(state), &state.ledger.clone(), status, outcome);
         Ok(Some(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await))
     }
+}
+
+/// The claims of a rejected draft, as its feedback records them.
+fn drafted(feedback: &str) -> Option<Vec<String>> {
+    let feedback: Value = serde_json::from_str(feedback).ok()?;
+    let claims = feedback.get("draft_claims")?.as_array()?;
+    Some(claims.iter().filter_map(|claim| claim.get("text")?.as_str().map(str::to_string)).collect())
 }
