@@ -588,7 +588,11 @@ def regressions(
             # A rate, like the score above: the two runs need not have the same number of repeats.
             if sum(r.completed for r in now) / len(now) < sum(r.completed for r in before) / len(before):
                 raise ValueError(f"completion regression: {group.id}/{task}")
-            moved = moves(f"{group.id}/{task}", "the published figures", _dumped(before), _dumped(now))
+            moved = [
+                finding
+                for finding in moves(f"{group.id}/{task}", "the published figures", _dumped(before), _dumped(now))
+                if finding.blocking
+            ]
             if moved:
                 raise ValueError(f"{moved[0].check} regression: {moved[0].detail}")
 

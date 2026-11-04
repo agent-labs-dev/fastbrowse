@@ -257,6 +257,17 @@ def test_more_jev_calls_are_not_a_regression(candidate):
     regressions(Candidate.model_validate(candidate), before)
 
 
+@pytest.mark.parametrize(("count", "basis"), [(None, None), (None, "physical_requests"), (40, "physical_requests")])
+def test_missing_or_different_call_counts_are_advisory(candidate, count, basis):
+    before = Candidate.model_validate(copy.deepcopy(candidate))
+    for group in candidate["groups"]:
+        for row in group["rows"]:
+            row["llm_calls"] = count
+            if basis is not None:
+                row["llm_calls_basis"] = basis
+    regressions(Candidate.model_validate(candidate), before)
+
+
 def _official(candidate: dict, repeats: int, failed: int = 0) -> Candidate:
     """The BU Bench group alone at this many repeats, with the last `failed` repeats of its first task unfinished."""
     group = copy.deepcopy(candidate["groups"][2])

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Benchmark publication keeps unmeasured-efficiency warnings advisory instead of treating them as regressions.
+
 - Model cost receipts retain physical provider request counts through retries and cancellation. Eval LLM call totals use those counts and stay unknown for historical receipts that lack them. Release comparisons preserve the counting basis and advise when it differs from a baseline.
 
 - Unmarked password fields and lone fields marked for a new password leave their role to the page-context decision, so field count and order do not select an existing credential for a reset or sign-up form.
