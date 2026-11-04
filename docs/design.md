@@ -117,7 +117,7 @@ for both claim support and requested answer coverage in one decision batch. A cl
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. Repair feedback retains claim text and citation
 identifiers, so the composer can preserve supported values while correcting rejected claims. A corrected draft
-must pass citation checks and cover every requested fact or value. The coverage check judges the written
+must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
 facts and values; citation support and browser actions have separate checks. Runs with a caller-supplied output schema
 retain their extracted data and end `unverified` when the composed prose fails its checks, without retrying prose composition. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.

@@ -11,6 +11,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Authorization checks include the non-sensitive text submitted with Enter and the destination of a drag, so permission is judged against the action's contents and target.
+
+- Answers whose combined coverage check exceeds Jev's input limit retain their individually supported claims and report the coverage limit.
+
 - The completion decision sees the selected answer separately from retained evidence, so a value left out of the answer is still an open requirement.
 
 - Composition recovery retains the latest nonempty checked partial draft, so a later repair's supported facts are available when the run stops.

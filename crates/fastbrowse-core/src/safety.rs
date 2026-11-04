@@ -93,12 +93,23 @@ pub fn irreversible_question(operation: Operation, control: &Control, destinatio
 
 /// What the agent is about to do to a control, with what tells it apart from another with the same label.
 ///
-/// A submission also says what the form's other fields hold, from `controls`: the form's own text leaves out typed
-/// values, and a form that reads as empty does not read as the message the task asked to send. A masked field is
-/// left out.
-pub fn control_action(operation: Operation, control: &Control, controls: &[Control]) -> String {
+/// A submission also says what the target and the form's other fields hold, from `controls`: the form's own text
+/// leaves out typed values, and a form that reads as empty does not read as the message the task asked to send. A
+/// masked field is left out.
+pub fn control_action(
+    operation: Operation,
+    control: &Control,
+    destination: Option<&Control>,
+    controls: &[Control],
+) -> String {
     let mut action = format!("{operation} the element labelled {}.\n", text::repr(&control.label));
-    describe_control(&mut action, operation, control, None);
+    describe_control(&mut action, operation, control, destination);
+    if operation == Operation::Enter
+        && !control.sensitive
+        && let Some(value) = control.value.as_deref().filter(|value| !value.is_empty())
+    {
+        action.push_str(&format!("The target currently holds {}.\n", text::repr(value)));
+    }
     let submits = operation == Operation::Enter || (operation == Operation::Click && control.role == "button");
     if submits && control.form_id.is_some() {
         let held: Vec<String> = controls
@@ -824,11 +835,54 @@ mod tests {
         field.value = Some("Please close my account".into());
         let mut secret = password("p", Some("f"), None);
         secret.value = Some("••••".into());
-        let action = control_action(Operation::Click, &target, &[target.clone(), field, secret]);
+        let action = control_action(Operation::Click, &target, None, &[target.clone(), field, secret]);
         let question = requested_question(&action);
         assert!(question.instructions.contains("It sits under 'Delete account' on the page.\n"));
         assert!(question.instructions.contains("The action submits this form: POST /account/delete\n"));
         assert!(question.instructions.contains("In the form, 'Message' holds 'Please close my account'.\n"));
+    }
+
+    #[test]
+    fn requested_enter_action_includes_non_sensitive_target_value_outside_a_form() {
+        let mut target = Control::new("search", "textbox", "Search", [Operation::Enter]);
+        target.value = Some("quarterly report".into());
+        let action = control_action(Operation::Enter, &target, None, &[]);
+        assert!(action.contains("The target currently holds 'quarterly report'."));
+
+        target.value = Some("annual report".into());
+        let changed = control_action(Operation::Enter, &target, None, &[]);
+        assert_ne!(requested_question(&action).instructions, requested_question(&changed).instructions);
+    }
+
+    #[test]
+    fn requested_enter_action_includes_form_target_value_but_never_sensitive_values() {
+        let mut target = Control::new("message", "textbox", "Message", [Operation::Enter]);
+        target.form_id = Some("form".into());
+        target.value = Some("send this".into());
+        let mut secret = password("secret", Some("form"), None);
+        secret.value = Some("do-not-leak".into());
+        let action = control_action(Operation::Enter, &target, None, &[target.clone(), secret]);
+        let question = requested_question(&action);
+        assert!(question.instructions.contains("The target currently holds 'send this'."));
+        assert!(!question.instructions.contains("do-not-leak"));
+
+        target.sensitive = true;
+        target.value = Some("target-secret".into());
+        let sensitive_question =
+            requested_question(&control_action(Operation::Enter, &target, None, &[target.clone()]));
+        assert!(!sensitive_question.instructions.contains("target-secret"));
+    }
+
+    #[test]
+    fn requested_drag_action_names_its_destination() {
+        let target = button("Move");
+        let archive = Control::new("archive", "listitem", "Archive", [Operation::Click]);
+        let delete = Control::new("delete", "listitem", "Delete", [Operation::Click]);
+        let archive_question = requested_question(&control_action(Operation::Drag, &target, Some(&archive), &[]));
+        let delete_question = requested_question(&control_action(Operation::Drag, &target, Some(&delete), &[]));
+        assert!(archive_question.instructions.contains("Drop it onto the element labelled 'Archive'."));
+        assert!(delete_question.instructions.contains("Drop it onto the element labelled 'Delete'."));
+        assert_ne!(archive_question.instructions, delete_question.instructions);
     }
 
     fn password(id: &str, form: Option<&str>, autocomplete: Option<&str>) -> Control {

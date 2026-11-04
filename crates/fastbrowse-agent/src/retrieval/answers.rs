@@ -498,7 +498,12 @@ async fn review_claims(
     }
     // A known citation can still be attached to another record's value, so Jev judges the original quotes after
     // every packing round has finished, rather than the intermediate prose those rounds wrote.
-    let oversized = questions.values().any(|question| state_chars > tokens.input_chars(&[question.dump_json()]));
+    let oversized_claim = questions
+        .iter()
+        .any(|(key, question)| key != "coverage" && state_chars > tokens.input_chars(&[question.dump_json()]));
+    let oversized_coverage =
+        questions.get("coverage").is_some_and(|question| state_chars > tokens.input_chars(&[question.dump_json()]));
+    let oversized = oversized_claim || oversized_coverage;
     let (answered, failure) =
         match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
             Ok(answered) => (answered, None),
@@ -537,8 +542,10 @@ async fn review_claims(
         })
         .collect::<Vec<_>>();
     let problem = failure.clone().or_else(|| {
-        if oversized {
+        if oversized_claim {
             Some("A composed claim's quotes exceed the decision model's input limits.".into())
+        } else if oversized_coverage {
+            Some("The written answer exceeds the decision model's input limits for checking task coverage.".into())
         } else if required.iter().any(Vec::is_empty) {
             Some("A composed claim has no retained source quote.".into())
         } else if missing {
@@ -1224,6 +1231,29 @@ mod tests {
         assert!(answer.claims.is_empty());
         assert!(answer.problem.unwrap().contains("input limits"));
         assert!(jev.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn oversized_answer_coverage_retains_individually_supported_claims() {
+        let limit = fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4;
+        let text = "x".repeat(limit / 8);
+        let source = fact(0, text.clone());
+        let source_id = fact_id(&source);
+        let notes = Notes::new([source]);
+        let claims = (0..16).map(|_| Claim::new(&text, vec![source_id.clone()])).collect::<Vec<_>>();
+        let jev = Support::new(true);
+        let checked =
+            review_claims(&jev, "Report every record", None, claims.clone(), &notes, None, true).await.unwrap();
+        assert_eq!(checked.claims.len(), claims.len());
+        assert!(checked.claims == claims);
+        assert_eq!(
+            checked.problem.as_deref(),
+            Some("The written answer exceeds the decision model's input limits for checking task coverage.")
+        );
+        assert!(checked.rejection.is_none());
+        let asked = jev.asked.lock().unwrap();
+        assert!(!asked.is_empty());
+        assert!(asked.iter().all(|questions| !questions.contains_key("coverage")));
     }
 
     #[tokio::test]
