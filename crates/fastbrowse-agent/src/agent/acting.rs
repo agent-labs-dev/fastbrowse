@@ -523,27 +523,45 @@ impl Agent {
         match (source.as_str(), first, last) {
             (IN_TASK | IN_READ, Some(first), Some(last)) => {
                 // The two ends are picked apart, and each can land on a different value the task gives, or cross: the
-                // end is asked again knowing where this value begins.
+                // end is asked again knowing where this value begins, then the beginning knowing where it ends, since
+                // a beginning picked alone can take in the request around the value.
+                let chars: Vec<char> = task.chars().collect();
+                let copied = |from: &Word, to: &Word| JsonValue::String(chars[from.start..to.end].iter().collect());
+                let holder = if source == IN_READ { "what was read" } else { "the task" };
+                let exact = |ends: &str| {
+                    format!(
+                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {ends}. Choose only the field's value, without surrounding task instructions."
+                    )
+                };
                 let last = if first.index == last.index {
                     last
                 } else {
-                    let rest: Vec<Word> = group.iter().filter(|word| word.index >= first.index).cloned().collect();
-                    let chars: Vec<char> = task.chars().collect();
-                    let options = rest
+                    let options = group
                         .iter()
-                        .map(|word| {
-                            let value: String = chars[first.start..word.end].iter().collect();
-                            (word.index.to_string(), JsonValue::String(value))
-                        })
-                        .collect();
-                    let question = format!(
-                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, beginning at the selected word. Choose only the field's value, without surrounding task instructions.",
-                        holder = if source == IN_READ { "what was read" } else { "the task" },
-                    );
-                    let picked = self.ask_choice(state, observation, &question, options).await?;
+                        .filter(|word| word.index >= first.index)
+                        .map(|word| (word.index.to_string(), copied(first, word)));
+                    let picked = self
+                        .ask_choice(state, observation, &exact("beginning at the selected word"), options.collect())
+                        .await?;
                     group
                         .iter()
                         .find(|word| word.index >= first.index && word.index.to_string() == picked)
+                        .unwrap_or(first)
+                };
+                let first = if first.index >= last.index {
+                    first
+                } else {
+                    let options = group
+                        .iter()
+                        .filter(|word| word.index <= last.index)
+                        .map(|word| (word.index.to_string(), copied(word, last)));
+                    let question = exact("ending where the value ends");
+                    let picks = self
+                        .ask_choices(state, Some(observation), vec![("start", question, options.collect())])
+                        .await?;
+                    group
+                        .iter()
+                        .find(|word| word.index <= last.index && Some(&word.index.to_string()) == picks.get("start"))
                         .unwrap_or(first)
                 };
                 let value: String = task.chars().skip(first.start).take(last.end - first.start).collect();

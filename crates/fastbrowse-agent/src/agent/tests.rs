@@ -1147,7 +1147,7 @@ impl DecisionClient for Picks {
 async fn test_a_value_whose_end_is_picked_before_its_beginning_asks_for_the_end_again() {
     // The words: Use 0, the 1, postcode 2, SW1A 3, 1AA 4. The end lands before the beginning, as Jev picked on a
     // checkout that had rejected another postcode, and the field was then treated as one the task gives no value for.
-    let picks = Picks(&[("source", "task"), ("first", "3"), ("last", "1"), ("pick", "4")]);
+    let picks = Picks(&[("source", "task"), ("first", "3"), ("last", "1"), ("pick", "4"), ("start", "3")]);
     let agent = Agent::new(Arc::new(NoPage), Arc::new(picks), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Use the postcode SW1A 1AA".into();
@@ -1156,6 +1156,21 @@ async fn test_a_value_whose_end_is_picked_before_its_beginning_asks_for_the_end_
         .await
         .expect("a value");
     assert_eq!(text, "SW1A 1AA");
+}
+
+#[tokio::test]
+async fn test_a_value_whose_beginning_takes_in_the_request_asks_for_the_beginning_again() {
+    // The words: Order 0, a 1, large 2, pizza 3, with 4, mushroom 5, for 6, Ada 7, Lovelace 8. Jev began the customer
+    // name at "large" in six of ten asks, and the order went out under "large pizza with mushroom for Ada Lovelace".
+    let picks = Picks(&[("source", "task"), ("first", "2"), ("last", "8"), ("pick", "8"), ("start", "7")]);
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(picks), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Order a large pizza with mushroom for Ada Lovelace".into();
+    let text = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Customer name"))
+        .await
+        .expect("a value");
+    assert_eq!(text, "Ada Lovelace");
 }
 
 struct TypingAttempts;
