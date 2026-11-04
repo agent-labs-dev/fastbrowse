@@ -300,10 +300,14 @@ pub(crate) async fn read_page(
     if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
         let (kept, narrowed, _) = focus(jev, &page, task, tokens, ledger, trace).await?;
         if narrowed.is_empty() {
-            return Ok(PageRead::default());
+            // Too many value options can hide a passage that still fits as an absent-or-synthesis question.
+            if !read_fits(&state, &asked, tokens) {
+                return Ok(PageRead::default());
+            }
+        } else {
+            candidates = narrowed;
+            (state, asked) = read_request(&page, task, &candidates, Some(&kept), shows);
         }
-        candidates = narrowed;
-        (state, asked) = read_request(&page, task, &candidates, Some(&kept), shows);
     }
     if let Some(ledger) = ledger {
         ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -413,7 +417,9 @@ mod tests {
     use crate::retrieval::testing::capture;
     use crate::support::testing::block_on;
     use fastbrowse_core::BoxFuture;
-    use fastbrowse_core::decision::{DecisionError, DecisionProfile, Evaluation, NoulAnswer, NoulTag};
+    use fastbrowse_core::decision::{
+        ChoiceAnswer, ChoiceTag, DecisionError, DecisionProfile, Evaluation, NoulAnswer, NoulTag,
+    };
     use fastbrowse_core::models::{CostBasis, SourceControl};
 
     /// Scores each passage by the number at its start.
@@ -480,6 +486,72 @@ mod tests {
         assert!(!kept.is_empty() && kept.len() < count);
         let expected: Vec<String> = (0..count).rev().take(kept.len()).map(|i| format!("s{i}")).collect();
         assert_eq!(kept, expected);
+    }
+
+    #[test]
+    fn too_many_value_choices_still_lets_jev_choose_synthesis() {
+        struct Reader(&'static str);
+        impl DecisionClient for Reader {
+            fn profile(&self) -> DecisionProfile {
+                DecisionProfile::jev()
+            }
+
+            fn evaluate<'a>(
+                &'a self,
+                _: &'a Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+                let answers = questions
+                    .iter()
+                    .map(|(key, question)| {
+                        let answer = match question {
+                            Question::Noul(_) => Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.9 }),
+                            Question::Choice(question) => {
+                                assert_eq!(question.criteria.len(), 2);
+                                Answer::Choice(ChoiceAnswer {
+                                    kind: ChoiceTag,
+                                    choice: self.0.into(),
+                                    probabilities: IndexMap::from([(self.0.into(), 1.0)]),
+                                    confidence: 1.0,
+                                })
+                            }
+                            _ => panic!("a read question"),
+                        };
+                        (key.clone(), answer)
+                    })
+                    .collect();
+                Box::pin(async move {
+                    Ok(Evaluation {
+                        model: "test".into(),
+                        answers,
+                        input_tokens: 1,
+                        cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                        requests: 1,
+                    })
+                })
+            }
+        }
+        let values = (0..MAX_CHOICE_OPTIONS + 1).map(|n| format!("Item {n}")).collect::<Vec<_>>().join("\n");
+        let captured = capture(&[(BlockKind::Paragraph, &values)]);
+        for choice in [SYNTHESIS, ABSENT] {
+            let read = block_on(read_page(
+                &Reader(choice),
+                &captured,
+                "List the items",
+                &TokenBudget::default(),
+                None,
+                &Trace::disabled(),
+                false,
+            ))
+            .unwrap();
+            assert_eq!(read.compose, choice == SYNTHESIS);
+            if choice == SYNTHESIS {
+                assert_eq!(read.facts.len(), 1);
+                assert_eq!(read.facts[0].text, values);
+            } else {
+                assert!(read.facts.is_empty());
+            }
+        }
     }
 
     #[test]

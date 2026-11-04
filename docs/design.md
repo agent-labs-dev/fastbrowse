@@ -83,9 +83,10 @@ actions to those controls.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
-relevance pass narrows them first. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
+relevance pass narrows them first. If no value choice fits, a page that fits Jev's input limit can still supply
+facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
-with all their source contexts. When Jev says the answer must be composed, every candidate is kept as a fact and the
+with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
 answer is written once, when the run ends.
 
 Jev selects verbatim answers only when every selected note can be repeated as written without unrelated text.

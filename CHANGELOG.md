@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Pages with too many quoted values for one Jev choice can still be read for synthesis when the page fits Jev's input limit.
+
 - Local MCP HTTP connections accept loopback Host and Origin headers that omit the default port, including bracketed IPv6 hosts.
 
 - Python callback failures retain the original exception and attach the run's receipt, including costs and finished recordings.
