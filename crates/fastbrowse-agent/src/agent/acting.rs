@@ -427,7 +427,7 @@ impl Agent {
         let asked = value_questions(state, target, (&task, "the task"), &label, &group, source_question, sources);
         let mut picks = match ahead_picks(decision, &asked) {
             Some(picks) => picks,
-            None => self.ask_choices(state, observation, asked).await?,
+            None => self.ask_choices(state, Some(observation), asked).await?,
         };
         let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
         if source == WRITTEN {
@@ -463,7 +463,7 @@ impl Agent {
             if asked.is_empty() {
                 return Err(self.missing(state, observation, target));
             }
-            picks.extend(self.ask_choices(state, observation, asked).await?);
+            picks.extend(self.ask_choices(state, Some(observation), asked).await?);
         }
         if let Some(input) = source.strip_prefix("input:") {
             return Ok(state.inputs.get(input).cloned().unwrap_or_default());
@@ -763,11 +763,11 @@ impl Agent {
         question: &str,
         criteria: IndexMap<String, JsonValue>,
     ) -> Step<String> {
-        let picks = self.ask_choices(state, observation, vec![("pick", question.to_string(), criteria)]).await?;
+        let picks = self.ask_choices(state, Some(observation), vec![("pick", question.to_string(), criteria)]).await?;
         Ok(picks["pick"].clone())
     }
 
-    pub(super) async fn output_intent(&self, state: &mut RunState, observation: &Observation) -> Step<OutputIntent> {
+    pub(super) async fn output_intent(&self, state: &mut RunState) -> Step<OutputIntent> {
         if state.output_intent != OutputIntent::Unknown {
             return Ok(state.output_intent);
         }
@@ -789,8 +789,8 @@ impl Agent {
             ),
         ]);
         let intent = match self
-            .ask_choice(state, observation, "What output does the task want at its end?", criteria)
-            .await?
+            .ask_choices(state, None, vec![("pick", "What output does the task want at its end?".into(), criteria)])
+            .await?["pick"]
             .as_str()
         {
             "text" => OutputIntent::Text,
@@ -812,11 +812,11 @@ impl Agent {
         Ok(self.ask_choice(state, observation, question, criteria).await? == "confirm")
     }
 
-    /// Several choices about this page in one request, each answer one its question offered.
+    /// Several choices in one request, each answer one its question offered.
     async fn ask_choices(
         &self,
         state: &mut RunState,
-        observation: &Observation,
+        observation: Option<&Observation>,
         asked: Vec<Asked<'_>>,
     ) -> Step<IndexMap<String, String>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -827,7 +827,11 @@ impl Agent {
             .map(|(key, question, criteria)| (key.to_string(), page_question(&state.task, &question, criteria)))
             .collect();
         let dumped: Vec<String> = questions.values().map(Dump::dump_json).collect();
-        let page = page_state(observation, &state.notes, &self.config.tokens, &dumped, None)?;
+        let page = match observation {
+            Some(observation) => page_state(observation, &state.notes, &self.config.tokens, &dumped, None)?,
+            // Output format is a requirement of the task, independent of what the page or notes say.
+            None => JsonValue::Object(Map::new()),
+        };
         let evaluation = self.jev.evaluate(&page, &questions).await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let mut picks = IndexMap::new();

@@ -36,7 +36,7 @@ impl Agent {
         {
             return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
         }
-        let intent = self.output_intent(state, observation).await?;
+        let intent = self.output_intent(state).await?;
         if matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage) && self.page.over_http() {
             return Err(self
                 .page
@@ -154,7 +154,7 @@ impl Agent {
         observation: &Observation,
         output_schema: Option<&RecordSchema>,
     ) -> Step<RunResult> {
-        let intent = self.output_intent(state, observation).await?;
+        let intent = self.output_intent(state).await?;
         if intent != OutputIntent::Image && output_schema.is_none() {
             self.read_drawn_page(state, observation).await?;
         }

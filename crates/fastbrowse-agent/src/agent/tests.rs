@@ -1351,6 +1351,7 @@ impl DecisionClient for IntentJev {
         if !intent {
             return self.fallback.evaluate(state, questions);
         }
+        assert_eq!(state, &json!({}), "output intent must not depend on page content or evidence identities");
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let Question::Choice(question) = &questions["pick"] else { unreachable!() };
         assert!(question.instructions.ends_with("What output does the task want at its end?"));
@@ -1390,10 +1391,7 @@ async fn test_output_intent_is_cached_without_guessing_from_task_text() {
     let mut state = run_state();
     assert_eq!(state.output_intent, super::state::OutputIntent::Unknown);
     for _ in 0..2 {
-        assert_eq!(
-            agent.output_intent(&mut state, &observation(&[])).await.unwrap(),
-            super::state::OutputIntent::Image
-        );
+        assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Image);
     }
     assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
