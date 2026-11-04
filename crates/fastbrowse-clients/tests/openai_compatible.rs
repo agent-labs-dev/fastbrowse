@@ -111,7 +111,8 @@ async fn test_schema_repair_keeps_images_and_accounts_for_both_calls() {
     let bodies = script.bodies();
     let body = &bodies[0];
     assert_eq!(body["model"], "reader");
-    assert!(body.get("max_tokens").is_none(), "no output cap is sent");
+    // A routed request caps its output, so a degenerate generation ends in seconds rather than minutes.
+    assert_eq!(body["max_tokens"], 32_768);
     // Strict output requires every property and no defaults; a docstring is the field's only guidance.
     let json_schema = &body["response_format"]["json_schema"];
     let schema = &json_schema["schema"];
@@ -221,14 +222,14 @@ async fn test_an_error_status_retry_does_not_add_llm_cost() {
 }
 
 #[tokio::test]
-async fn test_a_response_cut_off_sends_no_cap_and_is_asked_once_more() {
-    // A provider's decoder can write whitespace inside the JSON until the model's maximum; asked again, it answered.
+async fn test_a_response_cut_off_at_the_routed_cap_is_asked_once_more() {
+    // A provider's decoder can write whitespace inside the JSON until the cap; asked again, it answered.
     let script = Script::new([truncated(r#"{"count":""#), stopped(r#"{"count":5}"#, None)]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Start, "composer");
     let result = generate(&llm, LLMPurpose::Start, &[], None).await.unwrap();
     assert_eq!(result.data["count"], 5);
     assert_eq!(script.requests().len(), 2);
-    assert_eq!(caps(&script), [Value::Null, Value::Null]);
+    assert_eq!(caps(&script), [json!(32_768), json!(32_768)]);
     assert_eq!(result.cost.physical_requests, Some(2));
 }
 

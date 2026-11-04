@@ -45,8 +45,14 @@ pub fn gateway_provider_routing() -> Value {
     json!({"sort": "ttft"})
 }
 
-/// Request fields fastbrowse sets itself, and the output caps it never sends. An extra body that named one would replace
-/// the schema or the messages, or cut a reply short, so the run would fail far from the setting that caused it.
+/// The output cap a routed request sends. Every fastbrowse reply is a few thousand tokens at most, reasoning included,
+/// and every endpoint of the default models lists 64k or more, so it cuts only a degenerate generation: one DeepSeek
+/// compose call ran to 131,072 tokens over six minutes before it ended (#749). Another server gets no cap, since it may
+/// refuse the field.
+pub const ROUTED_OUTPUT_TOKENS: i64 = 32_768;
+
+/// Request fields fastbrowse sets itself, and the output caps. An extra body that named one would replace the schema or
+/// the messages, or change where a reply is cut, so the run would fail far from the setting that caused it.
 pub const RESERVED_BODY_KEYS: [&str; 7] =
     ["max_completion_tokens", "max_tokens", "messages", "model", "provider", "reasoning", "response_format"];
 
@@ -118,8 +124,8 @@ fn truncated(payload: &Map<String, Value>) -> Result<bool, String> {
 
 /// A response the model or provider cut off, named as truncation so it is never read as a bad answer.
 ///
-/// fastbrowse sends no output cap, so this is the model's own output maximum or a provider that dropped the tail. A
-/// cut-off reply is asked once more: the runaways measured were a provider's decoder writing whitespace inside the JSON
+/// This is the routed output cap, the model's own output maximum or a provider that dropped the tail. A cut-off reply is
+/// asked once more: the runaways measured were a provider's decoder writing whitespace inside the JSON
 /// or one paragraph of reasoning repeated until the maximum, and the same request asked again answered.
 fn truncation(purpose: LLMPurpose) -> LLMError {
     LLMError::Failed(format!("LLM response was cut off before its JSON ended ({purpose})"))
@@ -206,7 +212,8 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
         let endpoint = object_value(Some(entry))?;
         let context = token_count(endpoint.get("context_length"))?;
         found.context = found.context.max(context);
-        // A request sets no output limit, so the endpoint holds its listed completion length back from the window.
+        // Holding the listed completion length back from the window keeps the bound at or below what fits, whatever
+        // output cap the request sends.
         let output = match endpoint.get("max_completion_tokens") {
             None | Some(Value::Null) => 0,
             listed => token_count(listed)?,
@@ -703,8 +710,10 @@ impl OpenAICompatibleLLM {
         body.insert("model".into(), model.clone().into());
         body.insert("messages".into(), wire_messages.into());
         body.insert("response_format".into(), response_format);
+        // Only OpenRouter and the gateway route, and both take `max_tokens`.
         if let Some(routing) = &self.provider_routing {
             body.insert("provider".into(), routing.clone());
+            body.insert("max_tokens".into(), ROUTED_OUTPUT_TOKENS.into());
         }
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
@@ -832,7 +841,7 @@ impl OpenAICompatibleLLM {
             // it read, so it is scrubbed too.
             let detail = scrub(&detail, &self.api_key);
             if ends_mid_json {
-                // fastbrowse sets no output cap, so a reply ending mid-JSON was cut off by the model or provider.
+                // A reply ending mid-JSON was cut off by the output cap, the model or the provider.
                 if attempt == 0 {
                     continue;
                 }

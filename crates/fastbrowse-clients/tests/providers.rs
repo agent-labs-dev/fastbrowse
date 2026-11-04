@@ -271,7 +271,7 @@ fn test_an_extra_body_cannot_replace_the_presets_own_fields() {
     ]);
     let error = config_error(loaded.llm(&Script::default().http()));
     assert!(error.contains("reasoning_effort"), "{error}");
-    // Nor can it set an output cap, which fastbrowse never sends.
+    // Nor can it set an output cap, which fastbrowse owns.
     let loaded = settings(&[
         ("FASTBROWSE_LLM_PROVIDER", "openai"),
         ("OPENAI_API_KEY", "k"),

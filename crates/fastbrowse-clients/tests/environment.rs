@@ -434,6 +434,8 @@ async fn test_a_base_url_takes_the_llm_from_openrouter_and_the_gateway() {
         assert_eq!(seen[0].header("authorization"), None);
         assert_eq!(body(&seen[0])["model"], "qwen");
         assert!(body(&seen[0]).get("provider").is_none());
+        // Only OpenRouter and the gateway get an output cap; another server may refuse the field.
+        assert!(body(&seen[0]).get("max_tokens").is_none());
         assert_eq!(result.data["answer"], "ok");
     }
 }
