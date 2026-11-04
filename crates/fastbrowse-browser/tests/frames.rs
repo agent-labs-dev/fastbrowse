@@ -448,9 +448,10 @@ async fn test_close_does_not_wait_on_a_frame_callback_that_ignores_cancellation(
 
 // -- test_command_deadline.py: a live browser can leave one page command unanswered indefinitely --------------------
 //
-// These run on the real `CDP_REPLY_SECONDS` (60s), `CDP_ALIVE_SECONDS` (10s) and `CDP_COMMAND_SECONDS` (120s), which
-// are constants a test cannot shorten as Python's monkeypatch does, so each takes minutes and is ignored by default.
-// Each Python scenario is kept, its times scaled to these.
+// These run on the real `CDP_REPLY_SECONDS` (60s), `CDP_PAGE_SECONDS` (10s), `CDP_ALIVE_SECONDS` (10s) and
+// `CDP_COMMAND_SECONDS` (120s), which are constants a test cannot shorten as Python's monkeypatch does, so each takes
+// half a minute or more and is ignored by default. Each Python scenario is kept, its times scaled to these. A command
+// to a page also asks the page whether it answers, and the fake holds that `Runtime.evaluate` with the command.
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "slow: waits out the real CDP_COMMAND_SECONDS, about 120s"]
@@ -476,7 +477,7 @@ async fn test_unanswered_command_from_live_browser_has_a_deadline() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow: waits out the real CDP_COMMAND_SECONDS, about 120s"]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and CDP_ALIVE_SECONDS, about 20s"]
 async fn test_repeated_command_deadlines_stop_the_tab_instead_of_recurring() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
@@ -505,7 +506,7 @@ async fn test_repeated_command_deadlines_stop_the_tab_instead_of_recurring() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow: waits out the real CDP_COMMAND_SECONDS and CDP_ALIVE_SECONDS, about 130s"]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and two CDP_ALIVE_SECONDS, about 30s"]
 async fn test_a_browser_gone_by_the_command_deadline_is_an_outage() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
@@ -513,8 +514,8 @@ async fn test_a_browser_gone_by_the_command_deadline_is_an_outage() {
     let client = session.client().unwrap();
     let sending = client.send("Runtime.evaluate", json!({"expression": "1"}), Some("session"));
     let gone = async {
-        // The probe after the first wait answers; the browser goes before the deadline ends the second.
-        tokio::time::sleep(Duration::from_secs(65)).await;
+        // The browser answers the probe after the first wait, and goes while the page is asked whether it answers.
+        tokio::time::sleep(Duration::from_secs(15)).await;
         fake.block("Browser.getVersion");
     };
     let (raised, ()) = tokio::join!(sending, gone);
@@ -526,15 +527,15 @@ async fn test_a_browser_gone_by_the_command_deadline_is_an_outage() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow: waits out the 120s command deadline"]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and two CDP_ALIVE_SECONDS, about 30s"]
 async fn test_a_reply_that_lands_during_the_deadline_probe_is_kept() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
-    // The probe at the deadline waits on a browser slow to answer, and the page's reply lands meanwhile. Python's
-    // probe at the first wait is cut short by the deadline; the Rust probe is shorter than the wait, so it answers.
+    // The page leaves the probe unanswered, so the command is past its deadline, and the browser probe that follows
+    // waits on a browser slow to answer; the page's reply lands meanwhile. The first browser probe answers.
     fake.queue("Browser.getVersion", [json!({})]);
     fake.block("Browser.getVersion");
-    fake.delay("Runtime.evaluate", 125.0);
+    fake.delay("Runtime.evaluate", 22.0);
     let reply = session.client().unwrap().send("Runtime.evaluate", json!({"expression": "1"}), Some("session")).await;
     session.close().await.unwrap();
     assert_eq!(reply.unwrap(), json!({"result": {"value": "loading"}}));

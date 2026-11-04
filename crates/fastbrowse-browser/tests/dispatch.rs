@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use common::{eval_value, find, harness, harness_with, js, observe_until, sites};
 use dispatch_support::{PROXY_ERROR, action, eval_active, failing_proxy, fill, unanswering_proxy};
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::scripts::UNCOVER_JS;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing;
@@ -1353,5 +1354,34 @@ async fn test_a_wait_lasts_until_the_page_changes_by_itself() {
     assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.text.contains("Updated 16:59:27"), "{}", capture.text);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_input_event_to_a_hung_page_fails_soon_while_the_browser_answers() {
+    let Some(h) = harness().await else { return };
+    // The release starts a click handler that never returns, so it is never answered.
+    h.page
+        .navigate("data:text/html,<button style='width:100vw;height:100vh' onclick='while(true){}'>Go</button>", None)
+        .await
+        .unwrap();
+    let session_id = h.session.active_session_id().unwrap();
+    let mouse = |kind| json!({"type": kind, "x": 50, "y": 50, "button": "left", "clickCount": 1});
+    let started = std::time::Instant::now();
+    h.session
+        .send("Input.dispatchMouseEvent", mouse("mousePressed"), Some(&session_id))
+        .await
+        .expect("the press is answered");
+    let raised = tokio::time::timeout(
+        Duration::from_secs(40),
+        h.session.send("Input.dispatchMouseEvent", mouse("mouseReleased"), Some(&session_id)),
+    )
+    .await
+    .expect("a hung page is told apart from a slow one well before the command deadline")
+    .unwrap_err();
+    eprintln!("hung page reported after {:.1}s: {raised}", started.elapsed().as_secs_f64());
+    assert!(matches!(raised, BrowserError::PageUnresponsive(_)), "{raised:?}");
+    assert!(!raised.is_unavailable(), "the browser answered throughout");
+    h.session.send("Target.getTargets", json!({}), None).await.expect("the browser still answers");
     h.close().await;
 }

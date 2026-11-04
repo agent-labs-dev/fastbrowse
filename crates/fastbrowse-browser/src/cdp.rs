@@ -34,6 +34,11 @@ pub const CDP_REPLY_SECONDS: f64 = 60.0;
 pub const CDP_COMMAND_SECONDS: f64 = 120.0;
 /// `Browser.getVersion` is answered at once by any browser that is there.
 pub const CDP_ALIVE_SECONDS: f64 = 10.0;
+/// How long a command to a page waits before the page is asked whether it still answers. A renderer whose main thread
+/// never returns, as after a click handler that loops, answers nothing it is sent, while a page waiting on a slow
+/// server still answers a trivial evaluation. Only a page that leaves that unanswered for `CDP_ALIVE_SECONDS` too
+/// is unresponsive, so a hung page is known in about 20 seconds rather than at `CDP_COMMAND_SECONDS`.
+pub const CDP_PAGE_SECONDS: f64 = 10.0;
 /// Command deadlines one session may meet before its commands fail at once, as `PageUnresponsive`. A read
 /// that waits out the deadline is often one whose caller treats a failed read as an unreadable page and carries on,
 /// so the next read waited it out again: one login run met it thirteen times, 26 minutes on a page it could not
@@ -300,7 +305,11 @@ impl Cdp {
         tokio::pin!(reply);
         let deadline = Instant::now() + secs(CDP_COMMAND_SECONDS);
         let outcome = loop {
-            let wait = if self.answered() { CDP_REPLY_SECONDS } else { CDP_ALIVE_SECONDS };
+            let wait = match (self.answered(), session) {
+                (false, _) => CDP_ALIVE_SECONDS,
+                (true, Some(_)) => CDP_PAGE_SECONDS,
+                (true, None) => CDP_REPLY_SECONDS,
+            };
             let until = (Instant::now() + secs(wait)).min(deadline);
             match timeout_at(until, &mut reply).await {
                 Ok(outcome) => break Some(outcome),
@@ -309,9 +318,16 @@ impl Cdp {
             }
             // The probe runs inside the command deadline, as Python's does under `asyncio.timeout`.
             let Ok(alive) = timeout_at(deadline, self.alive()).await else { break None };
-            // A reply that landed while the probe waited still counts, however the probe ended.
+            let page_answers = match session {
+                Some(id) if alive => timeout_at(deadline, self.page_answers(id)).await.unwrap_or(false),
+                _ => true,
+            };
+            // A reply that landed while a probe waited still counts, however the probe ended.
             if let Ok(outcome) = timeout(Duration::ZERO, &mut reply).await {
                 break Some(outcome);
+            }
+            if !page_answers {
+                break None;
             }
             if !alive {
                 if !self.answered() {
@@ -382,6 +398,13 @@ impl Cdp {
             self.0.answered.store(true, Ordering::Relaxed);
         }
         alive
+    }
+
+    /// Whether the page behind `session` still runs anything: an error reply is an answer too, since the page read
+    /// the command.
+    async fn page_answers(&self, session: &str) -> bool {
+        let probe = self.call("Runtime.evaluate", json!({"expression": "0"}), Some(session));
+        matches!(timeout(secs(CDP_ALIVE_SECONDS), probe).await, Ok(Ok(_) | Err(CdpError::Protocol { .. })))
     }
 
     /// Run `handler` on every event, on the reader task, before any later message is routed. It must not block.
