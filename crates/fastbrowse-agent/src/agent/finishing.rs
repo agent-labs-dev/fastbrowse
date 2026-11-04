@@ -219,8 +219,8 @@ impl Agent {
         {
             let reason = "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.";
             state.composition_feedback = Some(self.redact(&rejection));
-            if state.checked_composition(&state.notes_to_compose()).is_none()
-                && let Some(answer) = &answered
+            if let Some(answer) = &answered
+                && !answer.claims.is_empty()
             {
                 state.composition_partial =
                     Some((answer.clone(), RunState::composition_sources(&state.notes_to_compose())));

@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The completion decision sees the selected answer separately from retained evidence, so a value left out of the answer is still an open requirement.
 
+- Composition recovery retains the latest nonempty checked partial draft, so a later repair's supported facts are available when the run stops.
+
+- Verbatim answers are checked for support and requested coverage after note selection, falling back to composition when the selected claims do not answer the task.
+
 - Initial and repaired answers receive a requested-coverage check alongside citation support. Coverage checks distinguish requested facts and values from citation support and browser actions, which have separate checks.
 
 - Answer repairs retain draft citation identifiers and ask the composer to preserve supported values while correcting rejected claims. Every repaired claim and the answer's coverage are checked again.

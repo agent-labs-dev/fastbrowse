@@ -648,7 +648,11 @@ pub async fn verdict(
         .filter(|(index, _)| picked(*index))
         .map(|(_, fact)| Claim::new(&fact.text, vec![fact_id(fact)]))
         .collect();
-    Ok((!claims.is_empty()).then(|| assemble_answer(&claims, notes)))
+    if claims.is_empty() {
+        return Ok(None);
+    }
+    let checked = review_claims(jev, task, None, claims, notes, ledger, true).await?;
+    Ok(checked.problem.is_none().then(|| assemble_answer(&checked.claims, notes)))
 }
 
 const PARTIAL_NOTICE: &str = "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.";
@@ -929,6 +933,74 @@ mod tests {
         let Question::Noul(note) = &asked[0]["note0"] else { panic!("note reuse is yes-or-no") };
         assert!(note.instructions.contains("an entire answer or requested value"));
         assert!(note.instructions.contains("unrelated text"));
+    }
+
+    struct SelectedNotes(Support);
+
+    impl DecisionClient for SelectedNotes {
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            if !questions.contains_key("whole") {
+                return self.0.evaluate(state, questions);
+            }
+            let answers = questions
+                .keys()
+                .map(|key| {
+                    let answer = if key == "whole" {
+                        Answer::Choice(fastbrowse_core::decision::ChoiceAnswer {
+                            kind: Default::default(),
+                            choice: QUOTED.into(),
+                            probabilities: IndexMap::new(),
+                            confidence: 1.0,
+                        })
+                    } else {
+                        Answer::Noul(fastbrowse_core::decision::NoulAnswer {
+                            kind: Default::default(),
+                            probability: if key == "note0" { 1.0 } else { 0.0 },
+                        })
+                    };
+                    (key.clone(), answer)
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(fastbrowse_core::decision::Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 0,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            self.0.profile()
+        }
+    }
+
+    #[tokio::test]
+    async fn verbatim_selection_requires_the_selected_claims_to_cover_the_request() {
+        let notes = Notes::new([fact(0, "Record B: 34".into()), fact(1, "Record C: 56".into())]);
+        for accepted in [false, true] {
+            let mut support = Support::new(true);
+            support.rejected = (!accepted).then(|| "coverage".into());
+            let jev = SelectedNotes(support);
+            let answer = verdict(&jev, "Report B and C", &notes, None).await.unwrap();
+            assert_eq!(answer.is_some(), accepted);
+            let asked = jev.0.asked.lock().unwrap();
+            assert_eq!(asked.len(), 1);
+            assert!(asked[0].contains_key("claim0"));
+            assert!(!asked[0].contains_key("claim1"));
+            let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is yes-or-no") };
+            assert!(coverage.instructions.contains("Record B: 34"));
+            assert!(!coverage.instructions.contains("Record C: 56"));
+        }
     }
 
     #[tokio::test]

@@ -1987,12 +1987,13 @@ impl DecisionClient for Verdict {
                         let probability = if note.contains(self.0) { 0.9 } else { 0.1 };
                         Answer::Noul(NoulAnswer { kind: Default::default(), probability })
                     }
-                    None => Answer::Choice(ChoiceAnswer {
+                    None if matches!(questions[key], Question::Choice(_)) => Answer::Choice(ChoiceAnswer {
                         kind: Default::default(),
                         choice: "quote".into(),
                         probabilities: IndexMap::new(),
                         confidence: 0.9,
                     }),
+                    None => Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.9 }),
                 };
                 (key.clone(), answer)
             })
@@ -3228,6 +3229,50 @@ fn composition_repair_state() -> RunState {
     let captured = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
     state.notes.add(Fact::read("Record B: 34", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
     state
+}
+
+struct GrowingComposer(std::sync::atomic::AtomicUsize);
+
+impl LLMClient for GrowingComposer {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let second = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0;
+        Box::pin(async move {
+            let mut claims = vec![json!({"text": "Record B: 34", "evidence_ids": ["e0"]})];
+            if second {
+                claims.push(json!({"text": "Record C: 57", "evidence_ids": ["e1"]}));
+            }
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_recovery_retains_the_latest_checked_partial_revision() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        repair_jev(vec![(1.0, 0.0), (1.0, 0.0)]),
+        Arc::new(GrowingComposer(Default::default())),
+    );
+    let mut state = composition_repair_state();
+    state.task = "Report Record B, C and D values".into();
+    let captured = capture(&[(BlockKind::Paragraph, "Record C: 57")]);
+    state.notes.add(Fact::read("Record C: 57", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let flow = agent.finish(&mut state, &page, None, None).await.expect_err("missing D exhausts recovery");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::Unverified);
+    let answer = result.answer.unwrap();
+    assert!(answer.contains("Record B: 34"));
+    assert!(answer.contains("Record C: 57"));
 }
 
 fn repair_jev(checks: Vec<(f64, f64)>) -> Arc<RepairComposeJev> {

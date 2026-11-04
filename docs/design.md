@@ -111,9 +111,10 @@ The composer and support check interpret a requested field by its meaning: descr
 value without a matching heading, and that value contradicts a claim that the field was not shown.
 The support question distinguishes facts about a quoted subset from claims about a whole set, and a source's
 population counter from the number of records the answer reports.
-Initial and repaired compositions are checked for both claim support and requested answer coverage in one
-decision batch. A claim with no cited quote or no support judgment is withheld and ends `unverified`. When every check is
-answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
+Verbatim note selection is checked against the selected claims' source support and requested coverage before
+returning an answer; a failed check falls back to composition. Initial and repaired compositions are checked
+for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
+support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. Repair feedback retains claim text and citation
 identifiers, so the composer can preserve supported values while correcting rejected claims. A corrected draft
 must pass citation checks and cover every requested fact or value. The coverage check judges the written
@@ -122,7 +123,8 @@ retain their extracted data and end `unverified` when the composed prose fails i
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
 Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
-their source evidence remains unchanged. Other stops also retain checked partial claims alongside their status,
+their source evidence remains unchanged. A later nonempty checked repair replaces the retained draft; an empty
+repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
 wall or budget details.
 A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked.
 
