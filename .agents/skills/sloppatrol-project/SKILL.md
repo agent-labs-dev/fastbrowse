@@ -71,7 +71,7 @@ Text a model reads is behaviour, never cleanup:
 - MCP tool descriptions in `crates/fastbrowse-cli/src/mcp`, and task text.
 - What the observation renders: `ObservationLimits` and `TokenBudget` in `crates/fastbrowse-core/src/config.rs`,
   `crates/fastbrowse-browser/src/page/mod.rs`, and the two page scripts.
-Validate behavior changes against dev evals; heldout runs are before and after a round and are not debugged.
+Validate behavior changes against dev evals.
 See [the evaluation workflow](../../../docs/agents/evals.md) for paid-run prerequisites.
 
 ## Zones
