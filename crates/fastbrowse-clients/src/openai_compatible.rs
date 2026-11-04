@@ -39,7 +39,8 @@ fn deepseek(model: &str) -> bool {
 /// The Vercel AI Gateway documents `ttft` for the lowest time to first token where OpenRouter calls that sort
 /// `latency`. It has no `require_parameters`: a provider that cannot hold a reply to `response_format` still serves
 /// the request, and the reply may not match the schema. DeepSeek V4.1 Flash failed schema validation in five of six
-/// live runs through the gateway even with `only` set to providers that list structured outputs.
+/// live runs through the gateway even with `only` set to providers that list structured outputs, answering `type` where
+/// the schema says `kind`. The request therefore also states the schema in the prompt.
 pub fn gateway_provider_routing() -> Value {
     json!({"sort": "ttft"})
 }
@@ -80,8 +81,8 @@ fn wire_message(message: &Message) -> Result<Value, LLMError> {
     Ok(json!({"role": message.role.as_str(), "content": parts}))
 }
 
-/// The schema stated for an endpoint that cannot be given it as `response_format`. JSON mode on such endpoints (DeepSeek's)
-/// also refuses a prompt that never says "json".
+/// The schema stated in the prompt, for an endpoint that cannot be given it as `response_format` or a route that may not
+/// hold the reply to it. JSON mode on such endpoints (DeepSeek's) also refuses a prompt that never says "json".
 fn schema_instruction(schema: &Value) -> String {
     format!("Reply with one JSON object, and nothing else, that matches this JSON Schema:\n{schema}")
 }
@@ -444,6 +445,14 @@ fn json_images(count: usize) -> Map<String, Value> {
 }
 
 impl OpenAICompatibleLLM {
+    /// Whether every provider that serves the request holds its reply to `response_format`. A router told to
+    /// `require_parameters` routes only to those; one without it (the AI Gateway) can pick a provider that drops the
+    /// schema, so the prompt states the schema too and the model sees it either way. A request without routing goes to
+    /// the one endpoint named, which decodes against the schema or refuses it.
+    fn routes_only_to_schema_providers(&self) -> bool {
+        self.provider_routing.as_ref().is_none_or(|routing| routing["require_parameters"] == true)
+    }
+
     /// An empty `api_key` sends no Authorization header, which is what a keyless local server expects.
     pub fn new(
         api_key: impl Into<String>,
@@ -676,10 +685,15 @@ impl OpenAICompatibleLLM {
         }
         let json_schema = if deepseek(model) { flat_optional_objects(&json_schema) } else { json_schema };
         let response_format = match self.output_format {
-            OutputFormat::JsonSchema => json!({
-                "type": "json_schema",
-                "json_schema": {"name": schema.name(), "schema": json_schema, "strict": self.strict},
-            }),
+            OutputFormat::JsonSchema => {
+                if !self.routes_only_to_schema_providers() {
+                    wire_messages.push(json!({"role": "system", "content": schema_instruction(&json_schema)}));
+                }
+                json!({
+                    "type": "json_schema",
+                    "json_schema": {"name": schema.name(), "schema": json_schema, "strict": self.strict},
+                })
+            }
             OutputFormat::JsonObject => {
                 wire_messages.push(json!({"role": "system", "content": schema_instruction(&json_schema)}));
                 json!({"type": "json_object"})

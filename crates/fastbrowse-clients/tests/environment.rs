@@ -328,6 +328,46 @@ async fn test_llm_uses_the_gateway_without_an_openrouter_key() {
     assert_eq!(result.cost.basis, CostBasis::Metered);
 }
 
+/// A model behind a provider that drops `response_format`, as DeepSeek on the gateway did: it sees only the messages,
+/// so it follows the schema when a message states it and otherwise writes the reported shape, `type` where the plan
+/// says `kind`.
+fn ignores_response_format(request: &Request) -> Response {
+    let sent = body(request);
+    let stated = sent["messages"].as_array().unwrap().iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("JSON Schema") && content.contains("\"kind\""))
+    });
+    let requirement = if stated { json!({"text": "t", "kind": "fact"}) } else { json!({"text": "t", "type": "fact"}) };
+    let reply = json!({"requirements": [requirement], "answer_expected": true, "note": null});
+    Response::json(
+        200,
+        &json!({"choices": [{"message": {"content": reply.to_string()}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "cost": 0.001}}),
+    )
+}
+
+#[tokio::test]
+async fn test_the_gateway_states_the_schema_a_provider_may_not_hold_the_reply_to() {
+    // The gateway has no `require_parameters`, so a provider that ignores the schema still serves the request. Stated
+    // in the prompt too, the schema reaches the model either way, and a reply in the reported shape is never written.
+    let http = answering(|request| {
+        let response = ignores_response_format(request);
+        Box::pin(async move { Ok(response) })
+    });
+    let llm = settings(&[("AI_GATEWAY_API_KEY", "g")]).llm(&http).unwrap();
+    let messages = [Message::user("Plan the task.")];
+    let plan = llm.generate_value(LLMPurpose::Start, &messages, &common::plan_model(), None).await.unwrap();
+    assert_eq!(plan.data["requirements"][0]["kind"], "fact");
+    // OpenRouter routes only to providers that hold the reply to the schema, so its prompt carries no copy.
+    let script = Script::new([common::Step::Reply(completion(Some(0.001)))]);
+    let llm = settings(&[("OPENROUTER_API_KEY", "o")]).llm(&script.http()).unwrap();
+    llm.generate_value(LLMPurpose::Start, &messages, &answer_model(), None).await.unwrap();
+    let sent = &script.bodies()[0];
+    assert_eq!(sent["messages"].as_array().unwrap().len(), 1, "{sent}");
+    assert_eq!(sent["response_format"]["type"], "json_schema");
+}
+
 #[tokio::test]
 async fn test_gateway_usage_without_a_cost_is_bounded() {
     // The gateway reports `usage.cost`; a response without it must not read as free, so it is bounded from the
