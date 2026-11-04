@@ -40,8 +40,8 @@ class ScriptedJev:
     """Answers each choice as the script's current step says, and every yes/no so that the run goes on.
 
     A run's options do not cross the protocol, so the thresholds are the shipped ones. A flat probability
-    cannot serve them all: the walls and the irreversible check stop a run above theirs, and the done check
-    stops it below its own.
+    cannot serve them all: the walls and the irreversible check stop a run above theirs, and the check that the
+    answer covers the task stops it below its own.
     """
 
     def __init__(self, script: Sequence[Step]) -> None:
@@ -66,7 +66,7 @@ class ScriptedJev:
                         confidence=1.0,
                     )
                 case NoulQuestion():
-                    answers[key] = NoulAnswer(probability=0.0)
+                    answers[key] = NoulAnswer(probability=float(key == "coverage"))
                 case _:
                     raise AssertionError(f"the scripted Jev has no answer for {key!r}")
         return Evaluation(

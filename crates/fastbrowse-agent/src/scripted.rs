@@ -61,10 +61,11 @@ pub fn steps(task: &str) -> Result<Vec<Step>> {
     Ok(found)
 }
 
-/// Answers each choice as the script's current step says, and every yes/no with no.
+/// Answers each choice as the script's current step says, and every yes/no with no but whether the answer covers the
+/// task.
 ///
 /// A no keeps a wall, a sign-in or the irreversible check from stopping the scripted run, and the run ends when the
-/// script runs out and the operation choice falls back to DONE.
+/// script runs out and the operation choice falls back to DONE, with the answer it read judged to cover the task.
 pub struct ScriptedJev {
     state: Mutex<Script>,
 }
@@ -134,7 +135,8 @@ impl DecisionClient for ScriptedJev {
                     );
                 }
                 Question::Noul(_) => {
-                    answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.0 }));
+                    let probability = f64::from(u8::from(key == "coverage"));
+                    answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability }));
                 }
                 Question::Score(_) | Question::Box(_) => {
                     failure =
