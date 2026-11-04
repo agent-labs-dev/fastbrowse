@@ -8,6 +8,7 @@ import java.util.List;
 /**
  * @param completeSource The quote covers an entire downloaded text file, apart from surrounding whitespace.
  * @param renderedText False for typed DOM observations whose quote is not literal rendered page text.
+ * @param table The quote is cut from table blocks alone, which a capture writes as markdown rows.
  * @param headingPath The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
  */
 public record Evidence(
@@ -22,6 +23,7 @@ public record Evidence(
     @JsonProperty("complete_source") boolean completeSource,
     @JsonProperty("control_context") SourceControl controlContext,
     @JsonProperty("rendered_text") boolean renderedText,
+    @JsonProperty("table") Boolean table,
     @JsonProperty("heading_path") List<String> headingPath) {
 
     /** A builder for a {@code Evidence}, every field unset. */
@@ -42,6 +44,7 @@ public record Evidence(
         private boolean completeSource;
         private SourceControl controlContext;
         private boolean renderedText;
+        private Boolean table;
         private List<String> headingPath;
 
         private Builder() {}
@@ -101,13 +104,18 @@ public record Evidence(
             return this;
         }
 
+        public Builder table(Boolean table) {
+            this.table = table;
+            return this;
+        }
+
         public Builder headingPath(List<String> headingPath) {
             this.headingPath = headingPath;
             return this;
         }
 
         public Evidence build() {
-            return new Evidence(sourceId, url, frameId, capturedAt, captureSha256, start, end, quote, completeSource, controlContext, renderedText, headingPath);
+            return new Evidence(sourceId, url, frameId, capturedAt, captureSha256, start, end, quote, completeSource, controlContext, renderedText, table, headingPath);
         }
     }
 }

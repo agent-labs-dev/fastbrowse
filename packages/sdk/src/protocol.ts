@@ -114,7 +114,7 @@ export interface CostLine {
   input_tokens: number;
   output_tokens: number;
   /**
-   * Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+   * Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
    */
   seconds: number | null;
 }
@@ -145,6 +145,10 @@ export interface Evidence {
    * False for typed DOM observations whose quote is not literal rendered page text.
    */
   rendered_text: boolean;
+  /**
+   * The quote is cut from table blocks alone, which a capture writes as markdown rows.
+   */
+  table?: boolean;
   /**
    * The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
    */

@@ -273,7 +273,7 @@
             }
           ],
           "default": null,
-          "description": "Wall time of the call, retries included. None for a line that is not one call, such as browser time.",
+          "description": "Wall time of the call, retries included, or the time a metered browser was held. None when unknown.",
           "title": "Seconds"
         }
       },
@@ -427,6 +427,12 @@
           "default": true,
           "description": "False for typed DOM observations whose quote is not literal rendered page text.",
           "title": "Rendered Text",
+          "type": "boolean"
+        },
+        "table": {
+          "default": false,
+          "description": "The quote is cut from table blocks alone, which a capture writes as markdown rows.",
+          "title": "Table",
           "type": "boolean"
         },
         "heading_path": {

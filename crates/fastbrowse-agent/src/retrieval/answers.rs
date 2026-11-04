@@ -2,11 +2,11 @@
 
 use std::collections::HashSet;
 
-use fastbrowse_core::citations::text_fragment;
+use fastbrowse_core::citations::{page_text, text_fragment};
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
-use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED, background_section};
+use fastbrowse_core::models::{Citation, Evidence, LLMPurpose, UNTRUSTED, background_section};
 use fastbrowse_core::page::cut_text;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
@@ -157,6 +157,21 @@ pub fn retain_fields(answer: ComposedAnswer, previous: &ComposedAnswer, notes: &
     assemble_answer(&claims, notes, &answer.requirements, answer.dropped_claims).with_outputs(outputs)
 }
 
+/// The quote and link a reader is shown for `evidence`, each passed through `redact`: the page's own text, a table's
+/// rows without the markdown the capture wrote them in, and a link that highlights it there. A typed observation is
+/// code's description rather than page text, so it links to the address alone. The link is built from the redacted
+/// text, since percent-encoding hides a secret from redaction.
+pub(crate) fn cited_quote(evidence: &Evidence, redact: impl Fn(&str) -> String) -> (String, String) {
+    let url = redact(&evidence.url);
+    if !evidence.rendered_text {
+        return (redact(&evidence.quote), url);
+    }
+    let quote = redact(&if evidence.table { page_text(&evidence.quote) } else { evidence.quote.clone() });
+    // Python raises on a quote of only whitespace; a capture never cuts one, so the address stands in.
+    let deep_link = text_fragment(&url, &quote).unwrap_or(url);
+    (quote, deep_link)
+}
+
 /// `assemble_answer`: the claims with their numbered links and the citations they use.
 pub fn assemble_answer(
     claims: &[Claim],
@@ -175,18 +190,13 @@ pub fn assemble_answer(
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact, evidence)))
         .enumerate()
         .map(|(index, (fact, evidence))| {
-            // Python raises on a quote of only whitespace; a capture never cuts one, so the address stands in.
-            let deep_link = if evidence.rendered_text {
-                text_fragment(&evidence.url, &evidence.quote).unwrap_or_else(|_| evidence.url.clone())
-            } else {
-                evidence.url.clone()
-            };
+            let (quote, deep_link) = cited_quote(evidence, str::to_owned);
             let citation = Citation {
                 id: index as i64 + 1,
                 text: fact.text.clone(),
                 requirement_id: fact.requirement_id.clone(),
                 url: evidence.url.clone(),
-                quote: evidence.quote.clone(),
+                quote,
                 deep_link,
             };
             (fact_id(fact), citation)
@@ -826,5 +836,27 @@ mod tests {
         assert_eq!(without_citation_markup("Value [sha:1:2], [derived:abc], [tally:abc]"), "Value , ,");
         assert_eq!(without_citation_markup("Use [optional] fields"), "Use [optional] fields");
         assert_eq!(without_citation_markup("See [docs](https://x.test) and [3]"), "See docs and");
+    }
+
+    #[test]
+    fn a_table_row_is_cited_as_the_page_shows_it() {
+        let quoted = |quote: &str, rendered_text: bool, table: bool| -> Evidence {
+            serde_json::from_value(json!({
+                "source_id": "s1", "url": "https://news.example/", "frame_id": null,
+                "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": "sha", "start": 0, "end": 1,
+                "quote": quote, "rendered_text": rendered_text, "table": table,
+            }))
+            .unwrap()
+        };
+        let row = "| Hacker News \\| past | login |";
+        let (quote, link) = cited_quote(&quoted(row, true, true), str::to_owned);
+        assert_eq!(quote, "Hacker News | past login");
+        assert_eq!(link, "https://news.example/#:~:text=Hacker%20News%20%7C%20past%20login");
+        // Prose or code that only looks like a row is the page's own text, pipes and backslashes included.
+        let (quote, link) = cited_quote(&quoted(row, true, false), str::to_owned);
+        assert_eq!(quote, row);
+        assert_eq!(link, "https://news.example/#:~:text=%7C%20Hacker%20News%20%5C%7C%20past%20%7C%20login%20%7C");
+        let (quote, link) = cited_quote(&quoted("| typed |", false, true), str::to_owned);
+        assert_eq!((quote.as_str(), link.as_str()), ("| typed |", "https://news.example/"));
     }
 }

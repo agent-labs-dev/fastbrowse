@@ -156,7 +156,7 @@ public sealed record CostLine
     public required long OutputTokens { get; init; }
 
     /// <summary>
-    /// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+    /// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
     /// </summary>
     [JsonPropertyName("seconds")]
     public double? Seconds { get; init; }
@@ -215,6 +215,12 @@ public sealed record Evidence
     /// </summary>
     [JsonPropertyName("rendered_text")]
     public required bool RenderedText { get; init; }
+
+    /// <summary>
+    /// The quote is cut from table blocks alone, which a capture writes as markdown rows.
+    /// </summary>
+    [JsonPropertyName("table")]
+    public bool? Table { get; init; }
 
     /// <summary>
     /// The headings the quote sits under on the page: which record a bare "£10.69" is the price of.

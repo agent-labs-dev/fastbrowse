@@ -180,6 +180,11 @@ pub struct Evidence {
     /// False for typed DOM observations whose quote is not literal rendered page text.
     #[serde(default = "yes", deserialize_with = "lax::boolean")]
     pub rendered_text: bool,
+    /// The quote is cut from table blocks alone, which a capture writes as markdown rows.
+    // Left out of the output when false: evidence is shown to Jev as its JSON, so writing it on every quote would
+    // change every claim check's question, not only those about a table.
+    #[serde(default, deserialize_with = "lax::boolean", skip_serializing_if = "std::ops::Not::not")]
+    pub table: bool,
     /// The headings the quote sits under on the page: which record a bare price is the price of.
     #[serde(default)]
     pub heading_path: Vec<String>,
@@ -203,6 +208,7 @@ impl Schema for Evidence {
                 Field::default("control_context", Ty::optional(SourceControl::ty()), Value::Null),
                 Field::default("rendered_text", Ty::Bool, true)
                     .doc("False for typed DOM observations whose quote is not literal rendered page text."),
+                Field::default("table", Ty::Bool, false).omitted_when_empty().doc("The quote is cut from table blocks alone, which a capture writes as markdown rows."),
                 Field::default("heading_path", Ty::list(Ty::Str), Value::Array(vec![])).doc(
                     "The headings the quote sits under on the page: which record a bare \"\u{a3}10.69\" is the price of.",
                 ),
@@ -427,7 +433,7 @@ pub struct CostLine {
     pub input_tokens: i64,
     #[serde(default, deserialize_with = "lax::int_ge0")]
     pub output_tokens: i64,
-    /// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+    /// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
     #[serde(default, deserialize_with = "lax::opt_float_ge0")]
     pub seconds: Option<f64>,
 }
@@ -457,7 +463,7 @@ impl Schema for CostLine {
                 Field::default("input_tokens", Ty::Int.ge(0), 0),
                 Field::default("output_tokens", Ty::Int.ge(0), 0),
                 Field::default("seconds", Ty::optional(Ty::Float.ge(0)), Value::Null).doc(
-                    "Wall time of the call, retries included. None for a line that is not one call, such as browser time.",
+                    "Wall time of the call, retries included, or the time a metered browser was held. None when unknown.",
                 ),
             ],
         )

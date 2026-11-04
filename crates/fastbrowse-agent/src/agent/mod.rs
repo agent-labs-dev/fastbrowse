@@ -51,7 +51,7 @@ use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
+use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, cited_quote, compose, partial_answer};
 use crate::shortcut::{Shortcut, propose_shortcut};
 use crate::verification::RecordSchema;
 
@@ -787,17 +787,12 @@ impl Agent {
         let Some(evidence) = &fact.evidence else {
             return StepFact { text, requirement_id, quote: None, url: None, reader: fact.reader, deep_link: None };
         };
-        let (url, quote) = (self.redact(&evidence.url), self.redact(&evidence.quote));
-        let deep_link = if evidence.rendered_text {
-            text_fragment(&url, &quote).unwrap_or_else(|_| url.clone())
-        } else {
-            url.clone()
-        };
+        let (quote, deep_link) = cited_quote(evidence, |value| self.redact(value));
         StepFact {
             text,
             requirement_id,
             quote: Some(quote),
-            url: Some(url),
+            url: Some(self.redact(&evidence.url)),
             reader: fact.reader,
             deep_link: Some(deep_link),
         }

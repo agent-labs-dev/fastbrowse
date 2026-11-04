@@ -91,7 +91,7 @@ type CostLine struct {
 	Purpose      *LLMPurpose   `json:"purpose"`
 	InputTokens  int64         `json:"input_tokens"`
 	OutputTokens int64         `json:"output_tokens"`
-	// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+	// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
 	Seconds *float64 `json:"seconds"`
 }
 
@@ -144,6 +144,8 @@ type Evidence struct {
 	ControlContext *SourceControl `json:"control_context"`
 	// False for typed DOM observations whose quote is not literal rendered page text.
 	RenderedText bool `json:"rendered_text"`
+	// The quote is cut from table blocks alone, which a capture writes as markdown rows.
+	Table bool `json:"table,omitempty"`
 	// The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
 	HeadingPath []string `json:"heading_path"`
 }

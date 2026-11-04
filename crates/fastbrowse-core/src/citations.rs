@@ -39,11 +39,80 @@ pub fn text_fragment(url: &str, text: &str) -> Result<String, EmptyQuote> {
     Ok(format!("{base}#{anchor}:~:text={}", directive.join(",")))
 }
 
+/// The page's own text for `quote`, a span cut from a capture's table rows.
+///
+/// A capture writes a table row as `| cell | cell |`, escapes a pipe inside a cell as `\|` and puts `| --- |` under
+/// a header. None of that is on the page, so a citation showing it, or a text fragment built from it, matches
+/// nothing there. Every unescaped pipe in a row is a cell border, so the cells are kept, separated by a space within
+/// a row and a line break between rows; a cell's own line breaks stay. A quote cut mid-row reads the same way.
+pub fn page_text(quote: &str) -> String {
+    let rows: String = quote.split_inclusive('\n').filter(|line| !separator_row(line)).collect();
+    let mut cells = Cells::default();
+    let mut chars = rows.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => cells.cell.push(chars.next().unwrap_or('|')),
+            '|' => cells.close(),
+            _ => cells.cell.push(c),
+        }
+    }
+    cells.close();
+    cells.text
+}
+
+/// The text read so far, the cell still open, and whether a row ended since the last cell with text.
+#[derive(Default)]
+struct Cells {
+    text: String,
+    cell: String,
+    new_row: bool,
+}
+
+impl Cells {
+    fn close(&mut self) {
+        let shown = self.cell.trim();
+        if shown.is_empty() {
+            // Between `|` and `|` of the next row there is only the line break.
+            self.new_row |= self.cell.contains('\n');
+        } else {
+            if !self.text.is_empty() {
+                self.text.push(if self.new_row { '\n' } else { ' ' });
+            }
+            self.text.push_str(shown);
+            self.new_row = false;
+        }
+        self.cell.clear();
+    }
+}
+
+/// The `| --- | --- |` row a capture puts under a table's header.
+fn separator_row(line: &str) -> bool {
+    line.trim_start().starts_with('|')
+        && line.contains("---")
+        && line.chars().all(|c| c.is_whitespace() || matches!(c, '|' | '-' | ':'))
+}
+
 #[cfg(test)]
 mod tests {
     //! Mirrors tests/test_citations.py.
     use super::*;
     use percent_encoding::percent_decode_str;
+
+    #[test]
+    fn page_text_drops_table_syntax_and_escapes() {
+        let quote = "| Hacker Newsnew \\| past \\| comments | login |\n| 1.\nAI is forcing us | (ieee.org) |";
+        assert_eq!(page_text(quote), "Hacker Newsnew | past | comments login\n1.\nAI is forcing us (ieee.org)");
+        let table = "| Author | Born |\n| --- | --- |\n| Frank Herbert |  |";
+        assert_eq!(page_text(table), "Author Born\nFrank Herbert");
+        assert_eq!(page_text("| First-edition cover |\n| Author | Frank"), "First-edition cover\nAuthor Frank");
+        assert_eq!(page_text("Herbert \\| Jr | 1965 |\n| Dune"), "Herbert | Jr 1965\nDune");
+    }
+
+    #[test]
+    fn a_table_quote_links_to_text_on_the_page() {
+        let quote = page_text("| Dune | Frank Herbert |");
+        assert_eq!(text_fragment("https://e.test", &quote).unwrap(), "https://e.test#:~:text=Dune%20Frank%20Herbert");
+    }
 
     #[test]
     fn text_fragment_encodes_terms() {

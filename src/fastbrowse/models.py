@@ -111,6 +111,8 @@ class Evidence(Frozen):
     control_context: SourceControl | None = None
     rendered_text: bool = True
     """False for typed DOM observations whose quote is not literal rendered page text."""
+    table: bool = Field(default=False, exclude_if=lambda table: not table)
+    """The quote is cut from table blocks alone, which a capture writes as markdown rows."""
     heading_path: tuple[str, ...] = ()
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
 
@@ -203,7 +205,7 @@ class CostLine(Frozen):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     seconds: float | None = Field(default=None, ge=0)
-    """Wall time of the call, retries included. None for a line that is not one call, such as browser time."""
+    """Wall time of the call, retries included, or the time a metered browser was held. None when unknown."""
 
     @property
     def label(self) -> str:
