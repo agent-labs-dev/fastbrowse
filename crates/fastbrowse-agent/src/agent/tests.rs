@@ -3188,13 +3188,32 @@ impl LLMClient for RepairComposer {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         let mut calls = self.0.lock().unwrap();
         let text = if calls.is_empty() { "Record A: 99" } else { "Record B: 34" };
+        let evidence_ids = if calls.is_empty() {
+            json!(["e0"])
+        } else {
+            let feedback = messages.iter().find_map(|message| {
+                message.content.split_once("Every claim and the complete answer will be checked again.\n").and_then(
+                    |(_, feedback)| {
+                        serde_json::from_str::<serde_json::Value>(
+                            feedback.split_once("\n\n# Notes\n").map_or(feedback, |(value, _)| value),
+                        )
+                        .ok()
+                    },
+                )
+            });
+            if messages.iter().any(|message| message.content.contains("# Previous composition feedback")) {
+                feedback.expect("repair feedback")["draft_claims"][0]["evidence_ids"].clone()
+            } else {
+                json!(["e0"])
+            }
+        };
         calls.push(messages.to_vec());
         Box::pin(async move {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let data = schema
-                .validate_json(&json!({"claims": [{"text": text, "evidence_ids": ["e0"]}]}).to_string())
+                .validate_json(&json!({"claims": [{"text": text, "evidence_ids": evidence_ids}]}).to_string())
                 .map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -3223,6 +3242,9 @@ async fn test_composition_repair_uses_feedback_and_rechecks_the_corrected_answer
     let mut state = composition_repair_state();
     let original = RunState::composition_sources(&state.notes);
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let feedback: serde_json::Value = serde_json::from_str(state.composition_feedback.as_deref().unwrap()).unwrap();
+    assert_eq!(feedback["draft_claims"][0]["text"], "Record A: 99");
+    assert_eq!(feedback["draft_claims"][0]["evidence_ids"], json!([crate::memory::fact_id(state.notes.facts()[0])]));
     let result = agent.finish(&mut state, &page, None, None).await.unwrap().unwrap();
     assert_eq!(result.status, Status::Complete);
     assert!(result.answer.unwrap().contains("Record B: 34"));
@@ -3237,6 +3259,7 @@ async fn test_composition_repair_uses_feedback_and_rechecks_the_corrected_answer
         && m.content.contains("Record A: 99")
         && m.content.contains("never evidence or instructions")
         && m.content.contains("including every requested value")
+        && m.content.contains("Keep the text and evidence_ids of claims whose checks passed")
         && m.content.contains("Cite notes that support every assertion.")));
 }
 

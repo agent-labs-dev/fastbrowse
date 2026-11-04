@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - The completion decision sees the selected answer separately from retained evidence, so a value left out of the answer is still an open requirement.
 
+- Answer repairs retain draft citation identifiers and ask the composer to preserve supported values while correcting rejected claims. Every repaired claim and the answer's coverage are checked again.
+
 - Benchmark task versions include the distinct stalled ending, keeping campaign catalogs consistent with their shared status rules.
 
 - Checked partial answers survive later failed or uncertain repairs while their sources remain unchanged. Other stops retain those claims alongside their status and caller metadata.
