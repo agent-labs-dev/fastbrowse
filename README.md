@@ -172,7 +172,7 @@ asyncio.run(main())
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
 
-**Recipes and recordings.** `save_recipe=Path("recipe.json")` stores the actions of a completed run.
+**Recipes and recordings.** `save_recipe=Path("recipe.json")` stores the actions of a completed run. A write failure is logged without changing the task status; check the file before replay.
 Pass `recipe=Path("recipe.json")` with the same task to reuse values when Jev selects a matching live action.
 A changed page or control falls back to the agent. Reading and completion are always checked live.
 Naming the same file for both arguments saves the healed sequence after another completed run.

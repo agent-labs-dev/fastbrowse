@@ -160,6 +160,7 @@ async def run_task(
     `recipe` reuses saved values when Jev selects a matching action on the same page, through the same
     authorization and secret gates. The task must match the recorded task. `save_recipe`
     writes the run's steps as a recipe when it ends `complete`; it may name the `recipe` file, to repair it.
+    A recipe write failure is logged without changing the task status; check that the file exists before replay.
     `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after delivery, with no fixed
     frame rate; only the latest pending frame is kept. Handler failures are logged without interrupting the run.
     A handler still running when the run ends is cancelled, and the run waits at most two seconds for it to stop.

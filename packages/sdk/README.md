@@ -96,7 +96,7 @@ may open, read and control to those exact origins: navigations, redirects, frame
 before they are sent, so a sign-in that redirects through another origin needs it listed too. It scopes documents,
 not the network, and a scoped run sends no frames and cannot `record`.
 `env` in `Fastbrowse.start` adds to the environment the process inherits.
-Recipe paths name files on the server running fastbrowse. `saveRecipe` writes after a completed run;
+Recipe paths name files on the server running fastbrowse. `saveRecipe` writes after a completed run; a write failure is logged without changing the task status, so check the file before replay;
 `recipe` reuses saved values for matching live actions with the same task.
 
 ## Platforms
