@@ -635,7 +635,7 @@ impl CdpPage {
             _ => return Err(bad("Literal['Enter', ' '] | None")),
         };
         let Some(key) = key else { return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))) };
-        if !self.focus(session_id, local_id, false, false, false).await? {
+        if !self.focus(session_id, local_id, false, false, false, true).await? {
             return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await)));
         }
         if let Some(refusal) = self.keys_reach(target, true, None).await? {
@@ -801,7 +801,9 @@ impl CdpPage {
         for attempt in 0..2 {
             if attempt > 0 || focused.is_none() {
                 let activate = focused.is_none();
-                focused = Some(self.focus(session_id, local_id, true, secret, activate).await?);
+                // The pointer route's own focus wait already answered null, so this activated wait is its one retry.
+                let retry = keyboard || attempt > 0;
+                focused = Some(self.focus(session_id, local_id, true, secret, activate, retry).await?);
                 covered = None;
             }
             if focused != Some(true) {
@@ -993,7 +995,7 @@ impl CdpPage {
                 }
                 Point::At(..) => {}
             }
-            if !self.focus(&session_id, local_id, false, false, false).await? {
+            if !self.focus(&session_id, local_id, false, false, false, true).await? {
                 return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
             }
             if let Some(refusal) = self.keys_reach(target, point == Point::Covered, None).await? {
@@ -1304,6 +1306,7 @@ impl CdpPage {
         prepare_fill: bool,
         secret: bool,
         activate: bool,
+        retry: bool,
     ) -> Result<bool, BrowserError> {
         // A pointer click normally focused the document already; background tabs still need activation. The script
         // answers null for a document without focus, before focusing it or after the wait, and the tab is brought
@@ -1314,7 +1317,7 @@ impl CdpPage {
         }
         let mut result =
             self.evaluate(session_id, &format!("{script}({local_id}, {})", py_json(&json!(activate)))).await?;
-        if result.is_null() {
+        if result.is_null() && retry {
             self.session.bring_to_front().await?;
             result = self.evaluate(session_id, &format!("{script}({local_id}, true)")).await?;
         }
