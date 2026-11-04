@@ -3,7 +3,8 @@
 //!
 //! Each case's scripted responses are handed back in order; every request must match Python's byte for byte (and so its
 //! canonical form, which a replay is keyed on), and every result, ledger line, collected spend and trace record must
-//! equal Python's. Time is paused, so an attempt deadline or a retry wait passes at once.
+//! match the recorded contract, originally captured from Python. Set `FASTBROWSE_UPDATE_GOLDEN=1` to accept producer receipt changes while keeping the
+//! scripted request bytes fixed. Time is paused, so an attempt deadline or a retry wait passes at once.
 
 mod common;
 
@@ -356,22 +357,36 @@ async fn cancellable(future: impl std::future::Future<Output = Value>, cancel: b
 }
 
 #[tokio::test(start_paused = true)]
-async fn every_case_sends_and_returns_what_python_did() {
-    let cases = cases();
+async fn every_case_preserves_request_bytes_and_receipt_contract() {
+    let mut cases = cases();
+    let update = std::env::var_os("FASTBROWSE_UPDATE_GOLDEN").is_some_and(|value| value == "1");
     assert!(cases.len() > 60, "{} cases", cases.len());
     let mut failures = Vec::new();
-    for case in &cases {
+    for case in &mut cases {
         let name = case["name"].as_str().unwrap();
         let got = replay(case).await;
+        assert_eq!(got["requests"], case["requests"], "{name}: request bytes changed");
+        if update {
+            for key in ["results", "ledgers", "spends", "trace"] {
+                case[key] = got[key].clone();
+            }
+            continue;
+        }
         for key in ["requests", "results", "ledgers", "spends", "trace"] {
             if got[key] != case[key] {
                 failures.push(format!(
-                    "{name}: {key} differ\n  python: {}\n  rust:   {}",
+                    "{name}: {key} differ\n  recorded: {}\n  rust:   {}",
                     serde_json::to_string(&case[key]).unwrap(),
                     serde_json::to_string(&got[key]).unwrap()
                 ));
             }
         }
+    }
+    if update {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/cases.json");
+        let formatted = write(&Value::Array(cases), Style::DUMPS.indented(1));
+        fs::write(path, format!("{formatted}\n")).expect("golden write");
+        return;
     }
     assert!(failures.is_empty(), "{} of {} cases differ:\n{}", failures.len(), cases.len(), failures.join("\n"));
 }

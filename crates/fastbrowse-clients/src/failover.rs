@@ -57,6 +57,7 @@ impl FailoverDecisionClient {
             lines.push(result.cost.clone());
             result.cost = fastbrowse_core::models::CostLine { seconds: result.cost.seconds, ..merged_cost(&lines) };
         }
+        result.cost.physical_requests = Some(result.requests);
         Ok(result)
     }
 
@@ -120,11 +121,13 @@ impl FailoverDecisionClient {
         }
         let mut answers = held;
         answers.extend(result.answers);
+        let requests = result.requests + error.requests;
+        cost.physical_requests = Some(requests);
         Ok(Evaluation {
             model: result.model,
             answers,
             input_tokens: result.input_tokens + error.answered.iter().map(|part| part.input_tokens).sum::<i64>(),
-            requests: result.requests + error.requests,
+            requests,
             cost: fastbrowse_core::models::CostLine {
                 seconds: Some(error.seconds + cost.seconds.unwrap_or(0.0)),
                 ..cost

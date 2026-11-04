@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Model cost receipts retain physical provider request counts through retries and cancellation. Eval LLM call totals use those counts and stay unknown for historical receipts that lack them.
+
 - A standalone password field marked for a new password leaves its role to the page-context decision instead of assuming it changes credentials.
 
 - Screenshot-derived answers pass support and requested-coverage checks before a run reports completion.

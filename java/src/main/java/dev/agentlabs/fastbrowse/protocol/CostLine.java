@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * @param seconds Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+ * @param physicalRequests Physical provider requests represented by this line; absent on historical receipts.
  */
 public record CostLine(
     @JsonProperty("component") CostComponent component,
@@ -15,7 +16,8 @@ public record CostLine(
     @JsonProperty("decision_purpose") JevPurpose decisionPurpose,
     @JsonProperty("input_tokens") long inputTokens,
     @JsonProperty("output_tokens") long outputTokens,
-    @JsonProperty("seconds") Double seconds) {
+    @JsonProperty("seconds") Double seconds,
+    @JsonProperty("physical_requests") Long physicalRequests) {
 
     /** A builder for a {@code CostLine}, every field unset. */
     public static Builder builder() {
@@ -32,6 +34,7 @@ public record CostLine(
         private long inputTokens;
         private long outputTokens;
         private Double seconds;
+        private Long physicalRequests;
 
         private Builder() {}
 
@@ -75,8 +78,13 @@ public record CostLine(
             return this;
         }
 
+        public Builder physicalRequests(Long physicalRequests) {
+            this.physicalRequests = physicalRequests;
+            return this;
+        }
+
         public CostLine build() {
-            return new CostLine(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds);
+            return new CostLine(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests);
         }
     }
 }

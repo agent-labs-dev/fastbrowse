@@ -305,6 +305,20 @@
           "default": null,
           "description": "Wall time of the call, retries included. None for a line that is not one call, such as browser time.",
           "title": "Seconds"
+        },
+        "physical_requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Physical provider requests represented by this line; absent on historical receipts.",
+          "title": "Physical Requests"
         }
       },
       "required": [

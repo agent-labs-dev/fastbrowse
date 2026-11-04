@@ -319,7 +319,10 @@ async fn test_failover_accounts_for_each_providers_unanswered_requests() {
         });
         let client = settings(Some(primary), true).decision(&http).unwrap();
         let first = client.evaluate(&json!("page"), &one()).await.unwrap();
+        let first_requests = seen.lock().unwrap().len() as i64;
         let second = client.evaluate(&json!("page"), &one()).await.unwrap();
+        assert_eq!(first.cost.physical_requests, Some(first_requests));
+        assert_eq!(second.cost.physical_requests, Some(1));
         assert_eq!(first.cost.basis, CostBasis::Estimated);
         assert_eq!(first.input_tokens, 100);
         assert_eq!(first.cost.input_tokens, 300);

@@ -140,13 +140,18 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
             input_tokens: token_count(Some(usage.get("prompt_tokens").unwrap_or(&zero)))?,
             output_tokens: token_count(Some(usage.get("completion_tokens").unwrap_or(&zero)))?,
             seconds: None,
+            physical_requests: None,
         })
     };
     read().unwrap_or_else(|_| unknown(purpose))
 }
 
 fn unknown(purpose: LLMPurpose) -> CostLine {
-    CostLine { purpose: Some(purpose), ..CostLine::new(CostComponent::Llm, CostBasis::Unknown, None) }
+    CostLine {
+        purpose: Some(purpose),
+        physical_requests: Some(1),
+        ..CostLine::new(CostComponent::Llm, CostBasis::Unknown, None)
+    }
 }
 
 fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
@@ -160,6 +165,7 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
         input_tokens: costs.iter().map(|line| line.input_tokens).sum(),
         output_tokens: costs.iter().map(|line| line.output_tokens).sum(),
         seconds: None,
+        physical_requests: costs.iter().map(|line| line.physical_requests).sum(),
     }
 }
 
@@ -389,8 +395,17 @@ impl Billing<'_> {
     /// Charge an attempt that returned nothing: a request without a response may still have been billed.
     fn charge_unanswered(&mut self, usage: &Usage) -> usize {
         let offset = self.costs.len();
-        let unaccounted = usage.lock().unaccounted_requests;
-        self.costs.extend((0..unaccounted).map(|_| unknown(self.purpose)));
+        let usage = usage.snapshot();
+        self.costs.extend((0..usage.unaccounted_requests).map(|_| unknown(self.purpose)));
+        let answered = usage.requests - usage.unaccounted_requests;
+        if answered > 0 {
+            // Rejected responses can cost nothing while still consuming physical provider requests.
+            self.costs.push(CostLine {
+                purpose: Some(self.purpose),
+                physical_requests: Some(answered),
+                ..CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0))
+            });
+        }
         self.in_flight = None;
         offset
     }

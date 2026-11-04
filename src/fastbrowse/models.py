@@ -233,6 +233,8 @@ class CostLine(Frozen):
     output_tokens: int = Field(default=0, ge=0)
     seconds: float | None = Field(default=None, ge=0)
     """Wall time of the call, retries included. None for a line that is not one call, such as browser time."""
+    physical_requests: int | None = Field(default=None, ge=0, exclude_if=lambda requests: requests is None)
+    """Physical provider requests represented by this line; absent on historical receipts."""
 
     @property
     def label(self) -> str:

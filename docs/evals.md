@@ -22,6 +22,8 @@ No attempt has a time, step or spend limit. An official benchmark's partial
 rubric score is not a solved-task percentage. A reported comparison needs matching task revision, scope,
 judge and browser protocol; missing reference configuration is disclosed rather than assumed equivalent.
 
+A model cost receipt records its physical provider request count, including retries. The `llm_calls` efficiency metric sums those counts and is omitted when any LLM receipt has no count. Historical receipts remain unknown; a logical cost line is not assumed to be one provider request.
+
 ## Fixture checks
 
 Local and mock suites exercise real browsers, completion rules and authorization gates. They are regression

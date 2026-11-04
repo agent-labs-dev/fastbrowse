@@ -173,6 +173,10 @@ export interface CostLine {
    * Wall time of the call, retries included. None for a line that is not one call, such as browser time.
    */
   seconds: number | null;
+  /**
+   * Physical provider requests represented by this line; absent on historical receipts.
+   */
+  physical_requests?: number | null;
 }
 export interface Citation {
   /**

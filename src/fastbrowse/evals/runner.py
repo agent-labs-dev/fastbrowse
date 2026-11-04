@@ -147,13 +147,15 @@ def _efficiency(cost: CostBreakdown) -> dict[str, object]:
     timed = [(line.input_tokens + line.output_tokens, line.seconds) for line in llm if line.seconds is not None]
     timed_tokens = sum(tokens for tokens, _ in timed)
     timed_seconds = sum(seconds for _, seconds in timed)
-    return {
+    result = {
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
-        "llm_calls": len(llm),
         "jev_calls": sum(1 for line in cost.lines if line.component is CostComponent.JEV),
         "tokens_per_second": round(timed_tokens / timed_seconds, 1) if timed_seconds > 0 else None,
     }
+    if all(line.physical_requests is not None for line in llm):
+        result["llm_calls"] = sum(line.physical_requests or 0 for line in llm)
+    return result
 
 
 def _row(

@@ -250,7 +250,7 @@ pub fn exhausted(requests: i64, seconds: f64, last: &str) -> String {
 /// that answered, as an estimate. A bound holds for any request with that input, so it stays a bound.
 pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
     if usage.unaccounted_requests == 0 {
-        return cost;
+        return CostLine { physical_requests: (usage.requests > 0).then_some(usage.requests), ..cost };
     }
     let sent = 1 + usage.unaccounted_requests;
     let basis =
@@ -259,6 +259,7 @@ pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
         basis: if cost.dollars.is_none() { CostBasis::Unknown } else { basis },
         dollars: cost.dollars.map(|dollars| dollars * sent as f64),
         input_tokens: cost.input_tokens * sent,
+        physical_requests: Some(usage.requests),
         ..cost
     }
 }
@@ -973,6 +974,7 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
         input_tokens: lines.iter().map(|line| line.input_tokens).sum(),
         output_tokens: lines.iter().map(|line| line.output_tokens).sum(),
         seconds: Some(py::sum(lines.iter().map(|line| line.seconds.unwrap_or(0.0)))),
+        physical_requests: lines.iter().map(|line| line.physical_requests).sum(),
     }
 }
 
@@ -1055,12 +1057,14 @@ pub(crate) async fn asking_split(
         let discarded = estimated_cost(price, input_tokens * usage.unaccounted_requests, 0);
         cost = merged_cost(&[cost, discarded]);
     }
+    let requests = usage.requests + answered.iter().map(|result| result.requests).sum::<i64>();
+    cost.physical_requests = Some(requests);
     Ok(Evaluation {
         model: answered[0].model.clone(),
         answers: answered.iter().flat_map(|result| result.answers.clone()).collect(),
         input_tokens,
         cost: CostLine { seconds: Some(started.elapsed().as_secs_f64()), ..cost },
-        requests: usage.requests + answered.iter().map(|result| result.requests).sum::<i64>(),
+        requests,
     })
 }
 
@@ -1136,6 +1140,7 @@ pub fn reported_cost(
             input_tokens,
             output_tokens,
             seconds: None,
+            physical_requests: None,
         }),
         _ => Ok(estimated_cost(price, input_tokens, output_tokens)),
     }
@@ -1152,6 +1157,7 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
         input_tokens,
         output_tokens,
         seconds: None,
+        physical_requests: None,
     }
 }
 
@@ -1162,5 +1168,8 @@ pub(crate) fn invalid_response(response: &Response, what: &str, detail: &str) ->
 
 /// A Jev response's `cost.seconds`: the call's wall time.
 pub(crate) fn timed(cost: CostLine, usage: &RequestUsage, started: Instant) -> CostLine {
-    CostLine { seconds: Some(started.elapsed().as_secs_f64()), ..with_discarded(cost, usage) }
+    let mut cost = with_discarded(cost, usage);
+    cost.physical_requests = Some(usage.requests);
+    cost.seconds = Some(started.elapsed().as_secs_f64());
+    cost
 }

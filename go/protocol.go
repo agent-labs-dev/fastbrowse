@@ -107,6 +107,8 @@ type CostLine struct {
 	OutputTokens    int64         `json:"output_tokens"`
 	// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
 	Seconds *float64 `json:"seconds"`
+	// Physical provider requests represented by this line; absent on historical receipts.
+	PhysicalRequests *int64 `json:"physical_requests,omitempty"`
 }
 
 // Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.

@@ -425,6 +425,9 @@ pub struct CostLine {
     /// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
     #[serde(default, deserialize_with = "lax::opt_float_ge0")]
     pub seconds: Option<f64>,
+    /// Physical provider requests represented by this line. Absent on historical receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
+    pub physical_requests: Option<i64>,
 }
 
 impl CostLine {
@@ -438,6 +441,7 @@ impl CostLine {
             input_tokens: 0,
             output_tokens: 0,
             seconds: None,
+            physical_requests: None,
         }
     }
 
@@ -469,6 +473,9 @@ impl Schema for CostLine {
                 Field::default("seconds", Ty::optional(Ty::Float.ge(0)), Value::Null).doc(
                     "Wall time of the call, retries included. None for a line that is not one call, such as browser time.",
                 ),
+                Field::default("physical_requests", Ty::optional(Ty::Int.ge(0)), Value::Null)
+                    .omitted_when_empty()
+                    .doc("Physical provider requests represented by this line; absent on historical receipts."),
             ],
         )
         .ty()

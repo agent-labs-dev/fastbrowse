@@ -180,7 +180,10 @@ async fn test_an_overloaded_model_is_retried_then_reported_without_a_schema_repa
     let rate_limited = format!("rate limited{}", "x".repeat(2000));
     let script = Script::new((0..6).map(|_| text(429, &rate_limited)));
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Start, "planner");
-    let error = generate(&llm, LLMPurpose::Start, &[], None).await.unwrap_err();
+    let ledger = capped(None);
+    let error = generate(&llm, LLMPurpose::Start, &[], Some(&ledger)).await.unwrap_err();
+    assert_eq!(ledger.state().lines.iter().map(|line| line.physical_requests).sum::<Option<i64>>(), Some(6));
+    assert_eq!(ledger.breakdown().known_dollars(), 0.0);
     assert!(matches!(error, LLMError::RetriesExhausted(_)));
     assert!(error.to_string().contains("429") && error.to_string().len() < 500);
     assert_eq!(script.requests().len(), 6);
@@ -212,6 +215,7 @@ async fn test_an_error_status_retry_does_not_add_llm_cost() {
     let result = generate(&llm, LLMPurpose::Start, &[], Some(&ledger)).await.unwrap();
     ledger.record([result.cost.clone()]).unwrap();
     assert_eq!(ledger.state().llm_calls, 2);
+    assert_eq!(result.cost.physical_requests, Some(2));
     assert_eq!((result.cost.basis, result.cost.dollars), (CostBasis::Metered, Some(0.01)));
     assert!(!ledger.breakdown().has_unknown());
 }
@@ -225,6 +229,7 @@ async fn test_a_response_cut_off_sends_no_cap_and_is_asked_once_more() {
     assert_eq!(result.data["count"], 5);
     assert_eq!(script.requests().len(), 2);
     assert_eq!(caps(&script), [Value::Null, Value::Null]);
+    assert_eq!(result.cost.physical_requests, Some(2));
 }
 
 #[tokio::test]
@@ -293,6 +298,10 @@ async fn test_cancelled_generation_records_dispatched_costs_and_paid_retries_onc
             assert!(cancelled(generate(&llm, LLMPurpose::Start, &[], Some(&ledger)), &script.cancel).await);
             let lines = ledger.state().lines.clone();
             assert_eq!(lines.len(), if paid_retry { 2 } else { 1 });
+            assert_eq!(
+                lines.iter().map(|line| line.physical_requests).sum::<Option<i64>>(),
+                Some(script.requests().len() as i64)
+            );
             assert_eq!((lines.last().unwrap().basis, lines.last().unwrap().dollars), (CostBasis::Unknown, None));
             if paid_retry {
                 assert_eq!(lines[0].dollars, Some(0.01));

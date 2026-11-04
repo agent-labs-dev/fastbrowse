@@ -156,7 +156,11 @@ async fn test_retry_waits_for_the_servers_retry_after() {
     let result = direct(script.traced(&trace)).evaluate(&json!("page"), &one()).await.unwrap();
     let waits: Vec<Value> = events(&trace, "request_retry").iter().map(|event| event["wait"].clone()).collect();
     assert_eq!(waits, [json!(0.25)]);
-    assert_eq!((result.requests, result.cost.input_tokens), (2, 100), "a refused request costs nothing");
+    assert_eq!(
+        (result.requests, result.cost.input_tokens, result.cost.physical_requests),
+        (2, 100, Some(2)),
+        "a refused request costs nothing"
+    );
 }
 
 #[tokio::test(start_paused = true)]

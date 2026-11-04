@@ -184,6 +184,12 @@ public sealed record CostLine
     /// </summary>
     [JsonPropertyName("seconds")]
     public double? Seconds { get; init; }
+
+    /// <summary>
+    /// Physical provider requests represented by this line; absent on historical receipts.
+    /// </summary>
+    [JsonPropertyName("physical_requests")]
+    public long? PhysicalRequests { get; init; }
 }
 
 /// <summary>
