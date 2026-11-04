@@ -1,0 +1,46 @@
+name: Registry parity
+# One tag publishes one version to PyPI and to npm, six packages of it, and each publish passes over a version
+# that is already there so a run that stopped partway can be run again. What nothing checked is the result.
+# 0.9.1 reached PyPI and the GitHub release on 2026-10-30 at 21:32Z: npm published two of the five platform
+# packages, then the publish of the third ended the job on a transparency-log conflict, so the SDK step was
+# skipped and `fastbrowse`'s `latest` dist-tag stayed 0.9.0. Every JavaScript install got the older code for
+# four days and no run said so.
+#
+# This is the check that says so: it runs when a Release completes, and hourly between releases, and it fails
+# while PyPI and the six npm packages name different versions.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: registry-parity
+  cancel-in-progress: true
+jobs:
+  parity:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with: {python-version: "3.13"}
+      # A release is checked against its own number, so a run that left npm behind is named with the version
+      # it failed to publish. A schedule, or a dispatched Release rehearsal (its head_branch is a branch, not a
+      # tag), has no release and PyPI's latest decides.
+      - name: The version the release published
+        id: release
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push'
+        env: {REF: "${{ github.event.workflow_run.head_branch }}"}
+        run: echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+      - name: Check the registries agree
+        env: {VERSION: "${{ steps.release.outputs.version }}"}
+        run: |
+          if [ -n "$VERSION" ]; then
+            uv run --no-project python scripts/registry_parity.py --version "$VERSION"
+          else
+            uv run --no-project python scripts/registry_parity.py
+          fi
