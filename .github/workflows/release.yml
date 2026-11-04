@@ -144,7 +144,7 @@ jobs:
           PARALLAX_SHA: ${{ vars.PARALLAX_SHA }}
         run: |
           test -n "$PARALLAX_SHA" || { echo "::error::missing repository variable PARALLAX_SHA"; exit 1; }
-          # The release already ran the fixture suites, as a called workflow; a candidate binds to a dispatched run.
+          # A benchmark candidate binds to a dispatched fixture run on this tag.
           gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
           gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
             -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all \
