@@ -8,8 +8,10 @@ The CLI prints the status, cost and step count, then the error and anything the 
 `--json` prints the whole result, including every step and the quotes behind the answer. A run that stops
 `stuck`, `unverified`, `budget_exceeded`, `observation_limit`, `unavailable` or `error` after it has read
 something still returns those cited quotes, so check `evidence` before browsing again. A `stuck` or `unverified`
-run can also write an answer from them when the task asks for one. Some partial answers start with
-`Partial evidence only.`; use the status to determine whether the task completed.
+run can also write an answer from them when the task asks for one. Other stops can retain an already checked
+partial answer while its source evidence remains unchanged, including a sign-in wall or pending authorization.
+Preserve any returned answer as partial. Some partial answers start with `Partial evidence only.`; use the
+status to determine whether the task completed.
 
 ## needs_login (exit 4)
 

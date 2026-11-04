@@ -82,6 +82,10 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |
 | `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. Present any answer as partial, whether or not it starts with `Partial evidence only.`. |
 
+For every status other than `complete`, preserve any returned answer and citations as partial alongside the
+status and its recovery instructions. Checked partial claims can survive stops such as a sign-in wall,
+pending authorization or an exhausted budget while their source evidence remains unchanged.
+
 Retry only after a concrete change, such as corrected input, a completed sign-in, a resolved provider outage, or a
 site's transient error (a 5xx, a 429, a maintenance page) clearing.
 Before repeating a write, inspect whether it already happened to avoid sending or purchasing twice.

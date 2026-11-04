@@ -160,8 +160,10 @@ The JSON result says why a run stopped where a caller can act on it:
 - `wall` describes a `needs_login` or `blocked` page: its `kind` (`password`, `one_time_code`, `sign_in` or
   `bot_check`), `origin`, the `fields` it asked for and `seen_at_ms`. A caller that can read the user's email or
   texts can answer a `one_time_code` wall with a secret scoped to that origin and run again.
-- A `stuck` or `unverified` run that read evidence can return a cited partial answer. It may start with
-  `Partial evidence only.`; the status determines whether the task completed.
+- A run that stops before completion can retain a cited partial answer from checked claims while their
+  source evidence remains unchanged. A `stuck` or `unverified` run can also compose an answer from evidence
+  it read. Partial answers may start with `Partial evidence only.`; the status determines whether the task
+  completed.
 
 A cost a provider omits is looked up from its receipt, or bounded from OpenRouter's listed prices. A cost that
 cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A browser command
