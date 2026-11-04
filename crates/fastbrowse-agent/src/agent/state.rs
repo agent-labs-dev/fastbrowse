@@ -283,6 +283,8 @@ pub(crate) struct RunState {
     /// A DONE was refused because the task is something to carry out, not to be told.
     pub to_carry_out: bool,
     pub output_intent: OutputIntent,
+    /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
+    pub appearance: bool,
     /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
@@ -458,6 +460,7 @@ impl RunState {
             read_whole: Vec::new(),
             to_carry_out: false,
             output_intent: OutputIntent::Unknown,
+            appearance: false,
             fetched: HashSet::new(),
             committing: false,
             read_pages: HashSet::new(),

@@ -834,11 +834,32 @@ impl Agent {
                 JsonValue::from("The task only asks for something to be carried out, with no report."),
             ),
         ]);
-        let intent = match self
-            .ask_choices(state, None, vec![("pick", "What output does the task want at its end?".into(), criteria)])
-            .await?["pick"]
-            .as_str()
-        {
+        // Asked in the same request, since both are about the task alone: a theme check on a page styled by CSS shows
+        // its answer only in pixels, and with no picture on the page its screenshot was never read.
+        let evidence = IndexMap::from([
+            (
+                "page_text".to_string(),
+                JsonValue::from("What the task asks about is something a page states in its text or controls."),
+            ),
+            (
+                "appearance".to_string(),
+                JsonValue::from(
+                    "The task asks how the page looks, such as its colours, styling, artwork or layout, which only the rendered page shows.",
+                ),
+            ),
+        ]);
+        let picks = self
+            .ask_choices(
+                state,
+                None,
+                vec![
+                    ("pick", "What output does the task want at its end?".into(), criteria),
+                    ("evidence", "Where can what the task asks about be seen?".into(), evidence),
+                ],
+            )
+            .await?;
+        state.appearance = picks["evidence"] == "appearance";
+        let intent = match picks["pick"].as_str() {
             "text" => OutputIntent::Text,
             "image" => OutputIntent::Image,
             "text_image" => OutputIntent::TextAndImage,

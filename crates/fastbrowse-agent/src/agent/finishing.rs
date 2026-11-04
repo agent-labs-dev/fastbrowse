@@ -135,13 +135,20 @@ impl Agent {
     /// up on such a page, so a run that stalls before `conclude` still reads what the screen showed.
     pub(super) async fn read_drawn_page(&self, state: &mut RunState, observation: &Observation) -> Step {
         // What a failed page shows is not what the task asked to be told, as the text read holds too.
-        if state.page_failed || !observation.visual_content || state.notes.answered() {
+        if state.page_failed {
+            return Ok(());
+        }
+        // How a page looks is in its pixels whether or not it shows a picture, and whatever its text answered. Jev is
+        // asked that with the task's output, at the first DONE; a run giving up before one reads only drawn pages.
+        let drawn_unanswered = observation.visual_content && !state.notes.answered();
+        if !drawn_unanswered && !state.appearance {
             return Ok(());
         }
         // Jev's image profile constrains its own questions; this image goes to the LLM reader instead.
         let Some(png) = self.screenshots().await?.into_iter().next() else { return Ok(()) };
         let image = crate::policy::screenshot_reference(&png);
-        if state.unanswered_images.contains(&image) {
+        let read = state.notes.facts().iter().any(|fact| fact.evidence.as_ref().is_some_and(|e| e.source_id == image));
+        if read || state.unanswered_images.contains(&image) {
             return Ok(());
         }
         let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;

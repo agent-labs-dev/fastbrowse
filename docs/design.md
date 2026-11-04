@@ -51,6 +51,10 @@ Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_c
 The LLM screenshot reader records `image_read` calls separately from answer composition. Jev image limits apply
 to Jev questions; the LLM reader uses its own client, which must refuse unsupported image input explicitly.
 Screenshot readings pass the same support and requested-coverage checks as composed text before completion.
+When Jev is asked what output the task wants, it also says whether the task asks how the page looks, such as
+its colours, styling, artwork or layout. For such a task the screenshot is read when the run answers, on any
+page and beside what its text answered, and the reader describes what the image shows of the look as well as
+quoting text. A page styled only by CSS states its colours nowhere in its text, so the image is the evidence.
 A successful screenshot reading that finds no answer is reused for identical pixels within one run.
 A changed screenshot is read again; failed model calls are not cached.
 Model screenshots check fresh page text for resolved secrets before capture. Image readings mask resolved

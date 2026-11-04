@@ -1547,13 +1547,15 @@ async fn test_requested_final_screenshot_is_captured_with_default_config() {
 
 struct IntentJev {
     choice: &'static str,
+    /// The answer to any other choice asked beside the output, where it is offered.
+    evidence: &'static str,
     calls: std::sync::atomic::AtomicUsize,
     fallback: ScriptedJev,
 }
 
 impl IntentJev {
     fn new(choice: &'static str) -> Self {
-        Self { choice, calls: Default::default(), fallback: ScriptedJev::new(Vec::new()) }
+        Self { choice, evidence: "page_text", calls: Default::default(), fallback: ScriptedJev::new(Vec::new()) }
     }
 }
 
@@ -1578,15 +1580,25 @@ impl DecisionClient for IntentJev {
             question.criteria.keys().map(String::as_str).collect::<Vec<_>>(),
             ["text", "image", "text_image", "carried_out"]
         );
-        let answers = IndexMap::from([(
-            "pick".into(),
-            Answer::Choice(ChoiceAnswer {
-                kind: fastbrowse_core::decision::ChoiceTag,
-                choice: self.choice.into(),
-                probabilities: IndexMap::new(),
-                confidence: 1.0,
-            }),
-        )]);
+        let answers = questions
+            .iter()
+            .filter_map(|(key, question)| {
+                let Question::Choice(question) = question else { return None };
+                let choice = if key == "pick" { self.choice } else { self.evidence };
+                let choice = if question.criteria.contains_key(choice) {
+                    choice.to_string()
+                } else {
+                    question.criteria.keys().next()?.clone()
+                };
+                let answer = ChoiceAnswer {
+                    kind: fastbrowse_core::decision::ChoiceTag,
+                    choice,
+                    probabilities: IndexMap::new(),
+                    confidence: 1.0,
+                };
+                Some((key.clone(), Answer::Choice(answer)))
+            })
+            .collect();
         Box::pin(async move {
             Ok(Evaluation {
                 model: "test".into(),
@@ -1600,6 +1612,31 @@ impl DecisionClient for IntentJev {
     fn profile(&self) -> DecisionProfile {
         self.fallback.profile()
     }
+}
+
+/// A check of a station's paper-and-ink theme, on a page styled by CSS with no picture in view, never had its
+/// screenshot read, and the run asked for text evidence of colours until it ran out of steps.
+#[tokio::test]
+async fn test_a_task_about_how_the_page_looks_reads_the_screenshot_of_a_page_styled_only_by_css() {
+    let reads = |evidence: &'static str| async move {
+        let llm = Arc::new(EmptyImageLLM::default());
+        let jev = Arc::new(IntentJev { evidence, ..IntentJev::new("text") });
+        let agent = Agent::new(Arc::new(Screenshots::default()), jev, llm.clone());
+        let mut state = run_state();
+        agent.output_intent(&mut state).await.expect("asked at DONE");
+        let captured = capture(&[(BlockKind::Paragraph, "Now playing: Bass")]);
+        state.notes =
+            Notes::new([
+                Fact::read("Now playing: Bass", block_evidence(&captured, "s0"), FactReader::JevChoice).answering()
+            ]);
+        let styled = observation(&[]);
+        assert!(!styled.visual_content);
+        agent.read_drawn_page(&mut state, &styled).await.expect("read");
+        agent.read_drawn_page(&mut state, &styled).await.expect("unchanged pixels");
+        llm.0.load(std::sync::atomic::Ordering::SeqCst)
+    };
+    assert_eq!(reads("appearance").await, 1);
+    assert_eq!(reads("page_text").await, 0);
 }
 
 #[tokio::test]
