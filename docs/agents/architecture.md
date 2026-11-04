@@ -2,7 +2,7 @@
 
 The core is Rust, in [crates/](../../crates) ([ADR 0004](../../docs/adr/0004-rust-core-by-default.md)), and the `fastbrowse`
 wheel carries it as `fastbrowse._native`. The Python package is the thin layer over it:
-[native.py](../../src/fastbrowse/native.py) hands `run_task`, `connect_cdp` and the commands to it, and the pydantic models
+[native.py](../../src/fastbrowse/native.py) hands `run_task`, `connect_cdp`, `open_cloud_browser`, `stop_cloud_browser` and the commands to it, and the pydantic models
 in `src/fastbrowse` are the shapes a caller passes and gets back. A behaviour change lands in the crates.
 
 The run loop is [crates/fastbrowse-agent/src/agent](../../crates/fastbrowse-agent/src/agent), and everything else is a seam it calls.

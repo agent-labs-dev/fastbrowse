@@ -12,9 +12,9 @@ name: Benchmark campaign
 # rows join this candidate as the bu-bench and online-mind2web groups: the site reads one candidate, so every group in
 # it comes from one build. Run them first; this workflow neither starts nor waits for them.
 #
-# The campaign code lives in agent-labs-dev/parallax (parallax.browser_use), pinned by `parallax_sha`. The
+# The campaign code lives in agent-labs-dev/parallax-old (parallax.browser_use), pinned by `parallax_sha`. The
 # fastbrowse repo does not depend on parallax, so this workflow checks the pinned parallax out beside fastbrowse
-# with PARALLAX_DEPLOY_KEY, a read-only deploy key on agent-labs-dev/parallax.
+# with PARALLAX_DEPLOY_KEY, a read-only deploy key on agent-labs-dev/parallax-old.
 #
 # Groups:
 #   fastbrowse    fastbrowse alone on every live suite task (internal-fastbrowse).
@@ -66,7 +66,7 @@ on:
         required: true
         type: string
       parallax_sha:
-        description: Full 40 character commit SHA of agent-labs-dev/parallax to run
+        description: Full 40 character commit SHA of agent-labs-dev/parallax-old to run
         required: true
         type: string
       groups:
@@ -316,10 +316,10 @@ jobs:
       - name: Check out the pinned parallax
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: agent-labs-dev/parallax
+          repository: agent-labs-dev/parallax-old
           ref: ${{ needs.resolve.outputs.parallax_sha }}
           path: parallax
-          # A read-only deploy key on agent-labs-dev/parallax, the private source this repository cannot read.
+          # A read-only deploy key on agent-labs-dev/parallax-old, the private source this repository cannot read.
           ssh-key: ${{ secrets.PARALLAX_DEPLOY_KEY }}
           persist-credentials: false
       - name: Install parallax and fastbrowse
@@ -414,10 +414,10 @@ jobs:
       - name: Check out the pinned parallax
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: agent-labs-dev/parallax
+          repository: agent-labs-dev/parallax-old
           ref: ${{ needs.resolve.outputs.parallax_sha }}
           path: parallax
-          # A read-only deploy key on agent-labs-dev/parallax, the private source this repository cannot read.
+          # A read-only deploy key on agent-labs-dev/parallax-old, the private source this repository cannot read.
           ssh-key: ${{ secrets.PARALLAX_DEPLOY_KEY }}
           persist-credentials: false
       - name: Install parallax and fastbrowse

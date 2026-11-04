@@ -144,3 +144,10 @@ def test_a_campaign_refuses_a_suite_outside_the_catalog(suites: str, passes: boo
     check = workflow[start : workflow.index("          done\n", start) + 15]
     result = subprocess.run(["bash", "-c", check], env={**os.environ, "SUITES": suites}, capture_output=True)
     assert (result.returncode == 0) is passes
+
+
+def test_registry_parity_takes_a_version_only_from_a_tag_pushed_release() -> None:
+    """A dispatched Release rehearsal runs on a branch, and its name is not a version to check against."""
+    steps = yaml.safe_load(Path(".github/workflows/registry-parity.yml").read_text())["jobs"]["parity"]["steps"]
+    release = next(step for step in steps if step.get("id") == "release")
+    assert "github.event.workflow_run.event == 'push'" in release["if"]
