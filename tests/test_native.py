@@ -710,6 +710,8 @@ async def test_a_run_names_the_providers_it_calls_in_its_trace(monkeypatch: pyte
     """The fixture runner records the route each run took from the run's own trace."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "unused")
+    # A gateway key in the environment would add the backup route this run is described without.
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     for name in [
         name for name in os.environ if name.startswith(("FASTBROWSE_LLM", "FASTBROWSE_DECISION", "FASTBROWSE_JEV"))
     ]:
