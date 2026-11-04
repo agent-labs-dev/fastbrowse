@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, NoulQuestion, Question};
-use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -22,7 +22,7 @@ use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, navigation_question};
 use super::state::{Flow, OutputIntent, RunState, Step, Stop, Unsure};
 use crate::memory::Notes;
-use crate::policy::{Ahead, Decision};
+use crate::policy::{Ahead, Decision, HistoryEntry};
 use crate::retrieval::text::{Word, words};
 use crate::verification::page_state;
 use crate::writing::write_value;
@@ -99,7 +99,7 @@ fn value_questions<'a>(
     if !group.is_empty() {
         let span = |end: &str| {
             format!(
-                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, the first comes first. A search takes what is looked for, not the request around it.{tried}"
+                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, the first comes first, unless the task says when to use another and that has happened. A search takes what is looked for, not the request around it.{tried}"
             )
         };
         asked.push(("first", span("begins"), options.clone()));
@@ -140,7 +140,11 @@ fn ahead_picks(decision: &Decision, asked: &[Asked<'_>]) -> Option<IndexMap<Stri
 /// What is asked before a control is pressed: whether that commits anything, and when the run is authorized, whether
 /// the task asked for it. A credential change is irreversible on the page's own structure, so Jev is not asked whether
 /// it is.
+///
+/// An authorized run told a step was undone went back and sent the same support request twice more, each time asked
+/// whether the task wanted it as if it had never been sent: how often this run has already done it is said.
 fn gate_questions(
+    history: &[HistoryEntry],
     operation: Operation,
     target: &Control,
     destination: Option<&Control>,
@@ -148,7 +152,20 @@ fn gate_questions(
 ) -> (Option<NoulQuestion>, NoulQuestion) {
     let irreversible = (!changes_credentials(controls, target, operation))
         .then(|| irreversible_question(operation, target, destination, controls));
-    (irreversible, requested_question(&control_action(operation, target, destination, controls)))
+    let mut action = control_action(operation, target, destination, controls);
+    let done = history
+        .iter()
+        .filter(|entry| {
+            entry.outcome == StepOutcome::Executed
+                && entry.operation == Some(operation)
+                && entry.target.as_deref() == Some(describe(target).as_str())
+        })
+        .count();
+    if done > 0 {
+        let times = if done == 1 { "once".to_string() } else { format!("{done} times") };
+        action += &format!("This run has already done this {times}.\n");
+    }
+    (irreversible, requested_question(&action))
 }
 
 impl Agent {
@@ -285,7 +302,12 @@ impl Agent {
         }
     }
 
-    async fn gate_irreversible(&self, state: &mut RunState, observation: &Observation, decision: &Decision) -> Step {
+    pub(super) async fn gate_irreversible(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+    ) -> Step {
         let Some(target) = decision.target.as_ref().filter(|_| may_be_irreversible(decision.operation)) else {
             return Ok(());
         };
@@ -294,8 +316,13 @@ impl Agent {
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
         }
-        let (irreversible, requested) =
-            gate_questions(decision.operation, target, decision.destination.as_ref(), &observation.controls);
+        let (irreversible, requested) = gate_questions(
+            &state.history,
+            decision.operation,
+            target,
+            decision.destination.as_ref(),
+            &observation.controls,
+        );
         self.gate_question(state, observation, decision, &label, irreversible, requested).await
     }
 

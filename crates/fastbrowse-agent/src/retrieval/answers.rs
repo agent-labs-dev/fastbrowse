@@ -375,7 +375,7 @@ pub async fn compose(
     notes: &Notes,
     ledger: Option<&Ledger>,
 ) -> Result<ComposedAnswer> {
-    Ok(compose_reviewed(jev, llm, task, notes, ledger, None).await?.answer)
+    Ok(compose_reviewed(jev, llm, task, notes, ledger, None, true).await?.answer)
 }
 
 pub(crate) struct ReviewedComposition {
@@ -383,6 +383,8 @@ pub(crate) struct ReviewedComposition {
     pub rejection: Option<String>,
 }
 
+/// `reports` is whether the task asks to be told anything: one only carried out has no facts to cover, and its steps
+/// are judged on their own.
 pub(crate) async fn compose_reviewed(
     jev: &dyn DecisionClient,
     llm: &dyn LLMClient,
@@ -390,6 +392,7 @@ pub(crate) async fn compose_reviewed(
     notes: &Notes,
     ledger: Option<&Ledger>,
     feedback: Option<&str>,
+    reports: bool,
 ) -> Result<ReviewedComposition> {
     let items = initial_items(notes);
     let writing_task = feedback.map(|feedback| format!(
@@ -408,7 +411,7 @@ pub(crate) async fn compose_reviewed(
             (columns, claims, true)
         }
     };
-    let reviewed = review_claims(jev, task, columns.as_deref(), claims, notes, ledger, true).await?;
+    let reviewed = review_claims(jev, task, columns.as_deref(), claims, notes, ledger, reports).await?;
     let CheckedClaims { claims, problem, rejection } = reviewed;
     // Each claim was still judged against its quotes, but a count or comparison across requests is not established.
     let problem = problem.or_else(|| (!reduced).then(|| UNREDUCED.to_string()));
@@ -1436,7 +1439,7 @@ mod tests {
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(vec![Claim::new(&format!("There are {stated} quotes by J.K. Rowling."), ids.clone())]);
             let jev = Counting { stated, per_quote: "1", sureness: 0.9, asked: Mutex::new(Vec::new()) };
-            let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None).await.unwrap();
+            let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
             assert_eq!(reviewed.answer.claims.is_empty(), rejected, "a count of {stated}");
             let Some(rejection) = reviewed.rejection else {
                 assert_eq!(reviewed.answer.problem, None);
@@ -1460,7 +1463,7 @@ mod tests {
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("The filtered list shows 27 results from $766.", vec!["e0".into()])]);
         let jev = Counting { stated: "27", per_quote: STATED_TOTAL, sureness: 0.9, asked: Mutex::new(Vec::new()) };
-        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None).await.unwrap();
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         assert_eq!(reviewed.rejection, None);
         assert_eq!(reviewed.answer.claims.len(), 1);
     }
@@ -1474,7 +1477,8 @@ mod tests {
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("The shop lists 14 products.", ids)]);
         let jev = Counting { stated: "14", per_quote: "0", sureness: 0.6, asked: Mutex::new(Vec::new()) };
-        let reviewed = compose_reviewed(&jev, &llm, "How many products does the shop list?", &notes, None, None).await;
+        let reviewed =
+            compose_reviewed(&jev, &llm, "How many products does the shop list?", &notes, None, None, true).await;
         assert_eq!(reviewed.unwrap().rejection, None);
     }
 
@@ -1490,7 +1494,7 @@ mod tests {
         jev.rejected = Some("coverage".into());
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("Record B: 34", vec!["e0".into()])]);
-        let reviewed = compose_reviewed(&jev, &llm, "Report B and C", &notes, None, None).await.unwrap();
+        let reviewed = compose_reviewed(&jev, &llm, "Report B and C", &notes, None, None, true).await.unwrap();
         assert_eq!(reviewed.answer.claims.len(), 1);
         assert_eq!(
             reviewed.answer.problem.as_deref(),
@@ -1569,6 +1573,7 @@ mod tests {
             &notes,
             None,
             Some(&"rejected draft ".repeat(limit)),
+            true,
         )
         .await
         .err()

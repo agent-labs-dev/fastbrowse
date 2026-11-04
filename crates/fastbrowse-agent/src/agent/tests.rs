@@ -1061,6 +1061,56 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
 }
 
+/// `DoneCheckJev`, judging that no answer gives every requested fact.
+struct RefusesCoverage(DoneCheckJev);
+
+impl DecisionClient for RefusesCoverage {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            if let Some(coverage) = evaluation.answers.get_mut("coverage") {
+                *coverage = Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.0 });
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// Sent a support request, a run ended `stuck`: its write-up of the page that confirmed it was asked whether it gave
+/// every fact the task asked to be told, of a task that asks to be told nothing, and Jev said a fact was missing.
+#[tokio::test]
+async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
+    let page = capture(&[(BlockKind::Paragraph, "We have your request: 'billing'.")]);
+    let fact = Fact::read("We have your request: 'billing'.", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::CarriedOut;
+    state.compose = true;
+    state.task = "Send a support request with the topic 'billing'.".into();
+    state.notes = Notes::new([fact.answering()]);
+    state.history.push(crate::policy::HistoryEntry::new(
+        Some(Operation::Click),
+        Some("Send request"),
+        StepOutcome::Executed,
+        true,
+    ));
+    let jev = Arc::new(RefusesCoverage(DoneCheckJev::new(Default::default(), 1.0, "done")));
+    let cited = Arc::new(Mutex::new(Some(crate::memory::fact_id(state.notes.facts()[0]))));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(CoverageComposer(cited)));
+
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    let asked = jev.0.3.lock().unwrap();
+    assert!(asked.len() >= 2, "the steps and the write-up are still judged");
+}
+
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
 /// field, it says the page holds nothing for the requirement. It says yes to the actions' context question with the given
 /// probability.
@@ -2284,6 +2334,64 @@ async fn test_page_text_cannot_argue_a_commit_through_its_gate() {
     let asked = requested_question(&control_action(Operation::Click, &delete, None, &[]));
     let refused = agent.gate_question(&mut state, &page, &decision, "Delete account", question, asked).await;
     assert!(refused.is_err(), "a commit passed on an answer that had read the page");
+}
+
+/// Says yes to every question it is asked, and keeps their instructions.
+#[derive(Default)]
+struct SaysYesRecording(Mutex<Vec<String>>);
+
+impl DecisionClient for SaysYesRecording {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let mut seen = self.0.lock().unwrap();
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                if let Question::Noul(question) = question {
+                    seen.push(question.instructions.clone());
+                }
+                (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.99 }))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// Asked to send one support request, an authorized run sent it, was told a step was undone, went back and sent it
+/// twice more: whether the task asked for the send was judged as if it had never been done.
+#[tokio::test]
+async fn test_a_commit_already_made_is_asked_about_as_a_repeat() {
+    let jev = Arc::new(SaysYesRecording::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.authorization.irreversible_actions = true;
+    let send = button("Send request");
+    let page = observation(std::slice::from_ref(&send));
+    let decision = code_decision(Operation::Click, Some(send.clone()));
+
+    agent.gate_irreversible(&mut state, &page, &decision).await.expect("a first send");
+    state.history.push(crate::policy::HistoryEntry::new(
+        Some(Operation::Click),
+        Some("Send request"),
+        StepOutcome::Executed,
+        true,
+    ));
+    agent.gate_irreversible(&mut state, &page, &decision).await.expect("asked");
+
+    let seen = jev.0.lock().unwrap();
+    let requested: Vec<_> = seen.iter().filter(|instructions| instructions.contains("Does `task` ask")).collect();
+    assert_eq!(requested.len(), 2, "{seen:?}");
+    assert!(!requested[0].contains("already"), "{}", requested[0]);
+    assert!(requested[1].contains("already done this once"), "{}", requested[1]);
 }
 
 #[test]

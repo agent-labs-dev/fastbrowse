@@ -224,6 +224,7 @@ impl Agent {
                                 &notes,
                                 Some(&ledger),
                                 state.composition_feedback.as_deref(),
+                                intent != OutputIntent::CarriedOut,
                             ),
                         )
                         .await?;
