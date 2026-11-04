@@ -21,6 +21,7 @@ from fastbrowse.models import (
     ArtifactSink,
     Attachment,
     Authorization,
+    CloudBrowser,
     EventHandler,
     FrameHandler,
     Limits,
@@ -86,6 +87,37 @@ async def connect_cdp(
     """
     async with native.connect_cdp(locals()) as page:
         yield page
+
+
+async def open_cloud_browser(
+    *,
+    browser_api_key: str,
+    profile: str | None = None,
+    extensions: Sequence[str] = (),
+    timeout_minutes: int = 15,
+    proxy_country: str | None = "us",
+    viewport: tuple[int, int] | None = None,
+    allow_resizing: bool = False,
+) -> CloudBrowser:
+    """Start a Browser Use Cloud browser that outlives any run, for a caller that keeps one across runs or hands
+    its live view to a person.
+
+    The options are `run_task`'s cloud ones without the `cloud_` prefix, and the browser is created with the
+    request `run_task` sends for its own. Pass the result's `cdp_url` to `run_task` with `attach=True` to run in
+    it; the run then leaves the browser running. A start that fails or is cancelled stops the browser it created,
+    and raises `CloudBrowserError`, or `CloudBrowserUnavailable` when the service could not be reached. Once this
+    returns, the browser bills until `stop_cloud_browser` stops it or `timeout_minutes` ends it.
+    """
+    return await native.open_cloud_browser(locals())
+
+
+async def stop_cloud_browser(browser: CloudBrowser, *, browser_api_key: str) -> None:
+    """Stop a browser `open_cloud_browser` started, retrying a stop the service could not take yet.
+
+    A caller that stored only the browser's fields rebuilds it with `CloudBrowser.model_validate`. A stop that
+    still fails raises `CloudBrowserError`, or `CloudBrowserUnavailable`, and the browser runs on to its timeout.
+    """
+    await native.stop_cloud_browser(browser, browser_api_key)
 
 
 async def run_task(
