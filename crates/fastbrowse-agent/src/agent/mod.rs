@@ -598,6 +598,20 @@ impl Agent {
         (answer, citations)
     }
 
+    fn decision_notes(&self, state: &RunState) -> String {
+        // Retained evidence can contain a requested value that the selected answer leaves out.
+        let selected = (!state.compose && !state.extraction_pending)
+            .then(|| draft_answer(&state.notes))
+            .flatten()
+            .map(|answer| self.public_answer(&answer).0);
+        fastbrowse_core::py::json::dumps(&json!({
+            "selected_answer": selected,
+            "composition_pending": state.compose,
+            "structured_output_pending": state.extraction_pending,
+            "retained_notes": state.notes.render_for_navigation(),
+        }))
+    }
+
     fn context(
         &self,
         state: &RunState,
@@ -632,7 +646,7 @@ impl Agent {
         Ok(StepContext {
             task: state.task.clone(),
             subgoal: state.hint.clone(),
-            notes: state.notes.render_for_navigation(),
+            notes: self.decision_notes(state),
             answered_in_notes: state.notes.answered(),
             history: state.history.clone(),
             check_login,

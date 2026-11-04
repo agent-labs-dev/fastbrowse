@@ -118,6 +118,69 @@ fn at(url: &str, controls: &[Control]) -> Observation {
     Observation { url: url.into(), page_key: url.into(), ..observation(controls) }
 }
 
+#[test]
+fn done_sees_the_selected_answer_separately_from_unselected_evidence() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = "Report the cheapest item's name and price.".into();
+    let page = capture(&[(BlockKind::Paragraph, "12 credits"), (BlockKind::Paragraph, "Item A")]);
+    state.notes.add(Fact::read("12 credits", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    state.notes.add(Fact::read("Item A", block_evidence(&page, "s1"), FactReader::JevChoice));
+    let context = agent.context(&state, &observation(&[]), Vec::new(), false, false).unwrap();
+    let notes: serde_json::Value = serde_json::from_str(&context.notes).expect("answer and evidence are separate");
+    let selected = crate::retrieval::draft_answer(&state.notes).unwrap();
+    assert_eq!(notes["selected_answer"], agent.public_answer(&selected).0);
+    assert!(!notes["selected_answer"].as_str().unwrap().contains("Item A"));
+    assert!(notes["retained_notes"].as_str().unwrap().contains("Item A"));
+    let request = crate::policy::build_request(&observation(&[]), &[], &context, &Default::default(), 64);
+    let Question::Choice(operations) = &request.questions["operation"] else { panic!("an operation choice") };
+    let done = operations.criteria["done"].as_str().unwrap();
+    assert!(done.contains("selected_answer"));
+    assert!(done.contains("every requested fact and value"));
+}
+
+#[test]
+fn done_keeps_composition_sources_distinct_from_a_written_answer() {
+    let agent = agent();
+    let mut state = run_state();
+    state.compose = true;
+    let page = capture(&[(BlockKind::Paragraph, "Item A costs 12 credits.")]);
+    state.notes.add(Fact::read("12 credits", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let context = agent.context(&state, &observation(&[]), Vec::new(), false, false).unwrap();
+    let notes: serde_json::Value = serde_json::from_str(&context.notes).expect("composition is explicit");
+    assert_eq!(notes["composition_pending"], true);
+    assert!(notes["selected_answer"].is_null());
+    assert!(notes["retained_notes"].as_str().unwrap().contains("12 credits"));
+}
+
+#[tokio::test]
+async fn done_keeps_schema_extraction_distinct_from_a_written_answer() {
+    let agent = agent();
+    let mut state = run_state();
+    state.ledger = Arc::new(Ledger::new(Limits { max_steps: Some(0), ..Limits::default() }));
+    let model = fastbrowse_core::output_schema::output_model(&json!({
+        "type": "object", "properties": {"price": {"type": "string"}}, "required": ["price"],
+    }))
+    .unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    assert!(agent.run_loop(&mut state, Some(&schema), None).await.is_err());
+    let page = capture(&[(BlockKind::Paragraph, "Item A costs 12 credits.")]);
+    state.notes.add(Fact::read("12 credits", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let context = agent.context(&state, &observation(&[]), Vec::new(), false, false).unwrap();
+    let notes: serde_json::Value = serde_json::from_str(&context.notes).unwrap();
+    assert_eq!(notes["composition_pending"], false);
+    assert_eq!(notes["structured_output_pending"], true);
+    assert!(notes["selected_answer"].is_null());
+    let request = crate::policy::build_request(&observation(&[]), &[], &context, &Default::default(), 64);
+    let Question::Choice(operations) = &request.questions["operation"] else { panic!("an operation choice") };
+    assert!(operations.criteria["done"].as_str().unwrap().contains("structured_output_pending"));
+    assert!(agent.run_loop(&mut state, None, None).await.is_err());
+    let context = agent.context(&state, &observation(&[]), Vec::new(), false, false).unwrap();
+    let notes: serde_json::Value = serde_json::from_str(&context.notes).unwrap();
+    assert_eq!(notes["structured_output_pending"], false);
+    assert!(notes["selected_answer"].is_string());
+}
+
 fn field(label: &str) -> Control {
     let mut control = Control::new("field", "combobox", label, [Operation::Fill, Operation::Click, Operation::Enter]);
     control.value = Some("Bath".into());

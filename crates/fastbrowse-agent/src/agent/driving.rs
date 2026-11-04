@@ -38,6 +38,7 @@ impl Agent {
         output_schema: Option<&RecordSchema>,
         until: Option<&fastbrowse_core::models::UntilCheck>,
     ) -> Step<fastbrowse_core::models::RunResult> {
+        state.extraction_pending = output_schema.is_some();
         loop {
             state.ledger.check(0.0)?;
             if let Some(stop) = super::out_of_browsing_time(state) {

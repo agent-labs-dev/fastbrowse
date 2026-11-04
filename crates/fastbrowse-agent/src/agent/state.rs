@@ -252,6 +252,8 @@ pub(crate) struct RunState {
     pub page_failed: bool,
     /// Jev said a read's answer must be composed, so the run ends on the LLM's writing of the notes.
     pub compose: bool,
+    /// A caller's schema is filled after DONE, so its result is not a selected prose answer yet.
+    pub extraction_pending: bool,
     /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
     /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
     pub read_whole: Vec<Capture>,
@@ -394,6 +396,7 @@ impl RunState {
             changed_page: None,
             page_failed: false,
             compose: false,
+            extraction_pending: false,
             read_whole: Vec::new(),
             to_carry_out: false,
             output_intent: OutputIntent::Unknown,

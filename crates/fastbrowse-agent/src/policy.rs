@@ -91,7 +91,9 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Read => {
             "Read this page's content, the whole page including text outside the viewport, to extract information the task needs."
         }
-        Operation::Done => "The task is done: what it asks is carried out, and everything it needs has been read.",
+        Operation::Done => {
+            "The task is done: what it asks is carried out. When it asks for a written answer, notes.selected_answer gives every requested fact and value, with no unrelated text or unresolved requirement; a value present only in retained_notes is not in that answer. When composition_pending or structured_output_pending is true, the retained sources cover every requested item and the answer or structured result will be generated and checked before delivery."
+        }
     }
 }
 

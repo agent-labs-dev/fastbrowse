@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The completion decision sees the selected answer separately from retained evidence, so a value left out of the answer is still an open requirement.
+
 - Benchmark task versions include the distinct stalled ending, keeping campaign catalogs consistent with their shared status rules.
 
 - Cursor feedback allows time for its pacing update alongside session refresh, window lookup and visibility restoration, so valid driver calls do not turn it off.

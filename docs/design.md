@@ -96,6 +96,10 @@ They judge the state the task asks about, retaining earlier quotes for historica
 
 Jev selects verbatim answers only when every selected note can be repeated as written without unrelated text.
 A value embedded in a broader note needs extraction through the composer and its support check.
+Before choosing DONE, Jev sees the selected answer with its citation links separately from retained evidence.
+The selected answer must give every requested fact and value; a value kept only as context does not answer it.
+When composition or the caller's schema extraction is pending, the same decision judges whether the retained
+sources cover the request; the generated result is checked before delivery.
 
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
