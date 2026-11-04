@@ -3447,6 +3447,10 @@ impl DecisionClient for TailValue {
             .map(|(key, question)| {
                 let Question::Choice(question) = question else { panic!("expected a choice") };
                 assert!(question.criteria.len() <= self.1);
+                if question.criteria.contains_key("none") && key != "source" {
+                    // A long source is cut into a few broad parts, not hundreds of fragments that lose its context (#636).
+                    assert!(question.criteria.len() <= 5, "{} parts offered", question.criteria.len() - 1);
+                }
                 let choice = if key == "source" {
                     "task".into()
                 } else if key == "first" || key == "last" {
@@ -3483,7 +3487,17 @@ impl DecisionClient for TailValue {
 
 #[tokio::test]
 async fn test_a_field_value_beyond_the_first_choice_window_is_offered() {
-    for (position, max, count) in [(0, 26, 1001), (350, 26, 1001), (1000, 26, 1001), (0, 3, 9), (8, 3, 9)] {
+    let cases = [
+        (0, 255, 330),
+        (164, 255, 330),
+        (329, 255, 330),
+        (0, 26, 1001),
+        (350, 26, 1001),
+        (1000, 26, 1001),
+        (0, 3, 9),
+        (8, 3, 9),
+    ];
+    for (position, max, count) in cases {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(TailValue(position, max)), Arc::new(ScriptedLLM));
         let mut state = run_state();
         let mut source = vec!["context"; count];
@@ -3507,6 +3521,57 @@ async fn test_a_long_source_can_be_refused_without_typing_an_unrelated_value() {
         .await
         .expect_err("no value");
     assert!(format!("{error:?}").contains("NeedsInput"), "{error:?}");
+}
+
+/// Refuses every part of a long source, and records the sources it is then offered for the field.
+struct RefusesParts(Arc<Mutex<Vec<String>>>);
+
+impl DecisionClient for RefusesParts {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let Question::Choice(question) = question else { panic!("expected a choice") };
+                if key == "source" {
+                    self.0.lock().unwrap().extend(question.criteria.keys().cloned());
+                }
+                let choice = if key == "source" { "task" } else { "none" };
+                let answer = ChoiceAnswer {
+                    kind: Default::default(),
+                    choice: choice.into(),
+                    probabilities: IndexMap::new(),
+                    confidence: 1.0,
+                };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { max_choice_options: 255, ..DecisionProfile::unknown() }
+    }
+}
+
+/// A 330-word request named its city once, Jev found it in none of the parts, and still said the task states the
+/// value: the field was left empty and the search ran for nothing (#636). Once no words remain to copy, the value can
+/// still be written from the task, but not copied from it.
+#[tokio::test]
+async fn test_a_source_refused_while_narrowing_is_not_offered_to_copy_from() {
+    let offered = Arc::new(Mutex::new(Vec::new()));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(RefusesParts(offered.clone())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = vec!["context"; 330].join(" ");
+    let _ = agent.text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Location")).await;
+    let offered = offered.lock().unwrap().clone();
+    assert!(offered.contains(&"write".to_string()), "{offered:?}");
+    assert!(!offered.contains(&"task".to_string()), "{offered:?}");
 }
 
 struct PasswordRole(Answers);

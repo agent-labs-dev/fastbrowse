@@ -38,6 +38,9 @@ const WRITTEN: &str = "write";
 const NO_VALUE: &str = "none";
 /// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
 const WORD_CONTEXT: usize = 3;
+/// A long source is cut into a few broad parts: as hundreds of overlapping fragments, a 330-word request lost the one
+/// city it named (#636).
+const VALUE_SOURCE_PARTS: usize = 4;
 
 /// The words Jev may pick from, each with where it stands in the task.
 fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
@@ -76,8 +79,12 @@ fn value_questions<'a>(
     label: &str,
     group: &[Word],
     source_question: String,
-    sources: IndexMap<String, JsonValue>,
+    mut sources: IndexMap<String, JsonValue>,
 ) -> Vec<Asked<'a>> {
+    // With no words left to copy, saying the task states the value leaves the field empty; it can still be written.
+    if group.is_empty() {
+        sources.shift_remove(IN_TASK);
+    }
     let tried = typed_into(state, target);
     let tried = if tried.is_empty() {
         String::new()
@@ -598,8 +605,9 @@ impl Agent {
         }
         // Parts cover the whole source and overlap so a value across a cut remains whole. Reserving one choice
         // for no value lets Jev refuse a source instead of being forced to pick unrelated words.
+        let chars: Vec<char> = task.chars().collect();
         while group.len() > max {
-            let step = group.len().div_ceil(max - 1);
+            let step = group.len().div_ceil((max - 1).min(VALUE_SOURCE_PARTS));
             let width = (2 * step).min(group.len() - 1);
             let parts: Vec<&[Word]> = group
                 .chunks(step)
@@ -609,7 +617,6 @@ impl Agent {
                     &group[from..(from + width).min(group.len())]
                 })
                 .collect();
-            let chars: Vec<char> = task.chars().collect();
             let mut criteria: IndexMap<String, JsonValue> = parts
                 .iter()
                 .enumerate()
