@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **An answer reports the results the run filtered to, not the ones it read before.** Changing a filter changes the page's address, so the unfiltered and filtered results were both kept as current notes, and a flight search that applied a nonstop filter answered with the unfiltered count and a connecting fare. The notes the answer is written from, and the checks on each claim, now name the page each note was read on in reading order, so the later filtered view can be told from the earlier one. A view that changes only the address fragment now retires the earlier read when composing too, where it had been brought back as current ([#720](https://github.com/agent-labs-dev/fastbrowse/issues/720)).
 - Recorded model responses keep negative or non-finite provider costs unknown, preserving valid zero-cost receipts.
 
 - Malformed successful model responses retain an unknown or bounded charge instead of a metered zero. Unsettled browser charges mark the total incomplete in Rust, Python and their CLI, MCP and eval consumers.

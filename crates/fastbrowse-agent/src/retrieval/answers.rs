@@ -18,7 +18,7 @@ use serde_json::json;
 
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
-use crate::memory::{Notes, fact_id};
+use crate::memory::{Fact, Notes, fact_id, unique};
 use crate::support::generate;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -177,11 +177,14 @@ struct ComposeItem {
     sources: Vec<String>,
     // Source fragments keep their state; rewritten claims are judged against their original quotes separately.
     superseded: Option<bool>,
+    /// The page a read note was quoted from: a filter or input can change the query, so two pages of results are both
+    /// current, and only reading order says which state came later.
+    page: Option<String>,
 }
 
 impl ComposeItem {
     fn line(&self, text: &str) -> String {
-        format!("{}: {}", self.label, note_text(text, self.superseded))
+        format!("{}: {}", self.label, note_text(text, self.superseded, self.page.as_deref()))
     }
 
     fn written(&self) -> String {
@@ -193,7 +196,7 @@ const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contain
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
-const SOURCE_STATE: &str = "A quote marked superseded was replaced by a later read of its source. It remains evidence about that earlier state, not the current value. Judge which state the task requests; historical comparisons can use earlier states.";
+const SOURCE_STATE: &str = "A quote marked superseded was replaced by a later read of its source. It remains evidence about that earlier state, not the current value. Notes are in reading order and name the page each was read on: a later page reached by changing filters, sorting or inputs shows the state after that change. Judge which state the task requests; historical comparisons can use earlier states.";
 
 fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
     [
@@ -350,6 +353,7 @@ async fn compose_packed(
                 text: claim.text.clone(),
                 sources: claim.evidence_ids.clone(),
                 superseded: None,
+                page: None,
             })
             .collect();
         let next = pack_items(task, &items, limit)?;
@@ -486,7 +490,7 @@ async fn review_claims(
         }
     }
     let tokens = jev.profile().fit(None).tokens;
-    let state = json!({"task": task});
+    let state = json!({"task": task, "pages_read": pages_read(notes)});
     let state_chars = text::len(&dumps(&state)) as i64;
     if require_coverage && questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]))
     {
@@ -574,11 +578,21 @@ struct QuoteState<'a> {
     superseded: bool,
 }
 
-fn note_text(text: &str, superseded: Option<bool>) -> String {
-    match superseded {
-        Some(superseded) => dumps(&json!({"text": text, "superseded": superseded})),
-        None => text.into(),
+fn note_text(text: &str, superseded: Option<bool>, page: Option<&str>) -> String {
+    match (superseded, page) {
+        (Some(superseded), Some(page)) => dumps(&json!({"text": text, "superseded": superseded, "page": page})),
+        (Some(superseded), None) => dumps(&json!({"text": text, "superseded": superseded})),
+        (None, _) => text.into(),
     }
+}
+
+fn fact_page(fact: &Fact) -> Option<String> {
+    fact.evidence.as_ref().map(|evidence| evidence.url.clone())
+}
+
+/// The pages the notes were read on, once each in reading order.
+fn pages_read(notes: &Notes) -> Vec<String> {
+    unique(notes.facts().into_iter().filter_map(fact_page))
 }
 
 fn initial_items(notes: &Notes) -> Vec<ComposeItem> {
@@ -589,7 +603,13 @@ fn initial_items(notes: &Notes) -> Vec<ComposeItem> {
         .map(|(index, fact)| {
             let source = fact_id(fact);
             let superseded = Some(notes.superseded(&source));
-            ComposeItem { label: format!("e{index}"), text: fact.text.clone(), sources: vec![source], superseded }
+            ComposeItem {
+                label: format!("e{index}"),
+                text: fact.text.clone(),
+                sources: vec![source],
+                superseded,
+                page: fact_page(fact),
+            }
         })
         .collect()
 }
@@ -605,8 +625,10 @@ pub async fn verdict(
     ledger: Option<&Ledger>,
 ) -> Result<Option<ComposedAnswer>> {
     let facts = notes.facts();
-    let written: Vec<String> =
-        facts.iter().map(|fact| note_text(&fact.text, Some(notes.superseded(&fact_id(fact))))).collect();
+    let written: Vec<String> = facts
+        .iter()
+        .map(|fact| note_text(&fact.text, Some(notes.superseded(&fact_id(fact))), fact_page(fact).as_deref()))
+        .collect();
     let mut questions: IndexMap<String, Question> = IndexMap::from([(
         "whole".to_string(),
         Question::Choice(ChoiceQuestion::new(
@@ -927,6 +949,46 @@ mod tests {
             assert_eq!(old_note["superseded"], true);
             assert_eq!(old_note["text"], old.text);
         }
+    }
+
+    /// #720: a filter changes the query, so the unfiltered and filtered results are different pages. Neither retires
+    /// the other, so composition and its checks must be told which page each note came from and in what order.
+    #[tokio::test]
+    async fn notes_name_their_page_and_reading_order_for_answers_and_their_checks() {
+        let page = |index: usize, url: &str, text: &str| {
+            let mut fact = fact(index, text.into());
+            fact.evidence.as_mut().unwrap().url = url.into();
+            fact
+        };
+        let unfiltered = page(0, "https://flights.test/search?stops=any", "30 results from $329");
+        let filtered = page(1, "https://flights.test/search?stops=0", "27 results from $811");
+        let notes = Notes::new([unfiltered, filtered]);
+        let task = "Apply the nonstop filter and report the result count and cheapest fare.";
+        let llm = RecordingLlm::new(None);
+        let jev = Support::new(true);
+        compose(&jev, &llm, task, &notes, None).await.unwrap();
+        let calls = llm.calls();
+        let note = |label: &str| -> Value {
+            let line = calls[0][1].content.lines().find_map(|line| line.strip_prefix(label)).unwrap();
+            serde_json::from_str(line).unwrap()
+        };
+        assert_eq!(note("e0: ")["page"], "https://flights.test/search?stops=any");
+        assert_eq!(note("e1: ")["page"], "https://flights.test/search?stops=0");
+        assert!(calls[0][0].content.contains("reading order"));
+        {
+            let states = jev.states.lock().unwrap();
+            let support =
+                states.iter().find(|state| state.get("pages_read").is_some()).expect("claim checks see the pages read");
+            assert_eq!(
+                support["pages_read"],
+                json!(["https://flights.test/search?stops=any", "https://flights.test/search?stops=0"])
+            );
+        }
+        let jev = Support::new(true);
+        verdict(&jev, task, &notes, None).await.unwrap();
+        let states = jev.states.lock().unwrap();
+        let last: Value = serde_json::from_str(states[0]["notes"][1].as_str().unwrap()).unwrap();
+        assert_eq!(last["page"], "https://flights.test/search?stops=0");
     }
 
     #[tokio::test]

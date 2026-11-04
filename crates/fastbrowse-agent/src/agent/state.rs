@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
-use crate::memory::{Fact, Notes, fact_id};
+use crate::memory::{Fact, Notes, address, fact_id};
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
@@ -318,6 +318,27 @@ impl RunState {
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
         let (partial, sources) = self.composition_partial.as_ref()?;
         (!partial.claims.is_empty() && *sources == Self::composition_sources(notes)).then_some(partial)
+    }
+
+    /// What one read leaves in the notes: its facts, the page kept whole when one fact was picked from it, and the
+    /// earlier reads of that address it supersedes.
+    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) {
+        let added = facts.len();
+        self.notes.remember_capture(capture);
+        for fact in facts {
+            self.notes.add(fact);
+        }
+        // A fragment names a view of the same page: an earlier view kept whole would come back as current notes when
+        // composing, beside the read that superseded it.
+        let page = address(&capture.url);
+        self.read_whole.retain(|read| address(&read.url) != page);
+        if !compose && added > 0 {
+            self.read_whole.push(capture.clone());
+        }
+        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
+        if added > 0 {
+            self.notes.supersede(&capture.url, &capture.sha256, &capture.text);
+        }
     }
 
     /// The notes with the pages read for one fact whole.

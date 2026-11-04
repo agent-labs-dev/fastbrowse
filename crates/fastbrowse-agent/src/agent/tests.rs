@@ -3629,3 +3629,35 @@ async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_m
         }
     }
 }
+
+fn results_page_720(url: &str, row: &str) -> Capture {
+    let mut page = capture(&[(BlockKind::Heading, "Results"), (BlockKind::Paragraph, row)]);
+    page.url = url.into();
+    page
+}
+
+/// What composition is told is current: a quote that is in the notes and not marked superseded.
+fn current_quotes_720(state: &RunState) -> Vec<String> {
+    let notes = state.notes_to_compose();
+    RunState::composition_sources(&notes)
+        .into_iter()
+        .filter(|(_, superseded)| !superseded)
+        .filter_map(|(fact, _)| fact.evidence.map(|evidence| evidence.quote))
+        .collect()
+}
+
+#[test]
+fn test_720_fragment_change_keeps_the_earlier_read_retired_when_composing() {
+    let mut state = run_state();
+    state.task = "Report the cheapest nonstop flight".into();
+    let before = results_page_720("https://flights.test/results#stops=any", "Flight A: $300");
+    let after = results_page_720("https://flights.test/results#stops=0", "Flight B: $450");
+    let a = Fact::read("Flight A: $300", block_evidence(&before, "s1"), FactReader::JevChoice).answering();
+    state.record_read(&before, vec![a], false);
+    let b = Fact::read("Flight B: $450", block_evidence(&after, "s1"), FactReader::JevChoice).answering();
+    state.record_read(&after, vec![b], false);
+    assert!(state.notes.facts().iter().any(|fact| fact.text == "Flight A: $300"), "history kept");
+    let current = current_quotes_720(&state);
+    assert!(current.iter().any(|quote| quote == "Flight B: $450"), "{current:?}");
+    assert!(!current.iter().any(|quote| quote == "Flight A: $300"), "pre-filter value is current again: {current:?}");
+}
