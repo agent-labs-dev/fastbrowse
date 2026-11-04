@@ -861,7 +861,7 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         let finish = button("Finish");
         let observation = observation(std::slice::from_ref(&finish));
         let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(finish.clone())) };
-        let question = (!credential).then(|| irreversible_question(Operation::Click, &finish, None));
+        let question = (!credential).then(|| irreversible_question(Operation::Click, &finish, None, &[]));
         let asked = requested_question(&control_action(Operation::Click, &finish, None, &[]));
         let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, asked).await;
         let case = format!("authorized {authorized}, credential {credential}, requested {requested}");
@@ -1954,7 +1954,7 @@ async fn test_page_text_cannot_argue_a_commit_through_its_gate() {
         ahead: IndexMap::from([("irreversible".to_string(), swayed)]),
         ..code_decision(Operation::Click, Some(delete.clone()))
     };
-    let question = Some(irreversible_question(Operation::Click, &delete, None));
+    let question = Some(irreversible_question(Operation::Click, &delete, None, &[]));
     let asked = requested_question(&control_action(Operation::Click, &delete, None, &[]));
     let refused = agent.gate_question(&mut state, &page, &decision, "Delete account", question, asked).await;
     assert!(refused.is_err(), "a commit passed on an answer that had read the page");

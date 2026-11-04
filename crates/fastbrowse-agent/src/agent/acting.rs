@@ -139,7 +139,7 @@ fn gate_questions(
     controls: &[Control],
 ) -> (Option<NoulQuestion>, NoulQuestion) {
     let irreversible = (!changes_credentials(controls, target, operation))
-        .then(|| irreversible_question(operation, target, destination));
+        .then(|| irreversible_question(operation, target, destination, controls));
     (irreversible, requested_question(&control_action(operation, target, destination, controls)))
 }
 

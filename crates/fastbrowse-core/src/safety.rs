@@ -50,7 +50,13 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
 
 /// What tells this control apart from another with the same label: where it sits, what it drops onto, the form it
 /// submits and the address it links to.
-fn describe_control(instructions: &mut String, operation: Operation, control: &Control, destination: Option<&Control>) {
+fn describe_control(
+    instructions: &mut String,
+    operation: Operation,
+    control: &Control,
+    destination: Option<&Control>,
+    controls: &[Control],
+) {
     if let Some(context) = control.context.as_deref().filter(|c| !c.is_empty()) {
         instructions.push_str(&format!("It sits under {} on the page.\n", text::repr(context)));
     }
@@ -71,14 +77,40 @@ fn describe_control(instructions: &mut String, operation: Operation, control: &C
     {
         instructions.push_str(&format!("It is a link to {href}\n"));
     }
+    if operation == Operation::Enter
+        && !control.sensitive
+        && let Some(value) = control.value.as_deref().filter(|value| !value.is_empty())
+    {
+        instructions.push_str(&format!("The target currently holds {}.\n", text::repr(value)));
+    }
+    let submits = operation == Operation::Enter || (operation == Operation::Click && control.role == "button");
+    if submits && control.form_id.is_some() {
+        let held: Vec<String> = controls
+            .iter()
+            .filter(|c| c.id != control.id && !c.sensitive)
+            .filter(|c| (&c.frame_id, &c.form_id) == (&control.frame_id, &control.form_id))
+            .filter_map(|c| {
+                let value = c.value.as_deref().filter(|v| !v.is_empty())?;
+                Some(format!("{} holds {}", text::repr(&c.label), text::repr(value)))
+            })
+            .collect();
+        if !held.is_empty() {
+            instructions.push_str(&format!("In the form, {}.\n", held.join("; ")));
+        }
+    }
 }
 
-pub fn irreversible_question(operation: Operation, control: &Control, destination: Option<&Control>) -> NoulQuestion {
+pub fn irreversible_question(
+    operation: Operation,
+    control: &Control,
+    destination: Option<&Control>,
+    controls: &[Control],
+) -> NoulQuestion {
     let mut instructions = format!(
         "{UNTRUSTED}\nThe agent is about to {operation} the element labelled {} while doing `task`.\n",
         text::repr(&control.label)
     );
-    describe_control(&mut instructions, operation, control, destination);
+    describe_control(&mut instructions, operation, control, destination, controls);
     instructions.push_str(
         "Would doing so commit something that cannot be undone, such as placing an order or spending money, sending a \
          message, submitting an application, changing or resetting an account password or credentials, or deleting or \
@@ -103,28 +135,7 @@ pub fn control_action(
     controls: &[Control],
 ) -> String {
     let mut action = format!("{operation} the element labelled {}.\n", text::repr(&control.label));
-    describe_control(&mut action, operation, control, destination);
-    if operation == Operation::Enter
-        && !control.sensitive
-        && let Some(value) = control.value.as_deref().filter(|value| !value.is_empty())
-    {
-        action.push_str(&format!("The target currently holds {}.\n", text::repr(value)));
-    }
-    let submits = operation == Operation::Enter || (operation == Operation::Click && control.role == "button");
-    if submits && control.form_id.is_some() {
-        let held: Vec<String> = controls
-            .iter()
-            .filter(|c| c.id != control.id && !c.sensitive)
-            .filter(|c| (&c.frame_id, &c.form_id) == (&control.frame_id, &control.form_id))
-            .filter_map(|c| {
-                let value = c.value.as_deref().filter(|v| !v.is_empty())?;
-                Some(format!("{} holds {}", text::repr(&c.label), text::repr(value)))
-            })
-            .collect();
-        if !held.is_empty() {
-            action.push_str(&format!("In the form, {}.\n", held.join("; ")));
-        }
-    }
+    describe_control(&mut action, operation, control, destination, controls);
     action
 }
 
@@ -810,15 +821,15 @@ mod tests {
     fn test_focusing_a_field_does_not_claim_to_submit_its_form() {
         let mut field = Control::new("b0", "textbox", "Name", [Operation::Click, Operation::Fill, Operation::Enter]);
         field.submit_semantics = Some("POST /delete-all".into());
-        assert!(!irreversible_question(Operation::Click, &field, None).instructions.contains("submits this form"));
-        assert!(irreversible_question(Operation::Enter, &field, None).instructions.contains("submits this form"));
+        assert!(!irreversible_question(Operation::Click, &field, None, &[]).instructions.contains("submits this form"));
+        assert!(irreversible_question(Operation::Enter, &field, None, &[]).instructions.contains("submits this form"));
     }
 
     #[test]
     fn the_irreversible_question_quotes_labels_as_python_repr_does() {
         let mut target = button("Yes, I'm sure");
         target.context = Some("Delete \"all\"".into());
-        let question = irreversible_question(Operation::Click, &target, None);
+        let question = irreversible_question(Operation::Click, &target, None, &[]);
         assert!(question.instructions.starts_with(&format!(
             "{UNTRUSTED}\nThe agent is about to click the element labelled \"Yes, I'm sure\" while doing `task`.\nIt sits under 'Delete \"all\"' on the page.\n"
         )));
@@ -871,6 +882,47 @@ mod tests {
         let sensitive_question =
             requested_question(&control_action(Operation::Enter, &target, None, &[target.clone()]));
         assert!(!sensitive_question.instructions.contains("target-secret"));
+    }
+
+    #[test]
+    fn irreversible_enter_question_includes_the_submitted_value_without_secrets() {
+        let mut target = Control::new("message", "textbox", "Message", [Operation::Enter]);
+        target.value = Some("send this".into());
+        let question = irreversible_question(Operation::Enter, &target, None, &[]);
+        assert!(question.instructions.contains("The target currently holds 'send this'."));
+
+        target.value = Some("send something else".into());
+        assert_ne!(question.instructions, irreversible_question(Operation::Enter, &target, None, &[]).instructions);
+
+        target.sensitive = true;
+        target.value = Some("target-secret".into());
+        assert!(!irreversible_question(Operation::Enter, &target, None, &[]).instructions.contains("target-secret"));
+    }
+
+    #[test]
+    fn irreversible_submission_question_includes_only_its_non_sensitive_form_values() {
+        let mut target = button("Submit");
+        target.form_id = Some("form".into());
+        let mut message = Control::new("message", "textbox", "Message", [Operation::Fill]);
+        message.form_id = target.form_id.clone();
+        message.value = Some("send this".into());
+        let mut secret = password("password", Some("form"), None);
+        secret.value = Some("sibling-secret".into());
+        let mut other = message.clone();
+        other.id = "other".into();
+        other.form_id = Some("another-form".into());
+        other.value = Some("unrelated-value".into());
+        for operation in [Operation::Click, Operation::Enter] {
+            let controls = [target.clone(), message.clone(), secret.clone(), other.clone()];
+            let question = irreversible_question(operation, &target, None, &controls);
+            assert!(question.instructions.contains("In the form, 'Message' holds 'send this'."));
+            assert!(!question.instructions.contains("sibling-secret"));
+            assert!(!question.instructions.contains("unrelated-value"));
+            message.value = Some("different body".into());
+            let changed = irreversible_question(operation, &target, None, &[message.clone()]);
+            assert_ne!(question.instructions, changed.instructions);
+            message.value = Some("send this".into());
+        }
     }
 
     #[test]
