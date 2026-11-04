@@ -389,6 +389,9 @@ fn test_the_trace_names_the_build_before_the_run() {
         .args(["t", "--cdp-url", "ws://b.test/x", "--trace"])
         .arg(&trace)
         .env_remove("FASTBROWSE_PROFILE")
+        // The run stops at configuration for want of a model key, before any connection is tried.
+        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("AI_GATEWAY_API_KEY")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
