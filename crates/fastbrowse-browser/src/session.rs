@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use data_encoding::BASE64;
 use fastbrowse_core::BoxFuture;
@@ -65,9 +65,16 @@ impl SnapshotScript {
         }
     }
 }
-/// DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
-/// before they paint, so neither the agent's steps nor a recording are spent on one.
-const REFUSE_COOKIES_JS: &str = include_str!("../js/autoconsent/autoconsent.standalone.js");
+/// DuckDuckGo's autoconsent (MPL-2.0, vendored unmodified): refuses consent banners on known platforms and hides
+/// them before they paint, so neither the agent's steps nor a recording are spent on one. Its bundle detects other
+/// banners at "tier2", which clicks a banner's only button when that button accepts; refusing never consents, so
+/// the detection here acts only on a banner it can refuse (#769).
+static REFUSE_COOKIES_JS: LazyLock<String> = LazyLock::new(|| {
+    const BUNDLE: &str = include_str!("../js/autoconsent/autoconsent.standalone.js");
+    const TIER2: &str = "heuristicMode: \"tier2\"";
+    assert_eq!(BUNDLE.matches(TIER2).count(), 1, "the autoconsent bundle sets its heuristic mode once");
+    BUNDLE.replacen(TIER2, "heuristicMode: \"reject\"", 1)
+});
 
 /// The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
 /// there, and a binding or listener in the page's world is a fingerprint any site can read.
@@ -363,7 +370,7 @@ impl BrowserSession {
         });
         let mut new_document_scripts = vec![format!("{}('fingerprint')", snapshot.install)];
         if options.refuse_cookie_banners {
-            new_document_scripts.push(REFUSE_COOKIES_JS.to_owned());
+            new_document_scripts.push(REFUSE_COOKIES_JS.clone());
         }
         // A scoped run casts nothing: a frame is pixels of whatever the tab shows, and the browser's reports of where
         // it is can trail the screen, so no ordering of events makes a delivered frame provably in the grant.

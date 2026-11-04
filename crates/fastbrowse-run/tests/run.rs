@@ -157,14 +157,39 @@ async fn a_task_that_answers_the_cookie_banner_itself_is_left_the_banner() {
     if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
         return;
     }
-    // Over HTTP, as a site serves it: the browser's refusal does not act on a data: page.
+    let start = serve_banner(
+        "<button id='reject' type='button'>Reject all</button><button id='accept' type='button'>Accept all</button>",
+    )
+    .await;
+    for (answers_it, shown) in [(0.9, true), (0.1, false)] {
+        let text = page_after_refusal(&start, "Accept the cookie banner.", answers_it).await;
+        assert_eq!(text.contains("Accept all"), shown, "consent answered {answers_it}: {text:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_banner_that_offers_only_accept_is_never_accepted() {
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    // Refusing cookies never consents to them: a banner with nothing to refuse is left for the agent (#769).
+    let start = serve_banner("<button id='accept' type='button'>Accept all</button>").await;
+    let text = page_after_refusal(&start, "Report the portal's name.", 0.1).await;
+    assert!(text.contains("Accept all") && !text.contains("ACCEPTED"), "{text:?}");
+}
+
+/// Serves, over HTTP as a site would (the browser's refusal does not act on a data: page), a page whose cookie banner
+/// has the given buttons, each removing it and an accept leaving ACCEPTED behind.
+async fn serve_banner(buttons: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let start = format!("http://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+    let page = format!(
+        "<html><body><div id='consent' style='position:fixed;left:0;right:0;bottom:0'>This site uses cookies. \
+         {buttons}</div><p>Support portal</p><script>for (const button of document.querySelectorAll('#consent button')) \
+         button.onclick = () => {{ if (button.id === 'accept') document.body.append('ACCEPTED'); \
+         document.getElementById('consent').remove(); }};</script></body></html>"
+    );
     tokio::spawn(async move {
-        let page = "<html><body><div id='consent' style='position:fixed;left:0;right:0;bottom:0'>This site uses \
-                    cookies. <button id='accept' type='button'>Accept all</button></div><p>Support portal</p><script>\
-                    document.getElementById('accept').onclick = () => document.getElementById('consent').remove();\
-                    </script></body></html>";
         while let Ok((mut socket, _)) = listener.accept().await {
             let mut buffer = [0u8; 4096];
             let _ = socket.read(&mut buffer).await;
@@ -175,33 +200,29 @@ async fn a_task_that_answers_the_cookie_banner_itself_is_left_the_banner() {
             let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
         }
     });
-    for (answers_it, shown) in [(0.9, true), (0.1, false)] {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let host = Host {
-            jev: Some(Arc::new(ConsentDecision(
-                answers_it,
-                seen.clone(),
-                fastbrowse_agent::scripted::ScriptedJev::new(fastbrowse_agent::scripted::steps("wait").unwrap()),
-            ))),
-            llm: Some(Arc::new(Silent)),
-            settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
-            ..Host::default()
-        };
-        let task = RunTask {
-            task: "Accept the cookie banner.".into(),
-            start: Some(start.clone()),
-            local: true,
-            browser: true,
-            ..RunTask::default()
-        };
-        run_task(task, host).await.expect("run returns a result");
-        let states = seen.lock().unwrap();
-        // The page read after the first decision, once the browser has had time to refuse the banner and before the
-        // script goes on to click it.
-        let pages: Vec<&str> = states.iter().filter_map(|state| state.pointer("/page/text")?.as_str()).collect();
-        let text = pages.get(1).copied().unwrap_or_default();
-        assert_eq!(text.contains("Accept all"), shown, "consent answered {answers_it}: {text:?}");
-    }
+    start
+}
+
+/// The page text read after the first decision, once the browser has had time to refuse the banner and before the
+/// script goes on to act, with Jev answering whether the task answers the banner itself at `answers_it`.
+async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host {
+        jev: Some(Arc::new(ConsentDecision(
+            answers_it,
+            seen.clone(),
+            fastbrowse_agent::scripted::ScriptedJev::new(fastbrowse_agent::scripted::steps("wait").unwrap()),
+        ))),
+        llm: Some(Arc::new(Silent)),
+        settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+        ..Host::default()
+    };
+    let task =
+        RunTask { task: task.into(), start: Some(start.into()), local: true, browser: true, ..RunTask::default() };
+    run_task(task, host).await.expect("run returns a result");
+    let states = seen.lock().unwrap();
+    let pages: Vec<&str> = states.iter().filter_map(|state| state.pointer("/page/text")?.as_str()).collect();
+    pages.get(1).copied().unwrap_or_default().to_string()
 }
 
 fn answering(status: u16) -> Http {

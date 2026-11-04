@@ -16,5 +16,7 @@ Verify after any re-sync:
   sha256sum crates/fastbrowse-browser/js/autoconsent/autoconsent.standalone.js
 
 This file is injected into every page the agent opens to refuse cookie banners before
-they paint. Treat any change to it as a supply-chain change: update this checksum and
+they paint. The injection sets its heuristic mode from "tier2" to "reject" (see
+REFUSE_COOKIES_JS in crates/fastbrowse-browser/src/session.rs), so a banner whose only
+button accepts is never clicked; the file itself stays byte-for-byte upstream. Treat any change to it as a supply-chain change: update this checksum and
 the upstream reference together, and review the diff.
