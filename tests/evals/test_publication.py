@@ -483,6 +483,21 @@ def test_more_jev_calls_do_not_block() -> None:
     assert not any(finding.check == "efficiency" for finding in report.blocking)
 
 
+def test_physical_calls_are_not_compared_with_historical_cost_line_counts() -> None:
+    baseline = [baseline_row(passed=True) | {"llm_calls": 10} for _ in range(3)]
+    candidate = [r | {"llm_calls": 40, "llm_calls_basis": "physical_requests"} for r in attempts(3)]
+    report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
+    assert not any(finding.check == "efficiency" for finding in report.blocking)
+    assert any("counting bases differ" in finding.detail for finding in report.findings)
+
+
+def test_physical_call_regressions_still_block_against_a_physical_baseline() -> None:
+    baseline = [baseline_row(passed=True) | {"llm_calls": 10, "llm_calls_basis": "physical_requests"} for _ in range(3)]
+    candidate = [r | {"llm_calls": 40, "llm_calls_basis": "physical_requests"} for r in attempts(3)]
+    report = publication.gate(candidate, release=RELEASE, ledger=evidence(candidate), baselines_=baseline)
+    assert any(finding.check == "efficiency" for finding in report.blocking)
+
+
 @pytest.mark.parametrize(("base_calls", "candidate_calls"), [(10, 10), (10, 11)])
 def test_a_call_rise_under_the_relative_bound_or_floor_does_not_block(base_calls: int, candidate_calls: int) -> None:
     baseline = [baseline_row(passed=True) | {"llm_calls": base_calls} for _ in range(3)]
@@ -529,9 +544,10 @@ def test_rows_from_two_builds_are_refused_without_a_named_release(
 
 
 def test_a_published_row_keeps_what_a_release_is_compared_on() -> None:
-    source = attempts(1)[0] | {"llm_calls": 4, "tokens_per_second": 80.0}
-    assert {"llm_calls": 4, "tokens_per_second": 80.0}.items() <= versions.slim(source).items()
-    assert {"llm_calls", "tokens_per_second"} <= baseline_module.FIELDS
+    metrics = {"llm_calls": 4, "llm_calls_basis": "physical_requests", "tokens_per_second": 80.0}
+    source = attempts(1)[0] | metrics
+    assert metrics.items() <= versions.slim(source).items()
+    assert metrics.keys() <= baseline_module.FIELDS
 
 
 def test_the_live_suites_are_the_catalog_suites() -> None:

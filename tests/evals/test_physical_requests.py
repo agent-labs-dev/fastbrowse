@@ -13,6 +13,7 @@ def test_efficiency_counts_requests_inside_aggregated_receipts():
     )
 
     assert _efficiency(cost)["llm_calls"] == 3
+    assert _efficiency(cost)["llm_calls_basis"] == "physical_requests"
     assert cost.known_dollars == 0.03
 
 

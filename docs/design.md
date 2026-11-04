@@ -28,6 +28,12 @@ the page calls it, so Jev is not asked whether it is irreversible: an unauthoriz
 is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
 that every externally visible change is detected.
 
+Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
+Field count and order do not establish that role. An explicit `current-password` marker identifies an
+existing credential. A `new-password` marker identifies a replacement within a multi-password form;
+a lone marker remains contextual because sign-in pages also use it to prevent autofill. Replacement
+values come only from the scoped `new_password` secret.
+
 ## Navigation
 
 The operation choice can open another literal HTTP(S) address from the caller's task. The address is a

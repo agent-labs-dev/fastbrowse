@@ -212,34 +212,21 @@ fn form_passwords<'a>(controls: &'a [Control], control: &Control) -> Option<Vec<
     Some(controls.iter().filter(same_form).filter(|c| is_password(c)).collect())
 }
 
-/// Whether a password field takes a replacement password, on the page's own structure rather than its wording.
+/// Whether an explicit autocomplete role identifies the password this field takes.
 ///
-/// A form holding more than one password field can distinguish the current password and a new one, or a new one and
-/// its confirmation. There `autocomplete` says which is which when the page marks it, a form that marks another field
-/// `current-password` leaves the rest new, and otherwise the first takes the current password and the rest the new
-/// one: a change-password form far more often leaves its fields unmarked than a sign-up form does. The only password
-/// field marked `new-password` is ambiguous: a reset form can have one field, while a sign-in page can use that
-/// marker to prevent autofill. None leaves that role to a decision using the task and form, as for a field outside
-/// any form on a page with other password fields.
+/// Unmarked fields leave their role to the task and page-context decision: field count and order cannot
+/// distinguish sign-in, reset and sign-up forms. A lone new-password marker is also ambiguous because sign-in
+/// pages use it to prevent autofill.
 pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> {
-    let passwords = form_passwords(controls, field);
-    if passwords.as_ref().is_some_and(|passwords| passwords.len() < 2) {
-        return (!autocompletes(field, "new-password")).then_some(false);
-    }
-    if passwords.is_none() && autocompletes(field, "new-password") {
-        return None;
-    }
-    if autocompletes(field, "new-password") {
-        return Some(true);
-    }
     if autocompletes(field, "current-password") {
         return Some(false);
     }
-    match passwords {
-        Some(passwords) if passwords.iter().any(|c| autocompletes(c, "current-password")) => Some(true),
-        Some(passwords) => passwords.iter().position(|c| c.id == field.id).map(|at| at > 0),
-        None => (!controls.iter().any(|c| is_password(c) && c.id != field.id)).then_some(false),
+    if autocompletes(field, "new-password")
+        && form_passwords(controls, field).is_some_and(|passwords| passwords.len() > 1)
+    {
+        return Some(true);
     }
+    None
 }
 
 /// Whether this step submits a form that changes an account's password: an Enter in, or a button of, a form holding
@@ -977,40 +964,41 @@ mod tests {
     }
 
     #[test]
-    fn a_replacement_password_field_is_told_by_structure_and_an_unclear_one_is_not_guessed() {
+    fn explicit_password_roles_are_used_and_unmarked_roles_are_not_guessed() {
         let (current, new, again) =
             (password("p0", Some("f"), None), password("p1", Some("f"), None), password("p2", Some("f"), None));
         let form = [current.clone(), new.clone(), again.clone()];
-        assert_eq!(sets_new_password(&form, &current), Some(false));
-        assert_eq!(sets_new_password(&form, &new), Some(true));
-        assert_eq!(sets_new_password(&form, &again), Some(true));
+        assert_eq!(sets_new_password(&form, &current), None);
+        assert_eq!(sets_new_password(&form, &new), None);
+        assert_eq!(sets_new_password(&form, &again), None);
         let sign_in = password("p", Some("f"), None);
-        assert_eq!(sets_new_password(std::slice::from_ref(&sign_in), &sign_in), Some(false));
+        assert_eq!(sets_new_password(std::slice::from_ref(&sign_in), &sign_in), None);
         let marked = password("p", Some("f"), Some("new-password"));
         assert_eq!(sets_new_password(std::slice::from_ref(&marked), &marked), None);
         let (first, second) = (password("n", Some("f"), Some("new-password")), password("c", Some("f"), None));
         assert_eq!(sets_new_password(&[first.clone(), second.clone()], &first), Some(true));
-        // A current and a new password, as change-password forms usually leave them: unmarked, in that order.
+        // The first of two unmarked fields may set a new password rather than request an existing one.
         let pair = [password("a", Some("f"), None), password("b", Some("f"), None)];
-        assert_eq!((sets_new_password(&pair, &pair[0]), sets_new_password(&pair, &pair[1])), (Some(false), Some(true)));
+        assert_eq!((sets_new_password(&pair, &pair[0]), sets_new_password(&pair, &pair[1])), (None, None));
         let old = password("o", Some("f"), Some("current-password"));
-        assert_eq!(sets_new_password(&[old.clone(), pair[0].clone()], &pair[0]), Some(true));
+        assert_eq!(sets_new_password(&[old.clone(), pair[0].clone()], &pair[0]), None);
+        assert_eq!(sets_new_password(&[old.clone(), pair[0].clone()], &old), Some(false));
         let loose = [password("a", None, None), password("b", None, None)];
         assert_eq!(sets_new_password(&loose, &loose[1]), None);
-        assert_eq!(sets_new_password(&loose[..1], &loose[0]), Some(false));
+        assert_eq!(sets_new_password(&loose[..1], &loose[0]), None);
         assert_eq!(sets_new_password(&loose, &password("c", None, Some("current-password"))), Some(false));
     }
 
     /// A username that took a stored secret is masked like a password, and is still not one.
     #[test]
-    fn a_sign_in_form_whose_username_holds_a_secret_takes_the_current_password() {
+    fn a_secret_filled_username_does_not_decide_the_password_role() {
         let mut username = Control::new("u", "textbox", "Username", [Operation::Fill]);
         (username.sensitive, username.input_type, username.form_id) = (true, Some("text".into()), Some("f".into()));
         let password = password("p", Some("f"), None);
         let mut login = button("Login");
         login.form_id = Some("f".into());
         let form = [username.clone(), password.clone(), login.clone()];
-        assert_eq!(sets_new_password(&form, &password), Some(false));
+        assert_eq!(sets_new_password(&form, &password), None);
         assert!(!changes_credentials(&form, &login, Operation::Click));
         assert!(!changes_credentials(&form, &password, Operation::Enter));
         assert_ne!(credential_field(&username), Some(CredentialField::Password));
@@ -1030,6 +1018,19 @@ mod tests {
 
         let standalone = password("standalone", None, Some("new-password"));
         assert_eq!(sets_new_password(std::slice::from_ref(&standalone), &standalone), None);
+    }
+
+    #[test]
+    fn unmarked_replacement_fields_leave_their_role_to_context() {
+        let mut reset = password("reset", Some("reset-form"), None);
+        reset.label = "New password".into();
+        assert_eq!(sets_new_password(std::slice::from_ref(&reset), &reset), None);
+        let mut confirmation = password("confirmation", Some("reset-form"), None);
+        confirmation.label = "Confirm new password".into();
+        let form = [reset, confirmation];
+        for field in &form {
+            assert_eq!(sets_new_password(&form, field), None);
+        }
     }
 
     #[test]

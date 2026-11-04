@@ -150,6 +150,7 @@ def _efficiency(cost: CostBreakdown) -> dict[str, object]:
     result = {
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "llm_calls_basis": "physical_requests",
         "jev_calls": sum(1 for line in cost.lines if line.component is CostComponent.JEV),
         "tokens_per_second": round(timed_tokens / timed_seconds, 1) if timed_seconds > 0 else None,
     }

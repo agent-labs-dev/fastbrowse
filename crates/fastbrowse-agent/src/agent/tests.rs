@@ -3052,44 +3052,54 @@ impl DecisionClient for PasswordRole {
 }
 
 #[tokio::test]
-async fn test_a_reset_form_with_one_password_field_uses_the_replacement_secret() {
-    for (task, role, expected) in [
-        (
-            "Set a new account password using the supplied replacement secret.",
-            "replacement",
-            Some("replacement-fixture-value"),
-        ),
-        ("Sign in to the existing account.", "current", Some("old-fixture-value")),
-        ("Continue on this page.", "unclear", None),
-    ] {
-        let mut password = Control::new("pw", "textbox", "New password", [Operation::Fill]);
-        password.input_type = Some("password".into());
-        password.autocomplete = Some("new-password".into());
-        password.form_id = Some("reset".into());
-        password.frame_origin = Some("https://b.test".into());
-        let stored = fastbrowse_core::safety::ScopedSecrets::per_secret([
+async fn test_contextual_password_roles_resolve_only_the_selected_scoped_secret() {
+    for (autocomplete, confirmation) in [(Some("new-password"), false), (None, false), (None, true)] {
+        for (task, role, expected) in [
             (
-                "password".into(),
-                (fastbrowse_core::models::SecretValue::from("old-fixture-value"), vec!["https://b.test".into()]),
+                "Set a new account password using the supplied replacement secret.",
+                "replacement",
+                Some("replacement-fixture-value"),
             ),
-            (
-                "new_password".into(),
+            ("Sign in to the existing account.", "current", Some("old-fixture-value")),
+            ("Continue on this page.", "unclear", None),
+        ] {
+            let mut password = Control::new("pw", "textbox", "New password", [Operation::Fill]);
+            password.input_type = Some("password".into());
+            password.autocomplete = autocomplete.map(str::to_string);
+            password.form_id = Some("reset".into());
+            password.frame_origin = Some("https://b.test".into());
+            let stored = fastbrowse_core::safety::ScopedSecrets::per_secret([
                 (
-                    fastbrowse_core::models::SecretValue::from("replacement-fixture-value"),
-                    vec!["https://b.test".into()],
+                    "password".into(),
+                    (fastbrowse_core::models::SecretValue::from("old-fixture-value"), vec!["https://b.test".into()]),
                 ),
-            ),
-        ]);
-        let agent = Agent::new(Arc::new(NoPage), Arc::new(PasswordRole(Answers(Some(role)))), Arc::new(ScriptedLLM))
-            .with_secrets(Some(Arc::new(stored)));
-        let page = at("https://b.test/reset", std::slice::from_ref(&password));
-        agent.seen().raw = Some(page.clone());
-        let mut state = run_state();
-        state.task = task.into();
-        let value = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &password).await;
-        match expected {
-            Some(expected) => assert_eq!(value.expect("a password"), expected),
-            None => assert!(format!("{:?}", value.expect_err("unclear role")).contains("NeedsInput")),
+                (
+                    "new_password".into(),
+                    (
+                        fastbrowse_core::models::SecretValue::from("replacement-fixture-value"),
+                        vec!["https://b.test".into()],
+                    ),
+                ),
+            ]);
+            let agent =
+                Agent::new(Arc::new(NoPage), Arc::new(PasswordRole(Answers(Some(role)))), Arc::new(ScriptedLLM))
+                    .with_secrets(Some(Arc::new(stored)));
+            let mut controls = vec![password.clone()];
+            if confirmation {
+                let mut again = password.clone();
+                again.id = "confirm".into();
+                again.label = "Confirm new password".into();
+                controls.push(again);
+            }
+            let page = at("https://b.test/reset", &controls);
+            agent.seen().raw = Some(page.clone());
+            let mut state = run_state();
+            state.task = task.into();
+            let value = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &password).await;
+            match expected {
+                Some(expected) => assert_eq!(value.expect("a password"), expected),
+                None => assert!(format!("{:?}", value.expect_err("unclear role")).contains("NeedsInput")),
+            }
         }
     }
 }

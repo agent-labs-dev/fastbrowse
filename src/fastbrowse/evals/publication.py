@@ -747,10 +747,20 @@ def moves(
     findings = []
     base_calls = _median_metric(measured_base, "llm_calls")
     candidate_calls = _median_metric(measured_candidate, "llm_calls")
-    if base_calls is None or candidate_calls is None:
+    # Historical rows counted cost lines, so retries cannot be compared with their new physical counts.
+    call_bases = [row.get("llm_calls_basis", "cost_lines") for row in (*measured_base, *measured_candidate)]
+    comparable_calls = (
+        bool(call_bases)
+        and call_bases[0] in ("cost_lines", "physical_requests")
+        and all(basis == call_bases[0] for basis in call_bases)
+    )
+    if not comparable_calls:
+        findings.append(_finding(ADVISE, "efficiency", f"{where}: LLM calls not compared, counting bases differ"))
+    elif base_calls is None or candidate_calls is None:
         findings.append(_finding(ADVISE, "efficiency", f"{where}: LLM calls not compared, a side lacks them"))
     if (
-        base_calls is not None
+        comparable_calls
+        and base_calls is not None
         and candidate_calls is not None
         and _over(base_calls, candidate_calls, REGRESSION_CALL_FLOOR)
     ):

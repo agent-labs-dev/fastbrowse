@@ -26,6 +26,7 @@ FIELDS = {
     "session_close_seconds",
     "dollars",
     "llm_calls",
+    "llm_calls_basis",
     "tokens_per_second",
     "model",
     "text_model",
