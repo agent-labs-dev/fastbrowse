@@ -403,7 +403,7 @@ pub(crate) async fn compose_reviewed(
             (columns, claims, true)
         }
     };
-    let reviewed = review_claims(jev, task, columns.as_deref(), claims, notes, ledger, feedback.is_some()).await?;
+    let reviewed = review_claims(jev, task, columns.as_deref(), claims, notes, ledger, true).await?;
     let CheckedClaims { claims, problem, rejection } = reviewed;
     // Each claim was still judged against its quotes, but a count or comparison across requests is not established.
     let problem = problem.or_else(|| (!reduced).then(|| UNREDUCED.to_string()));
@@ -485,18 +485,19 @@ async fn review_claims(
             questions.insert(key, Question::Noul(question));
         }
     }
-    if require_coverage {
+    let tokens = jev.profile().fit(None).tokens;
+    let state = json!({"task": task});
+    let state_chars = text::len(&dumps(&state)) as i64;
+    if require_coverage && questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]))
+    {
         questions.insert("coverage".into(), Question::Noul(NoulQuestion::new(
-            format!("{UNTRUSTED} This draft follows a rejected composition. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Browser actions are checked separately. Task: {} Answer: {}", dumps(&json!(task)), dumps(&json!({"columns": columns, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))),
+            format!("{UNTRUSTED} Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. Task: {} Answer: {}", dumps(&json!(task)), dumps(&json!({"columns": columns, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))),
             Some("The written answer covers every fact and value the task asks to be told."),
             Some("A requested fact or value is absent from the written answer."),
         )));
     }
     // A known citation can still be attached to another record's value, so Jev judges the original quotes after
     // every packing round has finished, rather than the intermediate prose those rounds wrote.
-    let tokens = jev.profile().fit(None).tokens;
-    let state = json!({"task": task});
-    let state_chars = text::len(&dumps(&state)) as i64;
     let oversized = questions.values().any(|question| state_chars > tokens.input_chars(&[question.dump_json()]));
     let (answered, failure) =
         match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
@@ -545,7 +546,7 @@ async fn review_claims(
         } else if supported.len() != count {
             Some("A composed claim is unsupported by its cited quotes.".into())
         } else if !coverage {
-            Some("The corrected answer does not establish every requested fact or value.".into())
+            Some("The answer does not establish every requested fact or value.".into())
         } else {
             None
         }
@@ -993,6 +994,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn initial_composition_rejects_supported_claims_that_omit_a_requested_value() {
+        let notes = Notes::new([fact(0, "Record B: 34".into())]);
+        let mut jev = Support::new(true);
+        jev.rejected = Some("coverage".into());
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("Record B: 34", vec!["e0".into()])]);
+        let reviewed = compose_reviewed(&jev, &llm, "Report B and C", &notes, None, None).await.unwrap();
+        assert_eq!(reviewed.answer.claims.len(), 1);
+        assert_eq!(
+            reviewed.answer.problem.as_deref(),
+            Some("The answer does not establish every requested fact or value.")
+        );
+        let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().unwrap()).unwrap();
+        assert_eq!(feedback["rejected_checks"], json!(["coverage"]));
+        assert_eq!(jev.asked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn corrected_composition_coverage_question_pins_the_original_request() {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let id = notes.facts_by_id().keys().next().unwrap().clone();
@@ -1004,7 +1023,7 @@ mod tests {
         let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is yes-or-no") };
         assert!(coverage.instructions.contains("Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations?"));
         assert!(coverage.instructions.contains("Judge the written answer, not whether unseen notes could answer it."));
-        assert!(coverage.instructions.contains("Browser actions are checked separately."));
+        assert!(coverage.instructions.contains("Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values."));
         assert!(coverage.instructions.contains("Report B and C"));
     }
 

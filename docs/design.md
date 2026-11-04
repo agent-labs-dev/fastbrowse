@@ -111,11 +111,13 @@ The composer and support check interpret a requested field by its meaning: descr
 value without a matching heading, and that value contradicts a claim that the field was not shown.
 The support question distinguishes facts about a quoted subset from claims about a whole set, and a source's
 population counter from the number of records the answer reports.
-A claim with no cited quote or no support judgment is withheld and ends `unverified`. When every check is
+Initial and repaired compositions are checked for both claim support and requested answer coverage in one
+decision batch. A claim with no cited quote or no support judgment is withheld and ends `unverified`. When every check is
 answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. Repair feedback retains claim text and citation
 identifiers, so the composer can preserve supported values while correcting rejected claims. A corrected draft
-must pass citation checks and cover every requested fact or value. Runs with a caller-supplied output schema
+must pass citation checks and cover every requested fact or value. The coverage check judges the written
+facts and values; citation support and browser actions have separate checks. Runs with a caller-supplied output schema
 retain their extracted data and end `unverified` when the composed prose fails its checks, without retrying prose composition. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
 Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
