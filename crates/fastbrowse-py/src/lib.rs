@@ -1,8 +1,10 @@
 //! `fastbrowse._native`: the Rust core in-process for Python.
 //!
-//! `run_task`, `connect_cdp` and `cli_main` are what `fastbrowse.run_task`, `connect_cdp` and the commands run.
+//! `run_task`, `connect_cdp`, `open_cloud_browser`, `stop_cloud_browser` and `cli_main` are what their namesakes in
+//! `fastbrowse` and the commands run.
 
 mod bridge;
+mod cloud;
 mod connect;
 mod host;
 
@@ -424,6 +426,8 @@ fn totp_period(key: &str) -> PyResult<u64> {
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_task, m)?)?;
     m.add_function(wrap_pyfunction!(connect_cdp, m)?)?;
+    m.add_function(wrap_pyfunction!(cloud::open_cloud_browser, m)?)?;
+    m.add_function(wrap_pyfunction!(cloud::stop_cloud_browser, m)?)?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;
     m.add_function(wrap_pyfunction!(monotonic, m)?)?;
     m.add_function(wrap_pyfunction!(origin_of, m)?)?;
@@ -434,6 +438,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(totp_period, m)?)?;
     m.add_class::<connect::Page>()?;
     m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
+    m.add("CloudFailed", m.py().get_type::<cloud::CloudFailed>())?;
     m.add_class::<Run>()?;
     m.add_class::<Context>()?;
     m.add("RunRefused", m.py().get_type::<RunRefused>())?;
