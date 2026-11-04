@@ -1648,6 +1648,27 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
     );
 }
 
+/// A hover only shows what is under the pointer, as a scroll shows what is below: a gallery run that hovered an image
+/// whose delete button never appeared had not deleted anything, and ended complete saying the image was not there.
+#[tokio::test]
+async fn test_a_task_to_carry_out_is_not_done_by_hovering() {
+    let page = Screenshots(Default::default(), false, Default::default(), true);
+    let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("carried_out")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    state.history.push(HistoryEntry::new(
+        Some(Operation::Hover),
+        Some("The settings panel"),
+        StepOutcome::Executed,
+        true,
+    ));
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("no step has done it"))),
+        "{result:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_text_and_image_returns_both_evidenced_text_and_frame() {
     let agent =

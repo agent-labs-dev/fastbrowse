@@ -1262,6 +1262,28 @@ async fn test_content_shown_only_under_the_pointer_is_reached_by_hovering() {
     h.close().await;
 }
 
+/// A media page's delete buttons were rendered by script only while a real pointer was over an image, so no stylesheet
+/// rule named them, nothing offered a hover, and the run reported the image it could see as one it could not find.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_their_card() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/hover-gallery.html").await;
+    let obs = h.observe().await;
+    assert!(!obs.controls.iter().any(|c| c.label == "Delete"));
+    let card = obs
+        .controls
+        .iter()
+        .find(|c| c.operations.contains(&Operation::Hover) && c.label == "The quest log grouped by zone")
+        .unwrap_or_else(|| panic!("no hover target for the second card in {:?}", obs.controls));
+    assert_eq!(act(&h.page, hover(card), &obs).await.outcome, StepOutcome::Executed);
+    let revealed = h.observe().await;
+    let delete = find(&revealed, "Delete");
+    assert_eq!(act(&h.page, click(delete), &revealed).await.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Deleted m2"));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_visible_option_is_clicked_without_scrolling_its_menu_shut() {
     let _turn = turn().await;

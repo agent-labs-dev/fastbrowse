@@ -545,12 +545,17 @@
         (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
     ));
   // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
+  // Each parent's children counted by tag and class once: asking every child about all its siblings is quadratic
+  // in a list of thousands, and every element of the page is asked whether it is a card.
+  const twinKey = e => `${e.localName} ${e.getAttribute('class')}`;
+  const twinCounts = memo(parent => {
+    const counts = new Map();
+    for (const child of parent?.children || []) counts.set(twinKey(child), (counts.get(twinKey(child)) || 0) + 1);
+    return counts;
+  });
   const isCard = memo(e =>
     e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
-    (!!e.getAttribute('class') &&
-      [...(e.parentElement?.children || [])].some(
-        s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
-      )));
+    (!!e.getAttribute('class') && twinCounts(e.parentElement).get(twinKey(e)) > 1));
   // A landmark or section owns its headings. A weather panel beside a search form must not name the search
   // field just because both sit in the same app shell.
   const isolatesTitle = memo(e =>
@@ -669,6 +674,44 @@
     return found;
   };
   const offered = new Set(controls.map(c => registry.nodes.get(c.id)));
+  // What carries page state in pixels: a chart, a picture, a drawing or a video.
+  const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
+  // Where the pointer can rest: an element with a box inside the viewport's width and no taller than it.
+  const pointerBox = e => {
+    if (e === e.ownerDocument.body || e === e.ownerDocument.documentElement || !visible(e)) return null;
+    const r = e.getBoundingClientRect(),
+      x = r.x + r.width / 2,
+      y = r.y + r.height / 2;
+    return r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth || r.height > innerHeight ? null : y;
+  };
+  const offerHover = (e, y) => {
+    const image = e.querySelector('img[alt]');
+    const label =
+      e.getAttribute('aria-label') ||
+      image?.getAttribute('alt') ||
+      firstLine(e.innerText) ||
+      e.getAttribute('title') ||
+      e.tagName.toLowerCase();
+    const role =
+      e.getAttribute('role') ||
+      { FIGURE: 'figure', LI: 'listitem', IMG: 'img', TR: 'row', TD: 'cell' }[e.tagName] ||
+      'group';
+    controls.push({
+      id: identity(e),
+      role,
+      label,
+      offscreen: y < 0 || y >= innerHeight,
+      distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
+      sensitive: false,
+      input_type: null,
+      frame_origin: e.ownerDocument.location.origin,
+      frame_path: framePath(e.ownerDocument),
+      submit_semantics: null,
+      value: null,
+      operations: ['hover'],
+    });
+    offered.add(e);
+  };
   for (const doc of docs) {
     for (const [base, tail] of revealsIn(doc)) {
       let hosts = [];
@@ -680,11 +723,9 @@
       for (const e of hosts) {
         // A link or button's own hover rule restyles it or shows decoration; offering HOVER there as well as
         // CLICK only gives the choice another way to be wrong.
-        if (offered.has(e) || e === doc.body || e === doc.documentElement || !visible(e)) continue;
-        const r = e.getBoundingClientRect(),
-          x = r.x + r.width / 2,
-          y = r.y + r.height / 2;
-        if (r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth || r.height > innerHeight) continue;
+        if (offered.has(e)) continue;
+        const y = pointerBox(e);
+        if (y === null) continue;
         let hidden = false;
         try {
           hidden = [...e.querySelectorAll(tail)].some(
@@ -696,34 +737,29 @@
         // Removing the active hover target renumbers its identical siblings and sends the next choice
         // to a different element. Keep it offered while the pointer still reveals its content.
         if (!hidden && !e.matches(':hover')) continue;
-        const image = e.querySelector('img[alt]');
-        const label =
-          e.getAttribute('aria-label') ||
-          image?.getAttribute('alt') ||
-          firstLine(e.innerText) ||
-          e.getAttribute('title') ||
-          e.tagName.toLowerCase();
-        const role =
-          e.getAttribute('role') ||
-          { FIGURE: 'figure', LI: 'listitem', IMG: 'img', TR: 'row', TD: 'cell' }[e.tagName] ||
-          'group';
-        const c = {
-          id: identity(e),
-          role,
-          label,
-          offscreen: y < 0 || y >= innerHeight,
-          distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
-          sensitive: false,
-          input_type: null,
-          frame_origin: e.ownerDocument.location.origin,
-          frame_path: framePath(e.ownerDocument),
-          submit_semantics: null,
-          value: null,
-          operations: ['hover'],
-        };
-        controls.push(c);
-        offered.add(e);
+        offerHover(e, y);
       }
+    }
+  }
+  // A script can render a card's controls only while a real pointer is over it, from hover state no stylesheet
+  // names: a media page's delete and reorder buttons were absent from the document until then, so nothing on
+  // the card could be acted on and the run reported an image it could see as one it could not find. A card of a
+  // list that shows a picture and holds nothing to act on is offered as a hover target, so the pointer can go
+  // there and the next observation shows what appeared. A card of text alone, a paragraph or a calendar's
+  // weekday row, is read rather than handled, and offering every one would bury the choice. Only the outermost
+  // such card is offered.
+  const holding = new Set();
+  for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  for (const doc of docs) {
+    let host = null;
+    for (const e of doc.body.querySelectorAll('*')) {
+      if (host?.contains(e)) continue;
+      if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
+      if (!e.querySelector(VISUAL)) continue;
+      const y = pointerBox(e);
+      if (y === null) continue;
+      offerHover(e, y);
+      host = e;
     }
   }
 
@@ -976,7 +1012,6 @@
   // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,
   // because that is what a screenshot captures. Geometry is read in the parent's coordinates the way readText reads
   // text, so a frame's image counts where the frame itself sits on screen.
-  const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
   let visual_content = 0;
   const readVisual = (doc, dx, dy) => {
     if (visual_content) return;
