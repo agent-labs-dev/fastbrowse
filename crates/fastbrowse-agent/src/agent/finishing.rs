@@ -43,14 +43,17 @@ impl Agent {
                 .needs_browser("The requested output needs a screenshot of the rendered page.".into())
                 .into());
         }
-        // A task to carry out is not done by reading. Over HTTP nothing can be carried out, and what scripts build on
-        // the page was never there to see. A hover only shows what is under the pointer, as a scroll shows what is
-        // below: a run that hovered an image whose delete button it never reached had deleted nothing.
+        // A task to carry out is not done by reading, or by waiting to read again. Over HTTP nothing can be carried
+        // out, and what scripts build on the page was never there to see. A hover only shows what is under the pointer,
+        // as a scroll shows what is below: a run that hovered an image whose delete button it never reached had deleted
+        // nothing.
         let acted = state.history.iter().any(|entry| {
             entry.outcome == StepOutcome::Executed
                 && !matches!(
                     entry.operation,
-                    None | Some(Operation::Read | Operation::Scroll | Operation::ScrollUp | Operation::Hover)
+                    None | Some(
+                        Operation::Read | Operation::Scroll | Operation::ScrollUp | Operation::Hover | Operation::Wait
+                    )
                 )
         });
         if !acted && output_schema.is_none() && matches!(intent, OutputIntent::CarriedOut) {

@@ -33,6 +33,8 @@ public enum Operation {
     UPLOAD,
     @JsonProperty("dialog")
     DIALOG,
+    @JsonProperty("wait")
+    WAIT,
     @JsonProperty("read")
     READ,
     @JsonProperty("done")

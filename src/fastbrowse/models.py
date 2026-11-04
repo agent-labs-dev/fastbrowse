@@ -90,6 +90,7 @@ class Operation(StrEnum):
     SWITCH_TAB = "switch_tab"
     UPLOAD = "upload"
     DIALOG = "dialog"
+    WAIT = "wait"
     READ = "read"
     DONE = "done"
     NAVIGATE = "navigate"

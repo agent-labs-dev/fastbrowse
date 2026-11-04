@@ -466,6 +466,7 @@ impl CdpPage {
                 Ok((StepOutcome::Executed, None))
             }
             Operation::Back => self.back().await,
+            Operation::Wait => self.await_change().await,
             Operation::SwitchTab => {
                 let Some(tab_id) = &action.tab_id else {
                     return Ok((StepOutcome::Failed, Some("switch_tab requires tab_id".into())));
@@ -1042,6 +1043,33 @@ impl CdpPage {
         let centre = self.evaluate(&session_id, "[innerWidth / 2, innerHeight / 2]").await?;
         let params = json!({"type": "mouseWheel", "x": centre[0], "y": centre[1], "deltaX": 0, "deltaY": delta});
         self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await
+    }
+
+    /// Wait for the page to change by itself, at most `SETTLE_SECONDS`: the bound every action's settle already has.
+    ///
+    /// This is the step that lets time pass between two reads of a status line. The page's own mutations say when to
+    /// look again; the fingerprint, which the settle that follows compares too, says whether what changed is something
+    /// an observation shows.
+    pub(crate) async fn await_change(&self) -> Result<Outcome, BrowserError> {
+        let session_id = self.session.active_session_id()?;
+        let watch = format!(
+            "new Promise(resolve => {{ const r = window.__fastbrowse; \
+             const later = r?.nativeSetTimeout ?? setTimeout, clear = r?.nativeClearTimeout ?? clearTimeout; \
+             const sample = () => {{ try {{ return {fingerprint}; }} catch {{ return null; }} }}; \
+             const before = sample(); let queued = false; \
+             const stop = moved => {{ observer.disconnect(); clear(timer); resolve(moved); }}; \
+             const look = () => {{ queued = false; if (sample() !== before) stop(true); }}; \
+             const observer = new MutationObserver(() => {{ if (!queued) {{ queued = true; later(look, 0); }} }}); \
+             observer.observe(document, {{childList: true, subtree: true, attributes: true, characterData: true}}); \
+             const timer = later(() => stop(sample() !== before), {ms}); }})",
+            fingerprint = self.fingerprint_js,
+            ms = py_float(super::SETTLE_SECONDS * 1000.0),
+        );
+        match self.evaluate(&session_id, &watch).await {
+            Ok(changed) if !truthy(&changed) => Ok((StepOutcome::Executed, Some("the page did not change".into()))),
+            // A navigation destroys the watch with its context, which is itself the page changing.
+            _ => Ok((StepOutcome::Executed, None)),
+        }
     }
 
     pub(crate) async fn back(&self) -> Result<Outcome, BrowserError> {

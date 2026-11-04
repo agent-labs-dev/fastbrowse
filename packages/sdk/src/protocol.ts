@@ -17,6 +17,7 @@ export type Operation =
   | 'switch_tab'
   | 'upload'
   | 'dialog'
+  | 'wait'
   | 'read'
   | 'done'
   | 'navigate';

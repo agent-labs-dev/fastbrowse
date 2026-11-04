@@ -719,3 +719,65 @@ async fn sign_in_judgments_get_the_navigation_source_and_still_decide_whether_it
         }
     }
 }
+
+/// A task that reads a value, waits and reads it again finishes: Jev can pick a wait, the page moves on under it, and
+/// the second read cites what the page shows afterwards. With no wait to pick, the run read the same page twice and
+/// could never report the change.
+#[tokio::test(start_paused = true)]
+async fn a_task_that_reads_waits_and_reads_again_completes_with_both_readings() {
+    let mut case = cases()
+        .into_iter()
+        .find(|case| case["name"] == "an HTTP 404 page goes to Jev, and its DONE ends the run")
+        .unwrap();
+    case["name"] = "read, wait, read".into();
+    case["calls"] = serde_json::json!([]);
+    case["task"] = "Open https://status.test/ and report its status line, then wait a few seconds and report the \
+                    status line again"
+        .into();
+    case["start"] = "https://status.test/".into();
+    case["jev"]["pick"] = serde_json::json!({"operation": ["read", "wait", "read", "done"]});
+    // Jev holds each claim supported by its quote, and the two together to cover the task.
+    case["jev"]["nouls"] = serde_json::json!({"claim0": 0.9, "claim1": 0.9, "coverage": 0.9});
+    case["llm"]["AnswerDraft"] = serde_json::json!([{"claims": [
+        {"text": "First: live, updated 16:59:21", "evidence_ids": ["e0"]},
+        {"text": "After waiting: live, updated 16:59:27", "evidence_ids": ["e1"]}
+    ]}]);
+    let screen = |key: &str, text: &str| {
+        let mut screen = case["site"]["screens"]["missing"].clone();
+        let observation = &mut screen["observation"];
+        observation["url"] = "https://status.test/".into();
+        observation["title"] = "Status".into();
+        observation["page_key"] = key.into();
+        observation["document_key"] = "status".into();
+        observation["viewport_text"] = text.into();
+        observation.as_object_mut().unwrap().remove("response_status");
+        let capture = &mut screen["capture"];
+        capture["url"] = "https://status.test/".into();
+        capture["title"] = "Status".into();
+        capture["sha256"] = fastbrowse_core::py::sha256_hex(text.as_bytes()).into();
+        capture["text"] = text.into();
+        capture["blocks"] = serde_json::json!([
+            {"source_id": "s0", "kind": "paragraph", "frame_id": null, "start": 0, "end": text.chars().count()}
+        ]);
+        screen
+    };
+    case["site"] = serde_json::json!({
+        "start": "blank",
+        "urls": {"https://status.test/": "early"},
+        "screens": {
+            "blank": case["site"]["screens"]["blank"].clone(),
+            "early": screen("early", "live, updated 16:59:21"),
+            "later": screen("later", "live, updated 16:59:27"),
+        },
+        "actions": [{"screen": "early", "operation": "wait", "next": "later"}]
+    });
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    let operations: Vec<&str> =
+        outcome["steps"].as_array().unwrap().iter().map(|step| step["operation"].as_str().unwrap()).collect();
+    assert!(operations.contains(&"wait"), "no wait was taken: {operations:?}");
+    let quotes: Vec<&str> =
+        outcome["evidence"].as_array().unwrap().iter().map(|e| e["quote"].as_str().unwrap()).collect();
+    assert!(quotes.contains(&"live, updated 16:59:21"), "{outcome}");
+    assert!(quotes.contains(&"live, updated 16:59:27"), "{outcome}");
+    assert_eq!(outcome["status"], "complete", "{outcome}");
+}

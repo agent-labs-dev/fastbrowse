@@ -399,6 +399,8 @@ public enum Operation
     Upload,
     [JsonStringEnumMemberName("dialog")]
     Dialog,
+    [JsonStringEnumMemberName("wait")]
+    Wait,
     [JsonStringEnumMemberName("read")]
     Read,
     [JsonStringEnumMemberName("done")]

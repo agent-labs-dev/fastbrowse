@@ -256,6 +256,7 @@ const (
 	OperationSwitchTab Operation = "switch_tab"
 	OperationUpload    Operation = "upload"
 	OperationDialog    Operation = "dialog"
+	OperationWait      Operation = "wait"
 	OperationRead      Operation = "read"
 	OperationDone      Operation = "done"
 	OperationNavigate  Operation = "navigate"

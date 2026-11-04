@@ -134,10 +134,10 @@ impl Replay {
     }
 }
 
-/// Whether a step of this operation is worth keeping in a recipe: one that acted on the site. Reads and DONE are
-/// decided live on replay, so evidence and completion are never taken from an earlier run.
+/// Whether a step of this operation is worth keeping in a recipe: one that acted on the site. Reads, waits and DONE
+/// are decided live on replay, so evidence, timing and completion are never taken from an earlier run.
 pub(crate) fn recorded(operation: Operation) -> bool {
-    !matches!(operation, Operation::Read | Operation::Done)
+    !matches!(operation, Operation::Read | Operation::Wait | Operation::Done)
 }
 
 /// The recipe step an executed action becomes. Text is kept only when it is safe to write down: a stored secret by

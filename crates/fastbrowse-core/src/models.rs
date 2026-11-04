@@ -71,6 +71,8 @@ str_enum! {
         SwitchTab = "switch_tab",
         Upload = "upload",
         Dialog = "dialog",
+        /// Let the page change by itself: a clock, a feed or a status line that updates without any input.
+        Wait = "wait",
         Read = "read",
         Done = "done",
         Navigate = "navigate",

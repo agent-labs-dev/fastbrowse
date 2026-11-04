@@ -89,6 +89,9 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Back => "Go back to the previous page.",
         Operation::SwitchTab => "Switch to another open tab.",
         Operation::Dialog => "Respond to the open browser dialog.",
+        Operation::Wait => {
+            "Wait without acting while the page changes by itself, as a clock or a live status line does."
+        }
         Operation::Read => {
             "Read this page's content, the whole page including text outside the viewport, to extract information the task needs."
         }
@@ -826,7 +829,12 @@ fn offered_operations(
             Operation::Upload => context.has_attachments && indexed.contains_key(operation),
             Operation::SwitchTab => observation.tabs.len() > 1,
             Operation::Back => observation.can_go_back,
-            Operation::Escape | Operation::Scroll | Operation::ScrollUp | Operation::Read | Operation::Done => true,
+            Operation::Escape
+            | Operation::Scroll
+            | Operation::ScrollUp
+            | Operation::Wait
+            | Operation::Read
+            | Operation::Done => true,
             Operation::Dialog => false,
         })
         .collect()

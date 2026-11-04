@@ -1339,3 +1339,19 @@ async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_o
     assert_eq!(eval_active(&h.page, "[window.pressed, window.submitted]").await, json!([null, null]));
     h.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_lasts_until_the_page_changes_by_itself() {
+    // A status line that a timer rewrites: the wait returns once it has changed, and the page then shows the new value.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const line = document.createElement('p'); line.textContent = 'Updated 16:59:21'; \
+                  document.body.append(line); setTimeout(() => { line.textContent = 'Updated 16:59:27'; }, 700); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let result = h.page.act(&Action::new(Operation::Wait), &before).await.expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    let capture = h.page.capture().await.expect("capture");
+    assert!(capture.text.contains("Updated 16:59:27"), "{}", capture.text);
+    h.close().await;
+}

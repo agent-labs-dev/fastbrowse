@@ -118,7 +118,7 @@ pub(crate) fn unsent_fact(history: &[HistoryEntry], observation: &Observation) -
     for entry in history.iter().rev().filter(|entry| entry.outcome == StepOutcome::Executed) {
         match entry.operation {
             Some(Operation::Fill) => fields.extend(entry.target.iter().cloned()),
-            Some(Operation::Read | Operation::Select | Operation::Scroll | Operation::ScrollUp) => {}
+            Some(Operation::Read | Operation::Select | Operation::Scroll | Operation::ScrollUp | Operation::Wait) => {}
             Some(Operation::Click) if entry.setting == Some(true) => {}
             _ => break,
         }

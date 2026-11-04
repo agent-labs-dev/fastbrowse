@@ -43,6 +43,7 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
         | Operation::SwitchTab
         | Operation::Upload
         | Operation::Dialog
+        | Operation::Wait
         | Operation::Read
         | Operation::Done => false,
     }
