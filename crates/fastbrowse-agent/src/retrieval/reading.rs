@@ -1696,8 +1696,16 @@ async fn read_inner(
                 });
             }
         }
+        // Claims rejected for lost records, by their `claim:N` reference: a conclusion drawing on one lost an operand.
+        let mut dropped: HashSet<String> = HashSet::new();
         for (index, original) in result.data.claims.iter().enumerate() {
             let mut claim = original.clone();
+            if claim.draws_on.iter().any(|reference| dropped.contains(reference)) {
+                // Rejecting the dependent is enough; the operand's own arm already settled what is lost.
+                dropped.insert(format!("claim:{index}"));
+                rejected_here += 1;
+                continue;
+            }
             if options.require_all_evidence
                 && let Some(requirement_id) = &claim.requirement_id
                 && requirement_ids.contains(requirement_id)
@@ -1735,6 +1743,7 @@ async fn read_inner(
                 }
                 uncovered += missing;
                 rejected_here += 1;
+                dropped.insert(format!("claim:{index}"));
                 continue;
             }
             if options.preserve_collections {
