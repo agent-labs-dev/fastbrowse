@@ -219,7 +219,7 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
             listed => token_count(listed)?,
         };
         found.prompt = found.prompt.max(if output < context { context - output } else { context });
-        let (mut token, mut request, mut image, mut peak) = (0.0_f64, 0.0, 0.0, 1.0_f64);
+        let (mut token, mut request, mut image, mut peak) = (0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64);
         for (key, value) in object_value(endpoint.get("pricing"))? {
             match key.as_str() {
                 "discount" => {} // a discount lowers the charge, and leaving it out keeps the bound above it
@@ -231,6 +231,21 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
                     }
                 }
                 "peak_pricing" => peak = peak.max(dollars(object_value(Some(value))?.get("multiplier"))?),
+                // Each override is a whole price set for the window it names, such as weekends or a band of hours.
+                "overrides" => {
+                    for set in value.as_array().ok_or("expected a list of price overrides")? {
+                        for (key, price) in object_value(Some(set))? {
+                            match key.as_str() {
+                                "utc_days" | "utc_start" | "utc_end" => {}
+                                key if PER_REQUEST_PRICES.contains(&key) => {
+                                    request = request.max(dollars(Some(price))?)
+                                }
+                                "image" => image = image.max(dollars(Some(price))?),
+                                _ => token = token.max(dollars(Some(price))?),
+                            }
+                        }
+                    }
+                }
                 key if PER_REQUEST_PRICES.contains(&key) => request += dollars(Some(value))?,
                 "image" => image = dollars(Some(value))?,
                 _ => token = token.max(dollars(Some(value))?),

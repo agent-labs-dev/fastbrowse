@@ -941,9 +941,16 @@ pub(crate) async fn draft_reviewed(
     if claims.is_empty() {
         return Ok(None);
     }
-    let questions = IndexMap::from([("coverage".to_string(), coverage_question(task, None, &claims))]);
+    let question = coverage_question(task, None, &claims);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
     let tokens = jev.profile().fit(None).tokens;
+    // One question cannot be split across requests, so one too long for Jev is not sent: the draft is written up.
+    if text::len(&dumps(&state)) as i64 > tokens.input_chars(&[question.dump_json()]) {
+        let problem = "The answer read exceeds the decision model's input limits for checking task coverage.";
+        let answer = ComposedAnswer { problem: Some(problem.into()), ..assemble_answer(&claims, notes) };
+        return Ok(Some(ReviewedComposition { answer, rejection: None }));
+    }
+    let questions = IndexMap::from([("coverage".to_string(), question)]);
     let answered =
         match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
             Ok(answered) => answered,
@@ -1658,6 +1665,21 @@ mod tests {
         let asked = jev.asked.lock().unwrap();
         assert!(!asked.is_empty());
         assert!(asked.iter().all(|questions| !questions.contains_key("coverage")));
+    }
+
+    /// Twelve re-reads of one results page left thousands of picked notes, and their coverage question went to Jev as
+    /// a 26 MB request it refused (#760). A question that cannot fit is not sent; the draft is written up instead.
+    #[tokio::test]
+    async fn a_draft_too_long_to_judge_is_composed_without_asking() {
+        let limit = fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4;
+        let mut notes = Notes::default();
+        for index in 0..16 {
+            notes.add(Fact { answers: true, ..fact(index, format!("{index} {}", "x".repeat(limit / 8))) });
+        }
+        let jev = Support::new(true);
+        let reviewed = draft_reviewed(&jev, "Report every record", &notes, None).await.unwrap().unwrap();
+        assert!(reviewed.answer.problem.unwrap().contains("input limits"));
+        assert!(jev.asked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

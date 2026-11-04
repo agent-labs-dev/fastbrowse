@@ -603,6 +603,37 @@ async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn test_a_price_overridden_for_part_of_the_week_is_bounded_by_its_dearest() {
+    // OpenRouter lists DeepSeek's weekend and off-peak prices as `overrides`, each a price set with the window it
+    // holds in. Read as one price, the list failed the whole lookup, so compose sent 8.44 MB unpacked (#760).
+    let http = answering(move |request| {
+        if request.url.ends_with("/endpoints") {
+            return ok(Response::json(
+                200,
+                &json!({"data": {"endpoints": [
+                    {"context_length": 2000, "max_completion_tokens": 500, "pricing": {
+                        "prompt": "0.0000003", "completion": "0.0000025", "discount": 0,
+                        "overrides": [
+                            {"utc_days": ["saturday", "sunday"], "prompt": "0.00000015", "completion": "0.0000006"},
+                            {"utc_start": 0, "utc_end": 100, "prompt": "0.000001", "completion": "0.000004"},
+                        ]}},
+                ]}}),
+            ));
+        }
+        if request.method.as_str() == "GET" {
+            return ok(Response::json(404, &json!({"error": "Usage event not found"})));
+        }
+        ok(Response::json(200, &without_cost("gen_1")))
+    });
+    let ledger = capped(Some(28.0));
+    let llm = client(http, OPENROUTER, LLMPurpose::Start, "writer");
+    assert_eq!(llm.context_tokens(LLMPurpose::Start).await, Some(1500));
+    let result = generate(&llm, LLMPurpose::Start, &[], Some(&ledger)).await.unwrap();
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.000004 * 1.05));
+}
+
+#[tokio::test(start_paused = true)]
 async fn test_a_price_with_no_ceiling_keeps_the_spend_guard() {
     for price in [json!("-1"), json!("free"), Value::Null] {
         let lookups = Arc::new(AtomicUsize::new(0));
