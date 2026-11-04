@@ -105,7 +105,11 @@ fn same(supplied: &[u8], expected: &[u8]) -> bool {
 }
 
 fn allowed_host(host: &str) -> bool {
-    host.rsplit_once(':').is_some_and(|(name, _)| is_loopback(name))
+    // A default-port authority has no colon, and IPv6 uses colons inside its bracketed host.
+    !host.contains('@')
+        && host
+            .parse::<hyper::http::uri::Authority>()
+            .is_ok_and(|authority| authority.host().eq_ignore_ascii_case("localhost") || is_loopback(authority.host()))
 }
 
 fn allowed_origin(origin: &str) -> bool {

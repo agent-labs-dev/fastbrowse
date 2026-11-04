@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Local MCP HTTP connections accept loopback Host and Origin headers that omit the default port, including bracketed IPv6 hosts.
+
 - Python callback failures retain the original exception and attach the run's receipt, including costs and finished recordings.
 
 - Download storage uses the host filesystem's filename rules, keeping absolute Windows filenames inside the artifact directory. Windows file URIs name the stored files with drive and UNC paths.

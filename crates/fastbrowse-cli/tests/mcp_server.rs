@@ -458,11 +458,17 @@ async fn test_every_loopback_address_checks_host_and_origin() {
         stream.read_to_string(&mut response).await.unwrap();
         response
     };
-    assert!(post("Host: evil.test:80").await.starts_with("HTTP/1.1 421"));
+    for host in ["evil.test:80", "evil.test", "localhost.evil.test", "localhost:80@evil.test", "evil@localhost"] {
+        assert!(post(&format!("Host: {host}")).await.starts_with("HTTP/1.1 421"), "{host}");
+    }
     let origin = format!("Host: 127.0.0.2:{port}\r\nOrigin: http://evil.test:80");
     assert!(post(&origin).await.starts_with("HTTP/1.1 403"));
-    let own = post(&format!("Host: 127.0.0.2:{port}")).await;
-    assert!(own.starts_with("HTTP/1.1 406"), "{own}");
+    for host in
+        [format!("127.0.0.2:{port}"), "127.0.0.2".into(), "localhost".into(), "LOCALHOST".into(), "[::1]".into()]
+    {
+        let own = post(&format!("Host: {host}\r\nOrigin: http://{host}")).await;
+        assert!(own.starts_with("HTTP/1.1 406"), "{host}: {own}");
+    }
 }
 
 async fn http(port: u16, request: &str) -> String {
