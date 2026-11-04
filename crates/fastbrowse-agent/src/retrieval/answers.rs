@@ -24,13 +24,13 @@ use crate::support::generate;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claim {
-    pub text: String,
     pub evidence_ids: Vec<String>,
+    pub text: String,
 }
 
 impl Claim {
     pub fn new(text: &str, evidence_ids: Vec<String>) -> Claim {
-        Claim { text: text.into(), evidence_ids }
+        Claim { evidence_ids, text: text.into() }
     }
 }
 
@@ -52,7 +52,8 @@ impl Schema for Claim {
     fn ty() -> Ty {
         ModelTy::frozen(
             "Claim",
-            vec![Field::required("text", Ty::Str), Field::required("evidence_ids", Ty::list(Ty::Str))],
+            // The notes are chosen before the text is written, so a count in the text can follow the notes cited.
+            vec![Field::required("evidence_ids", Ty::list(Ty::Str)), Field::required("text", Ty::Str)],
         )
         .ty()
     }
@@ -192,7 +193,7 @@ impl ComposeItem {
     }
 }
 
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and write each claim as one row: its cells in column order, separated by \" | \", with no other text. Otherwise set columns to null.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and write each claim as one row: its cells in column order, separated by \" | \", with no other text. Otherwise set columns to null.\n\n# Trust\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -455,22 +456,20 @@ async fn review_claims(
     }
     let mut questions = IndexMap::new();
     let mut required = vec![Vec::new(); claims.len()];
+    let mut counts = IndexMap::new();
     for (index, claim) in claims.iter().enumerate() {
-        let sources: Vec<_> = notes
-            .expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))
-            .iter()
-            .filter_map(|id| notes.facts_by_id().get(id))
-            .filter_map(|fact| {
-                fact.evidence
-                    .as_ref()
-                    .map(|quote| json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)) }))
-            })
-            .collect();
+        let sources = cited_quotes(claim, notes);
         if sources.is_empty() {
             continue;
         }
         let cited = json!({"columns": columns, "claim": claim.text, "quotes": sources});
-        let checks: Vec<_> = match columns.and_then(|columns| table_cells(&claim.text, columns).map(|cells| (columns, cells))) {
+        let row = columns.and_then(|columns| table_cells(&claim.text, columns).map(|cells| (columns, cells)));
+        if row.is_none()
+            && let Some(question) = count_question(claim, &sources)
+        {
+            counts.insert(format!("claim{index}"), question);
+        }
+        let checks: Vec<_> = match row {
             Some((columns, cells)) => columns.iter().zip(cells).enumerate().map(|(cell, (column, value))| {
                 (format!("claim{index}/cell{cell}"), format!("Judge only the cell for field {} with value {} in this row. Use the whole row to identify which record it belongs to.", text::repr(column), text::repr(value)))
             }).collect(),
@@ -509,8 +508,14 @@ async fn review_claims(
     let oversized_coverage =
         questions.get("coverage").is_some_and(|question| state_chars > tokens.input_chars(&[question.dump_json()]));
     let oversized = oversized_claim || oversized_coverage;
+    // Which number a claim states as its count is asked beside its support, in the same requests.
+    let asked: IndexMap<String, Question> = questions
+        .iter()
+        .map(|(key, question)| (key.clone(), question.clone()))
+        .chain(counts.iter().map(|(key, question)| (format!("{key}/count"), question.clone())))
+        .collect();
     let (answered, failure) =
-        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
+        match evaluate_batches(JevPurpose::Verify, jev, &state, &asked, &tokens, ledger, None, false).await {
             Ok(answered) => (answered, None),
             Err(AgentError::Jev(error)) => (None, Some(format!("Jev could not judge composed claims: {error}"))),
             Err(error) => return Err(error),
@@ -519,7 +524,7 @@ async fn review_claims(
     let missing = questions.keys().any(|key| answered.as_ref().is_none_or(|pass| !pass.answers.contains_key(key)));
     let fully_judged = questions.keys().all(|key| answered.as_ref().is_some_and(|pass|
         matches!(pass.answers.get(key), Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) && answer.probability != 0.5)));
-    let rejected_checks: Vec<_> = questions
+    let mut rejected_checks: Vec<_> = questions
         .keys()
         .filter(|key| {
             answered.as_ref().is_some_and(
@@ -532,19 +537,39 @@ async fn review_claims(
         || answered.as_ref().is_some_and(
             |pass| matches!(pass.answers.get("coverage"), Some(Answer::Noul(answer)) if answer.probability > 0.5),
         );
-    let feedback = json!({"columns": columns, "draft_claims": &claims, "rejected_checks": rejected_checks});
+    let supports = |index: usize| {
+        answered.as_ref().is_some_and(|pass| {
+            let keys = &required[index];
+            !keys.is_empty()
+                && keys
+                    .iter()
+                    .all(|key| matches!(pass.answers.get(key), Some(Answer::Noul(answer)) if answer.probability > 0.5))
+        })
+    };
+    let mut miscounts = Vec::new();
+    for (index, claim) in claims.iter().enumerate() {
+        let stated = answered.as_ref().and_then(|pass| match pass.answers.get(&format!("claim{index}/count")) {
+            Some(Answer::Choice(answer)) => answer.choice.parse::<u64>().ok(),
+            _ => None,
+        });
+        if let Some(stated) = stated.filter(|_| supports(index))
+            && let Some(counted) = counted_records(jev, task, claim, stated, notes, &tokens, ledger).await?
+            && counted != stated
+        {
+            miscounts.push(json!({"claim": index, "states": stated, "records_in_cited_quotes": counted}));
+            rejected_checks.push(format!("claim{index}/count"));
+        }
+    }
+    let miscounted = |index: usize| miscounts.iter().any(|miscount| miscount["claim"] == index);
+    let mut feedback = json!({"columns": columns, "draft_claims": &claims, "rejected_checks": rejected_checks});
+    if !miscounts.is_empty() {
+        feedback["miscounted_claims"] = json!(miscounts);
+    }
     let supported = claims
         .into_iter()
         .enumerate()
-        .filter_map(|(index, claim)| {
-            let answers = &answered.as_ref()?.answers;
-            let keys = &required[index];
-            (!keys.is_empty()
-                && keys
-                    .iter()
-                    .all(|key| matches!(answers.get(key), Some(Answer::Noul(answer)) if answer.probability > 0.5)))
-            .then_some(claim)
-        })
+        .filter(|(index, _)| supports(*index) && !miscounted(*index))
+        .map(|(_, claim)| claim)
         .collect::<Vec<_>>();
     let problem = failure.clone().or_else(|| {
         if oversized_claim {
@@ -555,6 +580,8 @@ async fn review_claims(
             Some("A composed claim has no retained source quote.".into())
         } else if missing {
             Some("Jev left a composed claim's support unanswered.".into())
+        } else if !miscounts.is_empty() {
+            Some("A composed claim states a count that differs from the records its cited quotes hold.".into())
         } else if supported.len() != count {
             Some("A composed claim is unsupported by its cited quotes.".into())
         } else if !coverage {
@@ -570,6 +597,122 @@ async fn review_claims(
         && required.iter().all(|keys| !keys.is_empty()))
     .then(|| dumps(&feedback));
     Ok(CheckedClaims { claims: supported, problem, rejection })
+}
+
+/// The quotes a claim cites, each with whether a later read superseded it.
+fn cited_quotes(claim: &Claim, notes: &Notes) -> Vec<serde_json::Value> {
+    notes
+        .expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))
+        .iter()
+        .filter_map(|id| notes.facts_by_id().get(id))
+        .filter_map(|fact| {
+            fact.evidence
+                .as_ref()
+                .map(|quote| json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)) }))
+        })
+        .collect()
+}
+
+/// The whole numbers written in `text`, once each in reading order. Commas group thousands; a decimal is no count.
+fn whole_numbers(text: &str) -> Vec<u64> {
+    let mut numbers = Vec::new();
+    let mut add = |digits: &str| {
+        if let Ok(number) = digits.parse::<u64>()
+            && !numbers.contains(&number)
+        {
+            numbers.push(number);
+        }
+    };
+    let characters: Vec<char> = text.chars().collect();
+    let mut start = 0;
+    while start < characters.len() {
+        let digit = |at: usize| characters.get(at).is_some_and(char::is_ascii_digit);
+        if !digit(start) || (start > 0 && (digit(start - 1) || characters[start - 1] == '.')) {
+            start += 1;
+            continue;
+        }
+        let mut end = start;
+        while digit(end)
+            || (characters.get(end) == Some(&',') && (1..=3).all(|ahead| digit(end + ahead)) && !digit(end + 4))
+        {
+            end += 1;
+        }
+        if !(characters.get(end) == Some(&'.') && digit(end + 1)) {
+            add(&characters[start..end].iter().filter(|c| c.is_ascii_digit()).collect::<String>());
+        }
+        start = end.max(start + 1);
+    }
+    numbers
+}
+
+const NOT_A_COUNT: &str = "No number in the claim is a count of records it draws from its quotes: for example a price, rating, date or page number, or a total that a quote itself states.";
+
+/// Asks which number in the claim, if any, counts records drawn from its cited quotes. None for a claim with no number.
+fn count_question(claim: &Claim, quotes: &[serde_json::Value]) -> Option<Question> {
+    let numbers = whole_numbers(&claim.text);
+    if numbers.is_empty() {
+        return None;
+    }
+    let mut criteria = IndexMap::from([("none".to_string(), json!(NOT_A_COUNT))]);
+    for number in numbers {
+        criteria.insert(
+            number.to_string(),
+            json!(format!("The claim's {number} states how many records it counted from its cited quotes.")),
+        );
+    }
+    let cited = json!({"claim": claim.text, "quotes": quotes});
+    Some(Question::Choice(ChoiceQuestion::new(
+        format!(
+            "{UNTRUSTED}\nWhich number in this claim states how many records it counts from its cited quotes? {cited}"
+        ),
+        criteria,
+    )))
+}
+
+const ONE_RECORD: &str = "1";
+
+/// How many records Jev says the claim's cited quotes hold toward the count it states, a record repeated by a later
+/// quote counted once. None when a quote holds several records, or Jev leaves a quote unanswered, so code cannot count.
+async fn counted_records(
+    jev: &dyn DecisionClient,
+    task: &str,
+    claim: &Claim,
+    stated: u64,
+    notes: &Notes,
+    tokens: &fastbrowse_core::config::TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<Option<u64>> {
+    let quotes = cited_quotes(claim, notes);
+    let questions: IndexMap<String, Question> = (0..quotes.len())
+        .map(|index| {
+            let criteria = IndexMap::from([
+                ("0".to_string(), json!("None: it holds no record the count includes, or only records an earlier quote holds.")),
+                (ONE_RECORD.to_string(), json!("Exactly one record the count includes.")),
+                ("several".to_string(), json!("More than one record the count includes.")),
+            ]);
+            let instructions = format!("{UNTRUSTED}\nThe claim states {stated} as the number of records it counted from its quotes. How many of the records that count includes does quote {index} hold, leaving out any record an earlier quote in the list already holds?");
+            (format!("quote{index}"), Question::Choice(ChoiceQuestion::new(instructions, criteria)))
+        })
+        .collect();
+    let quotes: Vec<_> =
+        quotes.into_iter().enumerate().map(|(index, quote)| json!({"index": index, "quote": quote})).collect();
+    let state = json!({"task": task, "claim": claim.text, "quotes": quotes});
+    let answered =
+        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, tokens, ledger, None, false).await {
+            Ok(answered) => answered,
+            Err(AgentError::Jev(_)) => None,
+            Err(error) => return Err(error),
+        };
+    let Some(answered) = answered else { return Ok(None) };
+    let mut counted = 0;
+    for key in questions.keys() {
+        match answered.answers.get(key) {
+            Some(Answer::Choice(answer)) if answer.choice == ONE_RECORD => counted += 1,
+            Some(Answer::Choice(answer)) if answer.choice == "0" => {}
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(counted))
 }
 
 #[derive(Serialize)]
@@ -1149,6 +1292,81 @@ mod tests {
         fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
             fastbrowse_core::decision::DecisionProfile::jev()
         }
+    }
+
+    /// Jev supports every claim, reads `stated` as the count a claim states, and finds one record in every quote.
+    struct Counting {
+        stated: &'static str,
+        asked: Mutex<Vec<IndexMap<String, Question>>>,
+    }
+
+    impl DecisionClient for Counting {
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation, NoulAnswer, NoulTag};
+            self.asked.lock().unwrap().push(questions.clone());
+            let answer = |question: &Question| match question {
+                Question::Choice(choice) => {
+                    let pick = if choice.criteria.contains_key("none") { self.stated } else { "1" };
+                    Answer::Choice(ChoiceAnswer {
+                        kind: ChoiceTag,
+                        choice: pick.into(),
+                        probabilities: IndexMap::from([(pick.to_string(), 0.9)]),
+                        confidence: 0.9,
+                    })
+                }
+                _ => Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.61 }),
+            };
+            let answers = questions.iter().map(|(key, question)| (key.clone(), answer(question))).collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
+        }
+    }
+
+    /// A composer that cites six quotes and writes that they are five is held to the six Jev finds in them.
+    #[tokio::test]
+    async fn a_claim_whose_count_differs_from_the_records_it_cites_is_rejected_with_the_count() {
+        let notes = Notes::new((0..6).map(|index| fact(index, format!("Quote {index} by J.K. Rowling"))));
+        let ids: Vec<String> = (0..6).map(|index| format!("e{index}")).collect();
+        let task = "How many quotes by J.K. Rowling are there?";
+        for (stated, rejected) in [("5", true), ("6", false)] {
+            let mut llm = RecordingLlm::new(None);
+            llm.claims = Some(vec![Claim::new(&format!("There are {stated} quotes by J.K. Rowling."), ids.clone())]);
+            let jev = Counting { stated, asked: Mutex::new(Vec::new()) };
+            let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None).await.unwrap();
+            assert_eq!(reviewed.answer.claims.is_empty(), rejected, "a count of {stated}");
+            let Some(rejection) = reviewed.rejection else {
+                assert_eq!(reviewed.answer.problem, None);
+                continue;
+            };
+            let feedback: Value = serde_json::from_str(&rejection).unwrap();
+            assert_eq!(feedback["rejected_checks"], json!(["claim0/count"]));
+            assert_eq!(feedback["miscounted_claims"], json!([{"claim": 0, "states": 5, "records_in_cited_quotes": 6}]));
+            let asked = jev.asked.lock().unwrap();
+            let Question::Choice(count) = &asked[0]["claim0/count"] else { panic!("the count is a choice") };
+            assert_eq!(count.criteria.keys().collect::<Vec<_>>(), ["none", "5"]);
+        }
+    }
+
+    #[test]
+    fn whole_numbers_leave_out_decimals_and_read_thousands() {
+        assert_eq!(whole_numbers("10 quotes, 1,234 pages, £12.50, 3. Then 7,8"), [10, 1234, 3, 7, 8]);
     }
 
     #[tokio::test]
