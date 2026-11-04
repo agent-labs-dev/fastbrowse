@@ -40,6 +40,9 @@ from fastbrowse.models import (
     ArtifactSink,
     BrowserEvent,
     BudgetStop,
+    CloudBrowser,
+    CloudBrowserError,
+    CloudBrowserUnavailable,
     ConfigurationError,
     CostBreakdown,
     CostComponent,
@@ -564,6 +567,47 @@ async def connect_cdp(arguments: dict[str, Any]) -> AsyncGenerator[NativePage]:
         yield NativePage(page, core.PageFailed)
     finally:
         await page.close()
+
+
+def _cloud_error(failed: Exception) -> CloudBrowserError:
+    unavailable, message = failed.args
+    return (CloudBrowserUnavailable if unavailable else CloudBrowserError)(message)
+
+
+async def open_cloud_browser(arguments: dict[str, Any], *, origin: str | None = None) -> CloudBrowser:
+    """`open_cloud_browser` with its `arguments` on the Rust core; `origin` stands in for Browser Use Cloud's."""
+    core: Any = importlib.import_module("fastbrowse._native")
+    viewport = arguments["viewport"]
+    options = {
+        **{name: arguments[name] for name in ("browser_api_key", "profile", "timeout_minutes", "proxy_country")},
+        "extensions": list(arguments["extensions"]),
+        "viewport": None if viewport is None else list(viewport),
+        "origin": origin,
+    }
+    try:
+        opening = core.open_cloud_browser(json.dumps(options))
+    except core.CloudFailed as exc:
+        raise _cloud_error(exc) from None
+    try:
+        return CloudBrowser.model_validate_json(await opening)
+    except core.CloudFailed as exc:
+        raise _cloud_error(exc) from None
+    except asyncio.CancelledError:
+        # Cancelled after the browser arrived but before this resumed: nobody else holds its id to stop it.
+        if opening.done() and not opening.cancelled() and opening.exception() is None:
+            started = CloudBrowser.model_validate_json(opening.result())
+            with contextlib.suppress(core.CloudFailed):
+                await core.stop_cloud_browser(arguments["browser_api_key"], started.id, origin=origin)
+        raise
+
+
+async def stop_cloud_browser(browser: CloudBrowser, browser_api_key: str, *, origin: str | None = None) -> None:
+    """`stop_cloud_browser` on the Rust core; `origin` stands in for Browser Use Cloud's."""
+    core: Any = importlib.import_module("fastbrowse._native")
+    try:
+        await core.stop_cloud_browser(browser_api_key, browser.id, origin=origin)
+    except core.CloudFailed as exc:
+        raise _cloud_error(exc) from None
 
 
 def command(program: str) -> NoReturn:

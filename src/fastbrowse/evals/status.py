@@ -12,6 +12,8 @@ class Ending(StrEnum):
     TIMEOUT = "timeout"
     ERROR = "error"
     BLOCKED = "blocked"
+    STALLED = "stalled"
+    """The arm stopped itself in a decision loop: it kept choosing and no choice became an action."""
     UNAVAILABLE = "unavailable"
 
 
@@ -32,7 +34,7 @@ def normalize(status: str | None, *, hosted: bool = False, answered: bool = Fals
         return Ending.BUDGET
     if value in {"timeout", "timed_out"}:
         return Ending.TIMEOUT
-    if value in {"blocked", "unavailable"}:
+    if value in {"blocked", "stalled", "unavailable"}:
         return Ending(value)
     if value in {
         "stopped",
