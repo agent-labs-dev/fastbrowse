@@ -491,6 +491,14 @@ def test_physical_calls_are_not_compared_with_historical_cost_line_counts() -> N
     assert any("counting bases differ" in finding.detail for finding in report.findings)
 
 
+@pytest.mark.parametrize("provenance", [{}, {"llm_calls_basis": None}, {"llm_calls_basis": "cost_lines"}])
+def test_projected_historical_call_regressions_still_block(provenance: dict[str, Any]) -> None:
+    before = versions.slim(baseline_row(passed=True) | {"llm_calls": 10} | provenance)
+    after = versions.slim(attempts(1)[0] | {"llm_calls": 40} | provenance)
+    findings = publication.moves(TASK, RELEASE, [before], [after])
+    assert any(finding.blocking and "LLM calls" in finding.detail for finding in findings)
+
+
 def test_physical_call_regressions_still_block_against_a_physical_baseline() -> None:
     baseline = [baseline_row(passed=True) | {"llm_calls": 10, "llm_calls_basis": "physical_requests"} for _ in range(3)]
     candidate = [r | {"llm_calls": 40, "llm_calls_basis": "physical_requests"} for r in attempts(3)]

@@ -748,7 +748,10 @@ def moves(
     base_calls = _median_metric(measured_base, "llm_calls")
     candidate_calls = _median_metric(measured_candidate, "llm_calls")
     # Historical rows counted cost lines, so retries cannot be compared with their new physical counts.
-    call_bases = [row.get("llm_calls_basis", "cost_lines") for row in (*measured_base, *measured_candidate)]
+    call_bases = [
+        basis if (basis := row.get("llm_calls_basis")) is not None else "cost_lines"
+        for row in (*measured_base, *measured_candidate)
+    ]
     comparable_calls = (
         bool(call_bases)
         and call_bases[0] in ("cost_lines", "physical_requests")
