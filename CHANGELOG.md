@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Download storage uses the host filesystem's filename rules, keeping absolute Windows filenames inside the artifact directory.
+
 - Tasks can request a final screenshot without enabling step frames. Image-only output skips text composition; requests for text and an image retain citation checks. Safe final images reach JSON clients as screenshot artifacts, while a missing requested image cannot be reported as complete.
 
 - Repeated Python cancellation waits for native cleanup and retains the run receipt, including costs and recording paths.

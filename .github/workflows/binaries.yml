@@ -82,6 +82,8 @@ jobs:
           fi
           "${build[@]}" --locked --profile release-small -p fastbrowse-cli --features scripted
           "${build[@]}" --locked --release -p fastbrowse-node
+      - name: Test core filesystem contracts
+        run: cargo test --locked --release --target "$TRIPLE" -p fastbrowse-core
       - name: Stage the build
         run: |
           mkdir -p stage/fastbrowse

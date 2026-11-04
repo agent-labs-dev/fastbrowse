@@ -28,10 +28,7 @@ fn file_uri(path: &Path) -> String {
 
 /// The last component of `name`, as `Path(name).name`: a hostile name cannot climb out with `..` or a separator.
 fn base_name(name: &str) -> &str {
-    match name.rsplit('/').next().unwrap_or("") {
-        "." | ".." => "",
-        last => last,
-    }
+    Path::new(name).file_name().and_then(|name| name.to_str()).unwrap_or("")
 }
 
 impl ArtifactSink for DirectorySink {
@@ -84,5 +81,21 @@ mod tests {
         let unnamed = block_on(sink.put(ArtifactKind::Download, "..", "text/plain", b"")).unwrap();
         assert!(unnamed.uri.ends_with("/artifact"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_absolute_artifact_name_cannot_replace_the_storage_root() {
+        let scratch = std::env::temp_dir().join(format!("fastbrowse-artifact-root-{}", std::process::id()));
+        let root = scratch.join("artifacts");
+        let outside = scratch.join("outside.txt");
+        let sink = DirectorySink::new(&root).unwrap();
+        let content = b"downloaded bytes";
+        let artifact =
+            block_on(sink.put(ArtifactKind::Download, outside.to_str().unwrap(), "text/plain", content)).unwrap();
+        let stored = root.join("download").join(&sha256_hex(content)[..16]).join("outside.txt");
+        assert_eq!(std::fs::read(stored).unwrap(), content);
+        assert!(!outside.exists(), "an artifact must not be written outside its storage root");
+        assert!(artifact.uri.ends_with("/outside.txt"));
+        std::fs::remove_dir_all(scratch).unwrap();
     }
 }
