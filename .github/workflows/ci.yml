@@ -208,7 +208,8 @@ jobs:
 
   # The builds on their own runners cost more than the rest of CI together, so a pull request pays for them only
   # when it changes how they are built or packed (the toolchain, the profiles, the lockfile, the packaging and smoke
-  # scripts, the SDK manifest the install smoke packs), or carries the `build-binaries` label. A change to the code
+  # scripts, the SDK manifest the install smoke packs) or a file the binary compiles in (the page scripts, the
+  # generated schemas), or carries the `build-binaries` label. A change to the code
   # alone is built on the push to `main`, which always builds, so a break still shows before a release. CI builds the
   # Linux and Windows targets; the two macOS ones, the costliest runners and the slowest to start, run in the release.
   changes:
@@ -230,7 +231,8 @@ jobs:
             .github/workflows/binaries.yml .github/workflows/ci.yml pyproject.toml \
             scripts/smoke_binary.py scripts/npm_platform_package.py scripts/smoke_npm_install.py \
             packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json \
-            Cargo.toml Cargo.lock rust-toolchain.toml
+            Cargo.toml Cargo.lock rust-toolchain.toml 'crates/*/Cargo.toml' 'crates/*/build.rs' \
+            crates/fastbrowse-browser/js crates/fastbrowse-cli/generated
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
           fi
