@@ -195,6 +195,19 @@ pub fn downloads_question(task: &str) -> NoulQuestion {
     )
 }
 
+/// Whether the task has the agent answer a cookie or consent banner itself: asked of the task alone, before the
+/// browser opens, since the browser otherwise refuses such banners before the agent sees them.
+pub fn consent_question(task: &str) -> NoulQuestion {
+    NoulQuestion::new(
+        format!(
+            "The agent is doing this task: {task}\nDoes the task ask the agent itself to answer a cookie or consent \
+             banner, such as accepting or rejecting cookies or choosing consent settings?"
+        ),
+        Some("The task asks the agent to accept, reject or set cookie or consent choices."),
+        Some("The task says nothing about answering a cookie or consent banner."),
+    )
+}
+
 /// Whether the page declares this a password field. `sensitive` is no evidence: it also marks a text field holding a
 /// secret the agent typed, and a sign-in form whose username took a stored secret read as two password fields.
 pub fn is_password(control: &Control) -> bool {

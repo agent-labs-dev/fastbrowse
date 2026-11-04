@@ -817,7 +817,13 @@ pub async fn run_task(mut task: RunTask, mut host: Host) -> Result<RunResult, Ru
     let mut feedback: Option<Arc<CursorFeedback>> = None;
     let work = async {
         check_browser_access(host.check_access.as_ref()).await?;
-        let (connection, started) = browser(&task, &host, &chrome, &http, &mut starting).await?;
+        // Asked while the browser starts: a task that answers a consent banner itself needs it left on the page.
+        let consent = async {
+            config.refuse_cookie_banners
+                && fastbrowse_agent::start::answers_consent_itself(&*jev, &task.task, &ledger).await.unwrap_or(false)
+        };
+        let (started, answers_consent) = tokio::join!(browser(&task, &host, &chrome, &http, &mut starting), consent);
+        let (connection, started) = started?;
         owned = Some(started);
         let connection = BrowserConnection { allowed_origins: origins.clone(), ..connection };
         if let Some(on_event) = &host.on_event {
@@ -835,7 +841,7 @@ pub async fn run_task(mut task: RunTask, mut host: Host) -> Result<RunResult, Ru
             sink(task.downloads.as_deref(), &scratch)?,
             SessionOptions {
                 max_download_bytes: config.max_download_bytes as usize,
-                refuse_cookie_banners: config.refuse_cookie_banners,
+                refuse_cookie_banners: config.refuse_cookie_banners && !answers_consent,
                 on_frame: host.on_frame.clone(),
                 check_access: host.check_access.clone(),
                 viewport: matches!(owned.as_ref(), Some(Owned::Local(_))).then_some(task.viewport).flatten(),

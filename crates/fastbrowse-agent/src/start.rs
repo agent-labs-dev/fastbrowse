@@ -1,12 +1,17 @@
-//! The page to begin on, for a caller with a task and no page. It names an address from the task alone, which no page is
-//! there yet for Jev to choose from.
+//! What is settled from the task alone, before any page is open: the page to begin on, for a caller with a task and no
+//! page, and whether the browser must leave cookie banners for the agent to answer.
 
+use fastbrowse_clients::validation::jev_purpose;
+use fastbrowse_core::decision::{Answer, DecisionClient, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
-use fastbrowse_core::models::LLMPurpose;
+use fastbrowse_core::models::{CostComponent, JevPurpose, LLMPurpose};
 use fastbrowse_core::py::lax;
+use fastbrowse_core::safety::consent_question;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use fastbrowse_core::telemetry::Ledger;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::error::Result;
 use crate::memory::split_scheme;
@@ -41,6 +46,16 @@ pub async fn propose_start(llm: &dyn LLMClient, task: &str, ledger: Option<&Ledg
 /// web.
 pub fn accept_start(proposed: Option<&str>) -> Option<String> {
     proposed.filter(|url| matches!(split_scheme(url).0.as_str(), "http" | "https")).map(str::to_string)
+}
+
+/// Whether the task has the agent answer a cookie or consent banner itself, so the browser must leave such banners on
+/// the page rather than refuse them. With no answer the banners are refused, as they would be without asking.
+pub async fn answers_consent_itself(jev: &dyn DecisionClient, task: &str, ledger: &Ledger) -> Result<bool> {
+    ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+    let questions = IndexMap::from([("consent".to_string(), Question::Noul(consent_question(task)))]);
+    let evaluation = jev_purpose(JevPurpose::Authorization, jev.evaluate(&json!({"task": task}), &questions)).await?;
+    ledger.record([evaluation.cost.clone()])?;
+    Ok(matches!(evaluation.answers.get("consent"), Some(Answer::Noul(answer)) if answer.probability > 0.5))
 }
 
 #[cfg(test)]

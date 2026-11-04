@@ -110,6 +110,100 @@ async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
     }
 }
 
+/// Answers whether the task answers a consent banner itself with the given probability, and everything else as the
+/// script `wait` says, keeping each page it is shown.
+struct ConsentDecision(f64, Arc<Mutex<Vec<Value>>>, fastbrowse_agent::scripted::ScriptedJev);
+
+impl DecisionClient for ConsentDecision {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.2.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            if !questions.contains_key("consent") {
+                let first = {
+                    let mut seen = self.1.lock().unwrap();
+                    seen.push(state.clone());
+                    seen.len() == 1
+                };
+                if first {
+                    // Time for the browser to refuse the banner before the next page is read.
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                return self.2.evaluate(state, questions).await;
+            }
+            let answer = fastbrowse_core::decision::NoulAnswer { kind: Default::default(), probability: self.0 };
+            Ok(Evaluation {
+                model: "jev".into(),
+                answers: IndexMap::from([("consent".to_string(), Answer::Noul(answer))]),
+                input_tokens: 0,
+                cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                requests: 1,
+            })
+        })
+    }
+}
+
+/// "Accept the cookie banner, then send a request" ended stuck: the browser refused the banner before it painted, so
+/// the agent never could accept it, went back to look again, and found it refused again. A task that answers the
+/// banner itself keeps it; any other still has it refused.
+#[tokio::test]
+async fn a_task_that_answers_the_cookie_banner_itself_is_left_the_banner() {
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    // Over HTTP, as a site serves it: the browser's refusal does not act on a data: page.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let start = format!("http://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+    tokio::spawn(async move {
+        let page = "<html><body><div id='consent' style='position:fixed;left:0;right:0;bottom:0'>This site uses \
+                    cookies. <button id='accept' type='button'>Accept all</button></div><p>Support portal</p><script>\
+                    document.getElementById('accept').onclick = () => document.getElementById('consent').remove();\
+                    </script></body></html>";
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    for (answers_it, shown) in [(0.9, true), (0.1, false)] {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let host = Host {
+            jev: Some(Arc::new(ConsentDecision(
+                answers_it,
+                seen.clone(),
+                fastbrowse_agent::scripted::ScriptedJev::new(fastbrowse_agent::scripted::steps("wait").unwrap()),
+            ))),
+            llm: Some(Arc::new(Silent)),
+            settings: Some(Settings::from_sources::<&str, &str>(&[], None).unwrap()),
+            ..Host::default()
+        };
+        let task = RunTask {
+            task: "Accept the cookie banner.".into(),
+            start: Some(start.clone()),
+            local: true,
+            browser: true,
+            ..RunTask::default()
+        };
+        run_task(task, host).await.expect("run returns a result");
+        let states = seen.lock().unwrap();
+        // The page read after the first decision, once the browser has had time to refuse the banner and before the
+        // script goes on to click it.
+        let pages: Vec<&str> = states.iter().filter_map(|state| state.pointer("/page/text")?.as_str()).collect();
+        let text = pages.get(1).copied().unwrap_or_default();
+        assert_eq!(text.contains("Accept all"), shown, "consent answered {answers_it}: {text:?}");
+    }
+}
+
 fn answering(status: u16) -> Http {
     Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
         Box::pin(async move { Ok(Response::new(status, Vec::new())) })
