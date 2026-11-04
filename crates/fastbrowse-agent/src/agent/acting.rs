@@ -393,6 +393,11 @@ impl Agent {
             let reversible = probability.is_some_and(|p| p <= thresholds.irreversible_above);
             if reversible || requested.is_some_and(|p| p > thresholds.requested_above) {
                 state.committing = !reversible;
+                if state.committing {
+                    // What this commits can still be redirecting or awaiting a 3-D Secure check when the run ends,
+                    // and closing the tab would abort it (#748).
+                    self.page.hand_over_tab();
+                }
                 return Ok(());
             }
         }

@@ -3014,6 +3014,7 @@ async fn an_executed_action_without_a_page_change_keeps_covered_actions_withheld
 struct Unmoved {
     now: Observation,
     sent: Mutex<Vec<(Operation, Option<String>)>>,
+    handed_over: std::sync::atomic::AtomicBool,
 }
 
 impl Page for Unmoved {
@@ -3056,6 +3057,10 @@ impl Page for Unmoved {
 
     fn withhold_frames(&self, _: bool) {}
 
+    fn hand_over_tab(&self) {
+        self.handed_over.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {
         let url = self.now.url.clone();
         Box::pin(async move { Ok(url) })
@@ -3081,6 +3086,7 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
     let page = Arc::new(Unmoved {
         now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
         sent: Mutex::new(Vec::new()),
+        handed_over: Default::default(),
     });
     let script = crate::scripted::steps("click Place order; click Place order; click Place order").unwrap();
     let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
@@ -3094,6 +3100,54 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
     let sent = page.sent.lock().unwrap().clone();
     let placed = sent.iter().filter(|(_, label)| label.as_deref() == Some("Place order")).count();
     assert_eq!(placed, 1, "{sent:?}");
+}
+
+/// The scripted Jev, judging every action irreversible with `irreversible` and every one requested by the task.
+struct Commits(ScriptedJev, f64);
+
+impl DecisionClient for Commits {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            for (key, probability) in [("irreversible", self.1), ("requested", 0.99)] {
+                if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut(key) {
+                    answer.probability = probability;
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+#[tokio::test]
+async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
+    // #748: closing the tab when the run ended aborted a payment still redirecting there.
+    for (irreversible, handed) in [(0.99, true), (0.0, false)] {
+        let page = Arc::new(Unmoved {
+            now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
+            sent: Mutex::new(Vec::new()),
+            handed_over: Default::default(),
+        });
+        let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
+        let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+        let options = super::RunOptions {
+            start: Some("https://shop.test/basket".into()),
+            authorization: Some(Authorization { irreversible_actions: true }),
+            limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+            ..Default::default()
+        };
+        let _ = agent.run("Place the order for the basket", options).await;
+        assert_eq!(page.sent.lock().unwrap().len(), 1, "{irreversible}");
+        assert_eq!(page.handed_over.load(std::sync::atomic::Ordering::SeqCst), handed, "{irreversible}");
+    }
 }
 
 /// A Jev that answers the choices it is given as `Picks` does, and every other question as the scripted Jev does.

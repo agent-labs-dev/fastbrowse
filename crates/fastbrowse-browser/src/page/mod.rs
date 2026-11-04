@@ -1479,6 +1479,10 @@ impl Page for CdpPage {
         CdpPage::withhold_frames(self, withheld);
     }
 
+    fn hand_over_tab(&self) {
+        self.session.hand_over_active_tab();
+    }
+
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {
         Box::pin(async move { seam(CdpPage::address(self).await) })
     }

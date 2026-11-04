@@ -527,6 +527,11 @@ pub trait Page: Send + Sync {
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
 
+    /// Leave the current tab open when the run ends, because an irreversible action was sent from it: what it
+    /// committed may still be in flight, and the result page is the user's to see. A page with no tab to keep does
+    /// nothing.
+    fn hand_over_tab(&self) {}
+
     /// The address the current document was served from, after any redirect.
     fn address(&self) -> BoxFuture<'_, PageResult<String>>;
 

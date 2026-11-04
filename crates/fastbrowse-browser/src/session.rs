@@ -248,6 +248,8 @@ pub(crate) struct State {
     pub(crate) keepers: HashMap<String, String>,
     /// Targets already open when an attached session began, which never join the run.
     pub(crate) open_before: HashSet<String>,
+    /// Owned tabs an irreversible action was sent on: the user's from then on, so `close` leaves them open.
+    pub(crate) handed_over: HashSet<String>,
     /// Popup target id -> (opener target id, whether it was adopted), in the order they opened.
     pub(crate) popups: Vec<Popup>,
     /// `Page.windowOpen` events from the run's pages: each one is a window on its way, announced or not.
@@ -515,7 +517,10 @@ impl BrowserSession {
                 let _ = self.bypass_service_workers(&session_id, false).await;
             }
         }
-        let owned: Vec<String> = self.0.state.lock().unwrap().owned.iter().cloned().collect();
+        let owned: Vec<String> = {
+            let state = self.0.state.lock().unwrap();
+            state.owned.difference(&state.handed_over).cloned().collect()
+        };
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
             let _ = self.send("Target.closeTarget", json!({"targetId": target_id}), None).await;
@@ -591,6 +596,14 @@ impl BrowserSession {
     /// A command through the client's deadlines.
     pub async fn send(&self, method: &str, params: Value, session: Option<&str>) -> Result<Value, BrowserError> {
         self.client()?.send(method, params, session).await
+    }
+
+    /// Leave the active tab open when the run ends. A payment or other commit sent from it can still be redirecting
+    /// or waiting on a 3-D Secure check when the run stops, and closing the tab would abort it.
+    pub fn hand_over_active_tab(&self) {
+        let mut state = self.0.state.lock().unwrap();
+        let active = state.active_target_id.clone();
+        state.handed_over.insert(active);
     }
 
     pub fn active_target_id(&self) -> String {

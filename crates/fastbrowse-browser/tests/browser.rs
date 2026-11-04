@@ -1789,6 +1789,30 @@ async fn test_a_browser_handed_over_by_cdp_url_drives_and_survives_the_run() {
     after.close().await.expect("close");
 }
 
+/// A tab an irreversible action was sent from is the user's once the run ends: a payment still redirecting there
+/// would be aborted by closing it (#748).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_tab_handed_over_after_a_commit_stays_open_when_the_run_ends() {
+    let _turn = turn().await;
+    let Some(chrome_connection) = chrome().cloned() else { return };
+    let sink = Arc::new(RecordingArtifactSink::default());
+    let handed = BrowserConnection::new(chrome_connection.cdp_url.clone(), true);
+    let session = BrowserSession::new(handed, sink.clone(), SessionOptions::default());
+    session.open().await.expect("session opens");
+    let page = CdpPage::new(session.clone(), Config::default());
+    page.navigate(&sites().main, None).await.expect("navigate");
+    let committed = session.active_target_id();
+    fastbrowse_core::page::Page::hand_over_tab(&page);
+    session.close().await.expect("close");
+    let after = BrowserSession::new(chrome_connection, sink, SessionOptions::default());
+    after.open().await.expect("session opens");
+    let targets = after.send("Target.getTargets", json!({}), None).await.expect("targets");
+    let open = targets["targetInfos"].as_array().expect("target infos").iter().any(|t| t["targetId"] == committed);
+    let _ = after.send("Target.closeTarget", json!({"targetId": committed}), None).await;
+    after.close().await.expect("close");
+    assert!(open, "the tab a commit was sent from must outlive the run");
+}
+
 /// A run in a visible window clicks, types and captures behind the window's current tab, and activates nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_background_run_drives_its_tab_without_bringing_it_forward() {
