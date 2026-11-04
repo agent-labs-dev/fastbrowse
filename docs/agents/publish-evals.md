@@ -78,6 +78,11 @@ group records the repeat count, and a task's figure is the mean of its repeats' 
 
 ## Validation and approval
 
+Candidate rows declare transport counts with `llm_calls_basis: physical_requests`. Historical rows without
+a basis retain their cost-line meaning. A declared basis without a count, or a null count, is unknown;
+the omitted-count zero default remains only for historical rows without a basis. Retry totals and summaries
+must retain unknown counts and keep different bases separate.
+
 CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
 throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
 catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
