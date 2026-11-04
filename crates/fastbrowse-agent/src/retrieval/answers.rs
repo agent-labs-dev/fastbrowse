@@ -854,6 +854,10 @@ pub async fn verdict(
         questions.insert(format!("note{index}"), Question::Noul(question));
     }
     let state = json!({"task": task, "notes": written});
+    // Notes too many for Jev to read are left to `compose`, which packs them: sent, they are refused (#760).
+    if !super::choices::read_fits(&state, &questions, &jev.profile().fit(None).tokens) {
+        return Ok(None);
+    }
     if let Some(ledger) = ledger {
         ledger.reserve(CostComponent::Jev, 0.0, 1)?;
     }
@@ -1684,6 +1688,20 @@ mod tests {
         let jev = Support::new(true);
         let reviewed = draft_reviewed(&jev, "Report every record", &notes, None).await.unwrap().unwrap();
         assert!(reviewed.answer.problem.unwrap().contains("input limits"));
+        assert!(jev.asked.lock().unwrap().is_empty());
+    }
+
+    /// The same re-reads left 11,350 notes, and the question whether any of them answers as written went to Jev as a
+    /// 29 MB request it refused. Notes that cannot fit are not sent; the answer is composed instead.
+    #[tokio::test]
+    async fn notes_too_long_to_pick_from_are_not_sent() {
+        let limit = fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4;
+        let mut notes = Notes::default();
+        for index in 0..16 {
+            notes.add(Fact { answers: true, ..fact(index, format!("{index} {}", "x".repeat(limit / 8))) });
+        }
+        let jev = Support::new(true);
+        assert!(verdict(&jev, "Report every record", &notes, None).await.unwrap().is_none());
         assert!(jev.asked.lock().unwrap().is_empty());
     }
 

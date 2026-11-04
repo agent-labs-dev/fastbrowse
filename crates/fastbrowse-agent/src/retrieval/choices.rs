@@ -158,7 +158,8 @@ fn read_request(
     (json!({"page": Value::Object(shown)}), questions)
 }
 
-fn read_fits(state: &Value, questions: &IndexMap<String, Question>, tokens: &TokenBudget) -> bool {
+/// Whether the state and the questions fit in one request to Jev.
+pub(super) fn read_fits(state: &Value, questions: &IndexMap<String, Question>, tokens: &TokenBudget) -> bool {
     let written: Vec<String> = questions.values().map(|q| q.dump_json()).collect();
     text::len(&dumps(state)) as i64 <= tokens.input_chars(&written)
 }
