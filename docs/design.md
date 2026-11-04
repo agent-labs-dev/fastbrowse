@@ -4,7 +4,7 @@ fastbrowse splits a browser agent into three owners:
 
 - **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled or a composed claim that cannot be supported ends `unverified`.
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled or a composed claim still unsupported after recovery ends `unverified`.
 
 When a field value is copied, Jev selects its source and first word. If its end needs a separate choice,
 each choice shows the complete text that would be typed from that first word to the candidate end.
@@ -111,9 +111,13 @@ The composer and support check interpret a requested field by its meaning: descr
 value without a matching heading, and that value contradicts a claim that the field was not shown.
 The support question distinguishes facts about a quoted subset from claims about a whole set, and a source's
 population counter from the number of records the answer reports.
-A claim with no cited quote, no support or no judgment is withheld, and the answer ends `unverified` rather than
-`complete`. A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev
-picked.
+A claim with no cited quote or no support judgment is withheld and ends `unverified`. When every check is
+answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
+more evidence. Rejected prose is feedback, never a source fact. A corrected draft must pass citation checks and
+cover every requested fact or value. Runs with a caller-supplied output schema retain their extracted data and
+end `unverified` when the composed prose fails its checks, without retrying prose composition. Exhausted recovery ends `unverified`, retaining supported claims; those
+claims can be reused without another composition call only while their source evidence remains unchanged.
+A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked.
 
 ## Prompt limits and progress
 

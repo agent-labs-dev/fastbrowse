@@ -21,6 +21,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Split answer composition stops when rewritten claims do not shrink, without treating removed source metadata as progress.
 
+- Rejected composed answers can use the run's existing recovery budget to correct their citations or gather evidence. Corrected answers must retain every requested fact or value and pass citation checks; uncertain support and exhausted recovery remain `unverified`.
+
 - AUR package synchronization can reuse its existing release PR branch without losing the rendered package files.
 
 - Answer composition and Jev's answer checks receive known superseded-source state, while retaining earlier quotes for historical tasks.

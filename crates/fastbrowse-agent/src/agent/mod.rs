@@ -392,6 +392,23 @@ impl Agent {
                     limit: ledger.limits.max_seconds.unwrap_or_default(),
                 })
             });
+            if let Some((partial, sources)) = &state.composition_partial {
+                let notes = state.notes_to_compose();
+                if !partial.claims.is_empty() && *sources == RunState::composition_sources(&notes) {
+                    let mut result = self.answered(
+                        &marked_partial(partial.clone()),
+                        &notes,
+                        Some(state),
+                        ledger,
+                        stop.status,
+                        error,
+                        budget,
+                    );
+                    result.wall = self.wall(stop);
+                    result.evidence.extend(stop.evidence.clone());
+                    return result;
+                }
+            }
             if matches!(stop.status, Status::Stuck | Status::Unverified | Status::BudgetExceeded)
                 && !state.notes.evidence().is_empty()
             {

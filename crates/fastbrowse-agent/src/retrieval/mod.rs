@@ -5,6 +5,7 @@
 //! extraction and `answers` the answer built from what Jev read.
 
 mod answers;
+pub(crate) use answers::compose_reviewed;
 mod choices;
 mod chunks;
 mod fields;

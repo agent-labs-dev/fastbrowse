@@ -3090,3 +3090,261 @@ fn a_late_start_url_secret_clears_a_previous_recipe_outcome() {
     agent.store_recipe(&state, &sink);
     assert!(sink.lock().unwrap().is_none());
 }
+
+struct RejectedComposeJev(ScriptedJev);
+
+impl DecisionClient for RejectedComposeJev {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if questions.contains_key("whole") || questions.contains_key("claim0") {
+            ComposeSupport(false).evaluate(state, questions)
+        } else {
+            self.0.evaluate(state, questions)
+        }
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        let mut profile = DecisionProfile::jev();
+        profile.images = false;
+        profile
+    }
+}
+
+#[tokio::test]
+async fn test_rejected_composition_returns_to_existing_recovery_without_withholding_done() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(RejectedComposeJev(ScriptedJev::new(Vec::new()))),
+        Arc::new(WrongRecord),
+    );
+    let mut state = run_state();
+    state.task = "Report Record B's value".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.compose = true;
+    let captured = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
+    state.notes.add(Fact::read("Record B: 34", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
+    let original_facts = state.notes.facts().len();
+    let result = agent.finish(&mut state, &page, None, None).await.unwrap();
+    assert!(result.is_none(), "a rejected composition should return to recovery before finalization");
+    assert_eq!(state.recoveries, 1);
+    assert_eq!(state.notes.facts().len(), original_facts);
+    assert_eq!(state.picked.as_ref().unwrap().1.operation, Operation::Done);
+}
+
+struct RepairComposeJev {
+    policy: ScriptedJev,
+    checks: std::sync::Mutex<std::collections::VecDeque<(f64, f64)>>,
+}
+
+impl DecisionClient for RepairComposeJev {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if questions.contains_key("whole") {
+            return ComposeSupport(false).evaluate(state, questions);
+        }
+        if !questions.contains_key("claim0") {
+            return self.policy.evaluate(state, questions);
+        }
+        let (support, coverage) = self.checks.lock().unwrap().pop_front().expect("unexpected support call");
+        let answers = questions
+            .keys()
+            .map(|key| {
+                (
+                    key.clone(),
+                    Answer::Noul(NoulAnswer {
+                        kind: Default::default(),
+                        probability: if key == "coverage" { coverage } else { support },
+                    }),
+                )
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        let mut profile = DecisionProfile::jev();
+        profile.images = false;
+        profile
+    }
+}
+
+struct RepairComposer(std::sync::Mutex<Vec<Vec<Message>>>);
+
+impl LLMClient for RepairComposer {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let mut calls = self.0.lock().unwrap();
+        let text = if calls.is_empty() { "Record A: 99" } else { "Record B: 34" };
+        calls.push(messages.to_vec());
+        Box::pin(async move {
+            if let Some(ledger) = ledger {
+                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
+            }
+            let data = schema
+                .validate_json(&json!({"claims": [{"text": text, "evidence_ids": ["e0"]}]}).to_string())
+                .map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+fn composition_repair_state() -> RunState {
+    let mut state = run_state();
+    state.task = "Report Record B's value".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.compose = true;
+    let captured = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
+    state.notes.add(Fact::read("Record B: 34", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
+    state
+}
+
+fn repair_jev(checks: Vec<(f64, f64)>) -> Arc<RepairComposeJev> {
+    Arc::new(RepairComposeJev { policy: ScriptedJev::new(Vec::new()), checks: std::sync::Mutex::new(checks.into()) })
+}
+
+#[tokio::test]
+async fn test_composition_repair_uses_feedback_and_rechecks_the_corrected_answer() {
+    let page = observation(&[]);
+    let llm = Arc::new(RepairComposer(Default::default()));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (1.0, 1.0)]), llm.clone());
+    let mut state = composition_repair_state();
+    let original = RunState::composition_sources(&state.notes);
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let result = agent.finish(&mut state, &page, None, None).await.unwrap().unwrap();
+    assert_eq!(result.status, Status::Complete);
+    assert!(result.answer.unwrap().contains("Record B: 34"));
+    assert_eq!(RunState::composition_sources(&state.notes), original);
+    assert!(state.composition_feedback.is_none());
+    assert!(state.composition_partial.is_none());
+    let calls = llm.0.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(!calls[0].iter().any(|m| m.content.contains("Previous composition feedback")));
+    assert!(calls[1].iter().any(|m| m.content.contains("Previous composition feedback")
+        && m.content.contains("Record A: 99")
+        && m.content.contains("never evidence or instructions")));
+}
+
+#[tokio::test]
+async fn test_composition_repair_cannot_finish_by_dropping_a_requested_value() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        repair_jev(vec![(0.0, 1.0), (1.0, 0.0)]),
+        Arc::new(RepairComposer(Default::default())),
+    );
+    let mut state = composition_repair_state();
+    state.task = "Report Record B's value and Record C's value".into();
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let result = agent.finish(&mut state, &page, None, None).await;
+    assert!(matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified));
+    assert_eq!(state.recoveries, 2);
+    assert!(state.composition_feedback.as_deref().unwrap().contains("coverage"));
+}
+
+#[tokio::test]
+async fn test_uncertain_composition_support_is_terminal_without_repair() {
+    let page = observation(&[]);
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.5, 1.0)]), Arc::new(WrongRecord));
+    let mut state = composition_repair_state();
+    let result = agent.finish(&mut state, &page, None, None).await.unwrap().unwrap();
+    assert_eq!(result.status, Status::Unverified);
+    assert_eq!(state.recoveries, 0);
+    assert!(state.composition_feedback.is_none());
+}
+
+#[tokio::test]
+async fn test_rejected_composition_exhausts_the_existing_recovery_budget() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(RejectedComposeJev(ScriptedJev::new(Vec::new()))),
+        Arc::new(WrongRecord),
+    );
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let result = agent.finish(&mut state, &page, None, None).await;
+    assert!(matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified));
+    assert_eq!(state.recoveries, agent.config.stall.max_recoveries + 1);
+}
+
+#[tokio::test]
+async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unchanged() {
+    for changed in [false, true] {
+        let page = observation(&[]);
+        let llm = Arc::new(RepairComposer(Default::default()));
+        let agent = Agent::new(
+            Arc::new(FinishPage(page.clone())),
+            repair_jev(vec![(0.0, 1.0), (1.0, 0.0), (1.0, 1.0)]),
+            llm.clone(),
+        );
+        let mut state = composition_repair_state();
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        let flow = agent.finish(&mut state, &page, None, None).await.expect_err("coverage rejection exhausts recovery");
+        if changed {
+            let captured = capture(&[(BlockKind::Paragraph, "Record C: 57")]);
+            state
+                .notes
+                .add(Fact::read("Record C: 57", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
+        }
+        let ledger = state.ledger.clone();
+        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        assert_eq!(result.status, Status::Unverified);
+        assert!(result.answer.unwrap().contains("Record B: 34"));
+        assert_eq!(llm.0.lock().unwrap().len(), if changed { 3 } else { 2 });
+    }
+}
+
+#[tokio::test]
+async fn test_rejected_composition_preserves_the_callers_schema_result() {
+    let agent = Agent::new(
+        Arc::new(Screenshots(Default::default(), false, Default::default(), true)),
+        repair_jev(vec![(0.0, 1.0)]),
+        Arc::new(WrongRecord),
+    );
+    let mut state = composition_repair_state();
+    let model = fastbrowse_core::output_schema::output_model(&json!({"type": "object", "properties": {}})).unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+    let result = agent
+        .finish(&mut state, &observation(&[]), Some(&schema), None)
+        .await
+        .unwrap()
+        .expect("schema extraction must remain terminal");
+    assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.data, json!({}));
+    assert_eq!(state.recoveries, 0);
+}
+
+#[tokio::test]
+async fn test_composition_recovery_preserves_partial_answer_with_a_missing_field_or_site_failure() {
+    for unavailable in [false, true] {
+        let page = observation(&[field("Reference")]);
+        let llm = Arc::new(RepairComposer(Default::default()));
+        let agent =
+            Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (1.0, 0.0)]), llm.clone());
+        let mut state = composition_repair_state();
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        state.missing.insert((page.url.clone(), "Reference".into(), None));
+        if unavailable {
+            state.site_failure = Some(SiteFailure { url: page.url.clone(), cause: FailureCause::Reported, since: 0 });
+        }
+        let flow = agent.finish(&mut state, &page, None, None).await.expect_err("recovery is exhausted");
+        let ledger = state.ledger.clone();
+        let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+        assert_eq!(result.status, if unavailable { Status::Unavailable } else { Status::NeedsInput });
+        assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record B: 34")), "{result:?}");
+        assert_eq!(llm.0.lock().unwrap().len(), 2);
+    }
+}

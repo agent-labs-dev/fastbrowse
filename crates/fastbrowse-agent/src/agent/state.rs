@@ -12,8 +12,9 @@ use indexmap::IndexMap;
 
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
-use crate::memory::Notes;
+use crate::memory::{Fact, Notes, fact_id};
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
+use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +261,9 @@ pub(crate) struct RunState {
     pub compose: bool,
     /// A caller's schema is filled after DONE, so its result is not a selected prose answer yet.
     pub extraction_pending: bool,
+    /// A rejected draft is feedback, never a new page fact or evidence of progress.
+    pub composition_feedback: Option<String>,
+    pub composition_partial: Option<(ComposedAnswer, Vec<(Fact, bool)>)>,
     /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
     /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
     pub read_whole: Vec<Capture>,
@@ -305,6 +309,10 @@ impl RunState {
         } else {
             "Read this content. The notes hold nothing that answers the task."
         }
+    }
+
+    pub fn composition_sources(notes: &Notes) -> Vec<(Fact, bool)> {
+        notes.facts().iter().map(|fact| ((*fact).clone(), notes.superseded(&fact_id(fact)))).collect()
     }
 
     /// The notes with the pages read for one fact whole.
@@ -406,6 +414,8 @@ impl RunState {
             page_failed: false,
             compose: false,
             extraction_pending: false,
+            composition_feedback: None,
+            composition_partial: None,
             read_whole: Vec::new(),
             to_carry_out: false,
             output_intent: OutputIntent::Unknown,

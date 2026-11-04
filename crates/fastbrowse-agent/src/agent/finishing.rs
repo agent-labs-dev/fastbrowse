@@ -10,7 +10,7 @@ use super::recovery::{DONE, Idle};
 use super::state::{OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose, draft_answer, verdict};
+use crate::retrieval::{compose_reviewed, draft_answer, verdict};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -90,7 +90,9 @@ impl Agent {
             self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
             return Ok(None);
         }
-        let result = Box::pin(self.conclude(state, observation, output_schema)).await?;
+        let Some(result) = Box::pin(self.conclude_attempt(state, observation, output_schema, true)).await? else {
+            return Ok(None);
+        };
         let reached = match until {
             Some(until) => until(self.raw().map_or_else(|| observation.url.clone(), |raw| raw.url)).await,
             None => true,
@@ -148,12 +150,23 @@ impl Agent {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) async fn conclude(
         &self,
         state: &mut RunState,
         observation: &Observation,
         output_schema: Option<&RecordSchema>,
     ) -> Step<RunResult> {
+        Ok(self.conclude_attempt(state, observation, output_schema, false).await?.expect("terminal conclusion"))
+    }
+
+    async fn conclude_attempt(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        output_schema: Option<&RecordSchema>,
+        recover_rejection: bool,
+    ) -> Step<Option<RunResult>> {
         let intent = self.output_intent(state).await?;
         if intent != OutputIntent::Image && output_schema.is_none() {
             self.read_drawn_page(state, observation).await?;
@@ -166,19 +179,59 @@ impl Agent {
             }
             None => None,
         };
+        let mut rejection = None;
         let answered = if intent == OutputIntent::Image {
             None
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
-            match self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await? {
+            let chosen = if state.composition_feedback.is_none() {
+                self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await?
+            } else {
+                None
+            };
+            match chosen {
                 Some(chosen) => Some(chosen),
-                None => Some(
-                    self.trace.phase("compose", compose(&*self.jev, &*self.llm, &task, &notes, Some(&ledger))).await?,
-                ),
+                None => {
+                    let reviewed = self
+                        .trace
+                        .phase(
+                            "compose",
+                            compose_reviewed(
+                                &*self.jev,
+                                &*self.llm,
+                                &task,
+                                &notes,
+                                Some(&ledger),
+                                state.composition_feedback.as_deref(),
+                            ),
+                        )
+                        .await?;
+                    rejection = reviewed.rejection;
+                    Some(reviewed.answer)
+                }
             }
         } else {
             draft_answer(&state.notes)
         };
+        if recover_rejection
+            && output_schema.is_none()
+            && let Some(rejection) = rejection
+        {
+            let reason = format!(
+                "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs. Rejected draft data: {rejection}"
+            );
+            state.composition_feedback = Some(self.redact(&reason));
+            if let Some(answer) = &answered {
+                state.composition_partial =
+                    Some((answer.clone(), RunState::composition_sources(&state.notes_to_compose())));
+            }
+            self.recover(state, observation, &reason, Status::Unverified, None).await?;
+            return Ok(None);
+        }
+        if answered.as_ref().is_some_and(|answer| answer.problem.is_none()) {
+            state.composition_feedback = None;
+            state.composition_partial = None;
+        }
         let mut answer_text = None;
         let mut citations = Vec::new();
         let answer_problem = answered.as_ref().and_then(|answer| answer.problem.clone());
@@ -214,6 +267,6 @@ impl Agent {
             self.observe_if_changed(&observed).await?;
         }
         let result = self.result(Some(state), &state.ledger.clone(), status, outcome);
-        Ok(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await)
+        Ok(Some(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await))
     }
 }

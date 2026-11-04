@@ -23,6 +23,12 @@ def test_aur_sync_keeps_the_rendered_package(tmp_path: Path, existing_branch: bo
             [git, "-C", str(tmp_path), *args], capture_output=True, text=True, check=True
         ).stdout.strip()
 
+    def run_remote(*args: str, preserve_newline: bool = False) -> str:
+        output = subprocess.run(
+            [git, "--git-dir", str(remote), *args], capture_output=True, text=True, check=True
+        ).stdout
+        return output if preserve_newline else output.strip()
+
     run_git("init", "-q", "-b", "main")
     run_git("config", "user.name", "Package fixture")
     run_git("config", "user.email", "fixture@example.invalid")
@@ -86,3 +92,8 @@ def test_aur_sync_keeps_the_rendered_package(tmp_path: Path, existing_branch: bo
     assert run_git("merge-base", "--is-ancestor", old, "HEAD") == ""
     if existing_branch:
         assert run_git("rev-parse", "HEAD") == expected, "a rerun must not replace the existing package commit"
+    remote_head = run_remote("rev-parse", f"refs/heads/{branch}")
+    assert remote_head == run_git("rev-parse", "HEAD"), "the package commit must be pushed to the remote branch"
+    assert {
+        name: run_remote("show", f"{remote_head}:packaging/aur/{name}", preserve_newline=True) for name in rendered
+    } == rendered
