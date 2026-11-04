@@ -58,7 +58,7 @@ pub struct TableBlock {
 }
 
 /// The table blocks of `capture`, in order. A block that is only a divider, as a fetched page writes the one under a
-/// lone header row, is all divider.
+/// lone header row opening the table, is all divider. A downloaded CSV is not one, so its quote stays as cut.
 pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
     let chars: Vec<char> = capture.text.chars().collect();
     let text = |start: i64, end: i64| -> String {
@@ -67,10 +67,14 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
     };
     let mut tables: Vec<TableBlock> = Vec::new();
     let mut previous: Option<usize> = None;
+    // How many blocks of the same table come before this one.
+    let mut run = 0;
     for (index, block) in capture.blocks.iter().enumerate() {
-        if block.kind != BlockKind::Table {
+        // A downloaded CSV is the file's own text, not a capture's markdown, so its pipes are the file's.
+        if block.kind != BlockKind::Table || block.source_id.starts_with("download/") {
             continue;
         }
+        run = if previous == Some(index.wrapping_sub(1)) { run + 1 } else { 0 };
         // A cell's own pipes are escaped, so a line opening with a pipe is always the start of a row.
         let rows: Vec<i64> = (block.start..block.end)
             .filter(|&at| {
@@ -97,6 +101,7 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
             // A table with no data rows: its header rows and the divider under them.
             (block.end, Some((last, block.end)))
         } else if rows.len() == 1
+            && run == 1
             && before.is_some_and(|table| table.row == table.start && table.divider.is_none())
             && ends_in_divider
         {
