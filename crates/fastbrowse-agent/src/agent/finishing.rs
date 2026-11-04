@@ -10,7 +10,7 @@ use super::recovery::{DONE, Idle};
 use super::state::{OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose_reviewed, draft_answer, verdict};
+use crate::retrieval::{compose_reviewed, draft_answer, marked_partial, verdict};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -180,7 +180,7 @@ impl Agent {
             None => None,
         };
         let mut rejection = None;
-        let answered = if intent == OutputIntent::Image {
+        let mut answered = if intent == OutputIntent::Image {
             None
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
@@ -219,7 +219,9 @@ impl Agent {
         {
             let reason = "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.";
             state.composition_feedback = Some(self.redact(&rejection));
-            if let Some(answer) = &answered {
+            if state.checked_composition(&state.notes_to_compose()).is_none()
+                && let Some(answer) = &answered
+            {
                 state.composition_partial =
                     Some((answer.clone(), RunState::composition_sources(&state.notes_to_compose())));
             }
@@ -233,6 +235,11 @@ impl Agent {
         let mut answer_text = None;
         let mut citations = Vec::new();
         let answer_problem = answered.as_ref().and_then(|answer| answer.problem.clone());
+        if answer_problem.is_some()
+            && let Some(partial) = state.checked_composition(&state.notes_to_compose())
+        {
+            answered = Some(marked_partial(partial.clone()));
+        }
         if let Some(composed) = answered {
             let (text, cited) = self.public_answer(&composed);
             answer_text = (!text.is_empty()).then_some(text);

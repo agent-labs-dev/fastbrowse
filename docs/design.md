@@ -115,8 +115,12 @@ A claim with no cited quote or no support judgment is withheld and ends `unverif
 answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. A corrected draft must pass citation checks and
 cover every requested fact or value. Runs with a caller-supplied output schema retain their extracted data and
-end `unverified` when the composed prose fails its checks, without retrying prose composition. Exhausted recovery ends `unverified`, retaining supported claims; those
-claims can be reused without another composition call only while their source evidence remains unchanged.
+end `unverified` when the composed prose fails its checks, without retrying prose composition. Recovery is not
+attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
+Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
+site failure establishes another status. Those claims can be reused without another composition call only while
+their source evidence remains unchanged. Other stops also retain checked partial claims alongside their status,
+wall or budget details.
 A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked.
 
 ## Prompt limits and progress
@@ -168,8 +172,9 @@ Reloading remains restricted to an untouched opening page, since retrying a late
 changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no
 progress, and `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
 evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
-action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends `stuck`, `unverified` for a rejected composition,
-or as the site failure standing on the page. An HTTP error page goes to Jev like any other, with its status among the
+action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends
+`stuck`, or `unverified` for a rejected composition, unless an unfilled field requires `needs_input` or a site
+failure establishes another status. An HTTP error page goes to Jev like any other, with its status among the
 step's page facts, so Jev reloads it when the status can clear, goes back or picks another link; code only waits out a
 403, 429 or 503 once per document.
 

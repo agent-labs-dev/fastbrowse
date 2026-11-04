@@ -80,7 +80,7 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `unverified` | Report what could not be verified and preserve partial evidence. |
 | `budget_exceeded` | Report the exhausted resource; respect the user's total budget across retries. |
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |
-| `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. A `stuck` answer that starts `Answer (unverified)` is cited but unconfirmed; present it as partial. |
+| `stuck`, `unavailable`, `error` | Read the error or MCP `next_step`; report the obstacle if no concrete fix is available. A `stuck` answer that starts `Partial evidence only.` is cited but unconfirmed; present it as partial. |
 
 Retry only after a concrete change, such as corrected input, a completed sign-in, a resolved provider outage, or a
 site's transient error (a 5xx, a 429, a maintenance page) clearing.

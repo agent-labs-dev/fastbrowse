@@ -3405,3 +3405,66 @@ async fn test_rejected_draft_feedback_is_redacted_before_repair_and_trace_output
     assert!(calls[1].iter().all(|message| !message.content.contains("99")));
     assert!(!serde_json::to_string(&trace.events()).unwrap().contains("Record A: 99"));
 }
+
+#[tokio::test]
+async fn test_a_later_empty_or_uncertain_repair_cannot_erase_a_checked_partial() {
+    for support in [0.0, 0.5] {
+        let page = observation(&[]);
+        let llm = Arc::new(RepairComposer(Default::default()));
+        let mut agent = Agent::new(
+            Arc::new(FinishPage(page.clone())),
+            repair_jev(vec![(0.0, 1.0), (1.0, 0.0), (support, 1.0)]),
+            llm.clone(),
+        );
+        agent.config.stall.max_recoveries = 2;
+        let mut state = composition_repair_state();
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        assert!(state.checked_composition(&state.notes_to_compose()).is_some());
+        let result = agent.finish(&mut state, &page, None, None).await;
+        let result = match result {
+            Ok(Some(result)) => result,
+            Err(flow) => {
+                assert!(
+                    state.checked_composition(&state.notes_to_compose()).is_some(),
+                    "an empty repair erased checked claims"
+                );
+                let ledger = state.ledger.clone();
+                agent.stopped(flow, Some(&mut state), &ledger).await
+            }
+            other => panic!("expected terminal repair: {other:?}"),
+        };
+        assert_eq!(result.status, Status::Unverified);
+        assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record B: 34")), "{result:?}");
+        assert_eq!(llm.0.lock().unwrap().len(), 3);
+    }
+}
+
+#[tokio::test]
+async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_metadata() {
+    let page = observation(&[]);
+    for status in [Status::NeedsLogin, Status::Blocked, Status::NeedsConfirmation] {
+        let agent = Agent::new(
+            Arc::new(FinishPage(page.clone())),
+            repair_jev(vec![(0.0, 1.0), (1.0, 0.0)]),
+            Arc::new(RepairComposer(Default::default())),
+        );
+        let mut state = composition_repair_state();
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        assert!(agent.finish(&mut state, &page, None, None).await.is_err());
+        assert!(state.checked_composition(&state.notes_to_compose()).is_some());
+        if status == Status::NeedsLogin {
+            let mut code = Control::new("otp", "textbox", "Code", [Operation::Fill]);
+            code.autocomplete = Some("one-time-code".into());
+            agent.seen().raw = Some(at("https://shop.test/login", &[code]));
+        }
+        let stop = super::state::Stop::new(status, "stopped");
+        let ledger = state.ledger.clone();
+        let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+        assert_eq!(result.status, status);
+        assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Partial evidence only.")));
+        if status == Status::NeedsLogin {
+            assert!(result.wall.is_some(), "needs_login keeps the wall metadata with the partial answer");
+        }
+    }
+}
