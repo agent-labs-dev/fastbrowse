@@ -1394,3 +1394,26 @@ def test_rows_without_a_timing_basis_keep_their_approved_bytes(candidate):
     assert not {"timing_basis", "session_open_seconds", "session_close_seconds"} & dumped.keys()
     timed = Row.model_validate({**row, "timing_basis": TIMING_BASIS, "session_open_seconds": 1.5}).model_dump()
     assert timed["session_open_seconds"] == 1.5 and "session_close_seconds" not in timed
+
+
+@pytest.mark.parametrize("count", [None, 0, 3])
+def test_physical_call_count_basis_survives_candidate_reader(candidate: dict, count: int | None) -> None:
+    row = candidate["groups"][0]["rows"][0]
+    row.update(llm_calls=count, llm_calls_basis="physical_requests")
+    parsed = Candidate.model_validate(candidate).groups[0].rows[0]
+    assert parsed.llm_calls == count
+    assert parsed.model_dump()["llm_calls_basis"] == "physical_requests"
+
+
+def test_historical_call_basis_is_not_added_to_saved_rows(candidate: dict) -> None:
+    parsed = Candidate.model_validate(candidate).groups[0].rows[0]
+    assert parsed.llm_calls_basis is None
+    assert "llm_calls_basis" not in parsed.model_dump()
+
+
+@pytest.mark.parametrize("basis", ["physical_requests", "cost_lines"])
+def test_explicit_call_basis_without_count_remains_unknown(candidate: dict, basis: str) -> None:
+    row = candidate["groups"][0]["rows"][0]
+    row.pop("llm_calls", None)
+    row["llm_calls_basis"] = basis
+    assert Candidate.model_validate(candidate).groups[0].rows[0].llm_calls is None

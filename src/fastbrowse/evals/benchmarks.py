@@ -65,9 +65,9 @@ class Row(PublicModel):
     "cost not reported" in place of a cost."""
     physical_runs: Annotated[int, Field(gt=0)]
     # The efficiency figures a comparison is normalized onto, so a slow page or a provider's margin cannot move it.
-    # A build from before they existed omits them and they read as zero; the site then shows them as not recorded
-    # rather than falling back to the measured wall clock or billed charge they replace.
-    llm_calls: Annotated[int, Field(ge=0)] = 0
+    # Historical omitted metrics keep their old zero default; an explicit basis requires a recorded count.
+    llm_calls: Annotated[int, Field(ge=0)] | None = 0
+    llm_calls_basis: Literal["physical_requests", "cost_lines"] | None = None
     jev_calls: Annotated[int, Field(ge=0)] = 0
     tokens_per_second: Amount = 0.0
     input_tokens: Annotated[int, Field(ge=0)] = 0
@@ -82,13 +82,15 @@ class Row(PublicModel):
     def without_unrecorded_timing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """A row from before these fields keeps its old bytes, so approved candidates still match."""
         data = handler(self)
-        for name in ("timing_basis", "session_open_seconds", "session_close_seconds"):
+        for name in ("timing_basis", "session_open_seconds", "session_close_seconds", "llm_calls_basis"):
             if data.get(name) is None:
                 data.pop(name, None)
         return data
 
     @model_validator(mode="after")
     def completion(self) -> Self:
+        if self.llm_calls_basis is not None and "llm_calls" not in self.model_fields_set:
+            self.llm_calls = None
         # fastbrowse-pool is fastbrowse itself on another browser, so its completion is its own run status too.
         if self.arm in FASTBROWSE_ARMS:
             finished = Status(self.status) is Status.COMPLETE
