@@ -259,7 +259,7 @@ async def test_a_response_that_ran_out_of_tokens_before_any_text_is_truncation()
         with pytest.raises(LLMError, match="truncated"):
             await OpenAICompatibleLLM(
                 "key", http=http, base_url="https://llm.test", models={LLMPurpose.READ: "reader"}
-            ).generate(LLMPurpose.READ, [], Result)
+            ).generate(LLMPurpose.READ, [], Result, max_output_tokens=100)
     assert calls == 2
 
 
