@@ -3687,6 +3687,10 @@ async fn test_composition_repair_uses_feedback_and_rechecks_the_corrected_answer
         && m.content.contains("including every requested value")
         && m.content.contains("Keep the text and evidence_ids of claims whose checks passed")
         && m.content.contains("Cite notes that support every assertion.")));
+    // The rejected draft's citations name the notes the composer is shown, and a rejection says what to correct.
+    let fact = crate::memory::fact_id(state.notes.facts()[0]);
+    assert!(calls[1].iter().any(|m| m.content.contains(r#""evidence_ids": ["e0"]"#) && !m.content.contains(&fact)));
+    assert!(calls[1].iter().any(|m| m.content.contains("A rejected claim does not follow from the notes it cites")));
 }
 
 #[tokio::test]
