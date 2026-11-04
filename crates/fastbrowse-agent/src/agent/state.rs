@@ -129,6 +129,29 @@ impl HttpFailure {
         format!("HTTP {} at {} in this browser session; the cause is unknown.", self.status, self.url)
     }
 
+    /// What the stop report says about the refusal, and which wall it names.
+    ///
+    /// A status the server chose is not an unknown cause: 401 asks for a sign-in, 403 is the shape an access or bot
+    /// check takes (the page has no credential field and no form, so a caller told to pass a password is sent the
+    /// wrong way), and 429 or a 5xx is the site being unavailable rather than the run failing at its task.
+    fn refusal(&self) -> (String, Option<WallKind>) {
+        match self.status {
+            401 => (format!("HTTP 401 at {}: the site asks this browser session to sign in", self.url), None),
+            403 => (
+                format!(
+                    "HTTP 403 at {}: the site refused this browser session, which is an access or bot check; no credential passes it",
+                    self.url
+                ),
+                Some(WallKind::BotCheck),
+            ),
+            429 => (format!("HTTP 429 at {}: the site is rate-limiting this browser session", self.url), None),
+            status if status >= 500 => {
+                (format!("HTTP {status} at {}: the site failed to serve the page", self.url), None)
+            }
+            status => (format!("HTTP {status} at {} in this browser session", self.url), None),
+        }
+    }
+
     pub fn stop(&self) -> Stop {
         let mut status = match self.status {
             401 => Status::NeedsLogin,
@@ -138,7 +161,13 @@ impl HttpFailure {
         if matches!(self.status, 408 | 419 | 429) || self.status >= 500 {
             status = Status::Unavailable;
         }
-        Stop::new(status, format!("Could not complete the task after {}", self.message()))
+        let (refusal, wall) = self.refusal();
+        Stop {
+            status,
+            error: Some(format!("Could not complete the task after {refusal}.")),
+            evidence: Vec::new(),
+            wall,
+        }
     }
 }
 
