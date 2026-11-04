@@ -442,6 +442,7 @@ async def test_cancellation_before_success_delivery_keeps_the_completed_receipt(
                 intercepted.append(True)
                 if cancel_before_result:
                     execution.cancel()
+                    loop.call_soon(execution.cancel)
                 callback()
                 if not cancel_before_result:
                     execution.cancel()
@@ -459,6 +460,63 @@ async def test_cancellation_before_success_delivery_keeps_the_completed_receipt(
     assert intercepted == [True]
     assert stopped.value.receipt.cost.lines
     assert stopped.value.receipt.cost.known_dollars == 0.0
+
+
+@pytest.mark.parametrize("cancel_receipt", [False, True])
+async def test_repeated_cancellation_drains_a_pending_native_receipt(
+    monkeypatch: pytest.MonkeyPatch, cancel_receipt: bool
+) -> None:
+    started = asyncio.Event()
+    receipt = json.dumps(
+        {
+            "steps": [],
+            "cost": {"lines": [{"component": "llm", "basis": "metered", "dollars": 0.01}]},
+            "recordings": ["finished.mp4"],
+        }
+    )
+
+    class PendingNative:
+        finished = asyncio.Future()
+
+        def __await__(self):
+            async def pending():
+                started.set()
+                await asyncio.Future()
+
+            return pending().__await__()
+
+        def trace_events(self) -> str:
+            return "[]"
+
+    class FakeCore:
+        RunRefused = type("RunRefused", (Exception,), {})
+
+        @staticmethod
+        def monotonic() -> float:
+            return 0.0
+
+        @staticmethod
+        def run_task(*args: Any, **kwargs: Any) -> PendingNative:
+            return PendingNative()
+
+    monkeypatch.setattr(native.importlib, "import_module", lambda _: FakeCore)
+    execution = asyncio.create_task(native.run("task", arguments()))
+    await started.wait()
+    execution.cancel()
+    await asyncio.sleep(0)
+    if cancel_receipt:
+        PendingNative.finished.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+        return
+    execution.cancel()
+    await asyncio.sleep(0)
+    assert not execution.done()
+    PendingNative.finished.set_result(receipt)
+    with pytest.raises(RunCancelled) as stopped:
+        await execution
+    assert stopped.value.receipt.cost.known_dollars == 0.01
+    assert stopped.value.receipt.recordings == (Path("finished.mp4"),)
 
 
 @pytest.mark.usefixtures("rust_core")

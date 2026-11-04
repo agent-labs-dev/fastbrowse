@@ -434,7 +434,16 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         raise refusal from None
     except asyncio.CancelledError as exc:
         # The browser is closed before the cancellation reaches the caller, and what the run spent comes with it.
-        receipt = await asyncio.shield(native.finished)
+        finished = asyncio.ensure_future(native.finished)
+        while True:
+            try:
+                receipt = await asyncio.shield(finished)
+                break
+            except asyncio.CancelledError:
+                # A second cancellation must not interrupt the core's cleanup: its receipt is the only record of spend.
+                if finished.cancelled():
+                    raise
+                continue
         if receipt is None:
             raise
         raise _cancelled(exc, receipt) from None

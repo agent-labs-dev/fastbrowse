@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Repeated Python cancellation waits for native cleanup and retains the run receipt, including costs and recording paths.
+
 - Python Jev clients accept the box questions and answers used by the Rust browser agent. Python and Rust schemas agree on optional box confidence, including its bounds.
 
 - Configuration and recording startup failures retain the work and charges already incurred. Python keeps the original exception class with a typed receipt; JSON-RPC, MCP and CLI error responses preserve the same accounting without an answer or success status.
