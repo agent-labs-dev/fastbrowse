@@ -820,7 +820,8 @@ impl Agent {
         !observation.document_key.is_empty() && state.read_documents.get(&state::read_key(observation)) == Some(&false)
     }
 
-    /// Whether the page is read before the action Jev chose takes the run off it.
+    /// Whether the page is read before the action Jev chose takes the run off it, and if so whether the read may take
+    /// it that the page holds evidence for the task.
     ///
     /// Jev's operation can leave a page, or end the run, before anything it shows has been read: an order total is
     /// gone once the order is placed. Jev has said the page shows what the task needs, so the read is not asked again
@@ -828,17 +829,18 @@ impl Agent {
     /// is written from several records, every new page is one more of them, however it came: a shop's fifth page
     /// scored under even odds, and a list's More changes no address. The page the run began on is read whatever Jev
     /// scored it: asked to count a site's Einstein quotes, Jev scored the quote list under even odds, left it for an
-    /// author page, and never came back to the list.
+    /// author page, and never came back to the list. Only that read may find nothing: on a bookshop's home page, a
+    /// read that could not say so picked the category link "Travel" as which Travel book costs most.
     pub(super) fn reads_before_leaving(
         state: &RunState,
         observation: &Observation,
         decision: &crate::policy::Decision,
-    ) -> bool {
+    ) -> Option<bool> {
         let unread = !Self::page_read(state, observation);
         let first = state.first_url.as_deref() == Some(observation.url.as_str());
-        decision.operation != fastbrowse_core::models::Operation::Read
-            && (decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
-                || ((state.compose || first) && unread))
+        let shows = decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
+            || (state.compose && unread);
+        (decision.operation != fastbrowse_core::models::Operation::Read && (shows || (first && unread))).then_some(shows)
     }
 
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.

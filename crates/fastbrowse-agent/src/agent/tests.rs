@@ -3960,13 +3960,15 @@ fn the_page_a_run_began_on_is_read_before_an_action_leaves_it_whatever_jev_score
     state.first_url = Some(home.url.clone());
     let mut leave = code_decision(Operation::Click, Some(button("(about)")));
     leave.shows_answer = Some(0.2);
-    assert!(Agent::reads_before_leaving(&state, &home, &leave));
-    assert!(!Agent::reads_before_leaving(&state, &author, &leave), "another page still waits on Jev's score");
+    // A page read only because the run began there may hold nothing for the task: on a bookshop's home page, a read
+    // that could not say so picked the category link "Travel" as the answer to which Travel book costs most.
+    assert_eq!(Agent::reads_before_leaving(&state, &home, &leave), Some(false));
+    assert_eq!(Agent::reads_before_leaving(&state, &author, &leave), None, "another page still waits on Jev's score");
     state.mark_read(&home);
-    assert!(!Agent::reads_before_leaving(&state, &home, &leave), "a page read once is not read again");
+    assert_eq!(Agent::reads_before_leaving(&state, &home, &leave), None, "a page read once is not read again");
     leave.shows_answer = Some(0.9);
-    assert!(Agent::reads_before_leaving(&state, &author, &leave));
-    assert!(!Agent::reads_before_leaving(&state, &author, &code_decision(Operation::Read, None)));
+    assert_eq!(Agent::reads_before_leaving(&state, &author, &leave), Some(true));
+    assert_eq!(Agent::reads_before_leaving(&state, &author, &code_decision(Operation::Read, None)), None);
 }
 
 #[test]

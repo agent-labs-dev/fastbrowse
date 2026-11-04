@@ -205,9 +205,9 @@ impl Agent {
                 }
                 return Err(self.meet_wall(&observation, &raw));
             }
-            if Self::reads_before_leaving(state, &observation, &decision) {
+            if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision) {
                 let capture = self.capture().await?;
-                self.trace.phase("read", self.read(state, capture, &observation, true)).await?;
+                self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
             }
             if decision.operation == Operation::Done {
                 if let Some(result) =
