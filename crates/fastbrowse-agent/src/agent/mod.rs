@@ -450,6 +450,13 @@ impl Agent {
                     && let Ok(composed) = compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting)).await
                     && !composed.claims.is_empty()
                 {
+                    // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
+                    // check answers what that stop was about, as it would have at done.
+                    if stop.status == Status::Unverified && composed.problem.is_none() {
+                        let result = self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
+                        let requested = state.output_intent == state::OutputIntent::TextAndImage;
+                        return self.ending_frame(result, requested).await;
+                    }
                     let partial = marked_partial(composed);
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }

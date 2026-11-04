@@ -3753,10 +3753,30 @@ async fn test_recovery_exhaustion_reuses_partial_only_while_its_sources_are_unch
         }
         let ledger = state.ledger.clone();
         let result = agent.stopped(flow, Some(&mut state), &ledger).await;
-        assert_eq!(result.status, Status::Unverified);
+        // The kept partial stays unverified; new notes are composed afresh, and that answer passes its checks.
+        assert_eq!(result.status, if changed { Status::Complete } else { Status::Unverified });
         assert!(result.answer.unwrap().contains("Record B: 34"));
         assert_eq!(llm.0.lock().unwrap().len(), if changed { 3 } else { 2 });
     }
+}
+
+#[tokio::test]
+async fn a_composition_that_passes_every_check_after_recovery_ran_out_completes_the_run() {
+    // Books: two drafts named the wrong price, recovery ran out, and the answer written as the run stopped passed its
+    // claim and coverage checks, yet it came back marked partial and unverified.
+    let page = observation(&[]);
+    let llm = Arc::new(RepairComposer(Default::default()));
+    let agent =
+        Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (0.0, 1.0), (1.0, 1.0)]), llm);
+    let mut state = composition_repair_state();
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::Complete);
+    assert_eq!(result.error, None);
+    let answer = result.answer.unwrap();
+    assert!(answer.contains("Record B: 34") && !answer.starts_with("Partial evidence only"), "{answer}");
 }
 
 #[tokio::test]
