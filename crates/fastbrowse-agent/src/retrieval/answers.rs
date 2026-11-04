@@ -24,13 +24,13 @@ use crate::support::generate;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claim {
-    pub evidence_ids: Vec<String>,
     pub text: String,
+    pub evidence_ids: Vec<String>,
 }
 
 impl Claim {
     pub fn new(text: &str, evidence_ids: Vec<String>) -> Claim {
-        Claim { evidence_ids, text: text.into() }
+        Claim { text: text.into(), evidence_ids }
     }
 }
 
@@ -52,8 +52,7 @@ impl Schema for Claim {
     fn ty() -> Ty {
         ModelTy::frozen(
             "Claim",
-            // The notes are chosen before the text is written, so a count in the text can follow the notes cited.
-            vec![Field::required("evidence_ids", Ty::list(Ty::Str)), Field::required("text", Ty::Str)],
+            vec![Field::required("text", Ty::Str), Field::required("evidence_ids", Ty::list(Ty::Str))],
         )
         .ty()
     }
