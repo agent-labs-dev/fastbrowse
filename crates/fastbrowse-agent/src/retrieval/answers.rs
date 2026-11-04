@@ -864,5 +864,18 @@ mod tests {
         );
         let typed = Evidence { rendered_text: false, ..span };
         assert_eq!(cited_quote(&typed, &notes, str::to_owned), (typed.quote.clone(), typed.url.clone()));
+
+        // A later row's header is above the first row on the page, so its quote starts at its own row.
+        let scores = capture(&[
+            (BlockKind::Table, "| Name | Score |\n| --- | --- |\n| Ada | 10 |"),
+            (BlockKind::Table, "| Name | Score |\n| --- | --- |\n| Grace | 9 |"),
+        ]);
+        let block = &scores.blocks[1];
+        let row = evidence(&Page::new(&scores), block, block.start, block.end);
+        notes.remember_capture(&scores);
+        assert_eq!(
+            cited_quote(&row, &notes, str::to_owned),
+            ("Grace 9".into(), "https://example.test#:~:text=Grace%209".into())
+        );
     }
 }

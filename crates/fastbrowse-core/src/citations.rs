@@ -45,13 +45,16 @@ pub fn text_fragment(url: &str, text: &str) -> Result<String, EmptyQuote> {
 ///
 /// A capture writes each table row as a block of its own that repeats what identifies the row: the header rows and
 /// their `| --- |` divider, or a headerless table's first row. `row` is where the block's own row starts, so
-/// `start..row` is that repeated prefix, and `divider` is the divider's span when the block has one.
+/// `start..row` is that repeated prefix, and `divider` is the divider's span when the block has one. A table with
+/// no data rows is one block of header rows and divider, with `row` at its end. `repeats` is set when the prefix
+/// repeats the block before, so on the page it sits above an earlier row, not above this one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableBlock {
     pub start: i64,
     pub end: i64,
     pub row: i64,
     pub divider: Option<(i64, i64)>,
+    pub repeats: bool,
 }
 
 /// The table blocks of `capture`, in order. A block that is only a divider, as a fetched page writes the one under a
@@ -60,7 +63,7 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
     let chars: Vec<char> = capture.text.chars().collect();
     let text = |start: i64, end: i64| -> String {
         let clamp = |at: i64| (at.max(0) as usize).min(chars.len());
-        chars[clamp(start)..clamp(end).max(clamp(start))].iter().collect()
+        chars[clamp(start)..clamp(end).max(clamp(start))].iter().collect::<String>().trim_end().to_owned()
     };
     let mut tables: Vec<TableBlock> = Vec::new();
     let mut previous: Option<usize> = None;
@@ -74,17 +77,40 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
                 chars.get(at as usize) == Some(&'|') && (at == block.start || chars.get(at as usize - 1) == Some(&'\n'))
             })
             .collect();
-        let row = rows.last().copied().unwrap_or(block.start);
-        // The divider sits between the header rows and the row, so a prefix of one row is a headerless table's
-        // first row, whatever its cells hold.
-        let mut divider =
-            (rows.len() > 2 && divider_line(&text(rows[rows.len() - 2], row))).then(|| (rows[rows.len() - 2], row));
-        let after_header = previous == Some(index.wrapping_sub(1))
-            && tables.last().is_some_and(|table| table.row == table.start && table.divider.is_none());
-        if rows.len() == 1 && after_header && divider_line(&text(block.start, block.end)) {
-            divider = Some((block.start, block.end));
-        }
-        tables.push(TableBlock { start: block.start, end: block.end, row, divider });
+        let last = rows.last().copied().unwrap_or(block.start);
+        // The block before, when it is the same table's: a prefix repeating its prefix, or a headerless table's
+        // first row, is not this row's own header.
+        let before = tables.last().filter(|_| previous == Some(index.wrapping_sub(1)));
+        let repeats = |prefix: &str| {
+            !prefix.is_empty()
+                && before.is_some_and(|table| {
+                    text(table.start, table.row) == prefix
+                        || (table.row == table.start && text(table.start, table.end) == prefix)
+                })
+        };
+        let ends_in_divider = divider_line(&text(last, block.end));
+        let (row, divider) = if rows.len() > 2 && divider_line(&text(rows[rows.len() - 2], last)) {
+            // The divider sits between the header rows and the row, so a prefix of one row is a headerless
+            // table's first row, whatever its cells hold.
+            (last, Some((rows[rows.len() - 2], last)))
+        } else if rows.len() > 1 && ends_in_divider && !repeats(&text(block.start, last)) {
+            // A table with no data rows: its header rows and the divider under them.
+            (block.end, Some((last, block.end)))
+        } else if rows.len() == 1
+            && before.is_some_and(|table| table.row == table.start && table.divider.is_none())
+            && ends_in_divider
+        {
+            (last, Some((block.start, block.end)))
+        } else {
+            (last, None)
+        };
+        tables.push(TableBlock {
+            start: block.start,
+            end: block.end,
+            row,
+            divider,
+            repeats: repeats(&text(block.start, row)),
+        });
         previous = Some(index);
     }
     tables
@@ -103,8 +129,10 @@ fn divider_line(line: &str) -> bool {
 /// A capture writes a table row as `| cell | cell |`, escapes a pipe inside a cell as `\|`, and repeats the header
 /// and its `| --- |` divider before every row. None of that is on the page, so a citation showing it, or a text
 /// fragment built from it, matches nothing there. Within a table block the cells are kept, separated by a space
-/// within a row and a line break between rows; a repeated header or first row is shown once and the divider not at
-/// all. Text outside every table block is the page's own and is kept as it is, pipes and backslashes included.
+/// within a row and a line break between rows, and the divider is dropped. A header or first row repeated before a
+/// later row is dropped too, as the page shows it only above the table's first row; the quote stays text that runs
+/// on the page. Text outside every table block is the page's own and is kept as it is, pipes and backslashes
+/// included.
 pub fn page_text(quote: &str, start: i64, tables: &[TableBlock]) -> String {
     let chars: Vec<char> = quote.chars().collect();
     let end = start + chars.len() as i64;
@@ -114,26 +142,19 @@ pub fn page_text(quote: &str, start: i64, tables: &[TableBlock]) -> String {
     };
     let mut shown = String::new();
     let mut at = start;
-    // The prefixes already shown, and the rows a later block may repeat as its prefix.
-    let mut seen: Vec<String> = Vec::new();
     for table in tables.iter().filter(|table| table.start < end && table.end > start) {
         let whole_divider = table.divider == Some((table.start, table.end));
         // A divider written as a block of its own leaves no blank line where it was.
         if !whole_divider {
             shown.push_str(&text(at, table.start));
         }
-        let prefix = text(table.start, table.row);
         let mut parts = Vec::new();
-        if !prefix.is_empty() && !seen.contains(&prefix.trim_end().to_owned()) {
+        if !table.repeats {
             let (cut, resume) = table.divider.unwrap_or((table.row, table.row));
             parts.push(cells(&(text(table.start, cut) + &text(resume, table.row))));
         }
         if !whole_divider {
             parts.push(cells(&text(table.row, table.end)));
-        }
-        seen.push(prefix.trim_end().to_owned());
-        if table.row == table.start {
-            seen.push(text(table.start, table.end).trim_end().to_owned());
         }
         shown.push_str(&parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n"));
         at = table.end.max(at);
@@ -237,9 +258,21 @@ mod tests {
             (true, "| Name | Score |\n| --- | --- |\n| Grace | 9 |"),
         ]);
         assert_eq!(shown(&capture, 0, 1), "Name Score\nAda 10\nGrace 9");
-        assert_eq!(shown(&capture, 1, 1), "Name Score\nGrace 9");
+        // A span starting at a later row starts at that row, as the header is above the first row only.
+        assert_eq!(shown(&capture, 1, 1), "Grace 9");
         let headerless = captured(&[(true, "| Ada | 10 |"), (true, "| Ada | 10 |\n| Grace | 9 |")]);
         assert_eq!(shown(&headerless, 0, 1), "Ada 10\nGrace 9");
+        assert_eq!(shown(&headerless, 1, 1), "Grace 9");
+    }
+
+    #[test]
+    fn a_table_with_no_data_rows_is_its_header() {
+        assert_eq!(shown(&captured(&[(true, "| Name |\n| --- |")]), 0, 0), "Name");
+        let capture = captured(&[(true, "| Team | Score |\n| Name | Points |\n| --- | --- |")]);
+        assert_eq!(shown(&capture, 0, 0), "Team Score\nName Points");
+        // A headerless table's row of dashes is still a row.
+        let headerless = captured(&[(true, "| Name |"), (true, "| Name |\n| --- |")]);
+        assert_eq!(shown(&headerless, 0, 1), "Name\n---");
     }
 
     #[test]
