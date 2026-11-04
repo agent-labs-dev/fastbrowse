@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A standalone password field marked for a new password leaves its role to the page-context decision instead of assuming it changes credentials.
+
 - Screenshot-derived answers pass support and requested-coverage checks before a run reports completion.
 
 - Authorization checks include the non-sensitive text submitted with Enter and the destination of a drag, so permission is judged against the action's contents and target.

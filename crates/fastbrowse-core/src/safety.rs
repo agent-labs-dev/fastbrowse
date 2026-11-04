@@ -226,6 +226,9 @@ pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> 
     if passwords.as_ref().is_some_and(|passwords| passwords.len() < 2) {
         return (!autocompletes(field, "new-password")).then_some(false);
     }
+    if passwords.is_none() && autocompletes(field, "new-password") {
+        return None;
+    }
     if autocompletes(field, "new-password") {
         return Some(true);
     }
@@ -1018,12 +1021,15 @@ mod tests {
     fn one_password_marked_new_leaves_its_role_undecided() {
         let mut username = Control::new("u", "textbox", "Username", [Operation::Fill]);
         (username.form_id, username.autocomplete) = (Some("f".into()), Some("off".into()));
-        let password = password("p", Some("f"), Some("new-password"));
+        let password_field = password("p", Some("f"), Some("new-password"));
         let mut login = button("Login");
         login.form_id = Some("f".into());
-        let form = [username, password.clone(), login.clone()];
-        assert_eq!(sets_new_password(&form, &password), None);
+        let form = [username, password_field.clone(), login.clone()];
+        assert_eq!(sets_new_password(&form, &password_field), None);
         assert!(!changes_credentials(&form, &login, Operation::Click));
+
+        let standalone = password("standalone", None, Some("new-password"));
+        assert_eq!(sets_new_password(std::slice::from_ref(&standalone), &standalone), None);
     }
 
     #[test]
