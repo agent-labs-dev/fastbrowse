@@ -768,6 +768,26 @@ async fn test_confirm_dialog_handled_via_dialog_operation() {
     h.close().await;
 }
 
+/// Deleting a draft opened a confirm dialog, and the read that followed evaluated the blocked page until the command
+/// deadline, so the run ended unavailable before it could answer the dialog.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_capture_under_a_dialog_returns_without_reading_the_blocked_page() {
+    let _turn = turn().await;
+    let Some(h) = loaded().await else { return };
+    let obs = h.observe().await;
+    let result = act(&h.page, click(find(&obs, "Confirm")), &obs).await;
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    let s = &h.session;
+    wait_until(move || async move { s.pending_dialog().is_some() }).await;
+    let capture = tokio::time::timeout(std::time::Duration::from_secs(5), h.page.capture())
+        .await
+        .expect("the capture did not wait on the blocked page")
+        .expect("a capture");
+    assert!(capture.text.is_empty(), "{:?}", capture.text);
+    assert!(h.session.pending_dialog().is_some());
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_unnamed_card_controls_are_named_by_their_icon_and_card() {
     let _turn = turn().await;

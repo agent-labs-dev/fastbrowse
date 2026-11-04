@@ -692,16 +692,21 @@ impl CdpPage {
         (skipped != current && same_http_origin(&skipped, current)).then_some(BackTarget::Skipped(skipped))
     }
 
-    fn dialog_observation(&self, dialog: Dialog, bind: bool) -> Observation {
+    /// The active tab's address and title, as the browser reports them while a dialog blocks the page.
+    fn active_tab_page(&self) -> (String, String) {
         let tabs = self.session.tabs();
-        let active = tabs.iter().find(|t| t.active);
+        tabs.into_iter().find(|tab| tab.active).map(|tab| (tab.url, tab.title)).unwrap_or_default()
+    }
+
+    fn dialog_observation(&self, dialog: Dialog, bind: bool) -> Observation {
+        let (url, title) = self.active_tab_page();
         let page_key = format!("dialog:{}", dialog.kind);
         if bind {
             self.set_last(ObservedState { page_key: page_key.clone(), ..ObservedState::default() });
         }
         Observation {
-            url: active.map(|t| t.url.clone()).unwrap_or_default(),
-            title: active.map(|t| t.title.clone()).unwrap_or_default(),
+            url,
+            title,
             page_key,
             captured_at: DateTime::now_utc(),
             response_status: None,
@@ -838,11 +843,24 @@ impl CdpPage {
 
     async fn capture_once(&self) -> Result<Capture, BrowserError> {
         self.session.assert_clear().await?;
+        // A JavaScript dialog blocks the renderer, so the page reads as nothing until it is answered, as it observes.
+        let Some(frames) = self.until_dialog(self.read_frames::<CaptureSnapshot>(&self.capture_js)).await else {
+            let (url, title) = self.active_tab_page();
+            return Ok(Capture {
+                url,
+                title,
+                captured_at: DateTime::now_utc(),
+                sha256: sha256_hex(""),
+                text: String::new(),
+                blocks: vec![],
+                inaccessible_frames: 0,
+            });
+        };
+        let frames = frames?;
         let mut text = String::new();
         let mut blocks: Vec<Block> = vec![];
         let mut offset = 0usize;
         let mut coverage: Vec<(String, usize)> = vec![];
-        let frames = self.read_frames::<CaptureSnapshot>(&self.capture_js).await?;
         let main = frames.iter().find(|(k, _)| k == MAIN).map(|(_, f)| f);
         let title = main.map(|m| m.raw.title.clone()).unwrap_or_default();
         let url = match main {
