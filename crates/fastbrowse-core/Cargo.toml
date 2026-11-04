@@ -16,5 +16,5 @@ serde = { version = "1", features = ["derive"] }
 # Insertion order: pydantic writes fields in declaration order, and a request body must match Python's byte for byte.
 # float_roundtrip: without it a float can parse one unit off, so a cost Python wrote reads back as another number.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-sha2 = { version = "0.10", default-features = false }
+sha2 = { version = "0.11", default-features = false }
 thiserror = "2"

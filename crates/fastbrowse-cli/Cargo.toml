@@ -33,8 +33,8 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["server", "http1", "tokio"] }
 http-body-util = "0.1"
 bytes = "1"
-sha1 = { version = "0.10", default-features = false }
-sha2 = { version = "0.10", default-features = false }
+sha1 = { version = "0.11", default-features = false }
+sha2 = { version = "0.11", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net", "io-util", "test-util"] }
