@@ -310,6 +310,11 @@ impl Notes {
             .is_some_and(|fact| !self.retired.contains(key) && (!fact.answers || self.answering.contains(key)))
     }
 
+    /// Whether a later read replaced this fact, while retaining it as evidence about the earlier state.
+    pub(crate) fn superseded(&self, key: &str) -> bool {
+        self.retired.contains(key)
+    }
+
     /// Whether a new span was added.
     pub fn add(&mut self, fact: Fact) -> bool {
         let key = fact_id(&fact);

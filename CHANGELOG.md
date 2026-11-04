@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Answer composition and Jev's answer checks receive known superseded-source state, while retaining earlier quotes for historical tasks.
+
 - Authenticator keys with malformed Base32 lengths or padding fail validation instead of producing an incorrect code.
 
 - Fresh synthesis reads retire vanished values from earlier reads of the same address, while preserving quotes still shown and evidence from other pages.

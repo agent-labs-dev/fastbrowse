@@ -91,6 +91,8 @@ answer is written once, when the run ends.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.
+The composer, verbatim-answer decision and claim support check receive each source's known superseded state.
+They judge the state the task asks about, retaining earlier quotes for historical answers and comparisons.
 
 Jev selects verbatim answers only when every selected note can be repeated as written without unrelated text.
 A value embedded in a broader note needs extraction through the composer and its support check.

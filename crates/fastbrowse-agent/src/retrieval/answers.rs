@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
-use fastbrowse_core::models::{Citation, CostComponent, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::models::{Citation, CostComponent, Evidence, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
@@ -174,15 +174,29 @@ struct ComposeItem {
     label: String,
     text: String,
     sources: Vec<String>,
+    // Source fragments keep their state; rewritten claims are judged against their original quotes separately.
+    superseded: Option<bool>,
+}
+
+impl ComposeItem {
+    fn line(&self, text: &str) -> String {
+        format!("{}: {}", self.label, note_text(text, self.superseded))
+    }
+
+    fn written(&self) -> String {
+        self.line(&self.text)
+    }
 }
 
 const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself. A claim that compares, counts, totals or picks a superlative cites every note it is drawn from. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and write each claim as one row: its cells in column order, separated by \" | \", with no other text. Otherwise set columns to null.\n\n# Trust\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
+const SOURCE_STATE: &str = "A quote marked superseded was replaced by a later read of its source. It remains evidence about that earlier state, not the current value. Judge which state the task requests; historical comparisons can use earlier states.";
+
 fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
     [
-        Message::system(format!("{DESCRIPTIVE_VALUES}\n\n{COMPOSER}{UNTRUSTED}")),
+        Message::system(format!("{DESCRIPTIVE_VALUES}\n{SOURCE_STATE}\n\n{COMPOSER}{UNTRUSTED}")),
         Message::user(format!("# Task\n{task}\n\n# Notes\n{}", written.join("\n"))),
     ]
 }
@@ -209,8 +223,8 @@ fn context_limit(context: i64) -> Result<usize> {
 }
 
 /// The bytes one note adds to the request: its line as the JSON string escapes it, and the newline joining it.
-fn line_bytes(label: &str, text: &str) -> usize {
-    serde_json::to_string(&format!("{label}: {text}\n")).map_or(0, |escaped| escaped.len() - 2)
+fn line_bytes(item: &ComposeItem, text: &str) -> usize {
+    serde_json::to_string(&format!("{}\n", item.line(text))).map_or(0, |escaped| escaped.len() - 2)
 }
 
 /// Every note in reading order, in as few parts as fit `limit` with the request around them. A note too long for any
@@ -220,11 +234,11 @@ fn pack_items(task: &str, items: &[ComposeItem], limit: usize) -> Result<Vec<Vec
     let too_small = || AgentError::Llm(LLMError::Failed("compose context window cannot hold a note".into()));
     let mut pieces = Vec::new();
     for item in items {
-        let empty = line_bytes(&item.label, "");
+        let empty = line_bytes(item, "");
         let (mut piece, mut bytes) = (String::new(), empty);
         for character in item.text.chars() {
             // JSON escapes each character on its own, so a line's escaped length is the sum of its characters'.
-            let adds = line_bytes("", &character.to_string()) - line_bytes("", "");
+            let adds = line_bytes(item, &character.to_string()) - empty;
             if !piece.is_empty() && bytes + adds > room {
                 pieces.push(ComposeItem { text: std::mem::take(&mut piece), ..item.clone() });
                 bytes = empty;
@@ -240,7 +254,7 @@ fn pack_items(task: &str, items: &[ComposeItem], limit: usize) -> Result<Vec<Vec
     let mut parts: Vec<Vec<ComposeItem>> = Vec::new();
     let mut used = 0;
     for piece in pieces {
-        let bytes = line_bytes(&piece.label, &piece.text);
+        let bytes = line_bytes(&piece, &piece.text);
         if used + bytes > room && parts.last().is_some_and(|part| !part.is_empty()) {
             parts.push(Vec::new());
             used = 0;
@@ -260,7 +274,7 @@ async fn compose_part(
     items: &[ComposeItem],
     ledger: Option<&Ledger>,
 ) -> Result<Drafted> {
-    let written: Vec<String> = items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect();
+    let written: Vec<String> = items.iter().map(ComposeItem::written).collect();
     let messages = compose_messages(task, &written);
     let draft = generate::<AnswerDraft>(llm, LLMPurpose::Compose, &messages, ledger).await?;
     if let Some(ledger) = ledger {
@@ -286,7 +300,7 @@ async fn compose_part(
 /// How much composing a packing still needs: its requests, then the bytes of the notes they carry. A round may shorten
 /// its claims by less than one request's worth, so the bytes are what show it made progress.
 fn packed_size(parts: &[Vec<ComposeItem>]) -> (usize, usize) {
-    (parts.len(), parts.iter().flatten().map(|item| line_bytes(&item.label, &item.text)).sum())
+    (parts.len(), parts.iter().flatten().map(|item| line_bytes(item, &item.text)).sum())
 }
 
 /// Composes notes too large for one request in rounds, each round's claims becoming the next round's notes, until one
@@ -324,6 +338,7 @@ async fn compose_packed(
                 label: format!("c{index}"),
                 text: claim.text.clone(),
                 sources: claim.evidence_ids.clone(),
+                superseded: None,
             })
             .collect();
         let next = pack_items(task, &items, limit)?;
@@ -345,9 +360,8 @@ pub async fn compose(
     notes: &Notes,
     ledger: Option<&Ledger>,
 ) -> Result<ComposedAnswer> {
-    let facts = notes.facts();
-    let items = initial_items(&facts);
-    let written: Vec<String> = items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect();
+    let items = initial_items(notes);
+    let written: Vec<String> = items.iter().map(ComposeItem::written).collect();
     let messages = compose_messages(task, &written);
     let (columns, claims, reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
         Some(context) if estimated_context_bytes(&messages) > context_limit(context)? => {
@@ -382,8 +396,11 @@ async fn supported_claims(
             .expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))
             .iter()
             .filter_map(|id| notes.facts_by_id().get(id))
-            .filter_map(|fact| fact.evidence.as_ref())
-            .map(|evidence| json!(evidence))
+            .filter_map(|fact| {
+                fact.evidence
+                    .as_ref()
+                    .map(|quote| json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)) }))
+            })
             .collect();
         if sources.is_empty() {
             continue;
@@ -398,7 +415,7 @@ async fn supported_claims(
         for (key, focus) in checks {
             let question = NoulQuestion::new(
                 format!(
-                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record. Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer. A count of reported records requires those records as evidence.\n{cited} {DESCRIPTIVE_VALUES}"
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record. Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer. A count of reported records requires those records as evidence.\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}"
                 ),
                 Some("Every assertion being judged is supported by these quotes."),
                 Some(
@@ -451,14 +468,29 @@ async fn supported_claims(
     Ok((supported, problem))
 }
 
-fn initial_items(facts: &[&crate::memory::Fact]) -> Vec<ComposeItem> {
-    facts
+#[derive(Serialize)]
+struct QuoteState<'a> {
+    #[serde(flatten)]
+    quote: &'a Evidence,
+    superseded: bool,
+}
+
+fn note_text(text: &str, superseded: Option<bool>) -> String {
+    match superseded {
+        Some(superseded) => dumps(&json!({"text": text, "superseded": superseded})),
+        None => text.into(),
+    }
+}
+
+fn initial_items(notes: &Notes) -> Vec<ComposeItem> {
+    notes
+        .facts()
         .iter()
         .enumerate()
-        .map(|(index, fact)| ComposeItem {
-            label: format!("e{index}"),
-            text: fact.text.clone(),
-            sources: vec![fact_id(fact)],
+        .map(|(index, fact)| {
+            let source = fact_id(fact);
+            let superseded = Some(notes.superseded(&source));
+            ComposeItem { label: format!("e{index}"), text: fact.text.clone(), sources: vec![source], superseded }
         })
         .collect()
 }
@@ -474,11 +506,12 @@ pub async fn verdict(
     ledger: Option<&Ledger>,
 ) -> Result<Option<ComposedAnswer>> {
     let facts = notes.facts();
-    let written: Vec<&str> = facts.iter().map(|fact| fact.text.as_str()).collect();
+    let written: Vec<String> =
+        facts.iter().map(|fact| note_text(&fact.text, Some(notes.superseded(&fact_id(fact))))).collect();
     let mut questions: IndexMap<String, Question> = IndexMap::from([(
         "whole".to_string(),
         Question::Choice(ChoiceQuestion::new(
-            format!("{UNTRUSTED}\nWhat does answering `task` take, given `notes`?"),
+            format!("{UNTRUSTED}\n{SOURCE_STATE}\nWhat does answering `task` take, given `notes`?"),
             IndexMap::from([
                 (
                     QUOTED.to_string(),
@@ -493,7 +526,7 @@ pub async fn verdict(
     )]);
     for (index, fact) in written.iter().enumerate() {
         let instructions = format!(
-            "{UNTRUSTED}\nIs note {index} ({}) an entire answer or requested value that can be repeated as written, without unrelated text? A note that merely contains a requested value among unrelated text needs extraction instead. For a task picking a winner, only the winner's notes qualify. Labels, navigation and column headings do not answer the task.",
+            "{UNTRUSTED}\n{SOURCE_STATE}\nIs note {index} ({}) an entire answer or requested value that can be repeated as written, without unrelated text? A note that merely contains a requested value among unrelated text needs extraction instead. For a task picking a winner, only the winner's notes qualify. Labels, navigation and column headings do not answer the task.",
             text::repr(fact)
         );
         let question = NoulQuestion::new(
@@ -662,18 +695,25 @@ mod tests {
         fail: bool,
         rejected: Option<String>,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
+        states: Mutex<Vec<Value>>,
     }
 
     impl Support {
         fn new(accept: bool) -> Self {
-            Self { accept: Some(accept), fail: false, rejected: None, asked: Mutex::new(Vec::new()) }
+            Self {
+                accept: Some(accept),
+                fail: false,
+                rejected: None,
+                asked: Mutex::new(Vec::new()),
+                states: Mutex::new(Vec::new()),
+            }
         }
     }
 
     impl DecisionClient for Support {
         fn evaluate<'a>(
             &'a self,
-            _: &'a Value,
+            state: &'a Value,
             questions: &'a IndexMap<String, Question>,
         ) -> BoxFuture<
             'a,
@@ -681,6 +721,7 @@ mod tests {
         > {
             use fastbrowse_core::decision::{Evaluation, NoulAnswer, NoulTag};
             self.asked.lock().unwrap().push(questions.clone());
+            self.states.lock().unwrap().push(state.clone());
             Box::pin(async move {
                 if self.fail {
                     return Err(fastbrowse_core::decision::DecisionError::Failed("support unavailable".into()));
@@ -727,6 +768,62 @@ mod tests {
         .unwrap();
         let quote = evidence.quote.clone();
         Fact::read(&quote, evidence, FactReader::JevChoice)
+    }
+
+    #[tokio::test]
+    async fn packed_source_fragments_keep_their_superseded_state() {
+        let old = fact(0, format!("Earlier inventory: {}", "x".repeat(1000)));
+        let new = fact(1, "Inventory: 11 items.".into());
+        let mut notes = Notes::new([old.clone(), new.clone()]);
+        notes.supersede("https://example.test", "sha1", &new.text);
+        assert!(!notes.current(&fact_id(&old)));
+        let limit = estimated_context_bytes(&compose_messages("Report the current inventory", &[])) + 200;
+        let llm = RecordingLlm::new(Some(limit as i64));
+        compose(&Support::new(true), &llm, "Report the current inventory", &notes, None).await.unwrap();
+        let mut fragments = 0;
+        for call in llm.calls() {
+            for line in call[1].content.lines().filter_map(|line| line.strip_prefix("e0: ")) {
+                let fragment: Value = serde_json::from_str(line).expect("a fragment retains its source envelope");
+                assert_eq!(fragment["superseded"], true);
+                fragments += 1;
+            }
+        }
+        assert!(fragments > 1);
+    }
+
+    #[tokio::test]
+    async fn answer_decisions_receive_superseded_state_without_losing_history() {
+        let old = fact(0, "Inventory: 18 items.".into());
+        let new = fact(1, "Inventory: 11 items.".into());
+        let mut notes = Notes::new([old.clone(), new.clone()]);
+        notes.supersede("https://example.test", "sha1", &new.text);
+        assert!(!notes.current(&fact_id(&old)));
+        assert!(notes.current(&fact_id(&new)));
+        for task in ["Report the current inventory count.", "Report the inventory count before the update."] {
+            let llm = RecordingLlm::new(None);
+            let jev = Support::new(true);
+            compose(&jev, &llm, task, &notes, None).await.unwrap();
+            let calls = llm.calls();
+            let note = |label: &str| -> Value {
+                let line = calls[0][1].content.lines().find_map(|line| line.strip_prefix(label)).unwrap();
+                serde_json::from_str(line).unwrap()
+            };
+            assert_eq!(note("e0: ")["superseded"], true);
+            assert_eq!(note("e1: ")["superseded"], false);
+            assert_eq!(note("e0: ")["text"], old.text);
+            assert_eq!(note("e1: ")["text"], new.text);
+            {
+                let asked = jev.asked.lock().unwrap();
+                let Question::Noul(question) = &asked[0]["claim0"] else { panic!("support is yes-or-no") };
+                assert!(question.instructions.contains("\"superseded\":true"));
+            }
+            let jev = Support::new(true);
+            verdict(&jev, task, &notes, None).await.unwrap();
+            let states = jev.states.lock().unwrap();
+            let old_note: Value = serde_json::from_str(states[0]["notes"][0].as_str().unwrap()).unwrap();
+            assert_eq!(old_note["superseded"], true);
+            assert_eq!(old_note["text"], old.text);
+        }
     }
 
     #[tokio::test]
@@ -860,12 +957,11 @@ mod tests {
     #[tokio::test]
     async fn compose_packs_all_notes_and_reduces_their_claims() {
         let notes = Notes::new((0..4).map(|index| fact(index, format!("fact {index} {}", "x".repeat(100)))));
-        let facts = notes.facts();
-        let items = initial_items(&facts);
+        let items = initial_items(&notes);
         let limit = items
             .iter()
             .map(|item| {
-                let written = vec![format!("{}: {}", item.label, item.text)];
+                let written = vec![item.written()];
                 estimated_context_bytes(&compose_messages("Find it", &written))
             })
             .max()
@@ -873,7 +969,7 @@ mod tests {
         assert!(
             estimated_context_bytes(&compose_messages(
                 "Find it",
-                &items.iter().map(|item| format!("{}: {}", item.label, item.text)).collect::<Vec<_>>(),
+                &items.iter().map(ComposeItem::written).collect::<Vec<_>>(),
             )) > limit
         );
 
@@ -932,7 +1028,18 @@ mod tests {
                     .filter(|_| emit)
                     .filter_map(|line| line.split_once(": "))
                     .map(|(id, text)| {
-                        Claim::new(&format!("{round:08}{}", &text[8..text.len() - shorten]), vec![id.to_string()])
+                        let mut note = serde_json::from_str::<serde_json::Value>(text).ok();
+                        let raw =
+                            note.as_ref().and_then(|note| note.get("text")).and_then(Value::as_str).unwrap_or(text);
+                        let reworded = format!("{round:08}{}", &raw[8..raw.len() - shorten]);
+                        let text = match note.as_mut().filter(|note| note.get("text").is_some()) {
+                            Some(note) => {
+                                note["text"] = json!(reworded);
+                                dumps(note)
+                            }
+                            None => reworded,
+                        };
+                        Claim::new(&text, vec![id.to_string()])
                     })
                     .collect();
                 let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
@@ -951,11 +1058,9 @@ mod tests {
         let notes = Notes::new((0..4).map(|index| fact(index, format!("00000000 fact {index} {}", "x".repeat(100)))));
         let facts = notes.facts();
         // Room for any one note's request, never two.
-        let limit = initial_items(&facts)
+        let limit = initial_items(&notes)
             .iter()
-            .map(|item| {
-                estimated_context_bytes(&compose_messages("Find it", &[format!("{}: {}", item.label, item.text)]))
-            })
+            .map(|item| estimated_context_bytes(&compose_messages("Find it", &[item.written()])))
             .max()
             .unwrap()
             + 8;
@@ -979,11 +1084,9 @@ mod tests {
         let notes = Notes::new((0..2).map(|index| fact(index, format!("00000000 fact {index} {}", "x".repeat(200)))));
         let facts = notes.facts();
         // Room for one note's request, never two, until rounds of 20 bytes shorter claims fit together.
-        let limit = initial_items(&facts)
+        let limit = initial_items(&notes)
             .iter()
-            .map(|item| {
-                estimated_context_bytes(&compose_messages("Find it", &[format!("{}: {}", item.label, item.text)]))
-            })
+            .map(|item| estimated_context_bytes(&compose_messages("Find it", &[item.written()])))
             .max()
             .unwrap()
             + 8;
@@ -1008,11 +1111,9 @@ mod tests {
     async fn one_claim_from_separate_requests_is_kept_without_claiming_a_whole_answer() {
         let notes = Notes::new((0..2).map(|index| fact(index, format!("00000000 fact {index} {}", "x".repeat(100)))));
         let facts = notes.facts();
-        let limit = initial_items(&facts)
+        let limit = initial_items(&notes)
             .iter()
-            .map(|item| {
-                estimated_context_bytes(&compose_messages("Find it", &[format!("{}: {}", item.label, item.text)]))
-            })
+            .map(|item| estimated_context_bytes(&compose_messages("Find it", &[item.written()])))
             .max()
             .unwrap()
             + 8;
