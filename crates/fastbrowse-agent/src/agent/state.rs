@@ -131,12 +131,11 @@ impl HttpFailure {
 
     /// What the stop report says about the refusal, and which wall it names.
     ///
-    /// A status the server chose is not an unknown cause: 401 asks for a sign-in, 403 is the shape an access or bot
-    /// check takes (the page has no credential field and no form, so a caller told to pass a password is sent the
-    /// wrong way), and 429 or a 5xx is the site being unavailable rather than the run failing at its task.
+    /// A 403 is the shape an access or bot check takes: the page has no credential field and no form, so a caller
+    /// told only that "the cause is unknown" is sent looking for a sign-in that cannot pass it. Every other status
+    /// keeps the recorded wording (`message`) so replaying recorded Python traffic still matches byte for byte.
     fn refusal(&self) -> (String, Option<WallKind>) {
         match self.status {
-            401 => (format!("HTTP 401 at {}: the site asks this browser session to sign in", self.url), None),
             403 => (
                 format!(
                     "HTTP 403 at {}: the site refused this browser session, which is an access or bot check; no credential passes it",
@@ -144,11 +143,7 @@ impl HttpFailure {
                 ),
                 Some(WallKind::BotCheck),
             ),
-            429 => (format!("HTTP 429 at {}: the site is rate-limiting this browser session", self.url), None),
-            status if status >= 500 => {
-                (format!("HTTP {status} at {}: the site failed to serve the page", self.url), None)
-            }
-            status => (format!("HTTP {status} at {} in this browser session", self.url), None),
+            _ => (self.message(), None),
         }
     }
 
@@ -164,7 +159,7 @@ impl HttpFailure {
         let (refusal, wall) = self.refusal();
         Stop {
             status,
-            error: Some(format!("Could not complete the task after {refusal}.")),
+            error: Some(format!("Could not complete the task after {}.", refusal.trim_end_matches('.'))),
             evidence: Vec::new(),
             wall,
         }
