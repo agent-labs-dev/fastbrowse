@@ -271,7 +271,9 @@ async fn test_a_link_that_redirected_still_leads_to_the_page_it_read() {
     state.history.push(executed(Some(Operation::Click), Some("TEE"), true));
     agent().note_effect(&mut state, &product);
     state.mark_read(&product);
-    assert!(Agent::page_facts(&state, &results).contains(&"These links lead to pages already read: 'TEE'.".into()));
+    let mut results = results;
+    state.mark_read_links(&mut results);
+    assert_eq!(results.controls[0].already_read, Some(true));
 }
 
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
@@ -3965,4 +3967,24 @@ fn the_page_a_run_began_on_is_read_before_an_action_leaves_it_whatever_jev_score
     leave.shows_answer = Some(0.9);
     assert!(Agent::reads_before_leaving(&state, &author, &leave));
     assert!(!Agent::reads_before_leaving(&state, &author, &code_decision(Operation::Read, None)));
+}
+
+#[test]
+fn a_link_to_a_page_already_read_is_marked_on_the_link_so_links_sharing_its_label_stay_apart() {
+    let about = |id: &str, href: &str| Control {
+        href: Some(href.into()),
+        ..Control::new(id, "link", "(about)", [Operation::Click])
+    };
+    let mut state = run_state();
+    state.mark_read(&at("https://quotes.test/author/Albert-Einstein/", &[]));
+    let mut page = at(
+        "https://quotes.test/page/2/",
+        &[about("a", "/author/Albert-Einstein/"), about("b", "/author/Jane-Austen/")],
+    );
+    state.mark_read_links(&mut page);
+    let marks: Vec<_> = page.controls.iter().map(|control| control.already_read).collect();
+    assert_eq!(marks, [Some(true), None]);
+    assert_eq!(crate::policy::element(&page.controls[0])["already_read"], json!(true));
+    assert!(crate::policy::element(&page.controls[1]).get("already_read").is_none());
+    assert!(Agent::page_facts(&state, &page).iter().all(|fact| !fact.contains("already read")));
 }

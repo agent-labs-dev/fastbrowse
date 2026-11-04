@@ -376,6 +376,7 @@ fn control_from_raw(
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,
+        already_read: None,
     }
 }
 

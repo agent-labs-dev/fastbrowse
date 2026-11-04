@@ -854,19 +854,6 @@ impl Agent {
         if observation.controls.is_empty() {
             facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
         }
-        let here = url::Url::parse(&observation.url).ok();
-        let read_links: Vec<String> = observation
-            .controls
-            .iter()
-            .filter(|control| {
-                let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
-                leads_to.is_some_and(|url| state.read_urls.contains(url.as_str()))
-            })
-            .map(|control| fastbrowse_core::py::text::repr(&control.label))
-            .collect();
-        if !read_links.is_empty() {
-            facts.push(format!("These links lead to pages already read: {}.", read_links.join(", ")));
-        }
         let document = &observation.document_key;
         let read = state.read_documents.get(&state::read_key(observation)).copied();
         if !document.is_empty() && read == Some(true) {

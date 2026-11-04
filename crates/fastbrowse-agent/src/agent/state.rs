@@ -389,6 +389,18 @@ impl RunState {
         self.read_urls.insert(observation.url.clone());
     }
 
+    /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
+    /// label, as every quote's "(about)" does, where a list of labels could not.
+    pub fn mark_read_links(&self, observation: &mut Observation) {
+        let here = url::Url::parse(&observation.url).ok();
+        for control in &mut observation.controls {
+            let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
+            if leads_to.is_some_and(|url| self.read_urls.contains(url.as_str())) {
+                control.already_read = Some(true);
+            }
+        }
+    }
+
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,

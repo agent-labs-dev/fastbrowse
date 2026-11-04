@@ -122,6 +122,10 @@ pub struct Control {
     /// A link the page marks with a `download` attribute: activating it saves a file instead of opening a page.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub download: Option<bool>,
+    /// A link to a page the run has already read, as a browser styles a visited link: the agent marks it, the page
+    /// never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub already_read: Option<bool>,
 }
 
 impl Control {
@@ -156,6 +160,7 @@ impl Control {
             validation_message: None,
             next_page: None,
             download: None,
+            already_read: None,
         }
     }
 }

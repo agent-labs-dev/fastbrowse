@@ -213,6 +213,7 @@ impl Agent {
         let mut offered = observation.clone();
         context.problem = Some(reason.to_string());
         leave_out_idle(state, &mut offered, &mut context);
+        state.mark_read_links(&mut offered);
         let reason = context.problem.take().unwrap_or_default();
         withhold(&mut offered, &mut context, &reason, &withheld);
         context.screenshot = self.viewport().await?;

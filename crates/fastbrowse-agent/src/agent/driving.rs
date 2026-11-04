@@ -123,6 +123,7 @@ impl Agent {
                     context.screenshot = self.drawn_viewport(&observation).await?;
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
+                    state.mark_read_links(&mut offered);
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
                         let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
