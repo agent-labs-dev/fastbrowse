@@ -3947,3 +3947,22 @@ fn test_720_fragment_change_keeps_the_earlier_read_retired_when_composing() {
     assert!(current.iter().any(|quote| quote == "Flight B: $450"), "{current:?}");
     assert!(!current.iter().any(|quote| quote == "Flight A: $300"), "pre-filter value is current again: {current:?}");
 }
+
+#[test]
+fn the_page_a_run_began_on_is_read_before_an_action_leaves_it_whatever_jev_scored_it() {
+    // Asked to count a site's Einstein quotes, Jev scored the quote list it began on under even odds and left it for an
+    // author page, so the list was never read.
+    let home = Observation { document_key: "home".into(), ..at("https://quotes.test/", &[]) };
+    let author = Observation { document_key: "author".into(), ..at("https://quotes.test/author/", &[]) };
+    let mut state = run_state();
+    state.first_url = Some(home.url.clone());
+    let mut leave = code_decision(Operation::Click, Some(button("(about)")));
+    leave.shows_answer = Some(0.2);
+    assert!(Agent::reads_before_leaving(&state, &home, &leave));
+    assert!(!Agent::reads_before_leaving(&state, &author, &leave), "another page still waits on Jev's score");
+    state.mark_read(&home);
+    assert!(!Agent::reads_before_leaving(&state, &home, &leave), "a page read once is not read again");
+    leave.shows_answer = Some(0.9);
+    assert!(Agent::reads_before_leaving(&state, &author, &leave));
+    assert!(!Agent::reads_before_leaving(&state, &author, &code_decision(Operation::Read, None)));
+}

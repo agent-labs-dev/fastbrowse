@@ -204,15 +204,7 @@ impl Agent {
                 }
                 return Err(self.meet_wall(&observation, &raw));
             }
-            // Jev's operation can leave a page, or end the run, before anything it shows has been read: an order total
-            // is gone once the order is placed. Jev has said the page shows what the task needs, so the read is not
-            // asked again whether it does: the page of a list judged absent was a third of the list lost. Once a read
-            // has said the answer is written from several records, every new page is one more of them, however it
-            // came: a shop's fifth page scored under even odds, and a list's More changes no address.
-            if decision.operation != Operation::Read
-                && (decision.shows_answer.is_some_and(|probability| probability > EVEN_ODDS)
-                    || (state.compose && !Self::page_read(state, &observation)))
-            {
+            if Self::reads_before_leaving(state, &observation, &decision) {
                 let capture = self.capture().await?;
                 self.trace.phase("read", self.read(state, capture, &observation, true)).await?;
             }

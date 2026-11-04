@@ -820,6 +820,27 @@ impl Agent {
         !observation.document_key.is_empty() && state.read_documents.get(&state::read_key(observation)) == Some(&false)
     }
 
+    /// Whether the page is read before the action Jev chose takes the run off it.
+    ///
+    /// Jev's operation can leave a page, or end the run, before anything it shows has been read: an order total is
+    /// gone once the order is placed. Jev has said the page shows what the task needs, so the read is not asked again
+    /// whether it does: the page of a list judged absent was a third of the list lost. Once a read has said the answer
+    /// is written from several records, every new page is one more of them, however it came: a shop's fifth page
+    /// scored under even odds, and a list's More changes no address. The page the run began on is read whatever Jev
+    /// scored it: asked to count a site's Einstein quotes, Jev scored the quote list under even odds, left it for an
+    /// author page, and never came back to the list.
+    pub(super) fn reads_before_leaving(
+        state: &RunState,
+        observation: &Observation,
+        decision: &crate::policy::Decision,
+    ) -> bool {
+        let unread = !Self::page_read(state, observation);
+        let first = state.first_url.as_deref() == Some(observation.url.as_str());
+        decision.operation != fastbrowse_core::models::Operation::Read
+            && (decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
+                || ((state.compose || first) && unread))
+    }
+
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
     fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
         let mut facts = Vec::new();

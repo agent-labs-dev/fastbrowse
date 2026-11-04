@@ -203,6 +203,11 @@
      "click",
      "navigate",
      "done"
+    ],
+    "task": [
+     "first",
+     "absent",
+     "first"
     ]
    },
    "noul": 0.1,
