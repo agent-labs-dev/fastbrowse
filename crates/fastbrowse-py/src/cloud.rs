@@ -111,13 +111,8 @@ pub fn stop_cloud_browser(
     origin: Option<String>,
 ) -> PyResult<Py<PyAny>> {
     let (clock, sleep) = real_time();
-    let mut cloud = BrowserUseCloudBrowser::running_with_seams(
-        browser_api_key,
-        browser_id,
-        &self::origin(origin),
-        clock,
-        sleep,
-    );
+    let mut cloud =
+        BrowserUseCloudBrowser::running_with_seams(browser_api_key, browser_id, &self::origin(origin), clock, sleep);
     let stopping = async move { cloud.stop().await };
     let stopped = awaitable(py, stopping, |py, stopped| {
         stopped.map_err(failed)?;
