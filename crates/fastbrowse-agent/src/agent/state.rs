@@ -16,6 +16,15 @@ use crate::memory::Notes;
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::whole_page_facts;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputIntent {
+    Unknown,
+    Text,
+    Image,
+    TextAndImage,
+    CarriedOut,
+}
+
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
 pub(crate) struct Stop {
@@ -248,6 +257,7 @@ pub(crate) struct RunState {
     pub read_whole: Vec<Capture>,
     /// A DONE was refused because the task is something to carry out, not to be told.
     pub to_carry_out: bool,
+    pub output_intent: OutputIntent,
     /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
@@ -386,6 +396,7 @@ impl RunState {
             compose: false,
             read_whole: Vec::new(),
             to_carry_out: false,
+            output_intent: OutputIntent::Unknown,
             fetched: HashSet::new(),
             committing: false,
             read_pages: HashSet::new(),

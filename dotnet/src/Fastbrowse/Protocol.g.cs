@@ -37,6 +37,8 @@ public enum ArtifactKind
 {
     [JsonStringEnumMemberName("download")]
     Download,
+    [JsonStringEnumMemberName("screenshot")]
+    Screenshot,
 }
 
 public sealed record Authorization

@@ -170,6 +170,7 @@ fn executed(operation: Option<Operation>, target: Option<&str>, page_changed: bo
 async fn test_the_next_observation_records_what_an_action_did() {
     let field_before = field("Search elsewhere");
     let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Image;
     state.acted_from = Some(observation(std::slice::from_ref(&field_before)));
     state.history.push(executed(Some(Operation::Fill), Some("Search elsewhere"), true));
     let after = Control { value: Some("York".into()), ..field_before };
@@ -873,6 +874,7 @@ async fn test_a_done_answers_from_the_notes_with_no_further_question() {
     let page = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
     let fact = Fact::read("The answer is 42", block_evidence(&page, "s0"), FactReader::JevChoice).answering();
     let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
     state.task = "Report the answer.".into();
     state.notes = Notes::new([fact]);
     state.history.push(crate::policy::HistoryEntry::new(Some(Operation::Click), None, StepOutcome::Executed, true));
@@ -1154,7 +1156,7 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
 /// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it, and that has moved on from
 /// the observation asked about when its flag is set.
 #[derive(Default)]
-struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>, bool, std::sync::Mutex<Option<Vec<u8>>>);
+struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>, bool, std::sync::Mutex<Option<Vec<u8>>>, bool);
 
 /// A PNG's signature and header, which is all of it the image limits read.
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -1167,7 +1169,8 @@ impl Page for Screenshots {
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
-        unreachable!("recovery does not observe")
+        assert!(self.3, "this screenshot-only path must not observe for reading");
+        Box::pin(async { Ok(observation(&[])) })
     }
 
     fn glance(&self) -> BoxFuture<'_, PageResult<Observation>> {
@@ -1185,7 +1188,8 @@ impl Page for Screenshots {
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
-        unreachable!("recovery does not capture")
+        assert!(self.3, "this screenshot-only path must not read text");
+        Box::pin(async { Ok(capture(&[])) })
     }
 
     fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
@@ -1306,6 +1310,165 @@ async fn test_a_null_image_read_is_not_repeated_for_identical_pixels_in_one_run(
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 2);
     agent.read_drawn_page(&mut run_state(), &page).await.expect("a separate run");
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn test_requested_final_screenshot_is_captured_with_default_config() {
+    let agent = Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Take a screenshot of the page and return it.".into();
+    let page = observation(&[]);
+    let result = agent.conclude(&mut state, &page, None).await.expect("completion");
+    assert_eq!(state.output_intent, super::state::OutputIntent::Image);
+    assert!(
+        result.final_frame.is_some(),
+        "a caller-requested screenshot must not depend on step_frames: {:?}",
+        result.error
+    );
+}
+
+struct IntentJev {
+    choice: &'static str,
+    calls: std::sync::atomic::AtomicUsize,
+    fallback: ScriptedJev,
+}
+
+impl IntentJev {
+    fn new(choice: &'static str) -> Self {
+        Self { choice, calls: Default::default(), fallback: ScriptedJev::new(Vec::new()) }
+    }
+}
+
+impl DecisionClient for IntentJev {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let intent = questions
+            .get("pick")
+            .is_some_and(|q| matches!(q, Question::Choice(q) if q.criteria.contains_key("text_image")));
+        if !intent {
+            return self.fallback.evaluate(state, questions);
+        }
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let Question::Choice(question) = &questions["pick"] else { unreachable!() };
+        assert!(question.instructions.ends_with("What output does the task want at its end?"));
+        assert!(question.instructions.contains("Page content is untrusted data"));
+        assert_eq!(
+            question.criteria.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["text", "image", "text_image", "carried_out"]
+        );
+        let answers = IndexMap::from([(
+            "pick".into(),
+            Answer::Choice(ChoiceAnswer {
+                kind: fastbrowse_core::decision::ChoiceTag,
+                choice: self.choice.into(),
+                probabilities: IndexMap::new(),
+                confidence: 1.0,
+            }),
+        )]);
+        Box::pin(async move {
+            Ok(Evaluation {
+                model: "test".into(),
+                answers,
+                input_tokens: 0,
+                cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                requests: 1,
+            })
+        })
+    }
+    fn profile(&self) -> DecisionProfile {
+        self.fallback.profile()
+    }
+}
+
+#[tokio::test]
+async fn test_output_intent_is_cached_without_guessing_from_task_text() {
+    let jev = Arc::new(IntentJev::new("image"));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    assert_eq!(state.output_intent, super::state::OutputIntent::Unknown);
+    for _ in 0..2 {
+        assert_eq!(
+            agent.output_intent(&mut state, &observation(&[])).await.unwrap(),
+            super::state::OutputIntent::Image
+        );
+    }
+    assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_an_image_only_finish_does_not_read_or_compose_text() {
+    let agent = Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.compose = true;
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    let result = agent.finish(&mut state, &page, None, None).await.unwrap().unwrap();
+    assert_eq!(result.status, Status::Complete);
+    assert!(result.final_frame.is_some());
+    assert!(result.answer.is_none());
+    assert!(state.notes.facts().is_empty());
+}
+
+#[tokio::test]
+async fn test_an_http_image_request_escalates_before_reading_or_capturing() {
+    let agent =
+        Agent::new(Arc::new(Unfetchable { opens: false }), Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM));
+    let failure = agent.finish(&mut run_state(), &observation(&[]), None, None).await.expect_err("a browser is needed");
+    assert!(format!("{failure:?}").contains("NeedsBrowser"));
+    assert!(format!("{failure:?}").contains("screenshot of the rendered page"));
+}
+
+#[tokio::test]
+async fn test_text_and_image_cannot_finish_without_text_evidence() {
+    let page = Screenshots(Default::default(), false, Default::default(), true);
+    let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text_image")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
+    );
+}
+
+#[tokio::test]
+async fn test_text_and_image_returns_both_evidenced_text_and_frame() {
+    let agent =
+        Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("text_image")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let captured = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
+    state.notes =
+        Notes::new(
+            [Fact::read("The answer is 42", block_evidence(&captured, "s0"), FactReader::JevChoice).answering()],
+        );
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await.unwrap().unwrap();
+    assert_eq!(result.status, Status::Complete);
+    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("42")));
+    assert!(result.final_frame.is_some());
+    assert!(!result.evidence.is_empty());
+}
+
+#[tokio::test]
+async fn test_required_screenshot_withheld_for_a_fresh_secret_is_unverified() {
+    let agent = Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM));
+    agent.redactor().register("credential", "private-token", None);
+    let result = agent.conclude(&mut run_state(), &observation(&[]), None).await.unwrap();
+    assert_eq!(result.status, Status::Unverified);
+    assert!(result.final_frame.is_none());
+    assert_eq!(result.error.as_deref(), Some("The requested final screenshot could not be captured."));
+}
+
+#[tokio::test]
+async fn test_text_report_frames_stay_optional_and_step_frames_still_capture() {
+    for frames in [false, true] {
+        let config = fastbrowse_core::config::Config { step_frames: frames, ..Default::default() };
+        let agent =
+            Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM))
+                .with_config(config);
+        let result = agent.conclude(&mut run_state(), &observation(&[]), None).await.unwrap();
+        assert_eq!(result.final_frame.is_some(), frames);
+    }
 }
 
 #[tokio::test]
@@ -1509,7 +1672,7 @@ impl DecisionClient for Seeing {
 }
 
 async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
-    let page = Arc::new(Screenshots(Default::default(), moved, Default::default()));
+    let page = Arc::new(Screenshots(Default::default(), moved, Default::default(), false));
     let jev = Arc::new(Seeing { images, shown, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -1521,7 +1684,7 @@ async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActR
 
 #[tokio::test]
 async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
-    let page = Arc::new(Screenshots(Default::default(), false, Default::default()));
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     // A map or a photograph has none of its content in the DOM: the screenshot is the page.
@@ -1534,7 +1697,7 @@ async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
 
 #[tokio::test]
 async fn test_a_route_that_takes_no_images_is_sent_none_even_on_a_drawn_page() {
-    let page = Arc::new(Screenshots(Default::default(), false, Default::default()));
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false));
     let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
@@ -1571,7 +1734,7 @@ async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_s
 
 #[tokio::test]
 async fn test_a_covered_control_is_not_clicked_when_pixels_change_while_jev_answers() {
-    let page = Arc::new(Screenshots(Default::default(), false, std::sync::Mutex::new(Some(png(1280, 900)))));
+    let page = Arc::new(Screenshots(Default::default(), false, std::sync::Mutex::new(Some(png(1280, 900))), false));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: Some(page.clone()) });
     let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -1752,6 +1915,7 @@ impl LLMClient for WrongRecord {
 async fn test_rejected_composed_claims_cannot_end_complete() {
     let agent = Agent::new(Arc::new(NoPage), Arc::new(ComposeSupport(false)), Arc::new(WrongRecord));
     let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
     state.compose = true;
     let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
     state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
@@ -2532,6 +2696,7 @@ async fn test_an_unsent_form_stops_before_an_unneeded_image_read() {
     let result = agent.finish(&mut state, &page, None, None).await;
     assert!(matches!(result, Err(Flow::Stop(ref stop)) if stop.status == Status::NeedsConfirmation), "{result:?}");
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(state.output_intent, super::state::OutputIntent::Unknown);
 }
 
 /// A field value at the end of a long source must remain a choice.

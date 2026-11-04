@@ -752,3 +752,57 @@ async fn a_missing_browser_key_after_a_paid_fetch_preserves_its_receipt() {
     assert!(matches!(error.cause(), RunError::Configuration(_)));
     assert!(receipt.steps.is_empty(), "the bot check was read before the first action");
 }
+
+struct ScreenshotOutput(fastbrowse_agent::scripted::ScriptedJev);
+
+impl DecisionClient for ScreenshotOutput {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.0.profile()
+    }
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut result = self.0.evaluate(state, questions).await?;
+            if questions
+                .get("pick")
+                .is_some_and(|q| matches!(q, Question::Choice(q) if q.criteria.contains_key("text_image")))
+                && let Some(Answer::Choice(answer)) = result.answers.get_mut("pick")
+            {
+                answer.choice = "image".into();
+            }
+            Ok(result)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_requested_screenshot_escalates_from_http_to_the_supplied_browser() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let fetched = requests.clone();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let opened = opens.clone();
+    let options = task(|o, h| {
+        o.task = "Take a screenshot of the page and return it.".into();
+        o.start = Some("https://docs.example.test/value".into());
+        h.jev = Some(Arc::new(ScreenshotOutput(fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()))));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.http = Some(Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            fetched.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(Response::new(200, "<p>The page is ready.</p>").with_header("content-type", "text/html"))
+            })
+        })));
+        h.open_browser = Some(Arc::new(move || {
+            opened.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err("screenshot browser was requested".into()) })
+        }));
+    });
+    let result = run(options).await.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert_eq!(opens.load(Ordering::SeqCst), 1, "an HTTP screenshot refusal must trigger browser escalation");
+    assert_eq!(result.status, Status::Error);
+    assert!(result.error.as_deref().unwrap().contains("screenshot browser was requested"));
+}

@@ -82,6 +82,50 @@ async fn test_run_calls_run_task_and_replies_with_its_result() {
 }
 
 #[tokio::test]
+async fn test_run_exposes_a_safe_final_frame_as_a_screenshot_artifact() {
+    use fastbrowse_core::models::{Artifact, ArtifactKind, RunResult};
+    use fastbrowse_core::py::{base64, sha256_hex};
+    let bytes = b"png-bytes".to_vec();
+    let digest = sha256_hex(&bytes);
+    for (status, prior) in [
+        (Status::Complete, None),
+        (Status::Blocked, None),
+        (Status::Complete, Some(digest.clone())),
+        (Status::Complete, Some("other-image".into())),
+    ] {
+        let artifacts = prior
+            .as_ref()
+            .map(|sha256| Artifact {
+                kind: ArtifactKind::Screenshot,
+                name: "previous.png".into(),
+                mime_type: "image/png".into(),
+                size_bytes: bytes.len() as i64,
+                sha256: sha256.clone(),
+                uri: format!("data:image/png;base64,{}", base64::encode(&bytes)),
+            })
+            .into_iter()
+            .collect();
+        let recorder = Recorder {
+            result: Some(RunResult { final_frame: Some(bytes.clone()), artifacts, ..result(status) }),
+            ..Recorder::default()
+        };
+        let mut client = serving(recorder.runner(), settings());
+        let response = client.request("run", Some(json!({"run_id":"run-1", "task":"show the page"}))).await;
+        assert_eq!(response["result"]["status"], status.as_str());
+        let artifacts = response["result"]["artifacts"].as_array().unwrap();
+        let expected = if prior.as_deref().is_some_and(|hash| hash != digest) { 2 } else { 1 };
+        assert_eq!(artifacts.len(), expected);
+        let artifact = artifacts.iter().find(|a| a["sha256"] == digest).unwrap();
+        assert_eq!(artifact["kind"], "screenshot");
+        assert_eq!(artifact["mime_type"], "image/png");
+        assert_eq!(artifact["size_bytes"], bytes.len());
+        let encoded = artifact["uri"].as_str().unwrap().strip_prefix("data:image/png;base64,").unwrap();
+        assert_eq!(base64::decode(encoded).unwrap(), bytes);
+        assert!(response["result"].get("final_frame").is_none());
+    }
+}
+
+#[tokio::test]
 async fn test_the_fields_that_describe_the_task_arrive_as_run_tasks_arguments() {
     let tools = tempdir::Dir::new();
     let call = received(json!({

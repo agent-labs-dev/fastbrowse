@@ -22,7 +22,7 @@ name: Benchmark campaign
 #                 Cloud browser with the same settings (published as internal-hosted). Ultrafast runs every task it can
 #                 attempt; the catalog states why it skips the others.
 #   all           both.
-# Every attempt of every arm stops at 10 minutes and counts as DNF, a failure; Parallax records the limit in the run.
+# The budget gates new attempts; Parallax gives no task time, step or dollar limit to an active arm.
 # Browser Use and Browser Harness are not run by default: their figures come from docs/results/competitor-reference.json,
 # which only the candidate step reads, and each is labelled with the date it was measured. Without a reference that
 # matches the catalog, the candidate is refused.

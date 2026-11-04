@@ -42,7 +42,8 @@
     },
     "ArtifactKind": {
       "enum": [
-        "download"
+        "download",
+        "screenshot"
       ],
       "title": "ArtifactKind",
       "type": "string"

@@ -6,5 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 public enum ArtifactKind {
     @JsonProperty("download")
-    DOWNLOAD
+    DOWNLOAD,
+    @JsonProperty("screenshot")
+    SCREENSHOT
 }

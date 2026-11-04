@@ -23,6 +23,7 @@ use fastbrowse_core::protocol::{
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text::repr;
+use fastbrowse_core::py::{base64, sha256_hex};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -532,7 +533,24 @@ pub fn reply(
     run_id: &str,
 ) -> Result<RunResult, Refused> {
     match outcome {
-        Ok(result) => Ok(result),
+        Ok(mut result) => {
+            if let Some(frame) = result.final_frame.as_ref() {
+                let sha256 = sha256_hex(frame);
+                if !result.artifacts.iter().any(|artifact| {
+                    artifact.kind == fastbrowse_core::models::ArtifactKind::Screenshot && artifact.sha256 == sha256
+                }) {
+                    result.artifacts.push(fastbrowse_core::models::Artifact {
+                        kind: fastbrowse_core::models::ArtifactKind::Screenshot,
+                        name: "screenshot.png".into(),
+                        mime_type: "image/png".into(),
+                        size_bytes: frame.len() as i64,
+                        sha256,
+                        uri: format!("data:image/png;base64,{}", base64::encode(frame)),
+                    });
+                }
+            }
+            Ok(result)
+        }
         Err(RunError::AfterSpending { error, receipt }) => match reply(Err(*error), failure, run_id) {
             Ok(mut result) => {
                 result.steps = receipt.steps;

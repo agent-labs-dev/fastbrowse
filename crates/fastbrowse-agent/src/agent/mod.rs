@@ -212,6 +212,7 @@ impl Agent {
         // provider call that never returns.
         let deadline = ledger.limits.max_seconds.map(|seconds| began + Duration::from_secs_f64(seconds));
         let mut slot: Option<RunState> = None;
+        let mut requested_frame = false;
         let resume = options.resume.take();
         let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
             let running = Box::pin(async {
@@ -245,6 +246,9 @@ impl Agent {
                     (result, false, false)
                 }
             };
+            requested_frame = slot.as_ref().is_some_and(|state| {
+                matches!(state.output_intent, state::OutputIntent::Image | state::OutputIntent::TextAndImage)
+            });
             if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
                 self.seen().resume = Some(Resume { state, url: page.url });
             }
@@ -270,7 +274,7 @@ impl Agent {
             loop_returned = false;
         }
         result.cost = ledger.breakdown();
-        Ok(if loop_returned { result } else { self.ending_frame(result).await })
+        Ok(if loop_returned { result } else { self.ending_frame(result, requested_frame).await })
     }
 
     async fn tell_page_ready(&self) {
@@ -419,8 +423,8 @@ impl Agent {
         self.partial_result(&notes, state, ledger, status, Some(message), None)
     }
 
-    async fn ending_frame(&self, mut result: RunResult) -> RunResult {
-        if !self.config.step_frames {
+    async fn ending_frame(&self, mut result: RunResult, requested: bool) -> RunResult {
+        if !(self.config.step_frames || requested) {
             return result;
         }
         // A blocked or failed run still needs its ending page, checked for secrets at capture time.
@@ -429,6 +433,10 @@ impl Agent {
                 Ok(Ok(frame)) => frame,
                 _ => None,
             };
+        if requested && result.final_frame.is_none() && result.status == Status::Complete {
+            result.status = Status::Unverified;
+            result.error = Some("The requested final screenshot could not be captured.".into());
+        }
         result
     }
 

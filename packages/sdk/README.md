@@ -69,6 +69,10 @@ starts has none. The receipt has no status or answer, and an unpriced charge rem
 The result is the `RunResult` the Python library returns. Its fields keep their Python names, such as
 `final_url`, since the types are generated from the protocol's schema; the options are camelCase.
 
+A safe final screenshot is returned in `result.artifacts` with `kind: "screenshot"`, `mime_type: "image/png"`,
+a SHA-256 digest and a base64 data URI in `uri`. A task can request the screenshot without enabling step frames.
+If a resolved secret is visible, the image is withheld.
+
 `output` is `data` after a Zod (4.2 or newer) or ArkType schema's validation and transforms, or a Valibot schema
 wrapped by `@valibot/to-json-schema`, typed as the schema's output. Data the schema refuses rejects with
 `OutputValidationError`, which carries the result. A plain JSON Schema object is accepted too; `output` is then

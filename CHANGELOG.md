@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Tasks can request a final screenshot without enabling step frames. Image-only output skips text composition; requests for text and an image retain citation checks. Safe final images reach JSON clients as screenshot artifacts, while a missing requested image cannot be reported as complete.
+
 - Repeated Python cancellation waits for native cleanup and retains the run receipt, including costs and recording paths.
 
 - Python Jev clients accept the box questions and answers used by the Rust browser agent. Python and Rust schemas agree on optional box confidence, including its bounds.

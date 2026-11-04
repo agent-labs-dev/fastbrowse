@@ -172,6 +172,7 @@ class StepChoice(Frozen):
 
 class ArtifactKind(StrEnum):
     DOWNLOAD = "download"
+    SCREENSHOT = "screenshot"
 
 
 class Artifact(Frozen):
@@ -311,7 +312,7 @@ class RunResult(Frozen):
     final_url: str | None = None
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
     final_frame: bytes | None = Field(default=None, exclude=True, repr=False)
-    """A safe final PNG when step frames are enabled; kept out of text results."""
+    """A safe final PNG requested by the task or enabled with step frames; kept out of text results."""
     recordings: tuple[Path, ...] = ()
     """The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed."""
     wall: Wall | None = None

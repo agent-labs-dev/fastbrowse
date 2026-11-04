@@ -29,7 +29,8 @@ type Artifact struct {
 type ArtifactKind string
 
 const (
-	ArtifactKindDownload ArtifactKind = "download"
+	ArtifactKindDownload   ArtifactKind = "download"
+	ArtifactKindScreenshot ArtifactKind = "screenshot"
 )
 
 type Authorization struct {

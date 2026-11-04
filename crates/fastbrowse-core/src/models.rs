@@ -316,6 +316,7 @@ impl Schema for StepChoice {
 str_enum! {
     pub enum ArtifactKind {
         Download = "download",
+        Screenshot = "screenshot",
     }
 }
 
@@ -623,7 +624,7 @@ pub struct RunResult {
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
     #[serde(default)]
     pub final_url: Option<String>,
-    /// A safe final PNG when step frames are enabled; kept out of text results.
+    /// A safe final PNG requested by the task or enabled with step frames; kept out of text results.
     #[serde(skip)]
     pub final_frame: Option<Vec<u8>>,
     /// The videos this run finished writing, captioned then plain.

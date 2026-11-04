@@ -18,7 +18,7 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, navigation_question};
-use super::state::{Flow, RunState, Step, Stop, Unsure};
+use super::state::{Flow, OutputIntent, RunState, Step, Stop, Unsure};
 use crate::policy::{Ahead, Decision};
 use crate::retrieval::text::{Word, words};
 use crate::verification::page_state;
@@ -767,17 +767,40 @@ impl Agent {
         Ok(picks["pick"].clone())
     }
 
-    /// Whether the task wants something reported back, rather than only something carried out.
-    pub(super) async fn asks_to_be_told(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+    pub(super) async fn output_intent(&self, state: &mut RunState, observation: &Observation) -> Step<OutputIntent> {
+        if state.output_intent != OutputIntent::Unknown {
+            return Ok(state.output_intent);
+        }
         let criteria = IndexMap::from([
             (
-                "told".to_string(),
-                JsonValue::from("The task asks to be told something, such as a value, a name or a list."),
+                "text".to_string(),
+                JsonValue::from(
+                    "The task asks to be told text, such as a value, a name or a list, and does not ask for an image.",
+                ),
             ),
-            ("carried_out".to_string(), JsonValue::from("The task only asks for something to be carried out.")),
+            ("image".to_string(), JsonValue::from("The task asks only for an image or screenshot as its report.")),
+            (
+                "text_image".to_string(),
+                JsonValue::from("The task asks for both a textual answer and an image or screenshot."),
+            ),
+            (
+                "carried_out".to_string(),
+                JsonValue::from("The task only asks for something to be carried out, with no report."),
+            ),
         ]);
-        let question = "What does the task want at its end?";
-        Ok(self.ask_choice(state, observation, question, criteria).await? == "told")
+        let intent = match self
+            .ask_choice(state, observation, "What output does the task want at its end?", criteria)
+            .await?
+            .as_str()
+        {
+            "text" => OutputIntent::Text,
+            "image" => OutputIntent::Image,
+            "text_image" => OutputIntent::TextAndImage,
+            "carried_out" => OutputIntent::CarriedOut,
+            _ => unreachable!(),
+        };
+        state.output_intent = intent;
+        Ok(intent)
     }
 
     pub(super) async fn stops_to_confirm(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {

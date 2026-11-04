@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::helpers::unsent_fact;
 use super::recovery::{DONE, Idle};
-use super::state::{RunState, Step, Stop};
+use super::state::{OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
 use crate::retrieval::{compose, draft_answer, verdict};
@@ -30,13 +30,26 @@ impl Agent {
         output_schema: Option<&RecordSchema>,
         until: Option<&UntilCheck>,
     ) -> Step<Option<RunResult>> {
+        // A form filled and left unsent is an ending of its own when that is where the task said to stop and ask.
+        if let Some(unsent) = unsent_fact(&state.history, observation)
+            && self.stops_to_confirm(state, observation).await?
+        {
+            return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
+        }
+        let intent = self.output_intent(state, observation).await?;
+        if matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage) && self.page.over_http() {
+            return Err(self
+                .page
+                .needs_browser("The requested output needs a screenshot of the rendered page.".into())
+                .into());
+        }
         // A task to carry out is not done by reading. Over HTTP nothing can be carried out, and what scripts build on
         // the page was never there to see.
         let acted = state.history.iter().any(|entry| {
             entry.outcome == StepOutcome::Executed
                 && !matches!(entry.operation, None | Some(Operation::Read | Operation::Scroll | Operation::ScrollUp))
         });
-        if !acted && output_schema.is_none() && !self.asks_to_be_told(state, observation).await? {
+        if !acted && output_schema.is_none() && matches!(intent, OutputIntent::CarriedOut) {
             // What was read did not do it, so it answers nothing yet.
             state.notes = Notes::default();
             state.to_carry_out = true;
@@ -50,7 +63,8 @@ impl Agent {
         // Jev can say DONE on what it never read, or on a page its last action changed, and an answer comes only from
         // what it read.
         let unread = state.read_documents.get(&super::state::read_key(observation)) != Some(&false);
-        if output_schema.is_none()
+        if intent != OutputIntent::Image
+            && output_schema.is_none()
             && (state.notes.facts().is_empty() || (!observation.document_key.is_empty() && unread))
         {
             let capture = self.capture().await?;
@@ -62,19 +76,15 @@ impl Agent {
         {
             return Err(failure.stop().into());
         }
-        // A form filled and left unsent is an ending of its own when that is where the task said to stop and ask.
-        if let Some(unsent) = unsent_fact(&state.history, observation)
-            && self.stops_to_confirm(state, observation).await?
-        {
-            return Err(Stop::new(Status::NeedsConfirmation, unsent).into());
-        }
         // A drawn page's answer may be only in its pixels, so it is read before the run treats "nothing read" as a
         // step short of the answer. Without this the run recovers on a page whose answer is in the image it shows.
-        if output_schema.is_none() {
+        if intent != OutputIntent::Image && output_schema.is_none() {
             self.read_drawn_page(state, observation).await?;
         }
         // DONE on nothing read, when the task wants to be told something, is a step short of the answer.
-        if output_schema.is_none() && state.notes.facts().is_empty() && self.asks_to_be_told(state, observation).await?
+        if output_schema.is_none()
+            && state.notes.facts().is_empty()
+            && matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage)
         {
             let reason = "Nothing read so far answers the task, so it is not done.";
             self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
@@ -144,7 +154,8 @@ impl Agent {
         observation: &Observation,
         output_schema: Option<&RecordSchema>,
     ) -> Step<RunResult> {
-        if output_schema.is_none() {
+        let intent = self.output_intent(state, observation).await?;
+        if intent != OutputIntent::Image && output_schema.is_none() {
             self.read_drawn_page(state, observation).await?;
         }
         let mut evidence: Vec<Evidence> = state.notes.facts().iter().filter_map(|fact| fact.evidence.clone()).collect();
@@ -155,7 +166,9 @@ impl Agent {
             }
             None => None,
         };
-        let answered = if state.compose {
+        let answered = if intent == OutputIntent::Image {
+            None
+        } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             match self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await? {
                 Some(chosen) => Some(chosen),
@@ -201,6 +214,6 @@ impl Agent {
             self.observe_if_changed(&observed).await?;
         }
         let result = self.result(Some(state), &state.ledger.clone(), status, outcome);
-        Ok(self.ending_frame(result).await)
+        Ok(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await)
     }
 }

@@ -1,7 +1,7 @@
 // Generated from protocol/schema.json, which crates/fastbrowse-core/src/protocol.rs writes.
 // Do not edit: change the types there, then run `npm run generate:sdk`.
 
-export type ArtifactKind = 'download';
+export type ArtifactKind = 'download' | 'screenshot';
 export type Operation =
   | 'click'
   | 'hover'

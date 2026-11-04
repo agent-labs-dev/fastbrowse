@@ -157,6 +157,13 @@ step's page facts, so Jev reloads it when the status can clear, goes back or pic
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
 `Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret.
 This safety reading preserves the pending action's guards and leaves download notices for the next decision.
+
+Jev identifies whether the task requests a final image, text, both, or an action without a report. A requested
+final screenshot does not require step frames. Image-only output skips answer composition and text evidence
+requirements; a request for both keeps the text evidence checks. An HTTP-first run opens a browser when
+its requested output needs pixels. A fresh secret check can withhold the image; a completed task without
+its requested image becomes `unverified`. Python and Rust expose the PNG as `RunResult.final_frame`.
+JSON clients receive a `screenshot` artifact with an `image/png` MIME type, SHA-256 digest and a base64 data URI.
 `Config(step_choices=True)` adds `StepResult.choices`, the controls Jev was offered for the decision the step carried
 out, after any shortlist or cap, with Jev's pick marked `chosen` (for a drag, the destination too).
 
