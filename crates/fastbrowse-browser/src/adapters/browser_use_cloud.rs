@@ -8,6 +8,8 @@
 //! cloud.cost(); // metered lines, available after stop
 //! ```
 //!
+//! A browser that outlives the value that started it is `keep`'s, and `running` stops it later by its id.
+//!
 //! Python creates on `__aenter__` and stops on `__aexit__`, shielding both from cancellation. Rust cannot run async
 //! work in a dropped future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
 //! behind for `stop` to wait on, and a browser still known when this value drops is stopped by a task spawned then.
@@ -25,7 +27,7 @@ use crate::adapters::http::{self, Response};
 
 pub const API_V3: &str = "https://api.browser-use.com/api/v3";
 pub const API_V4: &str = "https://api.browser-use.com/api/v4";
-const API_ORIGIN: &str = "https://api.browser-use.com";
+pub const API_ORIGIN: &str = "https://api.browser-use.com";
 /// https://docs.browser-use.com/cloud/api-v4/browsers/create-browser-session: "up to 3 ready extensions".
 pub const MAX_EXTENSIONS: usize = 3;
 /// A browser whose stop request failed bills until its own timeout, up to four hours, so a stop the service could
@@ -85,6 +87,24 @@ impl fmt::Display for BrowserUseCloudError {
 
 impl std::error::Error for BrowserUseCloudError {}
 
+/// The API a browser was created on, which its stop goes to as well. Only V4 takes extensions, and its docs say V3
+/// and V4 ids are not interchangeable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloudApi {
+    V3,
+    V4,
+}
+
+impl CloudApi {
+    fn root(self) -> &'static str {
+        match self {
+            Self::V3 => API_V3,
+            Self::V4 => API_V4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserUseCloudOptions {
     pub proxy_country: Option<String>,
@@ -115,7 +135,8 @@ struct Api {
     root: String,
     api_key: String,
     http_timeout: Duration,
-    timeout_minutes: u32,
+    /// Unknown for a browser `running` names, which another value started.
+    timeout_minutes: Option<u32>,
     clock: Clock,
     sleep: Sleep,
 }
@@ -138,6 +159,7 @@ struct View {
 
 pub struct BrowserUseCloudBrowser {
     api: Arc<Api>,
+    version: CloudApi,
     body: String,
     state: Shared,
     creating: Option<JoinHandle<Result<View, BrowserUseCloudError>>>,
@@ -148,8 +170,7 @@ pub struct BrowserUseCloudBrowser {
 impl BrowserUseCloudBrowser {
     /// Validate the options and build the create body; nothing is sent until `start`.
     pub fn new(api_key: &str, options: BrowserUseCloudOptions) -> Result<Self, BrowserUseCloudError> {
-        let clock: Clock = Arc::new(monotonic);
-        let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
+        let (clock, sleep) = real_time();
         Self::with_seams(api_key, options, API_ORIGIN, clock, sleep)
     }
 
@@ -164,7 +185,7 @@ impl BrowserUseCloudBrowser {
     ) -> Result<Self, BrowserUseCloudError> {
         // Only the V4 create call takes extensions, so a run that asks for none stays on the V3 path it was built
         // on.
-        let root = if options.extensions.is_empty() { API_V3 } else { API_V4 };
+        let version = if options.extensions.is_empty() { CloudApi::V3 } else { CloudApi::V4 };
         let mut body: Vec<(&str, Value)> = vec![("timeout", json!(options.timeout_minutes))];
         if !options.extensions.is_empty() {
             body.push(("extensionIds", json!(extension_ids(&options.extensions)?)));
@@ -188,21 +209,73 @@ impl BrowserUseCloudBrowser {
             body.push(("browserScreenHeight", json!(height)));
         }
         let api = Api {
-            root: root.replacen(API_ORIGIN, origin, 1),
+            root: version.root().replacen(API_ORIGIN, origin, 1),
             api_key: api_key.to_owned(),
             http_timeout: options.http_timeout,
-            timeout_minutes: options.timeout_minutes,
+            timeout_minutes: Some(options.timeout_minutes),
             clock,
             sleep,
         };
         Ok(Self {
             api: Arc::new(api),
+            version,
             body: ordered_object(&body),
             state: Shared::default(),
             creating: None,
             stopping: None,
             connection: None,
         })
+    }
+
+    /// A browser already running, started by a value that `keep` let go of, so that `stop` stops it.
+    pub fn running(api_key: &str, browser_id: &str, version: CloudApi) -> Self {
+        let (clock, sleep) = real_time();
+        Self::running_with_seams(api_key, browser_id, version, API_ORIGIN, clock, sleep)
+    }
+
+    /// `running` against another origin, with the clock and sleep swapped, as `with_seams` is.
+    pub fn running_with_seams(
+        api_key: &str,
+        browser_id: &str,
+        version: CloudApi,
+        origin: &str,
+        clock: Clock,
+        sleep: Sleep,
+    ) -> Self {
+        let api = Api {
+            root: version.root().replacen(API_ORIGIN, origin, 1),
+            api_key: api_key.to_owned(),
+            http_timeout: BrowserUseCloudOptions::default().http_timeout,
+            timeout_minutes: None,
+            clock,
+            sleep,
+        };
+        let state = State { browser_id: Some(browser_id.to_owned()), cost: vec![] };
+        Self {
+            api: Arc::new(api),
+            version,
+            body: String::new(),
+            state: Arc::new(Mutex::new(state)),
+            creating: None,
+            stopping: None,
+            connection: None,
+        }
+    }
+
+    /// The API this browser was created on, which `running` needs to stop it.
+    pub fn version(&self) -> CloudApi {
+        self.version
+    }
+
+    /// Let a started browser outlive this value: neither `stop` nor dropping it stops the browser after this, so
+    /// whoever holds the connection's `browser_id` stops it, or the service does at its timeout.
+    pub fn keep(&mut self) -> Result<BrowserConnection, BrowserUseCloudError> {
+        let connection = self
+            .connection
+            .take()
+            .ok_or_else(|| BrowserUseCloudError::Error("the cloud browser is not running".into()))?;
+        lock(&self.state).browser_id = None;
+        Ok(connection)
     }
 
     pub fn connection(&self) -> Result<&BrowserConnection, BrowserUseCloudError> {
@@ -310,6 +383,12 @@ impl Drop for BrowserUseCloudBrowser {
     }
 }
 
+/// The clock and sleep `new` and `running` use, for a caller that only swaps the origin.
+pub fn real_time() -> (Clock, Sleep) {
+    let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
+    (Arc::new(monotonic), sleep)
+}
+
 fn monotonic() -> f64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f64()
@@ -353,9 +432,9 @@ async fn finish(
         Err(error) => {
             // A run that already failed, a failed start and a cancelled run all drop this error for the one they
             // carry, so a browser left running is said here or nowhere.
+            let timeout = api.timeout_minutes.map(|minutes| format!("{minutes}-minute ")).unwrap_or_default();
             crate::warn(&format!(
-                "Browser Use Cloud browser {browser_id} was not stopped ({error}); it runs until its {}-minute timeout",
-                api.timeout_minutes
+                "Browser Use Cloud browser {browser_id} was not stopped ({error}); it runs until its {timeout}timeout"
             ));
             return Err(error);
         }
@@ -788,6 +867,50 @@ mod tests {
         assert!(keyed(&requests[0]) && !keyed(&requests[1]) && keyed(&requests[2]));
         assert_eq!(requests[2].body, br#"{"action":"stop"}"#);
         assert_eq!(dollars(&cloud), [Some(0.50), Some(0.10)]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_kept_browser_outlives_its_value_and_running_stops_it_on_its_api() {
+        for extensions in [vec![], vec![EXTENSION_A.to_owned()]] {
+            let v4 = !extensions.is_empty();
+            let server = FakeServer::start(move |_, base| {
+                let cdp = if v4 { "wss://cdp.test/browser/created" } else { base };
+                reply(200, serde_json::json!({"id": "created", "cdpUrl": cdp, "webSocketDebuggerUrl": "ws://cdp.test"}))
+            })
+            .await;
+            let waits = Waits::default();
+            let options = BrowserUseCloudOptions { extensions, ..Default::default() };
+            let mut cloud = cloud(&server, options, &waits);
+            cloud.start().await.unwrap();
+            let kept = cloud.keep().unwrap();
+            assert_eq!(kept.browser_id.as_deref(), Some("created"));
+            let version = cloud.version();
+            assert_eq!(version, if v4 { CloudApi::V4 } else { CloudApi::V3 });
+            cloud.stop().await.unwrap();
+            drop(cloud);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(patches(&server.requests()), 0);
+            let mut running = BrowserUseCloudBrowser::running_with_seams(
+                "key",
+                "created",
+                version,
+                &server.base,
+                waits.clock(),
+                waits.sleep(),
+            );
+            running.stop().await.unwrap();
+            let path = format!("/api/{}/browsers/created", if v4 { "v4" } else { "v3" });
+            let stopped: Vec<_> =
+                server.requests().into_iter().filter(|r| r.method == "PATCH").map(|r| r.path).collect();
+            assert_eq!(stopped, [path]);
+        }
+    }
+
+    #[tokio::test]
+    async fn keep_needs_a_started_browser() {
+        let server = FakeServer::start(|_, base| created(base, "0")).await;
+        let mut cloud = cloud(&server, BrowserUseCloudOptions::default(), &Waits::default());
+        assert!(cloud.keep().is_err());
     }
 
     #[tokio::test]

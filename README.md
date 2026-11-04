@@ -181,6 +181,25 @@ it. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens an
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
 
+**A cloud browser that outlives a run.** `open_cloud_browser(browser_api_key=...)` starts a Browser Use Cloud
+browser no run owns and returns a `CloudBrowser` with its `id`, `cdp_url` and `live_url`. It takes `run_task`'s
+cloud options without the `cloud_` prefix (`profile=`, `extensions=`, `timeout_minutes=` and the rest). Runs given
+its `cdp_url` with `attach=True` leave it running, and `stop_cloud_browser(browser, browser_api_key=...)` stops
+it; until then it bills, up to its timeout. A start that fails or is cancelled stops the browser it created.
+
+```python
+from fastbrowse import open_cloud_browser, run_task, stop_cloud_browser
+
+
+async def main() -> None:
+    browser = await open_cloud_browser(browser_api_key=KEY, profile=PROFILE_ID, timeout_minutes=60)
+    print("watch at", browser.live_url)
+    try:
+        await run_task("Open my inbox.", cdp_url=browser.cdp_url, attach=True)
+    finally:
+        await stop_cloud_browser(browser, browser_api_key=KEY)
+```
+
 **Your own script on the page.** `connect_cdp()` hands you the attached page without the agent, and
 `resolve_cdp_port(port)` returns the `ws://` URL behind a DevTools port:
 

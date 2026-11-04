@@ -315,6 +315,28 @@ class LocalChrome(Frozen):
     every run starts from a fresh profile that is deleted afterwards."""
 
 
+class CloudBrowserError(RuntimeError):
+    """Browser Use Cloud refused to start or stop a browser."""
+
+
+class CloudBrowserUnavailable(CloudBrowserError, Unavailable):
+    """Browser Use Cloud could not be reached, or answered only with retryable statuses."""
+
+
+class CloudBrowser(Frozen):
+    """A Browser Use Cloud browser that `open_cloud_browser` started and no run owns. It bills until
+    `stop_cloud_browser` stops it or its own timeout ends it."""
+
+    id: str
+    cdp_url: str
+    """Browser-level DevTools WebSocket URL (`ws://` or `wss://`), for `run_task(cdp_url=..., attach=True)`."""
+    live_url: str | None = None
+    """The service's live view of the browser, when it gave one."""
+    api: Literal["v3", "v4"]
+    """The API version the browser was created on, which its stop goes to as well: a browser with extensions is
+    a V4 one, and the service's V3 and V4 ids are not interchangeable."""
+
+
 class Attachment(Frozen):
     name: str
     mime_type: str
