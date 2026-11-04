@@ -364,6 +364,7 @@ impl Notes {
             control_context: None,
             rendered_text: false,
             heading_path: Vec::new(),
+            capture_artifact: None,
         };
         self.add(Fact {
             answers: true,

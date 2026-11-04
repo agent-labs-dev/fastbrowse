@@ -68,6 +68,18 @@ impl Page for FakeSite {
         Vec::new()
     }
 
+    fn keep_capture<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        let kept = self.site["keeps_captures"].as_bool().unwrap_or(false).then(|| Artifact {
+            kind: fastbrowse_core::models::ArtifactKind::Capture,
+            name: name.into(),
+            mime_type: "text/plain; charset=utf-8".into(),
+            size_bytes: text.len() as i64,
+            sha256: fastbrowse_core::py::sha256_hex(text.as_bytes()),
+            uri: format!("memory://{name}"),
+        });
+        ready(Ok(kept))
+    }
+
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         // A screen that `settles` turns into another once it has been observed `after` times.
         let settles = self.screen()["settles"].clone();
@@ -720,11 +732,8 @@ async fn sign_in_judgments_get_the_navigation_source_and_still_decide_whether_it
     }
 }
 
-/// A task that reads a value, waits and reads it again finishes: Jev can pick a wait, the page moves on under it, and
-/// the second read cites what the page shows afterwards. With no wait to pick, the run read the same page twice and
-/// could never report the change.
-#[tokio::test(start_paused = true)]
-async fn a_task_that_reads_waits_and_reads_again_completes_with_both_readings() {
+/// A status page whose line a wait changes, read before and after the wait: two captures, each quoted once.
+fn status_case() -> Value {
     let mut case = cases()
         .into_iter()
         .find(|case| case["name"] == "an HTTP 404 page goes to Jev, and its DONE ends the run")
@@ -771,7 +780,14 @@ async fn a_task_that_reads_waits_and_reads_again_completes_with_both_readings() 
         },
         "actions": [{"screen": "early", "operation": "wait", "next": "later"}]
     });
-    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    case
+}
+
+/// A task that reads a value, waits and reads it again finishes: Jev can pick a wait, the page moves on under it, and
+/// the second read cites what the page shows afterwards.
+#[tokio::test(start_paused = true)]
+async fn a_task_that_reads_waits_and_reads_again_completes_with_both_readings() {
+    let (outcome, _) = play(&status_case(), Some(Arc::default())).await;
     let operations: Vec<&str> =
         outcome["steps"].as_array().unwrap().iter().map(|step| step["operation"].as_str().unwrap()).collect();
     assert!(operations.contains(&"wait"), "no wait was taken: {operations:?}");
@@ -780,4 +796,25 @@ async fn a_task_that_reads_waits_and_reads_again_completes_with_both_readings() 
     assert!(quotes.contains(&"live, updated 16:59:21"), "{outcome}");
     assert!(quotes.contains(&"live, updated 16:59:27"), "{outcome}");
     assert_eq!(outcome["status"], "complete", "{outcome}");
+}
+
+/// Each page a citation quotes is kept as a `capture` artifact, and the evidence names it, so the quote can be checked
+/// against the text it was cut from.
+#[tokio::test(start_paused = true)]
+async fn each_cited_capture_is_kept_as_an_artifact_the_evidence_names() {
+    let mut case = status_case();
+    case["site"]["keeps_captures"] = true.into();
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "complete", "{outcome}");
+    let artifacts = outcome["artifacts"].as_array().unwrap();
+    let evidence = outcome["evidence"].as_array().unwrap();
+    assert_eq!(evidence.len(), 2, "{outcome}");
+    for quoted in evidence {
+        let uri = quoted["capture_artifact"].as_str().unwrap_or_else(|| panic!("no capture kept: {quoted}"));
+        let artifact = artifacts.iter().find(|artifact| artifact["uri"] == uri).expect("the named artifact");
+        assert_eq!(artifact["kind"], "capture");
+        // The kept bytes are the page text the quote was cut from: its digest is the evidence's capture digest.
+        assert_eq!(artifact["sha256"], quoted["capture_sha256"]);
+        assert_eq!(artifact["size_bytes"], quoted["quote"].as_str().unwrap().len());
+    }
 }

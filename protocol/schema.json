@@ -43,7 +43,8 @@
     "ArtifactKind": {
       "enum": [
         "download",
-        "screenshot"
+        "screenshot",
+        "capture"
       ],
       "title": "ArtifactKind",
       "type": "string"
@@ -493,6 +494,19 @@
           },
           "title": "Heading Path",
           "type": "array"
+        },
+        "capture_artifact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.",
+          "title": "Capture Artifact"
         }
       },
       "required": [

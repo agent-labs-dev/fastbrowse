@@ -31,6 +31,7 @@ type ArtifactKind string
 const (
 	ArtifactKindDownload   ArtifactKind = "download"
 	ArtifactKindScreenshot ArtifactKind = "screenshot"
+	ArtifactKindCapture    ArtifactKind = "capture"
 )
 
 type Authorization struct {
@@ -163,6 +164,8 @@ type Evidence struct {
 	RenderedText bool `json:"rendered_text"`
 	// The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
 	HeadingPath []string `json:"heading_path"`
+	// The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
+	CaptureArtifact *string `json:"capture_artifact,omitempty"`
 }
 
 type FactReader string

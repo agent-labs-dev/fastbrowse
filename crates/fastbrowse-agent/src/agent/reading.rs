@@ -49,6 +49,9 @@ impl Agent {
                 .is_some_and(|new| state.notes.facts().iter().any(|fact| fact.answers && fact.text != new.text));
             state.compose = compose || differs;
         }
+        if added > 0 {
+            self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());
+        }
         state.record_read(&capture, facts, compose);
         // A timer changes the capture hash, so only a new source quote is progress.
         // The same page read again in a browser after a fetch differs in small print, which is not new evidence.

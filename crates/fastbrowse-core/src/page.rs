@@ -474,6 +474,12 @@ pub trait Page: Send + Sync {
 
     fn artifacts(&self) -> Vec<Artifact>;
 
+    /// Keeps a capture's masked text as a `capture` artifact where this page keeps its downloads. A page with nowhere
+    /// to keep one, such as a page fetched over HTTP, keeps none.
+    fn keep_capture<'a>(&'a self, _name: &'a str, _text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>>;
 
     /// A fresh reading for screenshot safety, without replacing action guards or consuming pending notices.

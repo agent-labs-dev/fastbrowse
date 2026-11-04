@@ -30,6 +30,8 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
             .iter()
             .any(|item| item.kind == BlockKind::Observation && item.start < end && item.end > start),
         heading_path: block.heading_path.clone(),
+        // Set when the run ends and keeps the captures it cites.
+        capture_artifact: None,
     }
 }
 

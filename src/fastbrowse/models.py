@@ -135,6 +135,8 @@ class Evidence(Frozen):
     """False for typed DOM observations whose quote is not literal rendered page text."""
     heading_path: tuple[str, ...] = ()
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
+    capture_artifact: str | None = Field(default=None, exclude_if=lambda uri: uri is None)
+    """The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept."""
 
 
 class Citation(Frozen):
@@ -175,6 +177,7 @@ class StepChoice(Frozen):
 class ArtifactKind(StrEnum):
     DOWNLOAD = "download"
     SCREENSHOT = "screenshot"
+    CAPTURE = "capture"
 
 
 class Artifact(Frozen):

@@ -39,6 +39,8 @@ public enum ArtifactKind
     Download,
     [JsonStringEnumMemberName("screenshot")]
     Screenshot,
+    [JsonStringEnumMemberName("capture")]
+    Capture,
 }
 
 public sealed record Authorization
@@ -252,6 +254,12 @@ public sealed record Evidence
     /// </summary>
     [JsonPropertyName("heading_path")]
     public required IReadOnlyList<string> HeadingPath { get; init; }
+
+    /// <summary>
+    /// The <c>uri</c> of the <c>capture</c> artifact holding the page text <c>start</c> and <c>end</c> index into, if one was kept.
+    /// </summary>
+    [JsonPropertyName("capture_artifact")]
+    public string? CaptureArtifact { get; init; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<FactReader>))]

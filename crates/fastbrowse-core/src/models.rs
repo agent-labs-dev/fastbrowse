@@ -173,6 +173,9 @@ pub struct Evidence {
     /// The headings the quote sits under on the page: which record a bare price is the price of.
     #[serde(default)]
     pub heading_path: Vec<String>,
+    /// The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_artifact: Option<String>,
 }
 
 impl Schema for Evidence {
@@ -196,6 +199,9 @@ impl Schema for Evidence {
                 Field::default("heading_path", Ty::list(Ty::Str), Value::Array(vec![])).doc(
                     "The headings the quote sits under on the page: which record a bare \"\u{a3}10.69\" is the price of.",
                 ),
+                Field::default("capture_artifact", Ty::optional(Ty::Str), Value::Null)
+                    .omitted_when_empty()
+                    .doc("The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept."),
             ],
         )
         .ty()
@@ -320,6 +326,8 @@ str_enum! {
     pub enum ArtifactKind {
         Download = "download",
         Screenshot = "screenshot",
+        /// The masked text of a page a citation quotes, as it was read.
+        Capture = "capture",
     }
 }
 

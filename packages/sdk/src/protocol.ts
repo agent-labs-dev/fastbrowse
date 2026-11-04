@@ -1,7 +1,7 @@
 // Generated from protocol/schema.json, which crates/fastbrowse-core/src/protocol.rs writes.
 // Do not edit: change the types there, then run `npm run generate:sdk`.
 
-export type ArtifactKind = 'download' | 'screenshot';
+export type ArtifactKind = 'download' | 'screenshot' | 'capture';
 export type Operation =
   | 'click'
   | 'hover'
@@ -221,6 +221,10 @@ export interface Evidence {
    * The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
    */
   heading_path: string[];
+  /**
+   * The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
+   */
+  capture_artifact?: string | null;
 }
 export interface SourceControl {
   role: string;

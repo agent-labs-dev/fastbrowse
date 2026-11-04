@@ -18,7 +18,7 @@ pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -29,8 +29,8 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
-    Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler, Evidence,
-    Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall, WallKind,
+    Artifact, Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler,
+    Evidence, Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall, WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
 use fastbrowse_core::safety::{
@@ -102,6 +102,8 @@ struct Seen {
     /// The last observation `observe` returned, which the finish judges again only if the page changed since.
     observed: Option<Observation>,
     artifact_start: usize,
+    /// The masked text of each capture a read took facts from, by digest, for the captures a result cites.
+    read_captures: HashMap<String, String>,
     /// The ended run, kept for a browser to carry on from.
     resume: Option<Resume>,
 }
@@ -299,6 +301,7 @@ impl Agent {
             result.cost = ledger.breakdown();
             return Ok(result);
         }
+        self.keep_captures(&mut result).await;
         // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a spend
         // limit instead of naming the key.
         if let Err(error) = ledger.check_spend(0.0) {
@@ -313,6 +316,33 @@ impl Agent {
         }
         result.cost = ledger.breakdown();
         Ok(if loop_returned { result } else { self.ending_frame(result, requested_frame).await })
+    }
+
+    /// Keeps each page capture the result's evidence quotes as a `capture` artifact, so a citation can be checked
+    /// against the text it was read from, and names that artifact on the evidence.
+    async fn keep_captures(&self, result: &mut RunResult) {
+        let mut kept: HashMap<String, Option<String>> = HashMap::new();
+        for index in 0..result.evidence.len() {
+            let digest = result.evidence[index].capture_sha256.clone();
+            if !kept.contains_key(&digest) {
+                let artifact = self.keep_capture(&digest).await;
+                kept.insert(digest.clone(), artifact.as_ref().map(|artifact| artifact.uri.clone()));
+                result.artifacts.extend(artifact);
+            }
+            result.evidence[index].capture_artifact = kept[&digest].clone();
+        }
+    }
+
+    /// The artifact a read capture is kept as, if the run read it and the page has somewhere to keep it.
+    async fn keep_capture(&self, digest: &str) -> Option<Artifact> {
+        let text = self.seen().read_captures.get(digest).cloned()?;
+        match self.page.keep_capture(&format!("capture-{digest}.txt"), &text).await {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                self.event("capture_not_kept", || Map::from_iter([("error".into(), error.to_string().into())]));
+                None
+            }
+        }
     }
 
     async fn tell_page_ready(&self) {

@@ -685,3 +685,17 @@ async fn test_a_document_without_snapshot_installs_it_on_the_first_call() {
     assert_eq!(eval_active(&h.session, "!!globalThis.__fastbrowseScripts").await, serde_json::json!(true));
     h.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_kept_capture_goes_to_the_sessions_artifact_sink() {
+    use fastbrowse_core::models::ArtifactKind;
+    use fastbrowse_core::page::Page;
+    let Some(h) = harness().await else { return };
+    h.goto("/index.html").await;
+    let capture = h.page.capture().await.expect("capture");
+    let kept = Page::keep_capture(&h.page, "capture-index.txt", &capture.text).await.expect("kept").expect("a sink");
+    assert_eq!((kept.kind, kept.size_bytes), (ArtifactKind::Capture, capture.text.len() as i64));
+    assert_eq!(kept.sha256, fastbrowse_core::py::sha256_hex(capture.text.as_bytes()));
+    assert!(h.sink.artifacts.lock().unwrap().contains(&kept));
+    h.close().await;
+}

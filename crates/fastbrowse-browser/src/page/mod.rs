@@ -18,7 +18,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::JEV_IMAGE_SIDE;
-use fastbrowse_core::models::{Artifact, Operation, SourceControl};
+use fastbrowse_core::models::{Artifact, ArtifactKind, Operation, SourceControl};
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult,
 };
@@ -1421,6 +1421,16 @@ fn seam<T>(result: Result<T, BrowserError>) -> PageResult<T> {
 impl Page for CdpPage {
     fn artifacts(&self) -> Vec<Artifact> {
         CdpPage::artifacts(self)
+    }
+
+    fn keep_capture<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async move {
+            let sink = &self.session.0.artifact_sink;
+            match sink.put(ArtifactKind::Capture, name, "text/plain; charset=utf-8", text.as_bytes()).await {
+                Ok(artifact) => Ok(Some(artifact)),
+                Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
+            }
+        })
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {

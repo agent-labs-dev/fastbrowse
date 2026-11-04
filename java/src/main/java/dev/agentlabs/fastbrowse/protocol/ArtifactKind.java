@@ -8,5 +8,7 @@ public enum ArtifactKind {
     @JsonProperty("download")
     DOWNLOAD,
     @JsonProperty("screenshot")
-    SCREENSHOT
+    SCREENSHOT,
+    @JsonProperty("capture")
+    CAPTURE
 }
