@@ -140,7 +140,8 @@ pub fn page_text(quote: &str, start: i64, tables: &[TableBlock]) -> String {
     for table in tables.iter().filter(|table| table.start < end && table.end > start) {
         shown.push_str(&text(at, table.start));
         let mut parts = Vec::new();
-        if !table.repeats {
+        // A quote of only the repeated header is the header the page shows above the first row, so it stays.
+        if !table.repeats || (start >= table.start && end <= table.row) {
             let (cut, resume) = table.divider.unwrap_or((table.row, table.row));
             parts.push(cells(&(text(table.start, cut) + &text(resume, table.row))));
         }
@@ -201,6 +202,26 @@ mod tests {
     //! Mirrors tests/test_citations.py.
     use super::*;
     use percent_encoding::percent_decode_str;
+
+    #[test]
+    fn a_quote_of_only_a_repeated_header_is_the_header() {
+        let first = "| Name | Score |\n| --- | --- |\n| Ada | 10 |";
+        let second = "| Name | Score |\n| --- | --- |\n| Grace | 9 |";
+        let start = first.chars().count() as i64 + 2;
+        let text = format!("{first}\n\n{second}");
+        let capture: Capture = serde_json::from_value(serde_json::json!({
+            "url": "https://example.test/scores", "title": "Scores",
+            "captured_at": "2026-01-01T00:00:00Z", "sha256": "table-capture", "text": text,
+            "blocks": [
+                {"source_id": "main/0", "kind": "table", "frame_id": null, "start": 0, "end": first.chars().count()},
+                {"source_id": "main/1", "kind": "table", "frame_id": null, "start": start, "end": text.chars().count()}
+            ]
+        }))
+        .unwrap();
+        let tables = table_blocks(&capture);
+        assert_eq!(page_text("| Name | Score |", start, &tables), "Name Score");
+        assert_eq!(page_text(second, start, &tables), "Grace 9");
+    }
 
     /// A capture of `blocks`, each `(is a table, text)`, one per line.
     fn captured(blocks: &[(bool, &str)]) -> Capture {
