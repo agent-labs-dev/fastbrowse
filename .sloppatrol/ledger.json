@@ -298,10 +298,10 @@
       "what": "'Run the gate before you push. CI runs the same checks, and `main` requires them:' introduces a list with no Go, Java or .NET checks.",
       "why": "ci.yml:167-180 also runs `cargo build -p fastbrowse-cli --features scripted`, `go -C go generate ./... && git diff --exit-code -- go`, gofmt and go vet, `go test -race` against the scripted binary, `python3 scripts/java_types.py` with a diff check, `mvn -B -f java/pom.xml verify`, `python3 scripts/dotnet_types.py` and `dotnet test`. AGENTS.md's gate list includes them. A contributor who changes the protocol or a client and runs only CONTRIBUTING's list passes locally and fails CI. Either add those lines or stop saying it is the same set.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "Fix landed in 343d2c7468 on this branch; the quoted line survives the fix, so the ledger keeps the item confirmed. CI runs Go, Java and .NET generation, validation and tests at `.github/workflows/ci.yml:167-183`, but `CONTRIBUTING.md` omits them while claiming CI runs the same checks.",
+      "status": "fixed",
+      "reason": "Fixed by 1e332f5a: CONTRIBUTING gate includes Go generation/vet/race, Java generation/Maven and .NET generation/tests, with required tool versions and the scripted CLI build documented immediately after it.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether prose matches the code needs a reader"
     },
     {
@@ -312,10 +312,10 @@
       "what": "The 'Use it from Rust', 'Use it from Go' and 'Use it from Java or Kotlin' sections appear three times each (from lines 411, 485 and 577) and 'Use it from .NET' twice (559, 651): lines 485 to 667 repeat lines 411 to 575 word for word.",
       "why": "A reader scanning for the MCP or agent sections scrolls through about 180 lines of repeated SDK sections, and the duplicated headings make the page's anchors ambiguous (#use-it-from-rust and the other headings resolve to the first copy; the GitHub renderer suffixes the rest). Delete lines 485 to 668 so each language appears once, in the order Rust, Go, Java or Kotlin, .NET. The README is also built into fastbrowse.ai (scripts/docs_sync.py docstring), so the site carries the duplication too.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "README.md repeats the Rust, Go and Java or Kotlin sections three times and the .NET section twice, with identical blocks from lines 485 to 667, obstructing navigation and creating duplicate anchors. README.md is hot.",
+      "status": "fixed",
+      "reason": "Fixed in the current README: JavaScript and Go each have one SDK section; Rust, Java and .NET share one section linking their client READMEs. The repeated Rust/Go/Java sections and duplicate anchors are absent.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether prose repeats itself needs a reader"
     },
     {
@@ -866,10 +866,10 @@
       "what": "HeadStart.plan_billed and RunState.plan_billed are always true in production, so every branch on their false value is dead: the `!self.plan_billed` push in HeadStart::abandon, the `!head.plan_billed` block in Agent::run (\"First observation can fail before the completed plan is consumed...\"), and the `else { self.ledger.record([planned.cost])? }` arm of RunState::take_plan (state.rs). Fate: fully dead in production; the else arm is test-only (tests.rs run_state() passes false). Delete both fields, the RunState::new parameter and the three branches, keeping the billed-on-arrival path.",
       "why": "The only constructor of HeadStart is HeadStart::begin, which sets `plan_billed: true` (mod.rs:138), and the plan's receipt is pushed inside the spawned planning task; Agent::body passes head.plan_billed straight to RunState::new. No other code writes either field (rg over crates/src; git grep on all five in-flight branches shows the same single `plan_billed: true`). Private fields: no public surface, no string-built names, not serialised, no macro or golden fixture names them. The only false value is the unit-test helper run_state() in agent/tests.rs, which exercises the else arm of take_plan only via test_a_step_abandoned_while_waiting_for_the_plan...; that test passes on the billed path too (ledger.check(0.0) on an unlimited ledger).",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "Not edited: Needs crates/fastbrowse-agent/src/agent/state.rs (RunState.plan_billed, RunState::new, take_plan), a hot file.. Verifier: All production HeadStart construction sets plan_billed to true, and Agent passes that value into RunState; the false branches are only exercised by a test helper, with no dynamic, serialized, manifest, or in-flight-branch path reaching false in produ",
+      "status": "fixed",
+      "reason": "Fixed by ae02737e and the d5ad4195 planner removal: no HeadStart.plan_billed or RunState.plan_billed remains, and the active run builds its ledger directly without branches on that dead flag.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: reachability through open branches and published surfaces needs judgment"
     },
     {
@@ -1149,10 +1149,10 @@
       "what": "RunState::await_checks is an exact duplicate of await_plan: both forward to the private take_plan, and its own doc says it \"returns the same plan `await_plan` does; it stays a seam\". Single implementation, kept for a split of plan and checks that no longer exists.",
       "why": "Callers: finishing.rs:42 and :266 only. No branch or test introduces a different body (git grep on in-flight branches). Collapsed form: one `await_plan` holding take_plan's body; the two finishing callers call await_plan, and take_plan and await_checks go.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "await_checks and await_plan both forward unchanged to take_plan, whose single implementation serves all callers; the documented seam introduces no distinct behavior. The definition is in hot state.rs.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: planner futures, await_plan, await_checks and their take_plan helper were removed with the planner stage. The current run state has no duplicate waiter seam.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether a seam has a second use needs judgment"
     },
     {
@@ -1190,10 +1190,10 @@
       "what": "RunState::log_recovery is a one-line forwarder to `self.recovery_log.push_back(record)` on a public field, documented only as \"Record a recovery's record.\"",
       "why": "Two callers (recovery.rs:228, :347); recovery_log is a pub field read and cleared directly elsewhere (helpers::recovery_memory, driving::renew), so the method adds no invariant. Collapsed form: `state.recovery_log.push_back(...)` at both call sites.",
       "confidence": "low",
-      "status": "confirmed",
-      "reason": "The method only pushes onto the public(crate) recovery_log, and both callers can perform that operation directly; no invariant or alternate implementation was found. The definition is in hot state.rs.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: log_recovery and its recovery-log state were removed together; the current recovery path records active recovery state and decision context directly.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether a seam has a second use needs judgment"
     },
     {
@@ -1522,10 +1522,10 @@
       "what": "Stale: names tests/test_planner.py as the source of these tests.",
       "why": "No tests/test_planner.py exists in the repository; the module doc names a deleted file. Delete it.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The module test comment names tests/test_planner.py, but that file does not exist and the actual tests are Rust unit and integration tests. Removing the stale comment is behavior-preserving.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: the planner module and obsolete tests/test_planner.py provenance were deleted with the planner stage.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -1549,10 +1549,10 @@
       "what": "planner::unique (planner.rs:362) duplicates memory::unique (memory.rs:1099), same doc comment 'tuple(dict.fromkeys(...))'; canonical home memory::unique, already used by comparison, retrieval and chunks.",
       "why": "Only difference is &str vs String input (planner could map to_string or memory::unique could take Into<String>); HashSet filter vs IndexSet collect give the same first-seen order. Accidental drift.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "planner::unique and memory::unique implement the same first-seen string deduplication rule, with no contract requiring separate implementations: the only difference is borrowed versus owned input. memory::unique is the existing canonical helper.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: the planner module and its unique copy were deleted. Live helpers and retrieval choices use memory::unique, which preserves insertion order while deduplicating.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether two copies share one contract needs judgment"
     },
     {
@@ -6889,10 +6889,10 @@
       "what": "Claims scripts/ 'runs jev-ultrafast in its own environment and imports modules that are not installed here', and that the scope is 'the package and its tests'",
       "why": "No file in scripts/ mentions ultrafast (rg scripts; last removed per git log -S, around #209); every non-stdlib import in scripts/*.py is fastbrowse, httpx or pydantic, all installed in this environment. The include list also has `benchmarks`, which is neither the package nor its tests. Checked the in-flight branches: none add ultrafast under scripts.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "audit overruled a lens-only dismissal: scripts/ has no jev-ultrafast and jev_calibrate imports fastbrowse from this environment, so the pyproject comment is stale",
+      "status": "fixed",
+      "reason": "Fixed: removed the obsolete ty scope comment claiming scripts run Jev Ultrafast in another environment. The configured include list remains src, tests and benchmarks; no checker coverage was reduced.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether prose matches the code needs a reader"
     },
     {
@@ -7062,10 +7062,10 @@
       "what": "history narration: 'once skipped this' describes a past bug, not the code",
       "why": "the constraint (every release, results file or not, needs the Evals gate on its exact commit) is already stated in the module docstring lines 3-5 and the first line of this comment; the past-behaviour clause belongs in version control. Shorter: '# Every release needs the Evals workflow green on its exact commit. A malformed build fails closed rather than querying a commit that is not a full sha.'",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The clause \"once skipped this\" records past behavior rather than explaining a current code constraint, while the invariant and fail-closed rationale are already stated in the surrounding docstring and comment. This is hot, but deleting the historical clause is behavior-preserving.",
+      "status": "fixed",
+      "reason": "Fixed by aa82ec41: the release guard job and scripts/release_guard.py were removed together. No current workflow invokes that deleted script or contains its historical once-skipped comment.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -7076,10 +7076,10 @@
       "what": "`branch` parameter that no caller sets",
       "why": "Only caller problems() passes three positional args; tests call or monkeypatch it with three; no in-flight branch passes branch. Collapsed form: use DEFAULT_BRANCH directly in the query and the filter.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "Only problems() calls _evals_green, and every caller supplies three arguments; no repository or in-flight branch uses a branch override. The private parameter is an unused configuration seam that can be collapsed to DEFAULT_BRANCH.",
+      "status": "fixed",
+      "reason": "Fixed by aa82ec41: release_guard.py and its unused branch parameter were deleted with the release guard job. The current release workflow has no invocation of that parameter.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether a seam has a second use needs judgment"
     },
     {

@@ -84,8 +84,6 @@ asyncio_mode = "auto"
 timeout = 120
 
 [tool.ty.src]
-# The package and its tests, which is the scope the checker has always had. `scripts/` runs jev-ultrafast in its own environment
-# and imports modules that are not installed here, which is the point of it.
 include = ["src", "tests", "benchmarks"]
 
 [tool.ty.environment]
