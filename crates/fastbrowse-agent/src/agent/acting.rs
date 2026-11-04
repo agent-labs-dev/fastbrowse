@@ -21,6 +21,7 @@ use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, navigation_question};
 use super::state::{Flow, OutputIntent, RunState, Step, Stop, Unsure};
+use crate::memory::Notes;
 use crate::policy::{Ahead, Decision};
 use crate::retrieval::text::{Word, words};
 use crate::verification::page_state;
@@ -902,12 +903,60 @@ impl Agent {
         Ok(self.ask_choice(state, observation, question, criteria).await? == "confirm")
     }
 
+    /// Whether what the task asks to be done in the browser has been done, judged from the steps taken and this page.
+    /// A read that answers the question can come before the actions the task puts first: a run asked to sign in and
+    /// then report its account's email read the email off another page and stopped at the sign-in code.
+    pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+        let criteria = IndexMap::from([
+            (
+                "done".to_string(),
+                JsonValue::from(
+                    "Every such step has been carried out, or the task asks only to find, read or report something.",
+                ),
+            ),
+            (
+                "undone".to_string(),
+                JsonValue::from(
+                    "A step the task asks for, other than finding, reading or reporting, has not been carried out yet.",
+                ),
+            ),
+        ]);
+        // Finding, reading and reporting are judged by the answer's own checks, from the notes this question leaves out.
+        let question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?";
+        let history = state.history.iter().map(Dump::dump_exclude_none).collect();
+        let context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
+        let asked = vec![("pick", question.to_string(), criteria)];
+        // The whole page, not only what is in view: a feed loaded to its end showed its count at the top and "End of
+        // list" below the fold, and judged from the top alone the loading looked unfinished.
+        let page = Observation {
+            viewport_text: [observation.viewport_text.as_str(), observation.offscreen_text.as_str()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ..observation.clone()
+        };
+        Ok(self.ask_choices_in(state, Some(&page), asked, Some(&context)).await?["pick"] == "done")
+    }
+
     /// Several choices in one request, each answer one its question offered.
     async fn ask_choices(
         &self,
         state: &mut RunState,
         observation: Option<&Observation>,
         asked: Vec<Asked<'_>>,
+    ) -> Step<IndexMap<String, String>> {
+        self.ask_choices_in(state, observation, asked, None).await
+    }
+
+    /// `ask_choices`, asked with `context` in place of the notes when it is given: what was read is left out of a
+    /// question about what was done.
+    async fn ask_choices_in(
+        &self,
+        state: &mut RunState,
+        observation: Option<&Observation>,
+        asked: Vec<Asked<'_>>,
+        context: Option<&Map<String, JsonValue>>,
     ) -> Step<IndexMap<String, String>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let offered: IndexMap<String, HashSet<String>> =
@@ -918,7 +967,10 @@ impl Agent {
             .collect();
         let dumped: Vec<String> = questions.values().map(Dump::dump_json).collect();
         let page = match observation {
-            Some(observation) => page_state(observation, &state.notes, &self.config.tokens, &dumped, None)?,
+            Some(observation) => {
+                let notes = if context.is_some() { &Notes::default() } else { &state.notes };
+                page_state(observation, notes, &self.config.tokens, &dumped, context)?
+            }
             // Output format is a requirement of the task, independent of what the page or notes say.
             None => JsonValue::Object(Map::new()),
         };

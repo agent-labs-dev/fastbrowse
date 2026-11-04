@@ -955,19 +955,47 @@ impl Page for FinishPage {
     }
 }
 
-/// Accepts the draft made from a read claim and counts the done-check requests.
-struct DoneCheckJev(std::sync::Arc<std::sync::atomic::AtomicUsize>, f64);
+/// Answers each yes/no question at the given probability and each choice with the given pick where it is offered, else
+/// the first option, recording every request's state.
+struct DoneCheckJev(
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    f64,
+    &'static str,
+    std::sync::Mutex<Vec<serde_json::Value>>,
+);
+
+impl DoneCheckJev {
+    fn new(requests: std::sync::Arc<std::sync::atomic::AtomicUsize>, probability: f64, pick: &'static str) -> Self {
+        Self(requests, probability, pick, Default::default())
+    }
+}
 
 impl DecisionClient for DoneCheckJev {
     fn evaluate<'a>(
         &'a self,
-        _: &'a serde_json::Value,
+        state: &'a serde_json::Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.3.lock().unwrap().push(state.clone());
         let answers = questions
-            .keys()
-            .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.1 })))
+            .iter()
+            .map(|(key, question)| {
+                let answer = match question {
+                    Question::Choice(choice) => Answer::Choice(ChoiceAnswer {
+                        kind: fastbrowse_core::decision::ChoiceTag,
+                        choice: if choice.criteria.contains_key(self.2) {
+                            self.2.to_string()
+                        } else {
+                            choice.criteria.keys().next().cloned().unwrap_or_default()
+                        },
+                        probabilities: IndexMap::new(),
+                        confidence: 1.0,
+                    }),
+                    _ => Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.1 }),
+                };
+                (key.clone(), answer)
+            })
             .collect();
         Box::pin(
             async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
@@ -991,16 +1019,46 @@ async fn test_a_done_answers_from_the_notes_once_jev_finds_them_covering_the_tas
     let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let agent = Agent::new(
         Arc::new(FinishPage(observation(&[]))),
-        Arc::new(DoneCheckJev(requests.clone(), 1.0)),
+        Arc::new(DoneCheckJev::new(requests.clone(), 1.0, "done")),
         Arc::new(ScriptedLLM),
     );
 
     let page = observation(&[]);
     let result = agent.finish(&mut state, &page, None, None).await.expect("finish").expect("a completed result");
     assert_eq!(result.status, Status::Complete);
-    // One request judges the picked note against its quote and the task; nothing is composed.
-    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // One request asks whether the steps the task asks for were done, and one judges the picked note against the
+    // task; nothing is composed.
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
+}
+
+/// Asked to sign in and then report the account's email, a run filled the form, met the sign-in code, opened the page
+/// that shows the code, read the email there and ended `complete` without entering the code. A read that answers the
+/// question does not do the steps the task put before it.
+#[tokio::test]
+async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
+    let page = capture(&[(BlockKind::Paragraph, "katherine@example.com: 423345")]);
+    let fact = Fact::read("katherine@example.com: 423345", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.task = "Sign in, enter the code the Phone page shows, then tell me your account email.".into();
+    state.notes = Notes::new([fact.answering()]);
+    state.history.push(crate::policy::HistoryEntry::new(
+        Some(Operation::Click),
+        Some("Phone"),
+        StepOutcome::Executed,
+        true,
+    ));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    state.recoveries = agent.config.stall.max_recoveries;
+
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done")))
+    );
+    let asked = jev.3.lock().unwrap();
+    assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
 }
 
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
@@ -1674,8 +1732,9 @@ async fn test_a_task_about_how_the_page_looks_reads_the_screenshot_of_a_page_sty
     assert_eq!(reads("page_text").await, 0);
 }
 
-/// Jev reading the task's output as `IntentJev` does, judging every claim supported and the whole answer's coverage of
-/// the task at the given probability.
+/// Jev reading the task's output as `IntentJev` does, judging every claim unsupported by its quotes and the whole
+/// answer's coverage of the task at the given probability: a note picked verbatim is its own quote, so only coverage
+/// can decide it.
 struct Reviewing(IntentJev, f64);
 
 impl DecisionClient for Reviewing {
@@ -1699,7 +1758,7 @@ impl DecisionClient for Reviewing {
                     }),
                     _ => Answer::Noul(NoulAnswer {
                         kind: Default::default(),
-                        probability: if key == "coverage" { self.1 } else { 1.0 },
+                        probability: if key == "coverage" { self.1 } else { 0.0 },
                     }),
                 };
                 (key.clone(), answer)

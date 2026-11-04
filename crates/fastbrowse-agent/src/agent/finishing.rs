@@ -67,6 +67,12 @@ impl Agent {
             self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
             return Ok(None);
         }
+        // Acting is not having done everything asked: a read that answers can come before the steps the task put first.
+        if acted && !self.actions_done(state, observation).await? {
+            let reason = "A step the task asks to be carried out has not been done, so it is not done.";
+            self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
+            return Ok(None);
+        }
         // Jev can say DONE on what it never read, or on a page its last action changed, and an answer comes only from
         // what it read.
         let unread = state.read_documents.get(&super::state::read_key(observation)) != Some(&false);

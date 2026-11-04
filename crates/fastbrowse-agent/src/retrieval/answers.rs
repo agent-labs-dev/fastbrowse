@@ -437,6 +437,29 @@ struct CheckedClaims {
     rejection: Option<String>,
 }
 
+/// Jev's yes or no to a question, or None when it gave no probability that decides either way.
+fn judged(answer: Option<&Answer>) -> Option<bool> {
+    match answer {
+        Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) && answer.probability != 0.5 => {
+            Some(answer.probability > 0.5)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the written answer gives every fact and value the task asks to be told.
+fn coverage_question(task: &str, columns: Option<&[String]>, claims: &[Claim]) -> Question {
+    Question::Noul(NoulQuestion::new(
+        format!(
+            "{UNTRUSTED} Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. Task: {} Answer: {}",
+            dumps(&json!(task)),
+            dumps(&json!({"columns": columns, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))
+        ),
+        Some("The written answer covers every fact and value the task asks to be told."),
+        Some("A requested fact or value is absent from the written answer."),
+    ))
+}
+
 async fn review_claims(
     jev: &dyn DecisionClient,
     task: &str,
@@ -493,11 +516,7 @@ async fn review_claims(
     let state_chars = text::len(&dumps(&state)) as i64;
     if require_coverage && questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]))
     {
-        questions.insert("coverage".into(), Question::Noul(NoulQuestion::new(
-            format!("{UNTRUSTED} Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. Task: {} Answer: {}", dumps(&json!(task)), dumps(&json!({"columns": columns, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))),
-            Some("The written answer covers every fact and value the task asks to be told."),
-            Some("A requested fact or value is absent from the written answer."),
-        )));
+        questions.insert("coverage".into(), coverage_question(task, columns, &claims));
     }
     // A known citation can still be attached to another record's value, so Jev judges the original quotes after
     // every packing round has finished, rather than the intermediate prose those rounds wrote.
@@ -521,8 +540,8 @@ async fn review_claims(
         };
     let count = claims.len();
     let missing = questions.keys().any(|key| answered.as_ref().is_none_or(|pass| !pass.answers.contains_key(key)));
-    let fully_judged = questions.keys().all(|key| answered.as_ref().is_some_and(|pass|
-        matches!(pass.answers.get(key), Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) && answer.probability != 0.5)));
+    let fully_judged =
+        questions.keys().all(|key| answered.as_ref().is_some_and(|pass| judged(pass.answers.get(key)).is_some()));
     let mut rejected_checks: Vec<_> = questions
         .keys()
         .filter(|key| {
@@ -552,9 +571,10 @@ async fn review_claims(
             _ => None,
         });
         if let Some(stated) = stated.filter(|_| supports(index))
-            && let Some(counted) = counted_records(jev, task, claim, stated, notes, &tokens, ledger).await?
-            && counted != stated
+            && let Some((least, most)) = counted_records(jev, task, claim, stated, notes, &tokens, ledger).await?
+            && !(least..=most).contains(&stated)
         {
+            let counted = if stated < least { least } else { most };
             miscounts.push(json!({"claim": index, "states": stated, "records_in_cited_quotes": counted}));
             rejected_checks.push(format!("claim{index}/count"));
         }
@@ -671,8 +691,13 @@ fn count_question(claim: &Claim, quotes: &[serde_json::Value]) -> Option<Questio
 const ONE_RECORD: &str = "1";
 const STATED_TOTAL: &str = "total";
 
-/// How many records Jev says the claim's cited quotes hold toward the count it states, a record repeated by a later
-/// quote counted once. None when a quote holds several records or states the claim's number as its own total, or Jev
+/// Jev's answer about a quote settles it only when Jev is at least this sure of it.
+const SURE_OF_A_QUOTE: f64 = 0.8;
+
+/// The fewest and most records Jev says the claim's cited quotes hold toward the count it states, a record repeated
+/// by a later quote counted once: a quote counts toward the fewest when Jev is sure it holds one, and toward the most
+/// unless Jev is sure it holds none. Asked of 14 product names, Jev was unsure of three and the exact count missed the
+/// total they made. None when a quote holds several records or states the claim's number as its own total, or Jev
 /// leaves a quote unanswered, so code cannot count and the claim's support check decides it.
 async fn counted_records(
     jev: &dyn DecisionClient,
@@ -682,7 +707,7 @@ async fn counted_records(
     notes: &Notes,
     tokens: &fastbrowse_core::config::TokenBudget,
     ledger: Option<&Ledger>,
-) -> Result<Option<u64>> {
+) -> Result<Option<(u64, u64)>> {
     let quotes = cited_quotes(claim, notes);
     let questions: IndexMap<String, Question> = (0..quotes.len())
         .map(|index| {
@@ -706,15 +731,21 @@ async fn counted_records(
             Err(error) => return Err(error),
         };
     let Some(answered) = answered else { return Ok(None) };
-    let mut counted = 0;
+    let (mut least, mut most) = (0, 0);
     for key in questions.keys() {
-        match answered.answers.get(key) {
-            Some(Answer::Choice(answer)) if answer.choice == ONE_RECORD => counted += 1,
-            Some(Answer::Choice(answer)) if answer.choice == "0" => {}
-            _ => return Ok(None),
+        let Some(Answer::Choice(answer)) = answered.answers.get(key) else { return Ok(None) };
+        if answer.choice != ONE_RECORD && answer.choice != "0" {
+            return Ok(None);
         }
+        // A provider that reports no probabilities stands behind its pick alone.
+        let sure = |option: &str| {
+            answer.probabilities.get(option).copied().unwrap_or(if answer.choice == option { 1.0 } else { 0.0 })
+                >= SURE_OF_A_QUOTE
+        };
+        least += u64::from(sure(ONE_RECORD));
+        most += u64::from(!sure("0"));
     }
-    Ok(Some(counted))
+    Ok(Some((least, most)))
 }
 
 #[derive(Serialize)]
@@ -898,7 +929,8 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 }
 
 /// The notes Jev picked as the whole answer, held to what the task asks to be told as a composed answer is: a pick made
-/// from one read cannot see that the task also wants a value from a later state. None when nothing was picked.
+/// from one read cannot see that the task also wants a value from a later state. Each note is its own quote, so only
+/// the coverage is asked. None when nothing was picked.
 pub(crate) async fn draft_reviewed(
     jev: &dyn DecisionClient,
     task: &str,
@@ -909,8 +941,23 @@ pub(crate) async fn draft_reviewed(
     if claims.is_empty() {
         return Ok(None);
     }
-    let CheckedClaims { claims, problem, rejection } =
-        review_claims(jev, task, None, claims, notes, ledger, true).await?;
+    let questions = IndexMap::from([("coverage".to_string(), coverage_question(task, None, &claims))]);
+    let state = json!({"task": task, "pages_read": pages_read(notes)});
+    let tokens = jev.profile().fit(None).tokens;
+    let answered =
+        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
+            Ok(answered) => answered,
+            Err(AgentError::Jev(_)) => None,
+            Err(error) => return Err(error),
+        };
+    let (problem, rejection) = match answered.and_then(|pass| judged(pass.answers.get("coverage"))) {
+        Some(true) => (None, None),
+        Some(false) => (
+            Some("The answer does not establish every requested fact or value.".to_string()),
+            Some(dumps(&json!({"columns": null, "draft_claims": &claims, "rejected_checks": ["coverage"]}))),
+        ),
+        None => (Some("Jev left the answer's coverage of the task unanswered.".to_string()), None),
+    };
     Ok(Some(ReviewedComposition { answer: ComposedAnswer { problem, ..assemble_answer(&claims, notes) }, rejection }))
 }
 
@@ -1321,6 +1368,8 @@ mod tests {
     struct Counting {
         stated: &'static str,
         per_quote: &'static str,
+        /// The probability Jev gives each pick of a quote's count.
+        sureness: f64,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
     }
 
@@ -1344,11 +1393,12 @@ mod tests {
                     } else {
                         "0"
                     };
+                    let sureness = if choice.criteria.contains_key("none") { 0.9 } else { self.sureness };
                     Answer::Choice(ChoiceAnswer {
                         kind: ChoiceTag,
                         choice: pick.into(),
-                        probabilities: IndexMap::from([(pick.to_string(), 0.9)]),
-                        confidence: 0.9,
+                        probabilities: IndexMap::from([(pick.to_string(), sureness)]),
+                        confidence: sureness,
                     })
                 }
                 _ => Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.61 }),
@@ -1378,7 +1428,7 @@ mod tests {
         for (stated, rejected) in [("5", true), ("6", false)] {
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(vec![Claim::new(&format!("There are {stated} quotes by J.K. Rowling."), ids.clone())]);
-            let jev = Counting { stated, per_quote: "1", asked: Mutex::new(Vec::new()) };
+            let jev = Counting { stated, per_quote: "1", sureness: 0.9, asked: Mutex::new(Vec::new()) };
             let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None).await.unwrap();
             assert_eq!(reviewed.answer.claims.is_empty(), rejected, "a count of {stated}");
             let Some(rejection) = reviewed.rejection else {
@@ -1402,10 +1452,23 @@ mod tests {
         let task = "Apply the Nonstop filter and report how many results it shows and the cheapest fare.";
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("The filtered list shows 27 results from $766.", vec!["e0".into()])]);
-        let jev = Counting { stated: "27", per_quote: STATED_TOTAL, asked: Mutex::new(Vec::new()) };
+        let jev = Counting { stated: "27", per_quote: STATED_TOTAL, sureness: 0.9, asked: Mutex::new(Vec::new()) };
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None).await.unwrap();
         assert_eq!(reviewed.rejection, None);
         assert_eq!(reviewed.answer.claims.len(), 1);
+    }
+
+    /// A shop's 14 products across three pages, totalled right: Jev, asked of each product name, was unsure of three and
+    /// leant towards none for them, and an exact count of its picks rejected the total.
+    #[tokio::test]
+    async fn a_count_jev_is_unsure_of_does_not_reject_the_total() {
+        let notes = Notes::new((0..14).map(|index| fact(index, format!("Product {index}"))));
+        let ids: Vec<String> = (0..14).map(|index| format!("e{index}")).collect();
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("The shop lists 14 products.", ids)]);
+        let jev = Counting { stated: "14", per_quote: "0", sureness: 0.6, asked: Mutex::new(Vec::new()) };
+        let reviewed = compose_reviewed(&jev, &llm, "How many products does the shop list?", &notes, None, None).await;
+        assert_eq!(reviewed.unwrap().rejection, None);
     }
 
     #[test]
