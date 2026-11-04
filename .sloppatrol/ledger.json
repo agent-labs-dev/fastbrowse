@@ -176,10 +176,10 @@
       "what": "LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY in the guard step are never read (fully dead env); the job comment at line 72 'no repository secret is added' contradicts them",
       "why": "The step always runs `scripts/release_guard.py ... --evals-ran-here`, and release_guard.py reads the Langfuse keys only in eval_evidence_problems(), which it calls only `if not evals_ran_here`; its own comment says the lookup 'would only re-read it with credentials that step is not given'. A GitHub re-run executes the same command with the same flag, so 're-running the step without --evals-ran-here' cannot happen in this workflow. Checked release_guard.py lines 160-185 and 245-256.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The guard always passes --evals-ran-here, so release_guard.py never reads these variables in this workflow; the comment's alternate invocation is unreachable. The workflow is hot.",
+      "status": "fixed",
+      "reason": "Fixed by aa82ec41: the release guard and its unused Langfuse environment were removed. Current release.yml contains no LANGFUSE variable or guard step.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: reachability through open branches and published surfaces needs judgment"
     },
     {
@@ -456,10 +456,10 @@
       "what": "Stale Python-era doc: StepOptions documented as \"`_step`'s keyword arguments\"",
       "why": "There is no `_step`; the Rust method is `step`. Describe the options themselves.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The comment is stale: `StepOptions` is passed to the Rust `step` method at line 417, and repository-wide product references contain no `_step` API. The file is hot, but correcting this stale doc is mechanical.",
+      "status": "fixed",
+      "reason": "Fixed by e662f32a: the old StepOptions and _step keyword-argument documentation were removed. Current driving.rs has neither that type nor that documentation.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -562,10 +562,10 @@
       "what": "Stale Python-era comment: explains yield_now by how Python runs the work and watch as tasks",
       "why": "Only the last clause carries the Rust constraint (a plan left unpolled went unbilled); the Python description is history of a removed implementation.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The comment describes the removed Python task scheduling implementation, while the Rust code uses `yield_now` before `tokio::select!`; only the billing and polling rationale remains relevant. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: planner task scheduling and the Python task-order explanation were removed with the planner. Current driving.rs contains neither the quoted comment nor yield_now.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -1014,10 +1014,10 @@
       "what": "Stale: the comment says reasoning 'is off for this purpose on the branch above', but there is no branch above in ask_recovery that sets reasoning",
       "why": "The code calls generate::<Recovery>(LLMPurpose::Recover, ...) directly; no preceding branch configures reasoning. Shorten to the uncapped-output constraint alone or point at where Recover's reasoning is set.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The comment claims reasoning is disabled on a branch above, but ask_recovery directly calls generate with no such branch or local reasoning configuration. Removing that clause is a mechanical stale-comment correction.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: ask_recovery and its LLM reasoning comment were removed. Current recovery asks Jev through decide, without the quoted reasoning branch.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -1107,10 +1107,10 @@
       "what": "Stale Python-era doc: cancelled() described as \"Python's `CancelledError` reaching the waiter\"",
       "why": "No Python waiter exists; the function is the error a waiter gets when the spawned task was cancelled.",
       "confidence": "low",
-      "status": "confirmed",
-      "reason": "`cancelled()` returns a Rust `AgentError::Invalid` after a Tokio task cancellation, not Python's `CancelledError`; the comment describes removed implementation details. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: the old cancelled helper and its Python shield description were removed. Current Flow conversions retain typed Rust errors without that helper.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -1121,10 +1121,10 @@
       "what": "Unneeded clippy suppression on RunState::new, which takes 7 parameters.",
       "why": "clippy::too_many_arguments fires only above its threshold of 7 and the repo sets no clippy.toml override, so the allow suppresses nothing; removing it changes no lint output. It drops to 6 parameters once plan_billed goes.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "`RunState::new` has seven parameters, the repository has no clippy configuration overriding the default, and `too_many_arguments` triggers above seven; this allow suppresses nothing. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: RunState::new now takes five arguments and carries no too_many_arguments suppression. Verified the current constructor and its surrounding attributes.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -1176,10 +1176,10 @@
       "what": "Stale Python-era doc: is_llm defined by analogy to \"Python's `except LLMError`\"",
       "why": "The behaviour is an LLM error that is not a budget stop; the Python analogy refers to removed code.",
       "confidence": "low",
-      "status": "confirmed",
-      "reason": "`is_llm` matches `Flow::Agent(AgentError::Llm(_))`; no Python caller exists, so the `except LLMError` analogy is stale. The file is hot.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: Flow::is_llm and its Python except analogy were removed. Current From<LLMError> retains the typed error directly.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -1733,10 +1733,10 @@
       "what": "shed (policy.rs:558-559) restates the fitting ladder's on-screen rung from decide (policy.rs:407-409): the same eligibility test and the same offscreen filter producing Reduction::OnscreenOnly.",
       "why": "shed's doc says it drops off-screen controls 'as the fitting ladder drops them', so the two must stay identical: if a new Reduction rung (or a protected-control exception) changes when off-screen controls may be dropped, both conditions need the edit. A shared helper returning the on-screen subset would hold the rule once.",
       "confidence": "low",
-      "status": "confirmed",
-      "reason": "Fix landed in 75b489aafd on this branch; the quoted line survives the fix, so the ledger keeps the item confirmed. Hot file. decide and shed independently repeat the same offscreen eligibility and filtering rule for Reduction::OnscreenOnly, so a rule change can drift between them.",
+      "status": "fixed",
+      "reason": "Fixed by 7bfd1cd7: decide and shed both call onscreen_rung. Its shared body owns the reduction eligibility and offscreen filtering; the quoted expression survives only in that canonical helper.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether two copies share one contract needs judgment"
     },
     {
@@ -2406,10 +2406,10 @@
       "what": "Stale and duplicated: the first line names tests/test_done_check.py, and both lines describe the same thing.",
       "why": "tests/test_done_check.py does not exist. Keep the second line only.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The comment names nonexistent tests/test_done_check.py and repeats the following line's table-driven behavior; the target is hot, but deleting the stale narration is mechanical.",
+      "status": "fixed",
+      "reason": "Fixed by d5ad4195: the quoted Python test reference and duplicate fake-Jev description were removed from verification/mod.rs with the old test fixture.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -6251,10 +6251,10 @@
       "what": "stale: \"as Python's do\" refers to Python model clients that no longer exist",
       "why": "src/fastbrowse has no clients package. The Rust clients trace transients themselves (crates/fastbrowse-clients/src/validation.rs:326). Replacement: \"Kept by the run's model clients, which trace their transient failures, for a caller collecting them.\"",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The comment says Python clients trace transient failures, but the Python clients package is absent and tracing is implemented by the Rust clients. The comment is stale.",
+      "status": "fixed",
+      "reason": "Removed the obsolete Python-client comparison. The trace comment now explains why transient client failures must remain inspectable after a successful retry.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -6592,10 +6592,10 @@
       "what": "Connection.Delivered is fully dead: nothing reads it; keep the delivery loop as `_ = Task.Run(DeliverAsync);` and delete the property and its doc comment",
       "why": "Connection is internal; only InternalsVisibleTo Fastbrowse.Tests could reach it and rg over dotnet/ finds no read outside the assignment in the constructor; FastbrowseClient awaits _exited, never Delivered; no in-flight branch references it; no reflection in the package.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "Not edited: Code change that cannot be verified: dotnet is not installed here.. Verifier: Repository and in-flight branch searches find no read or dynamic access to Delivered; Connection is internal, and its friend tests only instantiate it. The delivery loop remains live through Task.Run, so only the property and comment are fully dead.",
+      "status": "fixed",
+      "reason": "Removed the unread Delivered property from the internal Connection class while retaining Task.Run(DeliverAsync). Repository-wide caller search found no reader of the property.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: reachability through open branches and published surfaces needs judgment"
     },
     {
@@ -6619,10 +6619,10 @@
       "what": "unused using directive: fully dead",
       "why": "the file uses no LINQ extension (`calls.ToArray()` is List<T>.ToArray, Assert.All is xUnit); a using has no dynamic or cross-boundary reach",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "Not edited: Code change that cannot be verified: dotnet is not installed here.. Verifier: `ConnectionTests.cs` uses `List<Task<JsonElement>>.ToArray()` and xUnit's `Assert.All`; no LINQ API is referenced, and the repository has no dynamic or external reachability for this using directive.",
+      "status": "fixed",
+      "reason": "Removed the unused System.Linq import. ConnectionTests calls List<Task>.ToArray, which is an instance method, and contains no LINQ calls.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: reachability through open branches and published surfaces needs judgment"
     },
     {
@@ -6633,10 +6633,10 @@
       "what": "unused using directive: fully dead",
       "why": "no Concurrent* type appears in the file (rg 'Concurrent[A-Z]' over dotnet/tests finds none); a using has no dynamic or cross-boundary reach; IDE0005 is not enforced so the build does not catch it",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "Not edited: Code change that cannot be verified: dotnet is not installed here.. Verifier: `System.Collections.Concurrent` is unused throughout the complete test file, and no indirect C# import mechanism applies. The repository uses it only in production files, not this test.",
+      "status": "fixed",
+      "reason": "Removed the unused System.Collections.Concurrent import. FastbrowseClientTests contains no concurrent collection reference; its used LINQ import remains.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: reachability through open branches and published surfaces needs judgment"
     },
     {
@@ -7370,10 +7370,10 @@
       "what": "bot_check_above says it is Jev's agreement 'on a page it also judged a wall' that the wall is a bot check and not a sign-in",
       "why": "crates/fastbrowse-agent/src/agent/driving.rs:130-131 compares decision.bot_check alone to the threshold (`bot_check || login_required > ...`), and the bot_check question is asked on every fresh page (policy.rs:892, context check_bot = fresh), not only on a page judged a wall. The Rust field doc (crates/fastbrowse-core/src/config.rs:16) states the current rule: 'Jev's agreement that the page is a bot check, above which the run waits for it to clear or stops on it.' Source inspection.",
       "confidence": "high",
-      "status": "unproven",
-      "reason": "the verifier dismissed on the lens alone (docstrings are not stale-docs) and never checked the claim; settle by reading how driving.rs uses bot_check_above",
+      "status": "fixed",
+      "reason": "Corrected bot_check_above documentation against driving.rs: bot_check is independently compared to this threshold and can enter the wall path without login_required exceeding its threshold.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30"
+      "updated": "2026-11-04"
     },
     {
       "id": "ef292bfabd",
@@ -8360,10 +8360,10 @@
       "what": "module-level `run` dict (lines 17-25) is fully dead; delete it",
       "why": "not a fixture or decorated; nothing reads the module name: test_fixture_claims_are_checked_against_the_actual_artifact inlines an identical dict in its github_run lambda (lines 290-298), and the two other tests that use `run` bind their own local (lines 328, 523). rg over the repo and git grep on the five in-flight branches find no import of test_benchmarks.run; no string-built lookup. Better fix: the inline dict at 290 could use it, or both go.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The module-level run dict has no decorator, import, dynamic lookup, manifest reference, or branch reference, and all other run bindings are local. It is fully dead and can be deleted mechanically.",
+      "status": "fixed",
+      "reason": "Removed the unused module-level run dictionary. The live test references are independent function-local dictionaries or string keys; all105 publication tests pass.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: reachability through open branches and published surfaces needs judgment"
     },
     {

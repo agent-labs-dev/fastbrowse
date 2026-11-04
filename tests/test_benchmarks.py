@@ -15,17 +15,6 @@ from fastbrowse.evals.status import TIMING_BASIS
 CATALOG = Path(__file__).parents[1] / "src/fastbrowse/evals/benchmark-catalog.json"
 
 
-run = {
-    "head_sha": "a" * 40,
-    "conclusion": "success",
-    "status": "completed",
-    "path": ".github/workflows/evals.yml",
-    "repository": {"full_name": "agent-labs-dev/fastbrowse"},
-    "head_branch": "main",
-    "event": "workflow_dispatch",
-}
-
-
 @pytest.fixture
 def candidate() -> dict:
     raw = CATALOG.read_bytes()

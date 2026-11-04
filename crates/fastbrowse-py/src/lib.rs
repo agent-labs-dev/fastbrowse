@@ -285,7 +285,7 @@ fn run_task(
         let call: HostCall<Request, Sent> = host_call(event_loop.clone(), function, request_argument, sent);
         run.http = Some(Http::new(Arc::new(HostTransport { call })));
     }
-    // Kept by the run's model clients, which trace their transient failures as Python's do, for a caller collecting them.
+    // Transient client failures must remain inspectable when a later retry succeeds.
     let trace = if trace { Trace::collecting() } else { Trace::disabled() };
     if trace.enabled() {
         run.http = Some(run.http.take().unwrap_or_else(Http::hyper).with_trace(trace.clone()));

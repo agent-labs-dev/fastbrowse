@@ -1,4 +1,4 @@
-//! What one run keeps between steps: `_RunState` and the small records it holds, and the stops a step can raise.
+//! What one run keeps between steps, and the stops a step can raise.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

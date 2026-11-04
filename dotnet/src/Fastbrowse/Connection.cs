@@ -39,11 +39,8 @@ internal sealed class Connection
         _output = output;
         _notify = notify;
         _serve = serve;
-        Delivered = Task.Run(DeliverAsync);
+        _ = Task.Run(DeliverAsync);
     }
-
-    /// <summary>Completes once everything before the end of the connection is delivered.</summary>
-    public Task Delivered { get; }
 
     private async Task DeliverAsync()
     {
