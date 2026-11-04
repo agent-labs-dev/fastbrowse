@@ -144,6 +144,7 @@ impl Agent {
         state.ledger.record([reading.cost.clone()])?;
         if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
             state.notes.add_image_read(&self.mask(&text), &observation.url, observation.captured_at, &png);
+            state.compose = true;
         } else {
             state.unanswered_images.insert(image);
         }

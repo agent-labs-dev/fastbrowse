@@ -44,6 +44,7 @@ focusing the field does not enter a query.
 Screenshot facts use the `llm_image` reader label; Jev-selected facts use `jev_choice`.
 The LLM screenshot reader records `image_read` calls separately from answer composition. Jev image limits apply
 to Jev questions; the LLM reader uses its own client, which must refuse unsupported image input explicitly.
+Screenshot readings pass the same support and requested-coverage checks as composed text before completion.
 A successful screenshot reading that finds no answer is reused for identical pixels within one run.
 A changed screenshot is read again; failed model calls are not cached.
 Model screenshots check fresh page text for resolved secrets before capture. Image readings mask resolved

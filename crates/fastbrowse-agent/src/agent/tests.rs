@@ -1,7 +1,7 @@
 //! The loop's pure helpers and small state transitions. Whole runs, and the async methods that need a scripted page and models, are replayed in
 //! tests/agent.rs instead.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
@@ -1397,6 +1397,70 @@ impl LLMClient for ImageLLM {
     }
 }
 
+struct CoverageComposer(Arc<Mutex<Option<String>>>);
+
+impl LLMClient for CoverageComposer {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let evidence_id = self.0.lock().unwrap().clone();
+        Box::pin(async move {
+            if let Some(ledger) = ledger {
+                ledger.reserve(CostComponent::Llm, 0.0, 1)?;
+            }
+            let reply = match purpose {
+                LLMPurpose::ImageRead => json!({"text": "premium 3.459 per gallon"}),
+                LLMPurpose::Compose => json!({
+                    "claims": [{"text": "Premium is 3.459 per gallon", "evidence_ids": [evidence_id.unwrap_or_default()]}]
+                }),
+                _ => json!(null),
+            };
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+struct CoverageOnlyJev;
+
+impl DecisionClient for CoverageOnlyJev {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let answer = match question {
+                    Question::Choice(_) => Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "work".into(),
+                        probabilities: IndexMap::new(),
+                        confidence: 1.0,
+                    }),
+                    _ => Answer::Noul(NoulAnswer {
+                        kind: Default::default(),
+                        probability: if key == "coverage" { 0.0 } else { 1.0 },
+                    }),
+                };
+                (key.clone(), answer)
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
 /// A screenshot read with no answer, counted independently from captures and recovery decisions.
 #[derive(Default)]
 struct EmptyImageLLM(std::sync::atomic::AtomicUsize, bool);
@@ -1421,6 +1485,25 @@ impl LLMClient for EmptyImageLLM {
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
+}
+
+#[tokio::test]
+async fn test_a_screenshot_read_checks_coverage_before_complete() {
+    let evidence_id = Arc::new(Mutex::new(None));
+    let agent = Agent::new(
+        Arc::new(Screenshots::default()),
+        Arc::new(CoverageOnlyJev),
+        Arc::new(CoverageComposer(evidence_id.clone())),
+    );
+    let mut state = run_state();
+    state.task = "Report the regular and premium prices".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    let page = Observation { visual_content: true, ..observation(&[]) };
+    agent.read_drawn_page(&mut state, &page).await.expect("read screenshot");
+    *evidence_id.lock().unwrap() = Some(crate::memory::fact_id(state.notes.facts()[0]));
+    let result = agent.conclude(&mut state, &page, None).await.expect("conclusion");
+    assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.error.as_deref(), Some("The answer does not establish every requested fact or value."));
 }
 
 #[tokio::test]
