@@ -1464,6 +1464,30 @@ async fn test_native_form_constraints_mark_invalid_controls() {
     h.close().await;
 }
 
+/// A field named `method` makes `form.method` return that field, and a React fiber on it points back at it, so
+/// serialising the form's submission as if every property were text threw and ended the run as a browser error.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_form_property_that_is_an_element_does_not_end_observe() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<form id=f><input type=hidden name=method><label>Search<input type=search></label>\
+         <button>Go</button></form>'; const field = document.querySelector('[name=method]'); field.fiber = {field}; 0",
+    )
+    .await;
+    assert_eq!(
+        eval_active(&h, "document.getElementById('f').method === document.querySelector('[name=method]')").await,
+        json!(true)
+    );
+    let observation = h.observe().await;
+    let go = find(&observation, "Go");
+    let semantics: Value = serde_json::from_str(go.submit_semantics.as_deref().unwrap()).unwrap();
+    assert_eq!(semantics["method"], "");
+    h.close().await;
+}
+
 /// A post's heading ("Data Entry Form") named a date picker's Submit, and the verifier read the wrong form.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_control_is_named_by_the_title_nearest_before_it_not_the_posts_first_heading() {
