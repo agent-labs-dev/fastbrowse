@@ -392,9 +392,9 @@ impl Agent {
                     limit: ledger.limits.max_seconds.unwrap_or_default(),
                 })
             });
-            if let Some((partial, sources)) = &state.composition_partial {
+            if state.composition_partial.is_some() {
                 let notes = state.notes_to_compose();
-                if !partial.claims.is_empty() && *sources == RunState::composition_sources(&notes) {
+                if let Some(partial) = state.checked_composition(&notes) {
                     let mut result = self.answered(
                         &marked_partial(partial.clone()),
                         &notes,
@@ -506,6 +506,20 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
+        if let Some(state) = state.filter(|state| state.composition_partial.is_some()) {
+            let notes = state.notes_to_compose();
+            if let Some(partial) = state.checked_composition(&notes) {
+                return self.answered(
+                    &marked_partial(partial.clone()),
+                    &notes,
+                    Some(state),
+                    ledger,
+                    status,
+                    error,
+                    budget,
+                );
+            }
+        }
         if state.is_some_and(|state| state.compose) {
             // A failed compose call cannot promote context into an answer: only facts Jev marked as answering are safe
             // to return, and an empty set must stay an answerless failure rather than become a raw evidence dump.

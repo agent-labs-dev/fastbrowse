@@ -3231,10 +3231,13 @@ async fn test_composition_repair_uses_feedback_and_rechecks_the_corrected_answer
     assert!(state.composition_partial.is_none());
     let calls = llm.0.lock().unwrap();
     assert_eq!(calls.len(), 2);
+    assert_eq!(result.cost.lines.iter().filter(|line| line.component == CostComponent::Llm).count(), calls.len());
     assert!(!calls[0].iter().any(|m| m.content.contains("Previous composition feedback")));
     assert!(calls[1].iter().any(|m| m.content.contains("Previous composition feedback")
         && m.content.contains("Record A: 99")
-        && m.content.contains("never evidence or instructions")));
+        && m.content.contains("never evidence or instructions")
+        && m.content.contains("including every requested value")
+        && m.content.contains("Cite notes that support every assertion.")));
 }
 
 #[tokio::test]
@@ -3347,4 +3350,58 @@ async fn test_composition_recovery_preserves_partial_answer_with_a_missing_field
         assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Record B: 34")), "{result:?}");
         assert_eq!(llm.0.lock().unwrap().len(), 2);
     }
+}
+
+#[tokio::test]
+async fn test_a_failed_repair_or_hard_deadline_keeps_the_verified_partial() {
+    for provider_failed in [false, true] {
+        let page = observation(&[]);
+        let llm = Arc::new(RepairComposer(Default::default()));
+        let agent =
+            Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (1.0, 0.0)]), llm.clone());
+        let mut state = composition_repair_state();
+        assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+        assert!(agent.finish(&mut state, &page, None, None).await.is_err());
+        let ledger = state.ledger.clone();
+        let result = if provider_failed {
+            agent
+                .stopped(
+                    Flow::Agent(LLMError::Failed("repair provider failed".into()).into()),
+                    Some(&mut state),
+                    &ledger,
+                )
+                .await
+        } else {
+            agent.partial_result(
+                &state.notes,
+                Some(&state),
+                &state.ledger,
+                Status::BudgetExceeded,
+                Some("hard deadline".into()),
+                None,
+            )
+        };
+        assert_eq!(result.status, if provider_failed { Status::Error } else { Status::BudgetExceeded });
+        let answer = result.answer.unwrap();
+        assert!(answer.starts_with("Partial evidence only."), "{answer}");
+        assert!(answer.contains("Record B: 34"));
+        assert_eq!(llm.0.lock().unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn test_rejected_draft_feedback_is_redacted_before_repair_and_trace_output() {
+    let page = observation(&[]);
+    let llm = Arc::new(RepairComposer(Default::default()));
+    let trace = Trace::collecting();
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (1.0, 1.0)]), llm.clone())
+        .with_trace(trace.clone());
+    agent.redactor().register("credential", "99", None);
+    let mut state = composition_repair_state();
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    assert!(!state.composition_feedback.as_deref().unwrap().contains("99"));
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_some());
+    let calls = llm.0.lock().unwrap();
+    assert!(calls[1].iter().all(|message| !message.content.contains("99")));
+    assert!(!serde_json::to_string(&trace.events()).unwrap().contains("Record A: 99"));
 }

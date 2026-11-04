@@ -87,7 +87,7 @@ relevance pass narrows them first. If no value choice fits, a page that fits Jev
 facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
-answer is written once, when the run ends.
+answer is composed when the run tries to finish, with recovery for a rejected draft.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.
@@ -168,7 +168,7 @@ Reloading remains restricted to an untouched opening page, since retrying a late
 changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no
 progress, and `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
 evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
-action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends `stuck`,
+action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends `stuck`, `unverified` for a rejected composition,
 or as the site failure standing on the page. An HTTP error page goes to Jev like any other, with its status among the
 step's page facts, so Jev reloads it when the status can clear, goes back or picks another link; code only waits out a
 403, 429 or 503 once per document.

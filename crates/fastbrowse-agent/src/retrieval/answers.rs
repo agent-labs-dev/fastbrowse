@@ -986,6 +986,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn corrected_composition_coverage_question_pins_the_original_request() {
+        let notes = Notes::new([fact(0, "Record B: 34".into())]);
+        let id = notes.facts_by_id().keys().next().unwrap().clone();
+        let jev = Support::new(true);
+        review_claims(&jev, "Report B and C", None, vec![Claim::new("Record B: 34", vec![id])], &notes, None, true)
+            .await
+            .unwrap();
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is yes-or-no") };
+        assert!(coverage.instructions.contains("Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations?"));
+        assert!(coverage.instructions.contains("Judge the written answer, not whether unseen notes could answer it."));
+        assert!(coverage.instructions.contains("Browser actions are checked separately."));
+        assert!(coverage.instructions.contains("Report B and C"));
+    }
+
+    #[tokio::test]
     async fn mixed_rejected_and_unanswered_support_does_not_authorize_repair() {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let id = notes.facts_by_id().keys().next().unwrap().clone();

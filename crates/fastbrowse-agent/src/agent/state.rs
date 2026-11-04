@@ -315,6 +315,11 @@ impl RunState {
         notes.facts().iter().map(|fact| ((*fact).clone(), notes.superseded(&fact_id(fact)))).collect()
     }
 
+    pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
+        let (partial, sources) = self.composition_partial.as_ref()?;
+        (!partial.claims.is_empty() && *sources == Self::composition_sources(notes)).then_some(partial)
+    }
+
     /// The notes with the pages read for one fact whole.
     pub fn notes_to_compose(&self) -> Notes {
         let mut notes = self.notes.clone();

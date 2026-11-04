@@ -217,15 +217,13 @@ impl Agent {
             && output_schema.is_none()
             && let Some(rejection) = rejection
         {
-            let reason = format!(
-                "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs. Rejected draft data: {rejection}"
-            );
-            state.composition_feedback = Some(self.redact(&reason));
+            let reason = "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.";
+            state.composition_feedback = Some(self.redact(&rejection));
             if let Some(answer) = &answered {
                 state.composition_partial =
                     Some((answer.clone(), RunState::composition_sources(&state.notes_to_compose())));
             }
-            self.recover(state, observation, &reason, Status::Unverified, None).await?;
+            self.recover(state, observation, reason, Status::Unverified, None).await?;
             return Ok(None);
         }
         if answered.as_ref().is_some_and(|answer| answer.problem.is_none()) {
