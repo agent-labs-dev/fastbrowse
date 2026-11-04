@@ -413,6 +413,10 @@ pub(crate) async fn compose_reviewed(
     };
     let reviewed = review_claims(jev, task, columns.as_deref(), claims, notes, ledger, reports).await?;
     let CheckedClaims { claims, problem, rejection } = reviewed;
+    if !reports {
+        // Nothing was asked to be told, so the write-up is shown only where it holds and is never a shortfall.
+        return Ok(ReviewedComposition { answer: tabled(columns, assemble_answer(&claims, notes)), rejection: None });
+    }
     // Each claim was still judged against its quotes, but a count or comparison across requests is not established.
     let problem = problem.or_else(|| (!reduced).then(|| UNREDUCED.to_string()));
     Ok(ReviewedComposition {
@@ -472,11 +476,10 @@ async fn review_claims(
     ledger: Option<&Ledger>,
     require_coverage: bool,
 ) -> Result<CheckedClaims> {
-    // A task only carried out asks to be told nothing, so writing nothing about it is no shortfall.
     if claims.is_empty() {
         return Ok(CheckedClaims {
             claims,
-            problem: require_coverage.then(|| "The composer returned no supported claims.".into()),
+            problem: Some("The composer returned no supported claims.".into()),
             rejection: None,
         });
     }
@@ -1510,17 +1513,24 @@ mod tests {
         assert_eq!(jev.asked.lock().unwrap().len(), 1);
     }
 
-    /// A password changed, the composer wrote nothing about it, and the run ended `unverified`: a task that asks to
-    /// be told nothing has nothing to cover, while one that asks for facts still needs claims.
+    /// Runs that changed a password or sent a message ended `unverified`: the composer wrote nothing about the task,
+    /// or added a statement it was never asked for that its quotes did not hold. A task that asks to be told nothing
+    /// shows only what holds, and its write-up is no shortfall; one that asks for facts still needs them.
     #[tokio::test]
-    async fn no_claims_are_a_problem_only_when_the_task_asks_to_be_told_something() {
+    async fn a_write_up_nobody_asked_for_never_fails_the_run() {
         let notes = Notes::new([fact(0, "Your password was changed.".into())]);
-        let jev = Support::new(true);
-        let carried_out = review_claims(&jev, "Change my password", None, vec![], &notes, None, false).await.unwrap();
-        assert_eq!(carried_out.problem, None);
-        let reported = review_claims(&jev, "Report the price", None, vec![], &notes, None, true).await.unwrap();
-        assert!(reported.problem.is_some());
-        assert!(jev.asked.lock().unwrap().is_empty());
+        for written in [vec![], vec![Claim::new("The old password was hunter2", vec!["e0".into()])]] {
+            let jev = Support::new(false);
+            let mut llm = RecordingLlm::new(None);
+            llm.claims = Some(written);
+            let reviewed = compose_reviewed(&jev, &llm, "Change my password", &notes, None, None, false).await.unwrap();
+            assert_eq!((reviewed.answer.problem, reviewed.rejection), (None, None));
+            assert!(reviewed.answer.claims.is_empty());
+        }
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![]);
+        let reported = compose_reviewed(&Support::new(true), &llm, "Report the price", &notes, None, None, true).await;
+        assert!(reported.unwrap().answer.problem.is_some());
     }
 
     #[tokio::test]
