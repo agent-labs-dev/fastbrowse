@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The agent cursor moves at a human pace. A sweep across the page used to take the same half second as a hop between two neighbouring controls, so it crossed at three to five times the speed and was gone before it could be followed: on a 1290x910 saucedemo replay the arrow peaked at 1,350-2,400px/s. A move is now paced to a travel speed, so it takes as long as its distance needs, between the 550ms floor tuned to land it on every click and a 2.2s ceiling. The run also asks the driver for `timing: fixed`, the only timing that reads the glide length it sends: under the driver's default timing the number was ignored and every move kept the style's own curve. A sweep now peaks near 750px/s.
+
 - Split answer composition stops when rewritten claims do not shrink, without treating removed source metadata as progress.
 
 - AUR package synchronization can reuse its existing release PR branch without losing the rendered package files.
