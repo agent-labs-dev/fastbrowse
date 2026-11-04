@@ -46,7 +46,8 @@ pub fn text_fragment(url: &str, text: &str) -> Result<String, EmptyQuote> {
 /// A capture writes each table row as a block of its own that repeats what identifies the row: the header rows and
 /// their `| --- |` divider, or a headerless table's first row. `row` is where the block's own row starts, so
 /// `start..row` is that repeated prefix, and `divider` is the divider's span when the block has one. A table with
-/// no data rows is one block of header rows and divider, with `row` at its end. `repeats` is set when the prefix
+/// no data rows is one block of header rows and divider, with `row` at its end, and so is a fetched table's header,
+/// as a fetched page writes every row as a block of its own. `repeats` is set when the prefix
 /// repeats the block before, so on the page it sits above an earlier row, not above this one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableBlock {
@@ -57,8 +58,7 @@ pub struct TableBlock {
     pub repeats: bool,
 }
 
-/// The table blocks of `capture`, in order. A block that is only a divider, as a fetched page writes the one under a
-/// lone header row opening the table, is all divider. A downloaded CSV is not one, so its quote stays as cut.
+/// The table blocks of `capture`, in order. A downloaded CSV is not one, so its quote stays as cut.
 pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
     let chars: Vec<char> = capture.text.chars().collect();
     let text = |start: i64, end: i64| -> String {
@@ -67,14 +67,11 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
     };
     let mut tables: Vec<TableBlock> = Vec::new();
     let mut previous: Option<usize> = None;
-    // How many blocks of the same table come before this one.
-    let mut run = 0;
     for (index, block) in capture.blocks.iter().enumerate() {
         // A downloaded CSV is the file's own text, not a capture's markdown, so its pipes are the file's.
         if block.kind != BlockKind::Table || block.source_id.starts_with("download/") {
             continue;
         }
-        run = if previous == Some(index.wrapping_sub(1)) { run + 1 } else { 0 };
         // A cell's own pipes are escaped, so a line opening with a pipe is always the start of a row.
         let rows: Vec<i64> = (block.start..block.end)
             .filter(|&at| {
@@ -92,20 +89,13 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
                         || (table.row == table.start && text(table.start, table.end) == prefix)
                 })
         };
-        let ends_in_divider = divider_line(&text(last, block.end));
         let (row, divider) = if rows.len() > 2 && divider_line(&text(rows[rows.len() - 2], last)) {
             // The divider sits between the header rows and the row, so a prefix of one row is a headerless
             // table's first row, whatever its cells hold.
             (last, Some((rows[rows.len() - 2], last)))
-        } else if rows.len() > 1 && ends_in_divider && !repeats(&text(block.start, last)) {
-            // A table with no data rows: its header rows and the divider under them.
+        } else if rows.len() > 1 && divider_line(&text(last, block.end)) && !repeats(&text(block.start, last)) {
+            // A table with no data rows, or a fetched table's header: its header rows and the divider under them.
             (block.end, Some((last, block.end)))
-        } else if rows.len() == 1
-            && run == 1
-            && before.is_some_and(|table| table.row == table.start && table.divider.is_none())
-            && ends_in_divider
-        {
-            (last, Some((block.start, block.end)))
         } else {
             (last, None)
         };
@@ -148,19 +138,13 @@ pub fn page_text(quote: &str, start: i64, tables: &[TableBlock]) -> String {
     let mut shown = String::new();
     let mut at = start;
     for table in tables.iter().filter(|table| table.start < end && table.end > start) {
-        let whole_divider = table.divider == Some((table.start, table.end));
-        // A divider written as a block of its own leaves no blank line where it was.
-        if !whole_divider {
-            shown.push_str(&text(at, table.start));
-        }
+        shown.push_str(&text(at, table.start));
         let mut parts = Vec::new();
         if !table.repeats {
             let (cut, resume) = table.divider.unwrap_or((table.row, table.row));
             parts.push(cells(&(text(table.start, cut) + &text(resume, table.row))));
         }
-        if !whole_divider {
-            parts.push(cells(&text(table.row, table.end)));
-        }
+        parts.push(cells(&text(table.row, table.end)));
         shown.push_str(&parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n"));
         at = table.end.max(at);
     }
@@ -288,9 +272,27 @@ mod tests {
         ]);
         assert_eq!(shown(&capture, 0, 0), "Name Score\n--- ---");
         assert_eq!(shown(&capture, 1, 1), "--- ---\nAda 10");
-        // A fetched page writes the divider under a lone header row as a block of its own.
-        let fetched = captured(&[(true, "| Name |"), (true, "| --- |"), (true, "| --- |")]);
-        assert_eq!(shown(&fetched, 0, 2), "Name\n---");
+    }
+
+    #[test]
+    fn a_fetched_table_is_a_header_block_then_one_block_per_row() {
+        let fetched = captured(&[(true, "| Name |\n| --- |"), (true, "| Ada |"), (true, "| --- |")]);
+        assert_eq!(shown(&fetched, 0, 2), "Name\nAda\n---");
+        assert_eq!(shown(&fetched, 2, 2), "---", "a block of dashes is a row");
+        let headerless = captured(&[(true, "| Ada |"), (true, "| --- |")]);
+        assert_eq!(shown(&headerless, 1, 1), "---");
+        let adjacent =
+            captured(&[(true, "| Name |\n| --- |"), (true, "| Ada |"), (true, "| Score |\n| --- |"), (true, "| 10 |")]);
+        assert_eq!(shown(&adjacent, 0, 3), "Name\nAda\nScore\n10");
+        assert_eq!(shown(&adjacent, 2, 2), "Score");
+    }
+
+    #[test]
+    fn a_downloaded_csv_keeps_its_own_pipes() {
+        let text = "name,expression\nfilter,a | b";
+        let mut capture = captured(&[(true, text)]);
+        capture.blocks[0].source_id = "download/0".into();
+        assert_eq!(page_text(text, 0, &table_blocks(&capture)), text);
     }
 
     #[test]
