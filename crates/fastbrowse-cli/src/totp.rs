@@ -63,7 +63,9 @@ fn base32(text: &str) -> Option<Vec<u8>> {
     let mut count = 0;
     let mut out = Vec::new();
     let trimmed = text.trim_end_matches('=');
-    if !text.len().is_multiple_of(8) || trimmed.contains('=') {
+    // A partial base32 quantum has only five valid padding counts; other lengths silently lose bits.
+    let padding = text.len() - trimmed.len();
+    if !text.len().is_multiple_of(8) || trimmed.contains('=') || !matches!(padding, 0 | 1 | 3 | 4 | 6) {
         return None;
     }
     for c in trimmed.chars() {
@@ -209,6 +211,19 @@ mod tests {
             totp_at("otpauth://totp/x?secret=GE&period=0", 0.0).unwrap_err().0,
             "authenticator period must be a whole number of seconds up to a day"
         );
+    }
+
+    #[test]
+    fn malformed_base32_lengths_and_padding_are_refused() {
+        for length in 1..=24 {
+            let key = "A".repeat(length);
+            let valid = matches!(length % 8, 0 | 2 | 4 | 5 | 7);
+            assert_eq!(totp_at(&key, 59.0).is_ok(), valid, "length {length}");
+        }
+        for key in ["AAAAAAA=", "AAAAA===", "AAAA====", "AA======"] {
+            assert!(totp_at(key, 59.0).is_ok(), "{key}");
+        }
+        assert!(totp_at("AAAAAAAA========", 59.0).is_err());
     }
 
     #[test]

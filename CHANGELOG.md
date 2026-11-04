@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Authenticator keys with malformed Base32 lengths or padding fail validation instead of producing an incorrect code.
+
 - Fresh synthesis reads retire vanished values from earlier reads of the same address, while preserving quotes still shown and evidence from other pages.
 
 - Pages with too many quoted values for one Jev choice can still be read for synthesis when the page fits Jev's input limit.
