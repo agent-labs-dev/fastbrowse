@@ -57,7 +57,10 @@ impl Agent {
         if !compose && added > 0 {
             state.read_whole.push(capture.clone());
         }
-        state.notes.supersede(&capture.url, &capture.sha256, &capture.text);
+        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
+        if added > 0 {
+            state.notes.supersede(&capture.url, &capture.sha256, &capture.text);
+        }
         // A timer changes the capture hash, so only a new source quote is progress.
         // The same page read again in a browser after a fetch differs in small print, which is not new evidence.
         let again = state.fetched.remove(&capture.url);

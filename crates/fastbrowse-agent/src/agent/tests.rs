@@ -1132,6 +1132,24 @@ async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_st
 }
 
 #[tokio::test]
+async fn an_absent_revisit_does_not_use_old_context_as_fresh_evidence() {
+    let mut agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "synthesis")])), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let earlier = capture(&[(BlockKind::Paragraph, "List: Alpha, Beta")]);
+    agent.read(&mut state, earlier.clone(), &observation(&[]), false).await.unwrap();
+    assert!(state.compose);
+    agent.jev = Arc::new(FieldReader(Some("Answer: 42"), 0.1));
+    let later = capture(&[(BlockKind::Paragraph, "List: Alpha, Beta"), (BlockKind::Paragraph, "Answer: 42")]);
+    agent.read(&mut state, later, &observation(&[]), false).await.unwrap();
+    assert!(state.notes.answered());
+    assert!(!state.compose);
+    agent.jev = Arc::new(Picks(&[("task", "absent")]));
+    assert!(!agent.read(&mut state, earlier, &observation(&[]), false).await.unwrap());
+    assert!(state.notes.answered());
+    assert_eq!(state.notes.supporting()[0].1.text, "Answer: 42");
+}
+
+#[tokio::test]
 async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
     let field = "Date Picker 2: 27/12/2026";
     let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
