@@ -542,7 +542,7 @@ impl Agent {
                 && let Some(target) = &decision.target
                 && let Some(held) = held_value(&action)
             {
-                written.record(&target.id, &held);
+                written.record(target, &held);
             }
             let judged = match edit {
                 _ if !executed => Some(false),
@@ -1036,10 +1036,10 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
     // A widget can redraw while rejecting repeated text, so a page change alone does not prove the value was set.
     // A field the form emptied can still receive the same text again.
     let kept_another = target.value.as_deref().is_some_and(|value| !value.is_empty());
-    if kept_another && written.holds(&target.id, &held) {
+    if kept_another && written.holds(target, &held) {
         return Some(false);
     }
-    if written.controls.contains(&target.id) { None } else { Some(true) }
+    if written.wrote(target) { None } else { Some(true) }
 }
 
 /// The value an action writes, as the page would show it. A secret's value never leaves the page, so only its length

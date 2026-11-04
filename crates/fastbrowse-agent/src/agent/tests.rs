@@ -276,17 +276,22 @@ async fn test_a_link_that_redirected_still_leads_to_the_page_it_read() {
 
 /// A decision to write `value` into a field that currently holds `holds`, and the action doing it.
 fn edit(value: &str, holds: Option<&str>, secret: bool, operation: Operation) -> (Decision, Action) {
-    let target = Control { value: holds.map(String::from), ..Control::new("f", "textbox", "Name", [Operation::Fill]) };
+    let target = Control { value: holds.map(String::from), ..name_field() };
     let action =
         Action { target_id: Some(target.id.clone()), text: Some(value.into()), secret, ..Action::new(operation) };
     (code_decision(operation, Some(target)), action)
 }
 
-fn progress(value: &str, holds: Option<&str>, secret: bool, operation: Operation, written: &[&str]) -> Option<bool> {
+/// The field `edit` writes to, as it is known whatever it holds.
+fn name_field() -> Control {
+    Control::new("f", "textbox", "Name", [Operation::Fill])
+}
+
+fn progress(value: &str, holds: Option<&str>, secret: bool, operation: Operation, earlier: &[&str]) -> Option<bool> {
     let (decision, action) = edit(value, holds, secret, operation);
     let mut seen = Written::default();
-    for control in written {
-        seen.controls.insert((*control).to_string());
+    for written in earlier {
+        seen.record(&name_field(), written);
     }
     edit_progress(&decision, &action, &seen)
 }
@@ -297,15 +302,15 @@ fn test_writing_a_value_a_field_already_holds_is_not_progress() {
     // A field's first value is progress: a checkout's three fields changed no page fingerprint and tripped the
     // stall recovery. Only the first: every new value credited let a PyPI run grind on one search box.
     assert_eq!(progress("Ada", None, false, Operation::Fill, &[]), Some(true));
-    assert_eq!(progress("Ada", Some(""), false, Operation::Fill, &["f"]), None);
+    assert_eq!(progress("Ada", Some(""), false, Operation::Fill, &["Ad"]), None);
     // A corrected value is not vetoed, even though the field is not empty.
-    assert_eq!(progress("Ada", Some("Adz"), false, Operation::Fill, &["f"]), None);
+    assert_eq!(progress("Ada", Some("Adz"), false, Operation::Fill, &["Ad"]), None);
 }
 
 #[test]
 fn test_typing_the_same_value_into_a_field_that_redraws_is_not_progress() {
     let mut seen = Written::default();
-    seen.record("f", "8.7.2027");
+    seen.record(&name_field(), "8.7.2027");
     // A date picker redraws its grid on every keystroke, so the page changes while the text lands nowhere: the second
     // write of that text is not a step toward the task.
     let (decision, action) = edit("8.7.2027", Some("1.5.2027"), false, Operation::Fill);
@@ -325,7 +330,7 @@ fn test_a_second_value_on_the_same_field_is_remembered() {
     let mut step = |value: &str, holds: Option<&str>| {
         let (decision, action) = edit(value, holds, false, Operation::Fill);
         let judged = edit_progress(&decision, &action, &seen);
-        seen.record("f", value);
+        seen.record(&name_field(), value);
         judged
     };
     assert_eq!(step("8.7.2027", None), Some(true));
@@ -337,7 +342,7 @@ fn test_a_second_value_on_the_same_field_is_remembered() {
 fn test_a_secret_is_compared_by_the_length_the_page_reveals() {
     let bullets = |n| "\u{2022}".repeat(n);
     assert_eq!(progress("hunter2", Some(&bullets(7)), true, Operation::Fill, &[]), Some(false));
-    assert_eq!(progress("hunter2", Some(&bullets(4)), true, Operation::Fill, &["f"]), None);
+    assert_eq!(progress("hunter2", Some(&bullets(4)), true, Operation::Fill, &["hunt"]), None);
 }
 
 #[test]
@@ -2975,6 +2980,65 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
     let sent = page.sent.lock().unwrap().clone();
     let placed = sent.iter().filter(|(_, label)| label.as_deref() == Some("Place order")).count();
     assert_eq!(placed, 1, "{sent:?}");
+}
+
+/// A Jev that answers the choices it is given as `Picks` does, and every other question as the scripted Jev does.
+struct Typist(&'static [(&'static str, &'static str)]);
+
+impl DecisionClient for Typist {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = ScriptedJev::new(Vec::new()).evaluate(state, questions).await?;
+            evaluation.answers.extend(Picks(self.0).evaluate(state, questions).await?.answers);
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+/// A checkout form whose postcode field is the element `id`, holding `zip`.
+fn checkout(id: &str, zip: &str) -> Observation {
+    let field =
+        Control { value: Some(zip.into()), ..Control::new(id, "textbox", "Zip/Postal Code", [Operation::Fill]) };
+    observation(&[field, button("Continue")])
+}
+
+/// An agent typing the postcode of "Use the postcode 12345" into a page that goes through `acts`.
+fn typing(now: Observation, acts: Vec<(Operation, StepOutcome, Observation)>) -> (Agent, RunState) {
+    let jev = Typist(&[("source", "task"), ("first", "3"), ("last", "3")]);
+    let agent = Agent::new(Arc::new(Scripted::new(now, acts)), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Use the postcode 12345".into();
+    (agent, state)
+}
+
+#[tokio::test]
+async fn test_refilling_a_field_the_rejected_form_drew_again_is_not_progress() {
+    // #548: the form rejected the submit and drew its fields again, emptied. The new element was taken for a field
+    // never written, so typing the same postcode back counted as its first value, and the run refilled it four times.
+    let (agent, mut state) = typing(
+        checkout("zip", ""),
+        vec![
+            (Operation::Fill, StepOutcome::Executed, checkout("zip", "12345")),
+            (Operation::Click, StepOutcome::Executed, checkout("zip-again", "")),
+            (Operation::Fill, StepOutcome::Executed, checkout("zip-again", "12345")),
+        ],
+    );
+    agent.settle(&mut state, &checkout("zip", "")).await.expect("settled");
+    take(&agent, &mut state, Operation::Fill, Some("Zip/Postal Code")).await;
+    assert_eq!(state.unchanged, 0, "a field's first value is progress");
+    take(&agent, &mut state, Operation::Click, Some("Continue")).await;
+    take(&agent, &mut state, Operation::Fill, Some("Zip/Postal Code")).await;
+    assert_eq!(state.unchanged, 2, "the refill landed on the page state the first fill reached");
+    let (offered, problem, _) = next_ask(&agent, &state).await;
+    assert!(!offers(&offered, Operation::Fill, "Zip/Postal Code"), "{problem:?}");
 }
 
 #[tokio::test]

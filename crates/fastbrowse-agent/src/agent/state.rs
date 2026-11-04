@@ -6,7 +6,7 @@ use std::sync::Arc;
 use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::LLMError;
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
-use fastbrowse_core::page::{BrowserError, Capture, Observation};
+use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
 
@@ -42,27 +42,39 @@ impl Stop {
     }
 }
 
-/// What a fill or select has written into one document: the controls it has written to, and each control with the
+/// What a fill or select has written into one document: the fields it has written to, and each field with the
 /// exact text or selection it received. A widget that redraws on every keystroke (a date picker's grid) changes the
 /// page while the text lands nowhere, so the pair is what tells a repeat write from a new one.
+///
+/// A field is known by what the page says it is, not by its element: a form that rejects a submit can draw its fields
+/// again, and the new element is still the field the run already wrote.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Written {
-    pub controls: HashSet<String>,
+    fields: HashSet<String>,
     values: HashSet<String>,
 }
 
 impl Written {
-    /// One control with one value, kept as a single key because a document holds many of both.
-    fn key(control: &str, value: &str) -> String {
-        format!("{control}\u{0}{value}")
+    fn field(control: &Control) -> String {
+        serde_json::json!([control.role, control.label, control.context, control.input_name]).to_string()
     }
 
-    pub(crate) fn record(&mut self, control: &str, value: &str) {
-        self.controls.insert(control.to_string());
+    /// One field with one value, kept as a single key because a document holds many of both.
+    fn key(control: &Control, value: &str) -> String {
+        format!("{}\u{0}{value}", Self::field(control))
+    }
+
+    pub(crate) fn record(&mut self, control: &Control, value: &str) {
+        self.fields.insert(Self::field(control));
         self.values.insert(Self::key(control, value));
     }
 
-    pub(crate) fn holds(&self, control: &str, value: &str) -> bool {
+    /// Whether this field has received any value.
+    pub(crate) fn wrote(&self, control: &Control) -> bool {
+        self.fields.contains(&Self::field(control))
+    }
+
+    pub(crate) fn holds(&self, control: &Control, value: &str) -> bool {
         self.values.contains(&Self::key(control, value))
     }
 }
@@ -223,7 +235,7 @@ pub(crate) struct RunState {
     pub picked: Option<(String, Decision)>,
     pub unchanged: i64,
     /// What a fill or select has written, by document, so only a field's first new value counts as progress by
-    /// itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes.
+    /// itself.
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
     pub blank_opening_checked: bool,
