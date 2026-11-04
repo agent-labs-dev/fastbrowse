@@ -1538,14 +1538,15 @@ fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     assert!(error.contains("HTTP 403"), "{error}");
     assert!(error.contains("access or bot check"), "{error}");
     assert!(!error.contains("cause is unknown"), "{error}");
-    // A 401 still asks for a sign-in and names no wall of its own, and a 5xx is the site being unavailable, not the
-    // run failing at its task. Neither claims an unknown cause.
+    // Every other status keeps the recorded Python wording, so replayed golden traffic stays byte for byte. A 401 is
+    // still a needs-login stop with no wall of its own, and a 5xx is the site being unavailable, not the run failing.
+    let recorded = "in this browser session; the cause is unknown.";
     let unauthorized = HttpFailure { url: "https://shop.test/cart".into(), status: 401 }.stop();
     assert_eq!(unauthorized.status, Status::NeedsLogin);
     assert_eq!(unauthorized.wall, None);
-    assert!(unauthorized.error.unwrap().contains("asks this browser session to sign in"));
+    assert!(unauthorized.error.unwrap().contains(recorded));
     let unavailable = HttpFailure { url: "https://shop.test/cart".into(), status: 503 }.stop();
     assert_eq!(unavailable.status, Status::Unavailable);
     assert_eq!(unavailable.wall, None);
-    assert!(unavailable.error.unwrap().contains("failed to serve the page"));
+    assert!(unavailable.error.unwrap().contains(recorded));
 }
