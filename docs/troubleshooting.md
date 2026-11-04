@@ -82,7 +82,7 @@ what you want, run again with authorization:
 - The run reached a field that takes a secret, such as a password, and none is stored. The error is
   `'<field>' wants a secret and none is stored`.
 - The site answered HTTP 401 and recovery found no way on. The error is
-  `Could not complete the task after HTTP 401 at <url> in this browser session; the cause is unknown.`
+  `Could not complete the task after HTTP 401 at <url>: the site asks this browser session to sign in.`
 - A secret is declared, but for a different origin. A field is offered only the secrets declared for the
   origin of the frame it sits in, so this reads the same as no secret.
 - A secret is declared for the origin but resolves to nothing, such as a password manager item that changed
@@ -145,7 +145,8 @@ limit.
   sign-in and no credential passes it. Retry using an attached local browser or choose another source for
   this research.`
 - The site answered HTTP 403 and recovery found no way on. The error is
-  `Could not complete the task after HTTP 403 at <url> in this browser session; the cause is unknown.`
+  `Could not complete the task after HTTP 403 at <url>: the site refused this browser session, which is an access or bot check; no credential passes it.`
+  and the result's `wall` field names `bot_check`, because the page offers no field to sign in with.
 
 A bot check can block a cloud browser before any task step runs. Credentials do not pass a CAPTCHA, so
 `--secret` and `--bitwarden` do not help here.
@@ -253,7 +254,7 @@ Both messages end with Chrome's own last output, which names the cause; fix that
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
-  `Could not complete the task after HTTP <status> at <url> in this browser session; the cause is unknown.`
+  `Could not complete the task after HTTP <status> at <url> in this browser session.`
 
 **Next step.**
 
