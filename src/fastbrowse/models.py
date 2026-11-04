@@ -111,8 +111,6 @@ class Evidence(Frozen):
     control_context: SourceControl | None = None
     rendered_text: bool = True
     """False for typed DOM observations whose quote is not literal rendered page text."""
-    table: bool = Field(default=False, exclude_if=lambda table: not table)
-    """The quote is cut from table blocks alone, which a capture writes as markdown rows."""
     heading_path: tuple[str, ...] = ()
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
 

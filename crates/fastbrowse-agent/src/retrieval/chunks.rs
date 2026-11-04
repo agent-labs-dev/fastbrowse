@@ -223,14 +223,6 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
             .blocks
             .iter()
             .any(|item| item.kind == BlockKind::Observation && item.start < end && item.end > start),
-        // A span may run over several blocks; only one made of table rows alone is markdown throughout, so prose
-        // beside a table is never rewritten as though it were a row.
-        table: start < end
-            && capture
-                .blocks
-                .iter()
-                .filter(|item| item.start < end && item.end > start)
-                .all(|item| item.kind == BlockKind::Table),
         heading_path: block.heading_path.clone(),
     }
 }
@@ -409,19 +401,5 @@ mod tests {
         let block = &captured.blocks[0];
         assert!(!evidence(&page, block, 0, page.len()).rendered_text);
         assert!(evidence(&page, block, 0, block.end).rendered_text);
-    }
-
-    #[test]
-    fn only_a_quote_of_table_rows_alone_is_marked_as_a_table() {
-        let captured = capture(&[
-            (BlockKind::Paragraph, "| not a row |"),
-            (BlockKind::Table, "| a | b |"),
-            (BlockKind::Table, "| c | d |"),
-        ]);
-        let page = Page::new(&captured);
-        let [prose, first, last] = &captured.blocks[..] else { panic!() };
-        assert!(!evidence(&page, prose, prose.start, prose.end).table);
-        assert!(evidence(&page, first, first.start, last.end).table);
-        assert!(!evidence(&page, prose, prose.start, first.end).table);
     }
 }

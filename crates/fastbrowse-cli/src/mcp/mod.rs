@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
-use fastbrowse_core::citations::page_text;
 use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, RunResult, SecretRef, SecretValue, Status};
 use fastbrowse_core::output_schema::{ObjectType, OutputField, OutputModel, OutputType};
 use fastbrowse_core::py::dump::Dump;
@@ -320,11 +319,7 @@ pub fn browse_result(result: &RunResult, live_url: Option<&str>, config: &Server
         let uri = format!("file://{}", text::quote_path(&path.display().to_string()));
         Some(download(&name, "image/png", frame.len() as i64, &uri))
     });
-    let citations: Vec<Value> = result
-        .evidence
-        .iter()
-        .map(|e| json!({"quote": if e.table { page_text(&e.quote) } else { e.quote.clone() }, "url": e.url}))
-        .collect();
+    let citations: Vec<Value> = result.evidence.iter().map(|e| json!({"quote": e.quote, "url": e.url})).collect();
     json!({
         "budget": result.budget.as_ref().map(Dump::dump),
         "status": result.status.as_str(),

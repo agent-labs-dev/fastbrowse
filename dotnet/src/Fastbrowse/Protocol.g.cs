@@ -217,12 +217,6 @@ public sealed record Evidence
     public required bool RenderedText { get; init; }
 
     /// <summary>
-    /// The quote is cut from table blocks alone, which a capture writes as markdown rows.
-    /// </summary>
-    [JsonPropertyName("table")]
-    public bool? Table { get; init; }
-
-    /// <summary>
     /// The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
     /// </summary>
     [JsonPropertyName("heading_path")]

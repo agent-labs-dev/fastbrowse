@@ -781,13 +781,13 @@ impl Agent {
         Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
     }
 
-    fn public_fact(&self, fact: &Fact) -> StepFact {
+    fn public_fact(&self, fact: &Fact, notes: &Notes) -> StepFact {
         let text = self.redact(&fact.text);
         let requirement_id = fact.requirement_id.as_deref().map(|id| self.redact(id));
         let Some(evidence) = &fact.evidence else {
             return StepFact { text, requirement_id, quote: None, url: None, reader: fact.reader, deep_link: None };
         };
-        let (quote, deep_link) = cited_quote(evidence, |value| self.redact(value));
+        let (quote, deep_link) = cited_quote(evidence, notes, |value| self.redact(value));
         StepFact {
             text,
             requirement_id,

@@ -4,6 +4,8 @@ use std::fmt;
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
+use crate::page::{BlockKind, Capture};
+
 /// Everything but ASCII letters, digits and `_.~`. `-`, `,` and `&` are text-directive syntax, so they are encoded
 /// too, along with everything else a URL fragment might reinterpret.
 const TERM: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'~');
@@ -39,16 +41,115 @@ pub fn text_fragment(url: &str, text: &str) -> Result<String, EmptyQuote> {
     Ok(format!("{base}#{anchor}:~:text={}", directive.join(",")))
 }
 
-/// The page's own text for `quote`, a span cut from a capture's table rows.
+/// Where a capture's table block keeps its own row, as offsets into `Capture.text` in code points.
 ///
-/// A capture writes a table row as `| cell | cell |`, escapes a pipe inside a cell as `\|` and puts `| --- |` under
-/// a header. None of that is on the page, so a citation showing it, or a text fragment built from it, matches
-/// nothing there. Every unescaped pipe in a row is a cell border, so the cells are kept, separated by a space within
-/// a row and a line break between rows; a cell's own line breaks stay. A quote cut mid-row reads the same way.
-pub fn page_text(quote: &str) -> String {
-    let rows: String = quote.split_inclusive('\n').filter(|line| !separator_row(line)).collect();
+/// A capture writes each table row as a block of its own that repeats what identifies the row: the header rows and
+/// their `| --- |` divider, or a headerless table's first row. `row` is where the block's own row starts, so
+/// `start..row` is that repeated prefix, and `divider` is the divider's span when the block has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableBlock {
+    pub start: i64,
+    pub end: i64,
+    pub row: i64,
+    pub divider: Option<(i64, i64)>,
+}
+
+/// The table blocks of `capture`, in order. A block that is only a divider, as a fetched page writes the one under a
+/// lone header row, is all divider.
+pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
+    let chars: Vec<char> = capture.text.chars().collect();
+    let text = |start: i64, end: i64| -> String {
+        let clamp = |at: i64| (at.max(0) as usize).min(chars.len());
+        chars[clamp(start)..clamp(end).max(clamp(start))].iter().collect()
+    };
+    let mut tables: Vec<TableBlock> = Vec::new();
+    let mut previous: Option<usize> = None;
+    for (index, block) in capture.blocks.iter().enumerate() {
+        if block.kind != BlockKind::Table {
+            continue;
+        }
+        // A cell's own pipes are escaped, so a line opening with a pipe is always the start of a row.
+        let rows: Vec<i64> = (block.start..block.end)
+            .filter(|&at| {
+                chars.get(at as usize) == Some(&'|') && (at == block.start || chars.get(at as usize - 1) == Some(&'\n'))
+            })
+            .collect();
+        let row = rows.last().copied().unwrap_or(block.start);
+        // The divider sits between the header rows and the row, so a prefix of one row is a headerless table's
+        // first row, whatever its cells hold.
+        let mut divider =
+            (rows.len() > 2 && divider_line(&text(rows[rows.len() - 2], row))).then(|| (rows[rows.len() - 2], row));
+        let after_header = previous == Some(index.wrapping_sub(1))
+            && tables.last().is_some_and(|table| table.row == table.start && table.divider.is_none());
+        if rows.len() == 1 && after_header && divider_line(&text(block.start, block.end)) {
+            divider = Some((block.start, block.end));
+        }
+        tables.push(TableBlock { start: block.start, end: block.end, row, divider });
+        previous = Some(index);
+    }
+    tables
+}
+
+/// `| --- | --- |`, the divider a capture writes under a table's header.
+fn divider_line(line: &str) -> bool {
+    let line = line.trim_end_matches(['\n', '\r']);
+    line.strip_prefix("| ")
+        .and_then(|inner| inner.strip_suffix(" |"))
+        .is_some_and(|inner| inner.split(" | ").all(|cell| cell == "---"))
+}
+
+/// The page's own text for `quote`, the span of a capture starting at `start`, given the capture's `tables`.
+///
+/// A capture writes a table row as `| cell | cell |`, escapes a pipe inside a cell as `\|`, and repeats the header
+/// and its `| --- |` divider before every row. None of that is on the page, so a citation showing it, or a text
+/// fragment built from it, matches nothing there. Within a table block the cells are kept, separated by a space
+/// within a row and a line break between rows; a repeated header or first row is shown once and the divider not at
+/// all. Text outside every table block is the page's own and is kept as it is, pipes and backslashes included.
+pub fn page_text(quote: &str, start: i64, tables: &[TableBlock]) -> String {
+    let chars: Vec<char> = quote.chars().collect();
+    let end = start + chars.len() as i64;
+    let text = |from: i64, to: i64| -> String {
+        let clamp = |at: i64| (at - start).clamp(0, chars.len() as i64) as usize;
+        chars[clamp(from)..clamp(to).max(clamp(from))].iter().collect()
+    };
+    let mut shown = String::new();
+    let mut at = start;
+    // The prefixes already shown, and the rows a later block may repeat as its prefix.
+    let mut seen: Vec<String> = Vec::new();
+    for table in tables.iter().filter(|table| table.start < end && table.end > start) {
+        let whole_divider = table.divider == Some((table.start, table.end));
+        // A divider written as a block of its own leaves no blank line where it was.
+        if !whole_divider {
+            shown.push_str(&text(at, table.start));
+        }
+        let prefix = text(table.start, table.row);
+        let mut parts = Vec::new();
+        if !prefix.is_empty() && !seen.contains(&prefix.trim_end().to_owned()) {
+            let (cut, resume) = table.divider.unwrap_or((table.row, table.row));
+            parts.push(cells(&(text(table.start, cut) + &text(resume, table.row))));
+        }
+        if !whole_divider {
+            parts.push(cells(&text(table.row, table.end)));
+        }
+        seen.push(prefix.trim_end().to_owned());
+        if table.row == table.start {
+            seen.push(text(table.start, table.end).trim_end().to_owned());
+        }
+        shown.push_str(&parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n"));
+        at = table.end.max(at);
+    }
+    if at == start {
+        return quote.to_owned();
+    }
+    shown.push_str(&text(at, end));
+    shown
+}
+
+/// One fragment of a table's markdown as its cells: every unescaped pipe is a border, `\|` is the pipe the page
+/// shows, and a line break between borders ends a row.
+fn cells(markdown: &str) -> String {
     let mut cells = Cells::default();
-    let mut chars = rows.chars().peekable();
+    let mut chars = markdown.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '\\' if chars.peek() == Some(&'|') => cells.cell.push(chars.next().unwrap_or('|')),
@@ -85,33 +186,92 @@ impl Cells {
     }
 }
 
-/// The `| --- | --- |` row a capture puts under a table's header.
-fn separator_row(line: &str) -> bool {
-    line.trim_start().starts_with('|')
-        && line.contains("---")
-        && line.chars().all(|c| c.is_whitespace() || matches!(c, '|' | '-' | ':'))
-}
-
 #[cfg(test)]
 mod tests {
     //! Mirrors tests/test_citations.py.
     use super::*;
     use percent_encoding::percent_decode_str;
 
+    /// A capture of `blocks`, each `(is a table, text)`, one per line.
+    fn captured(blocks: &[(bool, &str)]) -> Capture {
+        let mut text = String::new();
+        let mut spans = Vec::new();
+        for (index, (table, block)) in blocks.iter().enumerate() {
+            if index > 0 {
+                text.push('\n');
+            }
+            let start = text.chars().count();
+            text.push_str(block);
+            let kind = if *table { "table" } else { "paragraph" };
+            spans.push(serde_json::json!({
+                "source_id": format!("s{index}"), "kind": kind, "frame_id": null, "start": start,
+                "end": text.chars().count(),
+            }));
+        }
+        serde_json::from_value(serde_json::json!({
+            "url": "https://e.test", "title": "", "captured_at": "2026-01-01T00:00:00Z", "sha256": "sha",
+            "text": text, "blocks": spans,
+        }))
+        .unwrap()
+    }
+
+    /// `page_text` of the capture's text from block `first` to block `last`, inclusive.
+    fn shown(capture: &Capture, first: usize, last: usize) -> String {
+        let (start, end) = (capture.blocks[first].start, capture.blocks[last].end);
+        let quote: String = capture.text.chars().skip(start as usize).take((end - start) as usize).collect();
+        page_text(&quote, start, &table_blocks(capture))
+    }
+
     #[test]
-    fn page_text_drops_table_syntax_and_escapes() {
-        let quote = "| Hacker Newsnew \\| past \\| comments | login |\n| 1.\nAI is forcing us | (ieee.org) |";
-        assert_eq!(page_text(quote), "Hacker Newsnew | past | comments login\n1.\nAI is forcing us (ieee.org)");
-        let table = "| Author | Born |\n| --- | --- |\n| Frank Herbert |  |";
-        assert_eq!(page_text(table), "Author Born\nFrank Herbert");
-        assert_eq!(page_text("| First-edition cover |\n| Author | Frank"), "First-edition cover\nAuthor Frank");
-        assert_eq!(page_text("Herbert \\| Jr | 1965 |\n| Dune"), "Herbert | Jr 1965\nDune");
+    fn a_table_row_is_its_cells_with_the_page_own_pipes() {
+        let capture = captured(&[(true, "| Hacker Newsnew \\| past \\| comments | login |")]);
+        assert_eq!(shown(&capture, 0, 0), "Hacker Newsnew | past | comments login");
+        let capture = captured(&[(true, "| Rank | Story |\n| 1.\nAI is forcing us | (ieee.org) |")]);
+        assert_eq!(shown(&capture, 0, 0), "Rank Story\n1.\nAI is forcing us (ieee.org)");
+    }
+
+    #[test]
+    fn a_span_over_several_rows_shows_the_header_once() {
+        let capture = captured(&[
+            (true, "| Name | Score |\n| --- | --- |\n| Ada | 10 |"),
+            (true, "| Name | Score |\n| --- | --- |\n| Grace | 9 |"),
+        ]);
+        assert_eq!(shown(&capture, 0, 1), "Name Score\nAda 10\nGrace 9");
+        assert_eq!(shown(&capture, 1, 1), "Name Score\nGrace 9");
+        let headerless = captured(&[(true, "| Ada | 10 |"), (true, "| Ada | 10 |\n| Grace | 9 |")]);
+        assert_eq!(shown(&headerless, 0, 1), "Ada 10\nGrace 9");
+    }
+
+    #[test]
+    fn a_row_of_dashes_is_a_row() {
+        let capture = captured(&[
+            (true, "| Name | Score |\n| --- | --- |\n| --- | --- |"),
+            (true, "| --- | --- |\n| Ada | 10 |"),
+        ]);
+        assert_eq!(shown(&capture, 0, 0), "Name Score\n--- ---");
+        assert_eq!(shown(&capture, 1, 1), "--- ---\nAda 10");
+        // A fetched page writes the divider under a lone header row as a block of its own.
+        let fetched = captured(&[(true, "| Name |"), (true, "| --- |"), (true, "| --- |")]);
+        assert_eq!(shown(&fetched, 0, 2), "Name\n---");
+    }
+
+    #[test]
+    fn prose_keeps_its_pipes_and_backslashes() {
+        let capture =
+            captured(&[(false, "| not a row | a \\| b"), (true, "| Dune | Frank Herbert |"), (false, "x | y")]);
+        assert_eq!(shown(&capture, 0, 2), "| not a row | a \\| b\nDune Frank Herbert\nx | y");
+        assert_eq!(shown(&capture, 0, 0), "| not a row | a \\| b");
+        let quote = "| Dune | Frank Herbert |";
+        assert_eq!(page_text(quote, 0, &[]), quote, "with no capture the quote stands as cut");
     }
 
     #[test]
     fn a_table_quote_links_to_text_on_the_page() {
-        let quote = page_text("| Dune | Frank Herbert |");
-        assert_eq!(text_fragment("https://e.test", &quote).unwrap(), "https://e.test#:~:text=Dune%20Frank%20Herbert");
+        let capture = captured(&[(true, "| Dune | Frank Herbert |")]);
+        assert_eq!(
+            text_fragment("https://e.test", &shown(&capture, 0, 0)).unwrap(),
+            "https://e.test#:~:text=Dune%20Frank%20Herbert"
+        );
     }
 
     #[test]

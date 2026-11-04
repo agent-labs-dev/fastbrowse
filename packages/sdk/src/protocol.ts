@@ -146,10 +146,6 @@ export interface Evidence {
    */
   rendered_text: boolean;
   /**
-   * The quote is cut from table blocks alone, which a capture writes as markdown rows.
-   */
-  table?: boolean;
-  /**
    * The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
    */
   heading_path: string[];
