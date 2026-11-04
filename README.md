@@ -219,6 +219,8 @@ scrolls to the quote; it may not resolve on a page that changes or needs a sessi
   `ConfigurationError` and `RecordingError` also carry a `receipt` when they stop a run after work or charges
   have accrued; otherwise their `receipt` is `None`. JSON-RPC preserves this receipt in error data, or in the
   error result for recording failures. MCP keeps it in `_meta["fastbrowse.ai/receipt"]` beside the tool error.
+  A callback failure raises the original exception with a `receipt` attribute when the core retains one,
+  including when the callback fails as the run completes.
 - `with traced() as events:` collects the run's trace in-process, as `--trace` writes it.
 
 No frame or screenshot is sent while a resolved secret may show on the page.

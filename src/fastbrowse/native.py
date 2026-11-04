@@ -431,6 +431,9 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
         if isinstance(refusal, asyncio.CancelledError):
             # Settled in the same moment as the refusal, so this does not wait.
             refusal = _cancelled(refusal, await native.finished)
+        # A callback can fail as the run completes, so the finished receipt covers either outcome.
+        elif exc.args[0] == "callback" and (receipt := await native.finished):
+            refusal.__dict__["receipt"] = CancellationReceipt.model_validate_json(receipt)
         raise refusal from None
     except asyncio.CancelledError as exc:
         # The browser is closed before the cancellation reaches the caller, and what the run spent comes with it.

@@ -242,6 +242,90 @@ class Counted:
 
 
 @pytest.mark.usefixtures("rust_core")
+async def test_a_callback_failure_keeps_the_paid_runs_receipt() -> None:
+    counted = Counted()
+    evaluate = counted.jev.evaluate
+
+    async def paid(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
+        result = await evaluate(state, questions)
+        return result.model_copy(
+            update={"cost": CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.01)}
+        )
+
+    counted.jev.evaluate = paid  # ty: ignore[invalid-assignment]
+    failure = RuntimeError("the caller stopped reading steps")
+
+    async def until(_: str) -> bool:
+        raise failure
+
+    async with counted.http:
+        with pytest.raises(RuntimeError, match="the caller stopped reading steps") as caught:
+            await run_task(
+                "Read the release",
+                fetch=True,
+                jev=counted.jev,
+                llm=counted.llm,
+                http=counted.http,
+                until=until,
+                config=Config(step_frames=False),
+            )
+    assert caught.value is failure
+    receipt = getattr(caught.value, "receipt", None)
+    assert receipt is not None
+    assert receipt.cost.known_dollars > 0
+
+
+async def test_a_callback_failure_keeps_a_simultaneously_completed_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    failure = RuntimeError("callback failed at completion")
+
+    class Refused(Exception):
+        pass
+
+    class CompletedNative:
+        def __init__(self, callback: Any) -> None:
+            self.callback = callback
+            self.finished = asyncio.Future()
+            self.finished.set_result(
+                json.dumps(
+                    {
+                        "steps": [],
+                        "cost": {"lines": [{"component": "llm", "basis": "metered", "dollars": 0.01}]},
+                        "recordings": ["finished.mp4"],
+                    }
+                )
+            )
+
+        def __await__(self):
+            async def refused():
+                try:
+                    await self.callback("answer")
+                except RuntimeError:
+                    raise Refused("callback", "") from None
+
+            return refused().__await__()
+
+    class FakeCore:
+        RunRefused = Refused
+
+        @staticmethod
+        def run_task(*args: Any, **kwargs: Any) -> CompletedNative:
+            return CompletedNative(kwargs["until"])
+
+    monkeypatch.setattr(native.importlib, "import_module", lambda _: FakeCore)
+
+    async def until(_: str) -> bool:
+        raise failure
+
+    with pytest.raises(RuntimeError) as caught:
+        await native.run("task", arguments(until=until))
+    assert caught.value is failure
+    receipt = getattr(failure, "receipt", None)
+    assert receipt is not None
+    assert receipt.cost.known_dollars == 0.01
+    assert receipt.recordings == (Path("finished.mp4"),)
+
+
+@pytest.mark.usefixtures("rust_core")
 async def test_the_callers_own_clients_serve_the_rust_run() -> None:
     counted = Counted()
     async with counted.http:
