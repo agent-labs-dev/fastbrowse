@@ -27,6 +27,7 @@ from fastbrowse.evals.replay import (
     miss_diff,
     nearest_body,
     request_key,
+    response_cost,
     translate_origin,
     translate_response_origin,
 )
@@ -34,6 +35,16 @@ from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
 
 LLM = "/llm/chat/completions"
 JEV = "/jev/v1/systemone"
+
+
+@pytest.mark.parametrize("cost", [-1, float("nan"), float("inf"), float("-inf"), 10**400, True, "0.1", None])
+def test_invalid_provider_costs_remain_unknown(cost: object) -> None:
+    assert response_cost(json.dumps({"usage": {"cost": cost}})) is None
+
+
+@pytest.mark.parametrize("cost", [0, 0.125, 2])
+def test_finite_nonnegative_provider_costs_are_retained(cost: int | float) -> None:
+    assert response_cost(json.dumps({"usage": {"cost": cost}})) == cost
 
 
 def _exchange(path: str, request: object, body: str, *, latency: float = 0.0) -> Exchange:

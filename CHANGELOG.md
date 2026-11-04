@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Recorded model responses keep negative or non-finite provider costs unknown, preserving valid zero-cost receipts.
+
 - Malformed successful model responses retain an unknown or bounded charge instead of a metered zero. Unsettled browser charges mark the total incomplete in Rust, Python and their CLI, MCP and eval consumers.
 
 - Benchmark publication keeps unmeasured-efficiency warnings advisory instead of treating them as regressions.

@@ -22,6 +22,7 @@ import difflib
 import gzip
 import hashlib
 import json
+import math
 import re
 import sys
 import threading
@@ -364,7 +365,13 @@ def response_cost(body: str) -> float | None:
         cost = usage.get("cost") if isinstance(usage, dict) else None
     except (ValueError, AttributeError):
         return None
-    return float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else None
+    if not isinstance(cost, int | float) or isinstance(cost, bool):
+        return None
+    try:
+        dollars = float(cost)
+    except OverflowError:
+        return None
+    return dollars if math.isfinite(dollars) and dollars >= 0 else None
 
 
 type Forward = Callable[[str, bytes], tuple[int, str, str]]
