@@ -7,6 +7,7 @@ use serde_json::Map;
 use super::Agent;
 use super::helpers::read_sources;
 use super::state::{RunState, Step};
+use crate::memory::address;
 use crate::retrieval::{PageRead, read_page};
 
 impl Agent {
@@ -47,7 +48,15 @@ impl Agent {
                 .iter()
                 .find(|fact| fact.answers)
                 .is_some_and(|new| state.notes.facts().iter().any(|fact| fact.answers && fact.text != new.text));
-            state.compose = compose || differs;
+            // Jev picks from one page knowing only the task, so its pick cannot speak for another page an earlier read
+            // kept to compose from: counting a site's quotes, the author page's "Quotes by: GoodReads.com" was returned
+            // verbatim over the list page read whole.
+            let page = address(&capture.url);
+            let elsewhere = state.compose
+                && state.notes.facts().iter().any(|fact| {
+                    !fact.answers && fact.evidence.as_ref().is_some_and(|evidence| address(&evidence.url) != page)
+                });
+            state.compose = compose || differs || elsewhere;
         }
         if added > 0 {
             self.seen().read_captures.entry(capture.sha256.clone()).or_insert_with(|| capture.text.clone());

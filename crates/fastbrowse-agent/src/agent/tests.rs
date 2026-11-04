@@ -1267,6 +1267,23 @@ async fn an_absent_revisit_does_not_use_old_context_as_fresh_evidence() {
 }
 
 #[tokio::test]
+async fn a_pick_on_one_page_leaves_another_pages_material_to_be_composed() {
+    // Counting a site's Einstein quotes: the list page was read whole to count from, then the author page's read
+    // picked "Quotes by: GoodReads.com", and that line came back verbatim as the answer.
+    let mut agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "synthesis")])), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let list = capture(&[(BlockKind::Paragraph, "Quote one by Albert Einstein"), (BlockKind::Paragraph, "Next")]);
+    agent.read(&mut state, list, &observation(&[]), false).await.unwrap();
+    assert!(state.compose);
+    agent.jev = Arc::new(FieldReader(Some("Quotes by: GoodReads.com"), 0.1));
+    let mut author = capture(&[(BlockKind::Paragraph, "Quotes by: GoodReads.com")]);
+    author.url = "https://example.test/author/Albert-Einstein/".into();
+    agent.read(&mut state, author, &observation(&[]), false).await.unwrap();
+    assert!(state.notes.answered());
+    assert!(state.compose, "the list page's quotes still need writing up beside the author page's pick");
+}
+
+#[tokio::test]
 async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
     let field = "Date Picker 2: 27/12/2026";
     let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
