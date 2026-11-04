@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A calendar day is offered without its week's other days as its context.** A table row's cells are one line of text, so with no month heading a day in the week "26 27 28 29 30 1 2" was offered with the other six numbers as the context that should tell it apart, and a date picker read as if every day were another. A line made only of the labels of the control and its peers no longer names it ([#648](https://github.com/agent-labs-dev/fastbrowse/issues/648)).
 - **An answer reports the results the run filtered to, not the ones it read before.** Changing a filter changes the page's address, so the unfiltered and filtered results were both kept as current notes, and a flight search that applied a nonstop filter answered with the unfiltered count and a connecting fare. The notes the answer is written from, and the checks on each claim, now name the page each note was read on in reading order, so the later filtered view can be told from the earlier one. A view that changes only the address fragment now retires the earlier read when composing too, where it had been brought back as current ([#720](https://github.com/agent-labs-dev/fastbrowse/issues/720)).
 - Recorded model responses keep negative or non-finite provider costs unknown, preserving valid zero-cost receipts.
 

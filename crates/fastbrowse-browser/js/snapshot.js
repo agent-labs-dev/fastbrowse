@@ -591,10 +591,13 @@
     const peers = new Set(
       controls.filter(c => c !== mine && c.role === mine?.role).map(c => c.label),
     );
+    // A table row's cells are one line of text, so a week row reads "26 27 28 29 30 1 2": a line made only of this
+    // control's and its peers' labels names nothing but them.
+    const onlyPeers = line => line.split(' ').every(word => word === label || peers.has(word));
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line) && !peers.has(line));
+      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {

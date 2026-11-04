@@ -1565,6 +1565,47 @@ async fn test_calendar_twins_are_named_by_the_month_they_show() {
     h.close().await;
 }
 
+/// A calendar with no month heading whose grid repeats days from the next month: a week row's text is one line,
+/// "26 27 28 29 30 1 2", so day 26 was offered with its week's other numbers as its context (#648).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_calendar_day_is_not_named_after_the_other_days_in_its_week() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    let week = |days: std::ops::RangeInclusive<u32>| {
+        days.map(|day| format!("<td><button>{}</button></td>", (day - 1) % 31 + 1)).collect::<String>()
+    };
+    let rows: String = [26..=32, 33..=39, 40..=46, 54..=60, 62..=68]
+        .into_iter()
+        .map(|days| format!("<tr>{}</tr>", week(days)))
+        .collect();
+    eval_active(
+        &h,
+        &format!(
+            "document.body.innerHTML = '<table><thead><tr><th>Po</th><th>Ut</th><th>St</th><th>Ct</th><th>Pa</th>\
+             <th>So</th><th>Ne</th></tr></thead><tbody>{rows}</tbody></table>';"
+        ),
+    )
+    .await;
+    let obs = observe_until(&h.page, "26").await;
+    let days: Vec<_> = obs.controls.iter().filter(|c| c.label.chars().all(|ch| ch.is_ascii_digit())).collect();
+    assert!(days.len() > 30, "{}", days.len());
+    for day in days {
+        let context = day.context.as_deref().unwrap_or("");
+        // A twin's ordinal ("1 of 2") tells repeated days apart; any other number is another day's label.
+        let section = context.split(';').next().unwrap_or("");
+        let ordinal = section.split(' ').collect::<Vec<_>>();
+        let names_twin =
+            matches!(ordinal.as_slice(), [n, "of", m] if n.parse::<u32>().is_ok() && m.parse::<u32>().is_ok());
+        assert!(
+            names_twin || !section.chars().any(|ch| ch.is_ascii_digit()),
+            "day {} has context {context:?}",
+            day.label
+        );
+    }
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_uniquely_labelled_control_is_given_its_section_heading() {
     let Some(h) = harness().await else { return };
