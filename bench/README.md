@@ -83,4 +83,6 @@ Timings come from a shared laptop and vary run to run. Compare medians from runs
 ## Files
 
 - `cassettes/<task>.jsonl.gz`: one gzip JSONL file per task. The first line holds the recording date, version and
-  models; every other line is one request and its response, in the order they arrived.
+  models; every other line is one request and its response, in the order they arrived. When selected exchanges are
+  recorded again, `rerecorded_exchanges` names their request keys, models and request timestamps. Their response
+  bodies, usage costs and latency come from those new requests; unchanged exchanges retain their original recording.

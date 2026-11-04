@@ -100,6 +100,8 @@ A value embedded in a broader note needs extraction through the composer and its
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
+Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
+metadata alone does not count as progress.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.
 The composer and support check interpret a requested field by its meaning: descriptive prose can supply its
 value without a matching heading, and that value contradicts a claim that the field was not shown.

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Split answer composition stops when rewritten claims do not shrink, without treating removed source metadata as progress.
+
 - AUR package synchronization can reuse its existing release PR branch without losing the rendered package files.
 
 - Answer composition and Jev's answer checks receive known superseded-source state, while retaining earlier quotes for historical tasks.

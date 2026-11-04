@@ -298,9 +298,12 @@ async fn compose_part(
 }
 
 /// How much composing a packing still needs: its requests, then the bytes of the notes they carry. A round may shorten
-/// its claims by less than one request's worth, so the bytes are what show it made progress.
+/// its claims by less than one request's worth, so the content bytes show progress. Source metadata disappears
+/// from rewritten claims even when their text does not shrink, so that envelope cannot count as progress.
 fn packed_size(parts: &[Vec<ComposeItem>]) -> (usize, usize) {
-    (parts.len(), parts.iter().flatten().map(|item| line_bytes(item, &item.text)).sum())
+    let content_bytes =
+        parts.iter().flatten().map(|item| serde_json::to_string(&item.text).expect("text serializes").len()).sum();
+    (parts.len(), content_bytes)
 }
 
 /// Composes notes too large for one request in rounds, each round's claims becoming the next round's notes, until one
@@ -1028,18 +1031,11 @@ mod tests {
                     .filter(|_| emit)
                     .filter_map(|line| line.split_once(": "))
                     .map(|(id, text)| {
-                        let mut note = serde_json::from_str::<serde_json::Value>(text).ok();
+                        let note = serde_json::from_str::<serde_json::Value>(text).ok();
                         let raw =
                             note.as_ref().and_then(|note| note.get("text")).and_then(Value::as_str).unwrap_or(text);
                         let reworded = format!("{round:08}{}", &raw[8..raw.len() - shorten]);
-                        let text = match note.as_mut().filter(|note| note.get("text").is_some()) {
-                            Some(note) => {
-                                note["text"] = json!(reworded);
-                                dumps(note)
-                            }
-                            None => reworded,
-                        };
-                        Claim::new(&text, vec![id.to_string()])
+                        Claim::new(&reworded, vec![id.to_string()])
                     })
                     .collect();
                 let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
