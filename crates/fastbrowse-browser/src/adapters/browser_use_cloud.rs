@@ -208,13 +208,7 @@ impl BrowserUseCloudBrowser {
     }
 
     /// `running` against another origin, with the clock and sleep swapped, as `with_seams` is.
-    pub fn running_with_seams(
-        api_key: &str,
-        browser_id: &str,
-        origin: &str,
-        clock: Clock,
-        sleep: Sleep,
-    ) -> Self {
+    pub fn running_with_seams(api_key: &str, browser_id: &str, origin: &str, clock: Clock, sleep: Sleep) -> Self {
         let api = Api {
             root: API_V4.replacen(API_ORIGIN, origin, 1),
             api_key: api_key.to_owned(),
