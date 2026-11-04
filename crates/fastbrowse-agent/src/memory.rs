@@ -386,11 +386,12 @@ impl Notes {
     /// still quoted the old one, since both facts stood. A product page that swaps its name and price together must not
     /// answer with the old name beside the new price either, so a vanished value is retired whatever it was read for.
     pub fn supersede(&mut self, url: &str, sha256: &str, text: &str) {
-        // Synthesis keeps source quotes as context before composing an answer; those reads replace old values too.
+        // Synthesis keeps source quotes as context; retired history must not stand in for a fresh read.
         let fresh: Vec<&Evidence> = self
             .facts
-            .values()
-            .filter_map(|fact| fact.evidence.as_ref())
+            .iter()
+            .filter(|(key, _)| self.current(key))
+            .filter_map(|(_, fact)| fact.evidence.as_ref())
             .filter(|evidence| evidence.capture_sha256 == sha256)
             .collect();
         if fresh.is_empty() {
@@ -720,6 +721,24 @@ mod tests {
                 assert_eq!(notes.facts().len(), 2);
             }
         }
+    }
+
+    #[test]
+    fn revisiting_a_retired_capture_without_evidence_keeps_current_facts() {
+        let url = "https://example.test";
+        let old = quoted("Subtotal: GBP 34.50", "before", url);
+        let fresh = context(quoted("Subtotal: GBP 43.25", "after", url));
+        let mut notes = Notes::new([old.clone(), fresh.clone()]);
+        notes.supersede(url, "after", &fresh.text);
+        assert!(!notes.current(&fact_id(&old)));
+        assert!(notes.current(&fact_id(&fresh)));
+        notes.supersede(url, "before", &old.text);
+        assert!(notes.current(&fact_id(&fresh)));
+        assert!(!notes.current(&fact_id(&old)));
+        notes.add(old.clone());
+        notes.supersede(url, "before", &old.text);
+        assert!(notes.current(&fact_id(&old)));
+        assert!(!notes.current(&fact_id(&fresh)));
     }
 
     #[test]
