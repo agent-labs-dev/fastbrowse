@@ -35,6 +35,11 @@ endpoint exists only when remote debugging is switched on in `chrome://inspect`,
 connection on an "Allow remote debugging?" prompt that takes the user's focus and waits for their click, once
 per run. An endpoint that answers 404 on `/json/version` is that kind.
 
+When the user names that browser themselves, `--cdp-port` cannot reach it, because it serves no
+`/json/version`. Read its `DevToolsActivePort` file, which holds the port on the first line and the browser
+path on the second, and pass `--cdp-url ws://127.0.0.1:<port><path>`. Tell the user to expect Chrome's
+approval prompt.
+
 The endpoint that needs no approval is a Chrome the user starts for the purpose, with a data directory of its
 own (Chrome ignores the port flag on its default one):
 
