@@ -368,16 +368,23 @@ class LocalChrome(Frozen):
     every run starts from a fresh profile that is deleted afterwards."""
 
 
-class BrowserConnection(Frozen):
-    """A browser started outside a run (`fastbrowse.cloud.BrowserUseCloudBrowser`), for runs to attach to."""
+class CloudBrowserError(RuntimeError):
+    """Browser Use Cloud refused to start or stop a browser."""
 
+
+class CloudBrowserUnavailable(CloudBrowserError, Unavailable):
+    """Browser Use Cloud could not be reached, or answered only with retryable statuses."""
+
+
+class CloudBrowser(Frozen):
+    """A Browser Use Cloud browser that `open_cloud_browser` started and no run owns. It bills until
+    `stop_cloud_browser` stops it or its own timeout ends it."""
+
+    id: str
     cdp_url: str
-    """Browser-level DevTools WebSocket URL (`ws://` or `wss://`), which `run_task(cdp_url=...)` and `connect_cdp`
-    take."""
+    """Browser-level DevTools WebSocket URL (`ws://` or `wss://`), for `run_task(cdp_url=..., attach=True)`."""
     live_url: str | None = None
-    """The page where a person can watch the browser, when the service gives one."""
-    browser_id: str | None = None
-    """The cloud browser's id, for a caller that has to find or stop it out of band."""
+    """The service's live view of the browser, when it gave one."""
 
 
 class Attachment(Frozen):

@@ -39,9 +39,9 @@ Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.
 up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
 On 46 tasks run three times each against the hosted Browser Use agent, under the same limits on Browser Use
-Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. It was
-slower: 18.9s a task to 15.3s. These figures are the published campaign, release-0.7.1; see
-[How it compares](#how-it-compares).
+Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. That
+is the published campaign, release-0.7.1, which records no run time for either arm, so no speed claim is made
+here. See [How it compares](#how-it-compares).
 
 ## Try it
 
@@ -107,13 +107,18 @@ Benchmarking makes three comparisons:
 
 - **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, the figures above, on Browser
   Use cloud browsers under identical limits with the hosted agent at its defaults. On its own 53-task catalog,
-  fastbrowse passed 99.3% at 17.0s and $0.0268 a run.
+  fastbrowse passed 99.3% at $0.0268 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 47 tasks: not yet measured.
+- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 47 tasks: not yet measured. Browser Use's own
+  Ultrafast is not measured by us either: its vendor-reported 22 seconds and $0.0064 a task cover the model and
+  the search only, with the browser and proxy billed separately, so they are not comparable with our figures.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.7.1 (agent commit `7b8b0e8f`,
-data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).
+data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`). 0.9.1 is the current release and
+no campaign measured on a 0.9.x build has been published, so nothing above describes 0.9.1;
+[Benchmark results](docs/benchmarks.md#why-the-published-campaign-lags-the-release) says why and what the next
+campaign measures.
 [Benchmark results](docs/benchmarks.md) gives the sources, cost basis and limitations, and
 [eval results and workflow](docs/evals.md) covers the diagnostic suites.
 
@@ -181,6 +186,25 @@ Recipes can contain personal information from ordinary fields; stored secrets ar
 `recipe_schema()` exports its JSON Schema for client validation.
 `record=Path("run.mp4")` writes captioned and plain videos, and needs ffmpeg. The action cursor also needs ffprobe; if frame dimensions cannot be read, the cursor is omitted with a warning.
 
+**A cloud browser that outlives a run.** `open_cloud_browser(browser_api_key=...)` starts a Browser Use Cloud
+browser no run owns and returns a `CloudBrowser` with its `id`, `cdp_url` and `live_url`. It takes `run_task`'s
+cloud options without the `cloud_` prefix (`profile=`, `extensions=`, `timeout_minutes=` and the rest). Runs given
+its `cdp_url` with `attach=True` leave it running, and `stop_cloud_browser(browser, browser_api_key=...)` stops
+it; until then it bills, up to its timeout. A start that fails or is cancelled stops the browser it created.
+
+```python
+from fastbrowse import open_cloud_browser, run_task, stop_cloud_browser
+
+
+async def main() -> None:
+    browser = await open_cloud_browser(browser_api_key=KEY, profile=PROFILE_ID, timeout_minutes=60)
+    print("watch at", browser.live_url)
+    try:
+        await run_task("Open my inbox.", cdp_url=browser.cdp_url, attach=True)
+    finally:
+        await stop_cloud_browser(browser, browser_api_key=KEY)
+```
+
 **Your own script on the page.** `connect_cdp()` hands you the attached page without the agent:
 
 ```python
@@ -192,34 +216,12 @@ async def main() -> None:
         print(await page.observe())
 ```
 
-**One cloud browser for many runs.** `run_task` stops the cloud browser it started when the run ends. To keep one
-browser for a whole session, start it yourself with `fastbrowse.cloud.BrowserUseCloudBrowser` and hand its address to
-each run:
-
-```python
-from fastbrowse import run_task
-from fastbrowse.cloud import BrowserUseCloudBrowser
-
-cloud = BrowserUseCloudBrowser(profile=profile_id, timeout_minutes=60)
-connection = await cloud.start()  # BrowserConnection: cdp_url, live_url, browser_id
-result = await run_task("...", cdp_url=connection.cdp_url, foreground=True)
-await cloud.stop()  # the browser bills until this, or its timeout
-print(cloud.cost)  # metered browser and proxy lines
-```
-
-It is also an async context manager that stops the browser on exit. The key is `api_key=` or
-`BROWSER_USE_API_KEY`; `profile`, `extensions`, `timeout_minutes`, `proxy_country` and `viewport` are `run_task`'s
-`cloud_profile`, `cloud_extensions`, `cloud_timeout_minutes`, `proxy_country` and `viewport`. A browser created by a
-start that fails or is cancelled is stopped before the error is raised. `foreground=True` brings each run's tab to the
-front, which the live view at `connection.live_url` shows; a run that starts its own cloud browser does this already.
-Errors are `BrowserUseCloudError`, and `BrowserUseCloudUnavailable` (with `retry_after`) for an outage.
-
 **Moving from 0.8.** The Python modules that 0.9 removed with the Python core have these replacements:
 
 | 0.8 import | Now |
 |---|---|
-| `fastbrowse.adapters.browser_use_cloud.BrowserUseCloudBrowser` | `fastbrowse.cloud.BrowserUseCloudBrowser`, without the `http=` and `allow_resizing=` arguments, and with `start()` and `stop()` as well as `async with` |
-| `fastbrowse.models.BrowserConnection` | `fastbrowse.models.BrowserConnection`, holding `cdp_url`, `live_url` and `browser_id` |
+| `fastbrowse.adapters.browser_use_cloud.BrowserUseCloudBrowser` | `open_cloud_browser` to start one and `stop_cloud_browser` to stop it, without the `http=` and `allow_resizing=` arguments |
+| `fastbrowse.models.BrowserConnection` | `fastbrowse.CloudBrowser`, holding `id`, `cdp_url` and `live_url` |
 | `fastbrowse.clients.environment.Settings` | `run_task(settings={...})`, keyed by the environment variable names |
 | `fastbrowse.adapters.totp` (`TotpError`, `one_time_code`) | `fastbrowse.totp` |
 

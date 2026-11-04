@@ -8,6 +8,8 @@
 //! cloud.cost(); // metered lines, available after stop
 //! ```
 //!
+//! A browser that outlives the value that started it is `keep`'s, and `running` stops it later by its id.
+//!
 //! Creating and stopping the browser both have to survive cancellation. Rust cannot run async work in a dropped
 //! future, so both requests run as spawned tasks: a `start` dropped mid-create leaves its task
 //! behind for `stop` to wait on, and a browser still known when this value drops is stopped by a task spawned then.
@@ -114,7 +116,8 @@ struct Api {
     root: String,
     api_key: String,
     http_timeout: Duration,
-    timeout_minutes: u32,
+    /// Unknown for a browser `running` names, which another value started.
+    timeout_minutes: Option<u32>,
     clock: Clock,
     sleep: Sleep,
 }
@@ -147,14 +150,8 @@ pub struct BrowserUseCloudBrowser {
 impl BrowserUseCloudBrowser {
     /// Validate the options and build the create body; nothing is sent until `start`.
     pub fn new(api_key: &str, options: BrowserUseCloudOptions) -> Result<Self, BrowserUseCloudError> {
-        Self::at(api_key, options, API_ORIGIN)
-    }
-
-    /// `new` against another origin, with the real clock and sleep: an embedder's test serves the API itself.
-    pub fn at(api_key: &str, options: BrowserUseCloudOptions, origin: &str) -> Result<Self, BrowserUseCloudError> {
-        let clock: Clock = Arc::new(fastbrowse_core::telemetry::monotonic);
-        let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
-        Self::with_seams(api_key, options, origin, clock, sleep)
+        let (clock, sleep) = real_time();
+        Self::with_seams(api_key, options, API_ORIGIN, clock, sleep)
     }
 
     /// `new` against another origin, with the clock and sleep swapped, so a five-minute delay the service asks for
@@ -190,7 +187,7 @@ impl BrowserUseCloudBrowser {
             root: API_V4.replacen(API_ORIGIN, origin, 1),
             api_key: api_key.to_owned(),
             http_timeout: options.http_timeout,
-            timeout_minutes: options.timeout_minutes,
+            timeout_minutes: Some(options.timeout_minutes),
             clock,
             sleep,
         };
@@ -202,6 +199,50 @@ impl BrowserUseCloudBrowser {
             stopping: None,
             connection: None,
         })
+    }
+
+    /// A browser already running, started by a value that `keep` let go of, so that `stop` stops it.
+    pub fn running(api_key: &str, browser_id: &str) -> Self {
+        let (clock, sleep) = real_time();
+        Self::running_with_seams(api_key, browser_id, API_ORIGIN, clock, sleep)
+    }
+
+    /// `running` against another origin, with the clock and sleep swapped, as `with_seams` is.
+    pub fn running_with_seams(
+        api_key: &str,
+        browser_id: &str,
+        origin: &str,
+        clock: Clock,
+        sleep: Sleep,
+    ) -> Self {
+        let api = Api {
+            root: API_V4.replacen(API_ORIGIN, origin, 1),
+            api_key: api_key.to_owned(),
+            http_timeout: BrowserUseCloudOptions::default().http_timeout,
+            timeout_minutes: None,
+            clock,
+            sleep,
+        };
+        let state = State { browser_id: Some(browser_id.to_owned()), cost: vec![] };
+        Self {
+            api: Arc::new(api),
+            body: String::new(),
+            state: Arc::new(Mutex::new(state)),
+            creating: None,
+            stopping: None,
+            connection: None,
+        }
+    }
+
+    /// Let a started browser outlive this value: neither `stop` nor dropping it stops the browser after this, so
+    /// whoever holds the connection's `browser_id` stops it, or the service does at its timeout.
+    pub fn keep(&mut self) -> Result<BrowserConnection, BrowserUseCloudError> {
+        let connection = self
+            .connection
+            .take()
+            .ok_or_else(|| BrowserUseCloudError::Error("the cloud browser is not running".into()))?;
+        lock(&self.state).browser_id = None;
+        Ok(connection)
     }
 
     pub fn connection(&self) -> Result<&BrowserConnection, BrowserUseCloudError> {
@@ -311,6 +352,12 @@ impl Drop for BrowserUseCloudBrowser {
     }
 }
 
+/// The clock and sleep `new` and `running` use, for a caller that only swaps the origin.
+pub fn real_time() -> (Clock, Sleep) {
+    let sleep: Sleep = Arc::new(|seconds| Box::pin(tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0)))));
+    (Arc::new(fastbrowse_core::telemetry::monotonic), sleep)
+}
+
 /// A JSON object with its keys in the order given, as Python's dict keeps them; serde_json's map sorts them.
 fn ordered_object(fields: &[(&str, Value)]) -> String {
     let members: Vec<String> = fields.iter().map(|(key, value)| format!("{}:{value}", json!(key))).collect();
@@ -349,9 +396,9 @@ async fn finish(
         Err(error) => {
             // A run that already failed, a failed start and a cancelled run all drop this error for the one they
             // carry, so a browser left running is said here or nowhere.
+            let timeout = api.timeout_minutes.map(|minutes| format!("{minutes}-minute ")).unwrap_or_default();
             crate::warn(&format!(
-                "Browser Use Cloud browser {browser_id} was not stopped ({error}); it runs until its {}-minute timeout",
-                api.timeout_minutes
+                "Browser Use Cloud browser {browser_id} was not stopped ({error}); it runs until its {timeout}timeout"
             ));
             return Err(error);
         }
@@ -793,6 +840,32 @@ mod tests {
             cloud.cost().iter().map(|line| line.basis).collect::<Vec<_>>(),
             [CostBasis::Metered, CostBasis::Unsettled]
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_kept_browser_outlives_its_value_and_running_stops_it() {
+        let server = FakeServer::start(|_, base| created(base, "0")).await;
+        let waits = Waits::default();
+        let mut cloud = cloud(&server, BrowserUseCloudOptions::default(), &waits);
+        cloud.start().await.unwrap();
+        let kept = cloud.keep().unwrap();
+        assert_eq!(kept.browser_id.as_deref(), Some("created"));
+        cloud.stop().await.unwrap();
+        drop(cloud);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(patches(&server.requests()), 0);
+        let mut running =
+            BrowserUseCloudBrowser::running_with_seams("key", "created", &server.base, waits.clock(), waits.sleep());
+        running.stop().await.unwrap();
+        let stopped: Vec<_> = server.requests().into_iter().filter(|r| r.method == "PATCH").map(|r| r.path).collect();
+        assert_eq!(stopped, ["/api/v4/browsers/created"]);
+    }
+
+    #[tokio::test]
+    async fn keep_needs_a_started_browser() {
+        let server = FakeServer::start(|_, base| created(base, "0")).await;
+        let mut cloud = cloud(&server, BrowserUseCloudOptions::default(), &Waits::default());
+        assert!(cloud.keep().is_err());
     }
 
     #[tokio::test]
