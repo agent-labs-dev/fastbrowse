@@ -29,10 +29,11 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with: {python-version: "3.13"}
       # A release is checked against its own number, so a run that left npm behind is named with the version
-      # it failed to publish. A schedule has no release and PyPI's latest decides.
+      # it failed to publish. A schedule, or a dispatched Release rehearsal (its head_branch is a branch, not a
+      # tag), has no release and PyPI's latest decides.
       - name: The version the release published
         id: release
-        if: github.event_name == 'workflow_run'
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push'
         env: {REF: "${{ github.event.workflow_run.head_branch }}"}
         run: echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
       - name: Check the registries agree
