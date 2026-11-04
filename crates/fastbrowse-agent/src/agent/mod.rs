@@ -453,7 +453,8 @@ impl Agent {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
                     // check answers what that stop was about, as it would have at done.
                     if stop.status == Status::Unverified && composed.problem.is_none() {
-                        let result = self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
+                        let result =
+                            self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
@@ -847,7 +848,8 @@ impl Agent {
         let first = state.first_url.as_deref() == Some(observation.url.as_str());
         let shows = decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
             || (state.compose && unread);
-        (decision.operation != fastbrowse_core::models::Operation::Read && (shows || (first && unread))).then_some(shows)
+        (decision.operation != fastbrowse_core::models::Operation::Read && (shows || (first && unread)))
+            .then_some(shows)
     }
 
     /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
