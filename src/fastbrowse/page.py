@@ -48,6 +48,8 @@ class Control(Frozen):
     """A field the page marks required (`required` or `aria-required`)."""
     invalid: bool | None = None
     """A field marked invalid by ARIA or a failed native constraint, without implying submission."""
+    validation_message: str | None = Field(default=None, exclude_if=lambda message: message is None)
+    """The browser's own words for why a native constraint refuses this field."""
     next_page: bool | None = None
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None

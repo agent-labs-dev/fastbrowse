@@ -1464,6 +1464,31 @@ async fn test_native_form_constraints_mark_invalid_controls() {
     h.close().await;
 }
 
+/// A refused submit put no page text on screen, so the run saw only that a field was invalid and refilled the one
+/// the task named instead of the empty one the browser was complaining about.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_field_the_browser_refuses_carries_its_validation_message() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        "document.body.innerHTML = '<form id=f><label>Zip<input id=zip required value=12345></label>\
+         <label>Last name<input id=last required></label><button>Continue</button></form>'; 0",
+    )
+    .await;
+    let before = h.observe().await;
+    let message =
+        |o: &Observation, label: &str| serde_json::to_value(find(o, label)).unwrap()["validation_message"].clone();
+    assert_eq!(message(&before, "Zip"), Value::Null);
+    let browser_says = eval_active(&h, "document.getElementById('f').requestSubmit(); last.validationMessage").await;
+    assert!(browser_says.as_str().is_some_and(|text| !text.is_empty()), "{browser_says}");
+    let after = h.observe().await;
+    assert_eq!(message(&after, "Last name"), browser_says);
+    assert_eq!(message(&after, "Zip"), Value::Null);
+    h.close().await;
+}
+
 /// A field named `method` makes `form.method` return that field, and a React fiber on it points back at it, so
 /// serialising the form's submission as if every property were text threw and ended the run as a browser error.
 #[tokio::test(flavor = "multi_thread")]

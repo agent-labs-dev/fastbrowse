@@ -498,8 +498,11 @@
     // underneath it, so both are asked.
     if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
     // Native validation can refuse a form without adding any ARIA attribute or page text.
-    if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') ||
-      (source.willValidate === true && source.validity?.valid === false)) base.invalid = true;
+    const refused = source.willValidate === true && source.validity?.valid === false;
+    if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
+    // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
+    // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.
+    if (refused && source.validationMessage) base.validation_message = source.validationMessage;
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);

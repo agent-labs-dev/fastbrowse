@@ -134,6 +134,7 @@ struct SnapshotControl {
     offscreen: bool,
     required: Option<bool>,
     invalid: Option<bool>,
+    validation_message: Option<String>,
     next_page: Option<bool>,
     download: Option<bool>,
 }
@@ -371,6 +372,7 @@ fn control_from_raw(
         offscreen: c.offscreen,
         required: c.required,
         invalid: c.invalid,
+        validation_message: c.validation_message.clone(),
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,

@@ -113,6 +113,9 @@ pub struct Control {
     /// A field marked invalid by ARIA or a failed native constraint, without implying submission.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub invalid: Option<bool>,
+    /// The browser's own words for why a native constraint refuses this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_message: Option<String>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub next_page: Option<bool>,
@@ -150,6 +153,7 @@ impl Control {
             offscreen: false,
             required: None,
             invalid: None,
+            validation_message: None,
             next_page: None,
             download: None,
         }

@@ -1246,6 +1246,7 @@ pub fn element(control: &Control) -> Map<String, Value> {
         ("input_type", control.input_type.clone().map(Value::from)),
         ("input_name", control.input_name.clone().map(Value::from)),
         ("autocomplete", control.autocomplete.clone().map(Value::from)),
+        ("validation_message", control.validation_message.clone().map(Value::from)),
     ];
     for (key, value) in optional {
         if let Some(value) = value {
@@ -1731,8 +1732,10 @@ mod tests {
         let mut field = button(1);
         field.required = Some(true);
         field.invalid = Some(true);
+        field.validation_message = Some("Please fill in this field.".into());
         assert_eq!(element(&field)["required"], true);
         assert_eq!(element(&field)["invalid"], true);
+        assert_eq!(element(&field)["validation_message"], "Please fill in this field.");
         assert!(!element(&button(2)).contains_key("required"));
         assert!(!element(&button(2)).contains_key("invalid"));
     }
