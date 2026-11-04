@@ -189,6 +189,10 @@
       .filter(Boolean)
       .join(' ');
   };
+  // A name taken from content reads only what is shown: a card's hidden "Report fraud item" button named the card.
+  // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
+  // An svg's <title> never renders, yet it is the graphic's name.
+  const shown = e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -214,7 +218,10 @@
             .map(n =>
               n.nodeType === 3
                 ? n.textContent
-                : n.nodeType === 1 && !CODE.has(n.tagName) && n.getAttribute('aria-hidden') !== 'true'
+                : n.nodeType === 1 &&
+                    !CODE.has(n.tagName) &&
+                    n.getAttribute('aria-hidden') !== 'true' &&
+                    (shown(n) || !shown(e))
                   ? labelFrom(n, seen)
                   : '',
             )

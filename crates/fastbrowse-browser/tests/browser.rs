@@ -2132,6 +2132,30 @@ async fn test_icon_only_buttons_keep_their_named_glyphs() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_control_is_named_by_its_visible_content_only() {
+    // AliExpress result cards hold a hidden "Report fraud item" button, so every card was offered under that name (#745).
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h,
+        concat!(
+            "document.body.innerHTML = '",
+            "<a href=\"/item\"><button aria-label=\"Report fraud item\" style=\"display:none\"></button>",
+            "<span>N52 disc magnet</span><span style=\"opacity:0\">See preview</span></a>",
+            "<span id=\"draft\" hidden><b>Save</b></span><button aria-labelledby=\"draft\"></button>';",
+        ),
+    )
+    .await;
+    let observation = observe_until(&h.page, "N52 disc magnet").await;
+    assert_eq!(
+        observation.controls.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+        vec!["N52 disc magnet", "Save"]
+    );
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_button_wrapped_in_a_link_is_offered_once() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
