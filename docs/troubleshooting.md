@@ -22,8 +22,8 @@ what to do next. The full table is in [Results](cli.md#results).
 The CLI prints the status, cost and step count, then the error and anything the run read before it stopped.
 `--json` prints the whole result, including every step and the quotes behind the answer.
 
-A run that stops after reading something still returns those cited quotes, so check `evidence` before you
-browse again. A `stuck` or `unverified` run also writes an answer from them, marked `Answer (unverified)`, when
+A run that stops `stuck`, `unverified`, `budget_exceeded`, `observation_limit`, `unavailable` or `error` after
+reading something still returns those cited quotes, so check `evidence` before you browse again. A `stuck` or `unverified` run also writes an answer from them, marked `Answer (unverified)`, when
 the task asks for one.
 
 The causes below name Jev, the model that picks each action from the controls on the page; the LLM
