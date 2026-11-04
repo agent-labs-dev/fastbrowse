@@ -3041,6 +3041,45 @@ async fn test_refilling_a_field_the_rejected_form_drew_again_is_not_progress() {
     assert!(!offers(&offered, Operation::Fill, "Zip/Postal Code"), "{problem:?}");
 }
 
+/// A listings search in the document `document`, its location field holding `location`.
+fn listings(document: &str, location: &str) -> Observation {
+    let field =
+        Control { value: Some(location.into()), ..Control::new("where", "combobox", "Location", [Operation::Fill]) };
+    let found =
+        Control { href: Some("/houston/1".into()), ..Control::new("hit", "link", "Houston loft", [Operation::Click]) };
+    Observation { document_key: document.into(), ..at("https://rent.test/houston", &[field, button("Search"), found]) }
+}
+
+#[tokio::test]
+async fn test_retyping_a_search_the_page_turned_back_is_not_progress() {
+    // #638: each Search loaded the results again at the same address, still for the previous city, with that city back
+    // in the field. The new document forgot what was typed, so the same city typed again counted as the field's first
+    // value, the stall count reset every time, and the run typed and searched about eight times.
+    let page = Scripted::new(
+        listings("1", "Houston"),
+        vec![
+            (Operation::Fill, StepOutcome::Executed, listings("1", "Austin")),
+            (Operation::Click, StepOutcome::Executed, listings("2", "Houston")),
+            (Operation::Fill, StepOutcome::Executed, listings("2", "Austin")),
+        ],
+    );
+    let jev = Typist(&[("source", "task"), ("first", "3"), ("last", "3")]);
+    let agent = Agent::new(Arc::new(page), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Find apartments in Austin".into();
+    agent.settle(&mut state, &listings("1", "Houston")).await.expect("settled");
+    take(&agent, &mut state, Operation::Fill, Some("Location")).await;
+    assert_eq!(state.unchanged, 0, "a field's first value is progress");
+    take(&agent, &mut state, Operation::Click, Some("Search")).await;
+    take(&agent, &mut state, Operation::Fill, Some("Location")).await;
+    assert_eq!(state.unchanged, 2, "the same city typed again moved nothing");
+    let (offered, problem, _) = next_ask(&agent, &state).await;
+    assert!(!offers(&offered, Operation::Fill, "Location"), "{problem:?}");
+    // The field showed the previous city, not the one typed, and Jev is told so rather than that it holds the value.
+    let hint = state.hint.unwrap_or_default();
+    assert!(hint.contains("'Houston'") && !hint.contains("already holds"), "{hint}");
+}
+
 #[tokio::test]
 async fn test_the_llm_image_reader_does_not_require_decision_model_images() {
     let llm = Arc::new(EmptyImageLLM::default());

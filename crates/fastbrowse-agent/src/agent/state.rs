@@ -234,8 +234,9 @@ pub(crate) struct RunState {
     /// next decision there.
     pub picked: Option<(String, Decision)>,
     pub unchanged: i64,
-    /// What a fill or select has written, by document, so only a field's first new value counts as progress by
-    /// itself.
+    /// What a fill or select has written, by page address, so only a field's first new value counts as progress by
+    /// itself. A submit that loads the same address again is still the same form: a new document there does not make
+    /// its fields new.
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
     pub blank_opening_checked: bool,

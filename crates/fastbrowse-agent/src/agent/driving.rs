@@ -20,6 +20,7 @@ use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
 
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
+use crate::memory::address;
 use crate::policy::{Decision, HistoryEntry, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
@@ -534,7 +535,7 @@ impl Agent {
             // A value edit answers "was this progress" itself, and its answer beats `changed`: the popup a fill draws
             // IS a page change, so `changed` alone kept crediting the identical re-fill. `changed` decides every other
             // operation, by the page state it lands on.
-            let written = state.written.entry(observation.document_key.clone()).or_default();
+            let written = state.written.entry(address(&observation.url)).or_default();
             let edit = edit_progress(decision, &action, written);
             // Every write is remembered, including one the page judged for itself: a second, different value on a
             // control has to be recorded or the same text coming back later reads as new.
@@ -553,14 +554,23 @@ impl Agent {
                 None => (!changed).then_some(false),
             };
             if edit == Some(false) && executed {
-                // The field already held the value, so this step moved nothing and cannot count: three of them trip
-                // the stall budget. A run that went back to a credentials form re-entered the password it already had
-                // exactly this way, and nothing told it the form was ready to submit instead.
+                // The field already held the value, or was given it before, so this step moved nothing and cannot
+                // count: three of them trip the stall budget. A run that went back to a credentials form re-entered the
+                // password it already had exactly this way, and nothing told it the form was ready to submit instead.
                 // An edit always has a target, so the label is there; "None" is what Python's f-string would write.
                 let named = label.as_deref().unwrap_or("None");
-                state.hint = Some(self.redact(&format!(
-                    "{named} already holds that value: submit the form, or read the page, instead of typing it again."
-                )));
+                // A field showing something else was given this value before, and the page put that in its place.
+                let shown = decision.target.as_ref().and_then(|target| target.value.as_deref());
+                let hint = match shown.filter(|shown| Some(*shown) != held_value(&action).as_deref()) {
+                    Some(shown) => format!(
+                        "{named} was given that value before, and the page shows {} there instead.",
+                        text::repr(shown)
+                    ),
+                    None => format!(
+                        "{named} already holds that value: submit the form, or read the page, instead of typing it again."
+                    ),
+                };
+                state.hint = Some(self.redact(&hint));
             }
             state.acted_from = Some(observation.clone());
             state.followed = decision
