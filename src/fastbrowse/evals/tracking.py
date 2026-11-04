@@ -160,10 +160,8 @@ def _span(name: str, run: Mapping[str, Any], row: Mapping[str, Any], at: datetim
         ("tokens_per_second", row.get("tokens_per_second")),
     ):
         if value is not None:
-            # Both namespaces, because they are read separately: the v2 observation index answers with
-            # observation metadata, which Langfuse maps from `langfuse.observation.metadata.*`, while a trace
-            # read answers with trace metadata from `langfuse.trace.metadata.*`. Writing one and reading the
-            # other left every upload unverifiable, which is a silent failure of the whole evidence chain.
+            # Trace metadata identifies the run in Langfuse; read-back needs observation metadata because
+            # the v2 index does not return the trace namespace.
             attributes.append(_attribute(f"langfuse.trace.metadata.{key}", value))
             attributes.append(_attribute(f"langfuse.observation.metadata.{key}", value))
     seconds = float(row.get("seconds") or 0)
@@ -224,17 +222,14 @@ def _matches(observation: Mapping[str, Any], spec: Mapping[str, Any]) -> bool:
 
 
 def _run_id(observation: Mapping[str, Any]) -> str | None:
-    """The run id this stored observation carries, from whichever metadata namespace the read path returned.
+    """The run id this stored observation carries in the v2 index's metadata.
 
-    The index answers with observation metadata; a trace read answers with the trace's. Both are written by
-    the upload, so either one naming this run is the same evidence - and a row carrying neither is not ours.
     Langfuse stores a string attribute that looks like a number as that number, so a run id of hex digits
     that happen to be all decimal (`260814399035`) comes back as an integer and is compared as text.
     """
-    for field in ("metadata", "traceMetadata"):
-        metadata = observation.get(field)
-        if isinstance(metadata, Mapping) and metadata.get("run_id") is not None:
-            return str(metadata["run_id"])
+    metadata = observation.get("metadata")
+    if isinstance(metadata, Mapping) and metadata.get("run_id") is not None:
+        return str(metadata["run_id"])
     return None
 
 

@@ -7198,10 +7198,10 @@
       "what": "decorative banner that mislabels what follows",
       "why": "The functions under 'tier 2 and 3 helpers' are probes registered in PROBES, not helpers, and the tier-0 probes above have no banner; each probe's docstring already names its case id (T2.7, T2.8, T3.5).",
       "confidence": "low",
-      "status": "confirmed",
-      "reason": "Fix landed in 78ba142c06 on this branch; the quoted line survives the fix, so the ledger keeps the item confirmed. The banner labels registered probe functions as helpers, while their docstrings already identify the cases and no equivalent banner precedes tier 0 probes.",
+      "status": "fixed",
+      "reason": "Verified fixed in 78ba142c066ff478fac2b4a6f3e65b9f8ab77cb2: the misleading tier 2/3 helpers banner was deleted. The surviving quoted loop is unrelated to the finding. Current adjacent registered probes have no banner.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
@@ -8050,10 +8050,10 @@
       "what": "The campaign trace-name format is defined here (tracking.campaign, tracking.py:101) and restated by hand in scripts/release_guard.py:264 as the Langfuse filter prefix f\"fastbrowse/{version}@{head[:7]}/\". Canonical home: tracking (expose the build prefix, release_guard imports it as it already imports fastbrowse.evals).",
       "why": "If the name format changes in tracking (prefix, sha length, separator), release_guard.eval_evidence_problems finds no traces and refuses every release with 'no eval run recorded'; nothing ties the two strings together. The copies currently agree; the drift risk is the only difference.",
       "confidence": "high",
-      "status": "confirmed",
-      "reason": "The campaign prefix is independently reconstructed in scripts/release_guard.py rather than imported from tracking.campaign, so format changes can make the release guard miss all traces. The reviewed file is hot.",
+      "status": "fixed",
+      "reason": "Verified fixed in aa82ec4188994c4f582b3cd4cc04a07bcb8ff670: release_guard.py and its tests were deleted. The alleged second campaign-name reconstruction no longer exists.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "lens-only: whether two copies share one contract needs judgment"
     },
     {
@@ -8064,10 +8064,10 @@
       "what": "Stale: _run_id still falls back to traceMetadata for 'a trace read', and _span's comment (lines 163-166) justifies writing trace metadata because 'a trace read answers with trace metadata'",
       "why": "Since #570 (0e493eae 'read back only the Langfuse observation index') the module reads only /api/public/v2/observations, as its own docstring says; no code path performs a trace read, and git grep finds traceMetadata only here. Drop the traceMetadata branch and reword the _span comment to the reason trace metadata is still written, if any.",
       "confidence": "medium",
-      "status": "confirmed",
-      "reason": "The production read path only queries /api/public/v2/observations, but _run_id still handles traceMetadata and its comment describes the retired trace-read path. The branch and comment are stale; the reviewed file is hot.",
+      "status": "fixed",
+      "reason": "Removed the retired traceMetadata read fallback and corrected the upload comment. Read-back only queries the v2 observation index and reads its metadata. All 19 existing tracking tests pass, including numeric run ids, missing metadata and observation namespace coverage.",
       "first_seen": "2026-10-30",
-      "updated": "2026-10-30",
+      "updated": "2026-11-04",
       "guard": "settled:python-port-residue"
     },
     {
