@@ -39,9 +39,9 @@ Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.
 up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
 On 46 tasks run three times each against the hosted Browser Use agent, under the same limits on Browser Use
-Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. It was
-slower: 18.9s a task to 15.3s. These figures are the published campaign, release-0.7.1; see
-[How it compares](#how-it-compares).
+Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. That
+is the published campaign, release-0.7.1, which records no run time for either arm, so no speed claim is made
+here. See [How it compares](#how-it-compares).
 
 ## Try it
 
@@ -116,13 +116,18 @@ Benchmarking makes three comparisons:
 
 - **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, the figures above, on Browser
   Use cloud browsers under identical limits with the hosted agent at its defaults. On its own 53-task catalog,
-  fastbrowse passed 99.3% at 17.0s and $0.0268 a run.
+  fastbrowse passed 99.3% at $0.0268 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 6 tasks: not yet measured.
+- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 6 tasks: not yet measured. Browser Use's own
+  Ultrafast is not measured by us either: its vendor-reported 22 seconds and $0.0064 a task cover the model and
+  the search only, with the browser and proxy billed separately, so they are not comparable with our figures.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.7.1 (agent commit `7b8b0e8f`,
-data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`).
+data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`). 0.9.1 is the current release and
+no campaign measured on a 0.9.x build has been published, so nothing above describes 0.9.1;
+[Benchmark results](docs/benchmarks.md#why-the-published-campaign-lags-the-release) says why and what the next
+campaign measures.
 [Benchmark results](docs/benchmarks.md) gives the sources, cost basis and limitations, and
 [eval results and workflow](docs/evals.md) covers the diagnostic suites.
 

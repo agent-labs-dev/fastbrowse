@@ -8,6 +8,19 @@ records each comparison's sources and the earlier records that are no longer on 
 These are recorded benchmark comparisons, not a controlled experiment: the associations below do not
 establish cause.
 
+## Why the published campaign lags the release
+
+The page publishes `release-0.7.1` (agent commit `7b8b0e8f`, run 2026-10-25). The current release is 0.9.1,
+tagged 2026-10-30. No campaign measured on a 0.9.x build has been approved and published, so every figure here
+and on the page is a 0.7.1 figure and none of it describes the current build. A campaign becomes published only
+when its groups have run and its candidate export has been verified and merged, and since `bd02773b` a release
+does not wait on an eval run for its build, so nothing keeps a tag and a published campaign in step.
+
+The next campaign to publish measures a 0.9.x build on the same three comparisons: C1 head-to-head against the
+hosted Browser Use agent over the 46 live tasks, three repeats each, reporting task success and mean cost per
+run; C2 fastbrowse on its own browser pool against one Browser Use Cloud browser; and C3 against
+`jev-ultrafast` over the 6 tasks both run.
+
 Benchmarking compares exactly three things, and nothing else is a headline:
 
 | | Comparison | Arms | Publication group | Status |
@@ -31,13 +44,17 @@ cloud browsers under identical limits, with the hosted agent at its defaults. So
 | Metric | fastbrowse | Browser Use (hosted) | Delta |
 |:--|:--|:--|:--|
 | Task success | 99.2% (137 of 138 counted) | 96.3% (133 of 138) | 2.9 points higher |
-| Execution time | 18.9s | 15.3s | 3.6s slower |
 | Cost per run | $0.0296 | $0.3180 | 10.7x cheaper |
+
+Execution time is not published for this campaign. The benchmark page shows no run time for either arm of this
+group, both reading "Not recorded", so this file quotes no time and no time delta for it. The 18.9s to 15.3s
+this file used to carry is still in the campaign's recorded data, but a figure the page does not publish is not
+one this file puts in a comparison: the two surfaces carry the same numbers or neither does.
 
 Task success is the share of scored results the source grader passed. Completion is reported separately:
 fastbrowse completed 133 of 138 results to the hosted agent's 138 of 138. The same campaign also publishes the
-`fastbrowse-internal` group, fastbrowse alone on the 53-task internal catalog: 99.3% (158 of 159), an execution
-time of 17.0s and $0.0268 a run.
+`fastbrowse-internal` group, fastbrowse alone on the 53-task internal catalog: 99.3% (158 of 159) of results
+and $0.0268 a run.
 
 An earlier record in the `fastbrowse-site` repository (`src/app/page.tsx`) measured 14 answer tasks (lookups,
 sign-ins, checkout, Google Flights) under a 30-step, $0.25 cap, 300s regime: fastbrowse passed 40 of 42 and the
@@ -107,6 +124,23 @@ The earlier record is not a C3 figure: the 0.5.14 core suite ran fastbrowse on a
 its own pool, against `jev-ultrafast` (fastbrowse 58 of 60, median 8.6s; `jev-ultrafast` 40 of 60, median 12.6s;
 source: the `docs/results/0.5.14.jsonl` entry in `docs/results/publication-baselines.json`). Figures approved
 under that pairing keep it, under their own schema.
+
+### Browser Use Ultrafast (`bu-ultrafast`): deliberately unmeasured
+
+Browser Use put Ultrafast on every Cloud plan in the US on 2026-10-30 and publishes a vendor-reported median of
+22 seconds and $0.0064 a task (source: <https://browser-use.com/posts/bu-ultrafast-is-live>, read 2026-11-04).
+Those are Browser Use's figures about Browser Use, and they cover the model and the search only: browser time at
+$0.02 a browser-hour and proxy traffic at $5/GB are billed separately. They are not a measurement of ours, they
+are not the same kind of number as our `dollars` (metered provider spend, browser included), and this file puts
+them in no column above.
+
+We have not run that arm, and no C1 or C3 figure for it is claimed. The arms the runner can measure are fixed
+by `src/fastbrowse/evals/benchmarks.py` (`fastbrowse`, `fastbrowse-pool`, `browser-use`, `jev-ultrafast`), and
+each publication group validates the arms it may carry: `internal-hosted` pairs `fastbrowse` with `browser-use`,
+and `internal-ultrafast` pairs `fastbrowse-pool` with `jev-ultrafast` at the pinned commit `1231850a`. Measuring
+Browser Use Ultrafast therefore takes an arm added to the arm set and to a group, a patch pin of the revision it
+runs, and a cost meter that adds its browser-hour and proxy GB, so its per-task cost is the same quantity as
+ours. Until that exists the comparison stays unmeasured, and its vendor figures stay labelled as the vendor's.
 
 ## What is not claimed here
 
