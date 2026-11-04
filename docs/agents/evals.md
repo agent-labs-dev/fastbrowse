@@ -11,7 +11,8 @@ and check the result against the core suite and the local and mock fixtures rath
 Fix the general cause (the no eval tuning rule in [AGENTS.md](../../AGENTS.md)) before the before-and-after run.
 
 The internal live suite, external corpora, comparator adapters and recording tools live in Parallax under
-`parallax.browser_use`. Run its `parallax browser internal --help`, `official --help`, `data --help` and
+`parallax.browser_use`, in the private [agent-labs-dev/fastbrowse-evals](https://github.com/agent-labs-dev/fastbrowse-evals)
+repository. The campaign workflows check it out with the `EVALS_DEPLOY_KEY` deploy key. Run its `parallax browser internal --help`, `official --help`, `data --help` and
 `track --help` in the maintainer checkout. The internal comparison runs fastbrowse and Jev Ultrafast live and
 reads Browser Use hosted default and Browser Harness from the competitor reference; label the Python SDK agent
 separately when used. An agent shows tasks it cannot attempt as not run. Never pool the best score from separate agents.

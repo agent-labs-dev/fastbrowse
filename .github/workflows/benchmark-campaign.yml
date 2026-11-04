@@ -12,9 +12,9 @@ name: Benchmark campaign
 # rows join this candidate as the bu-bench and online-mind2web groups: the site reads one candidate, so every group in
 # it comes from one build. Run them first; this workflow neither starts nor waits for them.
 #
-# The campaign code lives in agent-labs-dev/parallax (parallax.browser_use), pinned by `parallax_sha`. The
+# The campaign code lives in agent-labs-dev/fastbrowse-evals (parallax.browser_use), pinned by `parallax_sha`. The
 # fastbrowse repo does not depend on parallax, so this workflow checks the pinned parallax out beside fastbrowse
-# with PARALLAX_DEPLOY_KEY, a read-only deploy key on agent-labs-dev/parallax.
+# with EVALS_DEPLOY_KEY, a read-only deploy key on agent-labs-dev/fastbrowse-evals.
 #
 # Groups:
 #   fastbrowse    fastbrowse alone on every live suite task (internal-fastbrowse).
@@ -32,7 +32,7 @@ name: Benchmark campaign
 # Browser Use Cloud browser through the Codex CLI on gpt-6-luna, installed only for this dispatch.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: PARALLAX_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
+#   secrets: EVALS_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
 #            with the fixture run)
 #            BROWSER_USE_API_KEY
@@ -66,7 +66,7 @@ on:
         required: true
         type: string
       parallax_sha:
-        description: Full 40 character commit SHA of agent-labs-dev/parallax to run
+        description: Full 40 character commit SHA of agent-labs-dev/fastbrowse-evals to run
         required: true
         type: string
       groups:
@@ -230,13 +230,13 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
-          PARALLAX_DEPLOY_KEY: ${{ secrets.PARALLAX_DEPLOY_KEY }}
+          EVALS_DEPLOY_KEY: ${{ secrets.EVALS_DEPLOY_KEY }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
-          need PARALLAX_DEPLOY_KEY "$PARALLAX_DEPLOY_KEY"
+          need EVALS_DEPLOY_KEY "$EVALS_DEPLOY_KEY"
           need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
           need AI_GATEWAY_API_KEY "$AI_GATEWAY_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
@@ -316,11 +316,11 @@ jobs:
       - name: Check out the pinned parallax
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: agent-labs-dev/parallax
+          repository: agent-labs-dev/fastbrowse-evals
           ref: ${{ needs.resolve.outputs.parallax_sha }}
           path: parallax
-          # A read-only deploy key on agent-labs-dev/parallax, the private source this repository cannot read.
-          ssh-key: ${{ secrets.PARALLAX_DEPLOY_KEY }}
+          # A read-only deploy key on agent-labs-dev/fastbrowse-evals, the private source this repository cannot read.
+          ssh-key: ${{ secrets.EVALS_DEPLOY_KEY }}
           persist-credentials: false
       - name: Install parallax and fastbrowse
         env:
@@ -414,11 +414,11 @@ jobs:
       - name: Check out the pinned parallax
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: agent-labs-dev/parallax
+          repository: agent-labs-dev/fastbrowse-evals
           ref: ${{ needs.resolve.outputs.parallax_sha }}
           path: parallax
-          # A read-only deploy key on agent-labs-dev/parallax, the private source this repository cannot read.
-          ssh-key: ${{ secrets.PARALLAX_DEPLOY_KEY }}
+          # A read-only deploy key on agent-labs-dev/fastbrowse-evals, the private source this repository cannot read.
+          ssh-key: ${{ secrets.EVALS_DEPLOY_KEY }}
           persist-credentials: false
       - name: Install parallax and fastbrowse
         env:

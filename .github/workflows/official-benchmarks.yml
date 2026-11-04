@@ -30,7 +30,7 @@ name: Official benchmarks
 # PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT before it is uploaded; only the holder of the matching identity can read it.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: PARALLAX_DEPLOY_KEY (a read-only deploy key on agent-labs-dev/parallax)
+#   secrets: EVALS_DEPLOY_KEY (a read-only deploy key on agent-labs-dev/fastbrowse-evals)
 #            OPENROUTER_API_KEY (the agent's LLM and Jev)
 #            PARALLAX_JUDGE_API_KEY (the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the run's record in the fastbrowse-evals project)
@@ -44,7 +44,7 @@ name: Official benchmarks
 # Both upstream judges call OpenAI directly. Here they call the OpenAI-compatible endpoint in `base_url`
 # (`parallax browser official --judge-base-url`); the run records the route, and a published group says it differs
 # from the upstream's. `--judge-base-url`, and Online-Mind2Web's task loader and reasoning judge request, need a
-# parallax_sha that includes agent-labs-dev/parallax#361.
+# parallax_sha that includes agent-labs-dev/fastbrowse-evals#361.
 #
 # Each judge variable is one JSON object with every price checked against that endpoint's listing:
 #   {"base_url": "https://...", "model": "...", "reasoning": "...", "pricing_checked": "YYYY-MM-DD",
@@ -74,7 +74,7 @@ on:
         required: true
         type: string
       parallax_sha:
-        description: Full 40 character commit SHA of agent-labs-dev/parallax to run
+        description: Full 40 character commit SHA of agent-labs-dev/fastbrowse-evals to run
         required: true
         type: string
       suites:
@@ -184,7 +184,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Check the credentials
         env:
-          PARALLAX_DEPLOY_KEY: ${{ secrets.PARALLAX_DEPLOY_KEY }}
+          EVALS_DEPLOY_KEY: ${{ secrets.EVALS_DEPLOY_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
@@ -198,7 +198,7 @@ jobs:
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
-          need PARALLAX_DEPLOY_KEY "$PARALLAX_DEPLOY_KEY"
+          need EVALS_DEPLOY_KEY "$EVALS_DEPLOY_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
           need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
@@ -313,10 +313,10 @@ jobs:
       - name: Check out the pinned parallax
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: agent-labs-dev/parallax
+          repository: agent-labs-dev/fastbrowse-evals
           ref: ${{ needs.resolve.outputs.parallax_sha }}
           path: parallax
-          ssh-key: ${{ secrets.PARALLAX_DEPLOY_KEY }}
+          ssh-key: ${{ secrets.EVALS_DEPLOY_KEY }}
           persist-credentials: false
       - name: Install parallax and fastbrowse
         # Every later parallax command runs with --no-sync: a syncing `uv run` would put back the fastbrowse
