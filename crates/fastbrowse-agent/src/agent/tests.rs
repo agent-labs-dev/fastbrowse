@@ -956,7 +956,7 @@ impl Page for FinishPage {
 }
 
 /// Accepts the draft made from a read claim and counts the done-check requests.
-struct DoneCheckJev(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+struct DoneCheckJev(std::sync::Arc<std::sync::atomic::AtomicUsize>, f64);
 
 impl DecisionClient for DoneCheckJev {
     fn evaluate<'a>(
@@ -967,7 +967,7 @@ impl DecisionClient for DoneCheckJev {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let answers = questions
             .keys()
-            .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.0 })))
+            .map(|key| (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.1 })))
             .collect();
         Box::pin(
             async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
@@ -980,7 +980,7 @@ impl DecisionClient for DoneCheckJev {
 }
 
 #[tokio::test]
-async fn test_a_done_answers_from_the_notes_with_no_further_question() {
+async fn test_a_done_answers_from_the_notes_once_jev_finds_them_covering_the_task() {
     let page = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
     let fact = Fact::read("The answer is 42", block_evidence(&page, "s0"), FactReader::JevChoice).answering();
     let mut state = run_state();
@@ -991,14 +991,15 @@ async fn test_a_done_answers_from_the_notes_with_no_further_question() {
     let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let agent = Agent::new(
         Arc::new(FinishPage(observation(&[]))),
-        Arc::new(DoneCheckJev(requests.clone())),
+        Arc::new(DoneCheckJev(requests.clone(), 1.0)),
         Arc::new(ScriptedLLM),
     );
 
     let page = observation(&[]);
     let result = agent.finish(&mut state, &page, None, None).await.expect("finish").expect("a completed result");
     assert_eq!(result.status, Status::Complete);
-    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // One request judges the picked note against its quote and the task; nothing is composed.
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("The answer is 42")));
 }
 
@@ -1673,6 +1674,70 @@ async fn test_a_task_about_how_the_page_looks_reads_the_screenshot_of_a_page_sty
     assert_eq!(reads("page_text").await, 0);
 }
 
+/// Jev reading the task's output as `IntentJev` does, judging every claim supported and the whole answer's coverage of
+/// the task at the given probability.
+struct Reviewing(IntentJev, f64);
+
+impl DecisionClient for Reviewing {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if !questions.contains_key("coverage") {
+            return self.0.evaluate(state, questions);
+        }
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let answer = match question {
+                    Question::Choice(choice) => Answer::Choice(ChoiceAnswer {
+                        kind: fastbrowse_core::decision::ChoiceTag,
+                        choice: if choice.criteria.contains_key("none") { "none" } else { "0" }.into(),
+                        probabilities: IndexMap::new(),
+                        confidence: 1.0,
+                    }),
+                    _ => Answer::Noul(NoulAnswer {
+                        kind: Default::default(),
+                        probability: if key == "coverage" { self.1 } else { 1.0 },
+                    }),
+                };
+                (key.clone(), answer)
+            })
+            .collect();
+        Box::pin(async move {
+            Ok(Evaluation {
+                model: "test".into(),
+                answers,
+                input_tokens: 0,
+                cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                requests: 1,
+            })
+        })
+    }
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A dashboard read over HTTP before its script drew it: Jev picked the status line as the whole answer to a task that
+/// also asks for a second reading after a scroll, and that one line ended the run `complete` with nothing checked
+/// (#679 rerun). An answer read verbatim is held to what the task asks to be told, as a composed one is.
+#[tokio::test]
+async fn test_an_answer_read_verbatim_is_checked_against_what_the_task_asks_to_be_told() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Reviewing(IntentJev::new("text"), 0.0)), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Read the status, scroll to the bottom of the table, read the status again and report both.".into();
+    let captured = capture(&[(BlockKind::Paragraph, "live, updated 00:00:00")]);
+    state.notes =
+        Notes::new([
+            Fact::read("live, updated 00:00:00", block_evidence(&captured, "s0"), FactReader::JevChoice).answering()
+        ]);
+    assert!(!state.compose, "Jev's pick alone answered the task");
+    let result = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
+    assert_eq!(result.status, Status::Unverified);
+}
+
 #[tokio::test]
 async fn test_output_intent_is_cached_without_guessing_from_task_text() {
     let jev = Arc::new(IntentJev::new("image"));
@@ -1742,8 +1807,8 @@ async fn test_a_task_to_carry_out_is_not_done_by_hovering() {
 
 #[tokio::test]
 async fn test_text_and_image_returns_both_evidenced_text_and_frame() {
-    let agent =
-        Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("text_image")), Arc::new(ScriptedLLM));
+    let jev = Arc::new(Reviewing(IntentJev::new("text_image"), 1.0));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     let captured = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
     state.notes =

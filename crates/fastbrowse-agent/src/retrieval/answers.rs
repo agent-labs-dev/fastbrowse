@@ -889,9 +889,29 @@ pub fn marked_partial(result: ComposedAnswer) -> ComposedAnswer {
 
 /// The facts standing as the answer, each citing its quote and the records it draws on.
 pub fn draft_answer(notes: &Notes) -> Option<ComposedAnswer> {
-    let claims: Vec<Claim> =
-        notes.supporting().into_iter().map(|(key, fact)| Claim::new(&fact.text, vec![key])).collect();
+    let claims = draft_claims(notes);
     (!claims.is_empty()).then(|| assemble_answer(&claims, notes))
+}
+
+fn draft_claims(notes: &Notes) -> Vec<Claim> {
+    notes.supporting().into_iter().map(|(key, fact)| Claim::new(&fact.text, vec![key])).collect()
+}
+
+/// The notes Jev picked as the whole answer, held to what the task asks to be told as a composed answer is: a pick made
+/// from one read cannot see that the task also wants a value from a later state. None when nothing was picked.
+pub(crate) async fn draft_reviewed(
+    jev: &dyn DecisionClient,
+    task: &str,
+    notes: &Notes,
+    ledger: Option<&Ledger>,
+) -> Result<Option<ReviewedComposition>> {
+    let claims = draft_claims(notes);
+    if claims.is_empty() {
+        return Ok(None);
+    }
+    let CheckedClaims { claims, problem, rejection } =
+        review_claims(jev, task, None, claims, notes, ledger, true).await?;
+    Ok(Some(ReviewedComposition { answer: ComposedAnswer { problem, ..assemble_answer(&claims, notes) }, rejection }))
 }
 
 #[cfg(test)]

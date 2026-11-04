@@ -10,7 +10,7 @@ use super::recovery::{DONE, Idle};
 use super::state::{OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose_reviewed, draft_answer, marked_partial, verdict};
+use crate::retrieval::{compose_reviewed, draft_answer, draft_reviewed, marked_partial, verdict};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -224,6 +224,17 @@ impl Agent {
                     rejection = reviewed.rejection;
                     Some(reviewed.answer)
                 }
+            }
+        } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
+            let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
+            match self.trace.phase("verdict", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
+                Some(reviewed) => {
+                    // A pick that falls short is written up next time, from everything read by then.
+                    state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();
+                    rejection = reviewed.rejection;
+                    Some(reviewed.answer)
+                }
+                None => None,
             }
         } else {
             draft_answer(&state.notes)

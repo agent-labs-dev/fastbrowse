@@ -313,8 +313,11 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
     let mut answers = serde_json::Map::new();
     for (key, question) in questions.as_object().unwrap() {
         if question["type"] == "noul" {
+            // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
             let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure") {
                 0.0
+            } else if key == "coverage" || key.starts_with("claim") {
+                1.0
             } else {
                 script["noul"].as_f64().unwrap_or(0.0)
             };
