@@ -81,7 +81,7 @@ public record RunOptions(
             Consumer<Event> onEvent,
             Consumer<byte[]> onFrame) {
         this(browser, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record,
-                null, null, cursor, secrets, resolver, until, onEvent, onFrame);
+                null, null, cursor, null, false, false, secrets, resolver, until, onEvent, onFrame);
     }
 
     public static RunOptions defaults() {
