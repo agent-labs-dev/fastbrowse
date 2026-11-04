@@ -23,7 +23,7 @@ env:
 jobs:
   select:
     permissions: {issues: write, pull-requests: read}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     # One selection at a time: an issue is labelled before this job ends, so the next run never picks it again.
     concurrency:
       group: claude-issue-pr-select
