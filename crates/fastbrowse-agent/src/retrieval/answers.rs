@@ -472,10 +472,11 @@ async fn review_claims(
     ledger: Option<&Ledger>,
     require_coverage: bool,
 ) -> Result<CheckedClaims> {
+    // A task only carried out asks to be told nothing, so writing nothing about it is no shortfall.
     if claims.is_empty() {
         return Ok(CheckedClaims {
             claims,
-            problem: Some("The composer returned no supported claims.".into()),
+            problem: require_coverage.then(|| "The composer returned no supported claims.".into()),
             rejection: None,
         });
     }
@@ -1507,6 +1508,19 @@ mod tests {
         let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().unwrap()).unwrap();
         assert_eq!(feedback["rejected_checks"], json!(["coverage"]));
         assert_eq!(jev.asked.lock().unwrap().len(), 1);
+    }
+
+    /// A password changed, the composer wrote nothing about it, and the run ended `unverified`: a task that asks to
+    /// be told nothing has nothing to cover, while one that asks for facts still needs claims.
+    #[tokio::test]
+    async fn no_claims_are_a_problem_only_when_the_task_asks_to_be_told_something() {
+        let notes = Notes::new([fact(0, "Your password was changed.".into())]);
+        let jev = Support::new(true);
+        let carried_out = review_claims(&jev, "Change my password", None, vec![], &notes, None, false).await.unwrap();
+        assert_eq!(carried_out.problem, None);
+        let reported = review_claims(&jev, "Report the price", None, vec![], &notes, None, true).await.unwrap();
+        assert!(reported.problem.is_some());
+        assert!(jev.asked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
