@@ -205,8 +205,10 @@ driver failure turns the feature off for the run.
 The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
 one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the
 arrow landed on nothing, and a glide past the two-second call bound turned the feature off. The run asks
-`set_agent_cursor_motion` for a fixed 550 ms glide, which lands on each click about half a second after it, and
-waits up to six seconds for a move. Shorter glides land sooner but cross the screen in a few frames.
+`set_agent_cursor_motion` for fixed timing with a glide paced between 550 and 2,200 ms, and waits up to six
+seconds for the move itself. The outer deadline also allows two seconds each for refreshing the session,
+finding its window, restoring visibility and updating the pace. Shorter glides land sooner but cross the
+screen in a few frames.
 
 The glide a move is drawn with is paced to a travel speed, not to a duration: it takes as long as its distance
 needs at `GLIDE_PX_PER_S`, between `GLIDE_MS` and `GLIDE_MAX_MS`. One fixed duration made a sweep across the page
