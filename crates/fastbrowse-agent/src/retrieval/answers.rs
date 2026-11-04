@@ -458,7 +458,7 @@ fn judged(answer: Option<&Answer>) -> Option<bool> {
 fn coverage_question(task: &str, columns: Option<&[String]>, claims: &[Claim]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. Task: {} Answer: {}",
+            "{UNTRUSTED} Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately. Task: {} Answer: {}",
             dumps(&json!(task)),
             dumps(&json!({"columns": columns, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))
         ),
