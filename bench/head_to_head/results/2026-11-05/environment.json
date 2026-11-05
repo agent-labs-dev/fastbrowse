@@ -1,0 +1,32 @@
+{
+  "machine": {
+    "name": "Agent Labs Computer (dev_06a131e838b1740e8000e96a880680c4)",
+    "hostname": "nb-53e0161a133d-d9c5",
+    "cpu": "AMD EPYC 9554P 64-Core Processor",
+    "vcpus": 4,
+    "memory_gib": 15.6,
+    "kernel": "6.12.93"
+  },
+  "chrome": "Chromium 149.0.7827.102 built on Debian GNU/Linux 12 (bookworm)",
+  "fastbrowse": {
+    "version": "0.9.1",
+    "commit": "7460dd458dcfa07c67ec232b83d727c3478f214f",
+    "profile": "release",
+    "wheel": "fastbrowse-0.9.1-cp313-abi3-manylinux_2_35_x86_64.whl"
+  },
+  "browser_use": {
+    "version": "0.13.14"
+  },
+  "python": "Python 3.13.13",
+  "model": "google/gemini-3.8-flash",
+  "reasoning": "low",
+  "run_seconds_limit": 900,
+  "truth_checked": {
+    "books-travel-priciest": "A Year in Provence (Provence #1) 56.88",
+    "stretch-books-nonfiction-five-star": "Agnostic: A Spirited Manifesto 12.51; Disrupted: My Misadventure in the Start-Up Bubble 15.28; Mother, Can You Not? 16.89",
+    "stretch-quotes-top-authors": "[('Albert Einstein', 10), ('J.K. Rowling', 9), ('Marilyn Monroe', 7)] over 10 pages",
+    "quotes-search": "unverified here: the answer sits behind the site's search form",
+    "dynamic-loading": "unverified here: the text appears only after the page's script runs",
+    "saucedemo-checkout": "fixed by the site: (29.99 + 9.99) with 8% tax = 43.18"
+  }
+}

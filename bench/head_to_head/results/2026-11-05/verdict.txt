@@ -1,0 +1,2 @@
+fastbrowse was faster and cheaper on the short and workflow tasks. Browser Use passed every run and won the task that aggregates across pages, where fastbrowse failed 2 of 3.
+Speed: fastbrowse's median was 2.8x to 6.5x faster on three tasks (search form, dynamic page, checkout), level on two, and 8.6x slower on quotes-top-authors. Cost: fastbrowse was cheaper on four tasks and dearer on two; quotes-top-authors alone was 72% of its spend, which is why its total is higher. Reliability: 16 of 18 runs against 18 of 18, with both fastbrowse failures on that same task.
