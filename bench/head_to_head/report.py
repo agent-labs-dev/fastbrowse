@@ -23,6 +23,9 @@ ARM_NAMES = {
     "fastbrowse": "fastbrowse",
     "browser-use": "Browser Use",
     "browser-use-default-effort": "Browser Use, default effort",
+    "browser-use-cloud": "Browser Use Cloud, default",
+    "bu-ultrafast": "bu-ultrafast",
+    "bu-fast": "bu-fast",
 }
 
 
@@ -64,8 +67,12 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "dollars_mean": _mean([row["dollars"] for row in rows if row.get("dollars") is not None]),
         "dollars_total": sum(row.get("dollars") or 0 for row in rows),
         "unknown_cost_runs": sum(bool(row.get("unknown_cost")) or row.get("dollars") is None for row in rows),
-        "cpu_median": _median([row["cpu_seconds"] for row in rows]),
-        "rss_median": _median([row["peak_rss_mib"] for row in rows]),
+        "session_dollars_mean": _mean(
+            [row["session_dollars"] for row in rows if row.get("session_dollars") is not None]
+        ),
+        "model_seconds_median": _median([row["model_seconds"] for row in rows if row.get("model_seconds") is not None]),
+        "cpu_median": _median([row["cpu_seconds"] for row in rows if row.get("cpu_seconds") is not None]),
+        "rss_median": _median([row["peak_rss_mib"] for row in rows if row.get("peak_rss_mib") is not None]),
     }
 
 
@@ -117,8 +124,8 @@ def markdown(name: str, env: dict[str, Any], rows: list[dict[str, Any]]) -> str:
         "",
         "## Every run",
         "",
-        "| Run | Started (UTC) | Passed | Ending | Wall (s) | Steps | Tool calls | LLM | Jev | All tokens in | All tokens out | Cost | Agent CPU (s) | Peak RSS (MiB) | Load before | Load after | Failure |",
-        "|:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|",
+        "| Run | Preset | Started (UTC) | Passed | Ending | Wall (s) | Steps | Tool calls | LLM | Jev | All tokens in | All tokens out | Cost | Agent CPU (s) | Peak RSS (MiB) | Load before | Load after | Failure |",
+        "|:--|:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|",
     ]
     for row in rows:
         cost = (
@@ -129,10 +136,10 @@ def markdown(name: str, env: dict[str, Any], rows: list[dict[str, Any]]) -> str:
         tools = len(row["tool_calls"]) if row.get("tool_calls") is not None else "not measured"
         failure = (row.get("error") or row["failure"] or "").replace("|", "\\|")
         lines.append(
-            f"| {row['run_id']} | {row['started_at']} | {'yes' if row['passed'] else 'no'} | {row['ending']} | {row['wall_seconds']:.1f} | "
+            f"| {row['run_id']} | {row.get('preset', 'not hosted')} | {row['started_at']} | {'yes' if row['passed'] else 'no'} | {row['ending']} | {row['wall_seconds']:.1f} | "
             f"{row.get('steps', 'not measured')} | {tools} | {row.get('llm_calls', 'not measured')} | {row.get('jev_calls', 'not measured')} | "
-            f"{row.get('input_tokens', 'not measured')} | {row.get('output_tokens', 'not measured')} | {cost} | {row['cpu_seconds']:.1f} | {row['peak_rss_mib']:.0f} | "
-            f"{row['load_1m_before']} | {row['load_1m_after']} | {failure} |"
+            f"{row.get('input_tokens', 'not measured')} | {row.get('output_tokens', 'not measured')} | {cost} | {_n(row['cpu_seconds'], '{:.1f}')} | {_n(row['peak_rss_mib'])} | "
+            f"{_n(row['load_1m_before'], '{}')} | {_n(row['load_1m_after'], '{}')} | {failure} |"
         )
     lines += ["", "## Every answer", ""]
     for row in rows:

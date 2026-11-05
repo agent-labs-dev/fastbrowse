@@ -22,11 +22,16 @@ from report import ARM_NAMES, load, plain_punctuation, summaries, summarize
 from tasks import TASKS, catalog_entry
 
 HERE = Path(__file__).parent
-MAIN_ARMS = ("fastbrowse", "browser-use")
+MAIN_ARMS = ("fastbrowse", "browser-use", "browser-use-cloud", "bu-ultrafast")
+SCOREBOARD_ARMS = (*MAIN_ARMS, "bu-fast")
+HOSTED_ARMS = ("browser-use-cloud", "bu-ultrafast", "bu-fast")
 SERIES = {
     "fastbrowse": "var(--series-1)",
     "browser-use": "var(--series-2)",
     "browser-use-default-effort": "var(--series-3)",
+    "browser-use-cloud": "var(--series-4)",
+    "bu-ultrafast": "var(--series-3)",
+    "bu-fast": "var(--series-5)",
 }
 
 STYLE = """
@@ -34,7 +39,7 @@ STYLE = """
   color-scheme: light;
   --page: #f4f4f1; --surface-1: #fcfcfb; --rule: #e4e3de; --track: #ecebe6;
   --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #6d6c67;
-  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #8a5fd1; --series-5: #b58a12;
   --good: #0a7a3e; --critical: #c62f2e;
 }
 @media (prefers-color-scheme: dark) {
@@ -42,7 +47,7 @@ STYLE = """
     color-scheme: dark;
     --page: #111110; --surface-1: #1a1a19; --rule: #30302d; --track: #2a2a27;
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #a3a298;
-    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #9b73e0; --series-5: #c79c1f;
     --good: #4cc38a; --critical: #ff8a8a;
   }
 }
@@ -63,7 +68,7 @@ h2 { font-size: 19px; margin: 0 0 4px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px; color: var(--text-secondary); font-size: 13px; }
 .legend span { display: inline-flex; align-items: center; gap: 7px; }
 .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; }
 .tile { background: var(--surface-1); border: 1px solid var(--rule); border-radius: 12px; padding: 14px; min-width: 0; }
 .tile .label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
 .tile .pair { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline; }
@@ -86,7 +91,7 @@ h2 { font-size: 19px; margin: 0 0 4px; }
 .value { font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .passes { display: flex; align-items: center; gap: 5px; height: 22px; font-size: 13px; }
 .passes + .passes { margin-top: 3px; }
-.who-mini { width: 104px; white-space: nowrap; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; font-size: 12px; flex: none; }
+.who-mini { width: 168px; white-space: nowrap; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; font-size: 12px; flex: none; }
 .mark { font-weight: 700; width: 16px; text-align: center; }
 .mark.ok { color: var(--good); }
 .mark.no { color: var(--critical); }
@@ -169,11 +174,18 @@ def metric(name: str, arms: tuple[str, ...], rows: list[dict[str, Any]], read: A
     return "".join(out)
 
 
+def _present(rows: list[dict[str, Any]], arms: tuple[str, ...] = MAIN_ARMS) -> tuple[str, ...]:
+    """The arms a campaign actually has, so a campaign without the hosted runs draws no empty rows."""
+    found = {row["arm"] for row in rows}
+    return tuple(arm for arm in arms if arm in found)
+
+
 def task_block(task: Any, rows: list[dict[str, Any]], scales: dict[str, float]) -> str:
     entry = catalog_entry(task)
-    these = [row for row in rows if row["task"] == task.id and row["arm"] in MAIN_ARMS]
+    arms = _present(rows)
+    these = [row for row in rows if row["task"] == task.id and row["arm"] in arms]
     passes = ['<div class="metric"><div class="name">Passed, each repeat</div>']
-    for arm in MAIN_ARMS:
+    for arm in arms:
         runs = sorted((row for row in these if row["arm"] == arm), key=lambda row: row["repeat"])
         marks = "".join(
             f'<span class="mark {"ok" if row["passed"] else "no"}" data-tip="Repeat {row["repeat"]}: {"passed" if row["passed"] else esc(row.get("error") or row["failure"])}">{"✓" if row["passed"] else "✕"}</span>'
@@ -189,7 +201,7 @@ def task_block(task: Any, rows: list[dict[str, Any]], scales: dict[str, float]) 
         "".join(passes),
         metric(
             "Wall clock, median and each run",
-            MAIN_ARMS,
+            arms,
             these,
             lambda row: row["wall_seconds"],
             _seconds,
@@ -197,17 +209,17 @@ def task_block(task: Any, rows: list[dict[str, Any]], scales: dict[str, float]) 
         ),
         metric(
             "Cost per run, median and each run",
-            MAIN_ARMS,
+            arms,
             these,
             lambda row: row.get("dollars"),
             _dollars,
             scales["cost"],
         ),
-        metric("Model calls, all kinds", MAIN_ARMS, these, lambda row: row.get("model_calls"), _count, scales["calls"]),
-        metric("Steps, each agent's own unit", MAIN_ARMS, these, steps, _count, scales["steps"]),
+        metric("Model calls, all kinds", arms, these, lambda row: row.get("model_calls"), _count, scales["calls"]),
+        metric("Steps, each agent's own unit", arms, these, steps, _count, scales["steps"]),
         metric(
             "Text-model tokens, in + out",
-            MAIN_ARMS,
+            arms,
             these,
             lambda row: (
                 None if row.get("llm_input_tokens") is None else row["llm_input_tokens"] + row["llm_output_tokens"]
@@ -225,7 +237,7 @@ def task_block(task: Any, rows: list[dict[str, Any]], scales: dict[str, float]) 
 
 
 def section(length: str, title: str, note: str, rows: list[dict[str, Any]]) -> str:
-    these = [row for row in rows if row["length"] == length and row["arm"] in MAIN_ARMS]
+    these = [row for row in rows if row["length"] == length and row["arm"] in _present(rows)]
     biggest = lambda read: max([value for row in these if (value := read(row)) is not None], default=0) * 1.04 or 1  # noqa: E731
     scales = {
         "wall": biggest(lambda row: row["wall_seconds"]),
@@ -246,6 +258,7 @@ def tile(label: str, s: dict[str, Any], show: Any, foot: str = "") -> str:
     lines = "".join(
         f'<span class="who">{_swatch(arm)}{esc(ARM_NAMES[arm])}</span><span class="num">{esc(show(s[arm]))}</span>'
         for arm in MAIN_ARMS
+        if arm in s
     )
     return f'<div class="tile"><div class="label">{esc(label)}</div><div class="pair">{lines}</div><div class="foot">{esc(foot)}</div></div>'
 
@@ -257,6 +270,7 @@ def _not_measured(value: object) -> str:
 def run_table(rows: list[dict[str, Any]]) -> str:
     head = [
         "Run",
+        "Preset",
         "Started (UTC)",
         "Passed",
         "Ending",
@@ -280,6 +294,7 @@ def run_table(rows: list[dict[str, Any]]) -> str:
         tools = row.get("tool_calls")
         cells = [
             row["run_id"],
+            row.get("preset", "not hosted"),
             row["started_at"][11:19],
             "yes" if row["passed"] else "NO",
             row["ending"],
@@ -293,10 +308,10 @@ def run_table(rows: list[dict[str, Any]]) -> str:
             _not_measured(row.get("input_tokens")),
             _not_measured(row.get("output_tokens")),
             "not measured" if row.get("dollars") is None else f"{row['dollars']:.6f}",
-            f"{row['cpu_seconds']:.1f}",
-            f"{row['peak_rss_mib']:.0f}",
-            row["load_1m_before"],
-            row["load_1m_after"],
+            "not measured" if row["cpu_seconds"] is None else f"{row['cpu_seconds']:.1f}",
+            "not measured" if row["peak_rss_mib"] is None else f"{row['peak_rss_mib']:.0f}",
+            _not_measured(row["load_1m_before"]),
+            _not_measured(row["load_1m_after"]),
         ]
         body.append("<tr>" + "".join(f"<td>{esc(cell)}</td>" for cell in cells) + "</tr>")
     return f"<table><thead><tr>{''.join(f'<th>{esc(h)}</th>' for h in head)}</tr></thead><tbody>{''.join(body)}</tbody></table>"
@@ -339,32 +354,35 @@ def sensitivity(rows: list[dict[str, Any]]) -> str:
 
 
 def scoreboard(s: dict[str, Any]) -> str:
-    """The digest: per task, medians and passes side by side, and how many times faster or cheaper the better arm was."""
+    """The digest: per task and per arm, passes, median wall clock, and mean model cost, with the fastest clean arm named."""
+    arms = [arm for arm in SCOREBOARD_ARMS if arm in s["arms"]]
 
-    def lead(fastbrowse: float, browser_use: float) -> str:
-        low, high = sorted((fastbrowse, browser_use))
-        if (high - low) / high < 0.1:
-            return "level (within 10%)"
-        return f"{'fastbrowse' if fastbrowse < browser_use else 'Browser Use'} {high / low:.1f}x"
+    def row(label: str, cell: dict[str, Any]) -> str:
+        clean = [arm for arm in arms if cell[arm]["passed"] == cell[arm]["runs"]]
+        fastest = min(clean, key=lambda arm: cell[arm]["wall_median"]) if clean else None
+        cells = [f"<td>{esc(label)}</td>"]
+        for arm in arms:
+            c = cell[arm]
+            text = f"{c['passed']} of {c['runs']}, {_seconds(c['wall_median'])}, {_dollars(c['dollars_mean'] or 0)}"
+            cells.append(f"<td>{'<strong>' + esc(text) + '</strong>' if arm == fastest else esc(text)}</td>")
+        return "<tr>" + "".join(cells) + "</tr>"
 
-    rows = []
-    for task in TASKS:
-        a, b = s["tasks"][task.id]["fastbrowse"], s["tasks"][task.id]["browser-use"]
-        cells = [
-            f"{task.id} ({task.length})",
-            f"{a['passed']} / {b['passed']} of {a['runs']}",
-            f"{_seconds(a['wall_median'])} / {_seconds(b['wall_median'])}",
-            lead(a["wall_median"], b["wall_median"]),
-            f"{_dollars(a['dollars_mean'])} / {_dollars(b['dollars_mean'])}",
-            lead(a["dollars_mean"], b["dollars_mean"]),
-        ]
-        rows.append("<tr>" + "".join(f"<td>{esc(cell)}</td>" for cell in cells) + "</tr>")
-    head = ["Task", "Passed", "Median wall", "Faster", "Mean cost", "Cheaper"]
+    rows = [row(f"{task.id} ({task.length})", s["tasks"][task.id]) for task in TASKS]
+    rows += [row("All short", s["short"]), row("All long", s["long"]), row("All six", s["all"])]
+    head = "".join(f"<th>{esc(ARM_NAMES[arm])}</th>" for arm in arms)
     return (
-        '<section class="card"><h2>Per task, side by side</h2><p class="sub">Each pair reads fastbrowse / Browser Use.</p>'
-        f'<div class="scroll"><table><thead><tr>{"".join(f"<th>{h}</th>" for h in head)}</tr></thead>'
-        f"<tbody>{''.join(rows)}</tbody></table></div></section>"
+        '<section class="card"><h2>Per task, side by side</h2><p class="sub">Each cell reads runs passed, median wall clock, mean model cost. Bold is the fastest arm that passed every run.</p>'
+        f'<div class="scroll"><table><thead><tr><th>Task</th>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
     )
+
+
+def hosted_notes(rows: list[dict[str, Any]]) -> str:
+    if not any(row["arm"] in HOSTED_ARMS for row in rows):
+        return ""
+    return """<li><strong>The hosted arms are not on the same machine or the same model.</strong> Browser Use's presets exist only on its cloud, so its agent, browser and network are its own, and it runs GPT-6 Luna where the local arms run Gemini 3.8 Flash. The clock runs from the create request to seeing the run finish, polled every 0.25 s, so it includes the round trip and queueing. fastbrowse has not been run on GPT-6 Luna here.</li>
+<li><strong>Hosted cost is model and search charges</strong>, the same kind of figure as the local arms, with the browser bill shown apart. Steps come from the run's event stream, one per model turn, and the final URL is read from the browser over CDP.</li>
+<li><strong>The hosted arms were run after the local ones</strong>, on the same day. The checkout's two public credentials are in their prompt, since the API's secret bindings need a vault.</li>
+"""
 
 
 def page(name: str, env: dict[str, Any], rows: list[dict[str, Any]], verdict: str) -> str:
@@ -380,6 +398,18 @@ def page(name: str, env: dict[str, Any], rows: list[dict[str, Any]], verdict: st
             lambda arm: _dollars(arm["dollars_mean"] or 0),
             "Model charges only; Chrome ran locally.",
         ),
+        *(
+            [
+                tile(
+                    "Mean bill per run, hosted browser included",
+                    {arm: s["all"][arm] for arm in HOSTED_ARMS if arm in s["all"]},
+                    lambda arm: _dollars(arm["session_dollars_mean"] or 0),
+                    "Browser Use's session total, only for the hosted arms.",
+                )
+            ]
+            if "browser-use-cloud" in s["all"]
+            else []
+        ),
         tile(
             "Total spend, all runs",
             s["all"],
@@ -393,8 +423,15 @@ def page(name: str, env: dict[str, Any], rows: list[dict[str, Any]], verdict: st
         "Machine": f"{machine['name']}, {machine['cpu']}, {machine['vcpus']} vCPUs, {machine['memory_gib']} GiB",
         "fastbrowse": f"{fastbrowse['version']}, commit {fastbrowse['commit']}, {fastbrowse['profile']} build",
         "Browser Use": f"{browser_use['version']} (open-source package)",
-        "Browser": env["chrome"],
-        "Text model, both arms": f"{env['model']}, {env['reasoning']} reasoning, through OpenRouter",
+        "Browser, local arms": env["chrome"],
+        "Text model, local arms": f"{env['model']}, {env['reasoning']} reasoning, through OpenRouter",
+        **(
+            {
+                "Hosted arms": "Browser Use Cloud API v4, on their machines and their browser, no managed proxy. Default: gpt-6-luna at high reasoning. bu-ultrafast: GPT-6 Luna, low reasoning, priority tier. bu-fast: GPT-6 Luna, medium reasoning.",
+            }
+            if any(row["arm"] in HOSTED_ARMS for row in rows)
+            else {}
+        ),
         "fastbrowse also calls": "Jev, its choice model, counted in its calls and cost",
         "Limits": f"No step or dollar cap; a run past {env['run_seconds_limit']}s is killed",
         "Run": f"{rows[0]['started_at']} to {rows[-1]['started_at']}, one at a time, order alternating",
@@ -406,9 +443,9 @@ def page(name: str, env: dict[str, Any], rows: list[dict[str, Any]], verdict: st
 <title>fastbrowse vs Browser Use, {esc(name)}</title><style>{STYLE}</style></head>
 <body class="viz-root"><div class="wrap">
 <header class="card"><h1>fastbrowse vs Browser Use</h1>
-<p class="sub">Six tasks, three repeats each, on one machine, {esc(name)}.</p>
+<p class="sub">Six tasks, three repeats each, {esc(name)}. fastbrowse and open-source Browser Use ran on one machine; the Browser Use Cloud arms ran on Browser Use's.</p>
 <div class="verdict">{paragraphs}</div>
-<div class="legend"><span>{_swatch("fastbrowse")}fastbrowse</span><span>{_swatch("browser-use")}Browser Use</span><span><i class="tick" style="position:relative;display:inline-block;top:0;width:2px;height:12px;margin:0"></i>one run</span></div></header>
+<div class="legend">{"".join(f"<span>{_swatch(arm)}{esc(ARM_NAMES[arm])}</span>" for arm in _present(rows))}<span><i class="tick" style="position:relative;display:inline-block;top:0;width:2px;height:12px;margin:0"></i>one run</span></div></header>
 <div class="tiles">{"".join(tiles)}</div>
 {scoreboard(s)}
 {section("short", "Short tasks", "One page or one interaction. Bars share a scale within this section, per measure.", rows)}
@@ -416,7 +453,7 @@ def page(name: str, env: dict[str, Any], rows: list[dict[str, Any]], verdict: st
 {sensitivity(rows)}
 <section class="card"><h2>What ran</h2><dl class="setup">{cells}</dl></section>
 <section class="card"><h2>How to read these numbers</h2><ul>
-<li><strong>Steps are not the same unit.</strong> A Browser Use step is one model turn and can hold several actions. A fastbrowse step is one browser action; its reads and checks are extra model calls. Model calls are the closer measure of work, and they are not equal work either: a Jev call is a small, fast choice.</li>
+{hosted_notes(rows)}<li><strong>Steps are not the same unit.</strong> A Browser Use step is one model turn and can hold several actions. A fastbrowse step is one browser action; its reads and checks are extra model calls. Model calls are the closer measure of work, and they are not equal work either: a Jev call is a small, fast choice.</li>
 <li><strong>Tokens here are the shared text model only.</strong> Jev's far larger, far cheaper token counts are in the table below. Dollars cover everything each arm was charged.</li>
 <li><strong>The text model is pinned, not fastbrowse's default.</strong> Both arms use the same model, so these figures do not describe fastbrowse on its default model.</li>
 <li><strong>How Browser Use won the aggregation task.</strong> It wrote one JavaScript call that fetched and tallied every page. fastbrowse has no such tool and clicked through the pages. In the two failed runs it looped for over 100 steps and its verifier refused the answer: one run returned nothing, the other named two of the three authors and said its evidence was partial.</li>

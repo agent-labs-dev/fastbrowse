@@ -44,15 +44,27 @@
 | books-travel-priciest | fastbrowse | 3/3 | 21.8 | 2 | 2 | 2 | 13 | 8507 | 1748 | $0.0194 |
 | books-travel-priciest | Browser Use | 3/3 | 22.0 | 3 | 3 | 3 | 0 | 35371 | 1623 | $0.0290 |
 | books-travel-priciest | Browser Use, default effort | 3/3 | 26.3 | 3 | 3 | 3 | 0 | 35386 | 2178 | $0.0302 |
+| books-travel-priciest | Browser Use Cloud, default | 3/3 | 10.7 | 4 | 3 | 4 | 0 | 52279 | 413 | $0.0029 |
+| books-travel-priciest | bu-ultrafast | 0/3 | 5.8 | 4 | 2 | 4 | 0 | 15185 | 148 | $0.0019 |
+| books-travel-priciest | bu-fast | 3/3 | 9.9 | 5 | 3 | 5 | 0 | 22168 | 209 | $0.0012 |
 | quotes-search | fastbrowse | 3/3 | 6.0 | 4 | 4 | 0 | 14 | 0 | 0 | $0.0018 |
 | quotes-search | Browser Use | 3/3 | 39.0 | 4 | 5 | 4 | 0 | 44024 | 1303 | $0.0358 |
 | quotes-search | Browser Use, default effort | 3/3 | 29.6 | 4 | 5 | 4 | 0 | 44004 | 1599 | $0.0382 |
+| quotes-search | Browser Use Cloud, default | 3/3 | 18.8 | 6 | 5 | 6 | 0 | 90806 | 825 | $0.0040 |
+| quotes-search | bu-ultrafast | 3/3 | 7.3 | 5 | 4 | 5 | 0 | 14816 | 174 | $0.0029 |
+| quotes-search | bu-fast | 3/3 | 13.0 | 7 | 5 | 7 | 0 | 23025 | 314 | $0.0010 |
 | dynamic-loading | fastbrowse | 3/3 | 9.0 | 3 | 3 | 0 | 11 | 0 | 0 | $0.0037 |
 | dynamic-loading | Browser Use | 3/3 | 25.1 | 3 | 4 | 3 | 0 | 30761 | 862 | $0.0208 |
 | dynamic-loading | Browser Use, default effort | 3/3 | 32.4 | 4 | 4 | 4 | 0 | 45334 | 1415 | $0.0269 |
+| dynamic-loading | Browser Use Cloud, default | 3/3 | 22.4 | 5 | 4 | 5 | 0 | 64858 | 441 | $0.0030 |
+| dynamic-loading | bu-ultrafast | 3/3 | 19.8 | 7 | 6 | 7 | 0 | 29891 | 264 | $0.0025 |
+| dynamic-loading | bu-fast | 3/3 | 31.4 | 11 | 9 | 11 | 0 | 62712 | 610 | $0.0030 |
 | **all short** | fastbrowse | 9/9 | 9.0 | 3 | 3 | 0 | 13 | 0 | 0 | $0.0083 |
 | **all short** | Browser Use | 9/9 | 25.1 | 3 | 4 | 3 | 0 | 35371 | 1303 | $0.0285 |
 | **all short** | Browser Use, default effort | 9/9 | 29.6 | 4 | 4 | 4 | 0 | 43990 | 1599 | $0.0317 |
+| **all short** | Browser Use Cloud, default | 9/9 | 18.8 | 5 | 4 | 5 | 0 | 64858 | 441 | $0.0033 |
+| **all short** | bu-ultrafast | 6/9 | 7.3 | 5 | 3 | 5 | 0 | 15185 | 153 | $0.0024 |
+| **all short** | bu-fast | 9/9 | 13.0 | 7 | 5 | 7 | 0 | 23025 | 314 | $0.0017 |
 
 ## Long tasks
 
@@ -61,15 +73,27 @@
 | stretch-books-nonfiction-five-star | fastbrowse | 3/3 | 31.9 | 7 | 7 | 2 | 30 | 59491 | 654 | $0.0747 |
 | stretch-books-nonfiction-five-star | Browser Use | 3/3 | 30.3 | 3 | 3 | 3 | 0 | 38906 | 1864 | $0.0397 |
 | stretch-books-nonfiction-five-star | Browser Use, default effort | 3/3 | 41.5 | 4 | 4 | 4 | 0 | 58773 | 3954 | $0.0486 |
+| stretch-books-nonfiction-five-star | Browser Use Cloud, default | 3/3 | 18.0 | 5 | 4 | 5 | 0 | 68815 | 928 | $0.0037 |
+| stretch-books-nonfiction-five-star | bu-ultrafast | 3/3 | 12.3 | 6 | 5 | 6 | 0 | 19542 | 865 | $0.0039 |
+| stretch-books-nonfiction-five-star | bu-fast | 3/3 | 14.6 | 4 | 3 | 4 | 0 | 16039 | 648 | $0.0014 |
 | stretch-quotes-top-authors | fastbrowse | 1/3 | 172.0 | 108 | 108 | 5 | 300 | 98900 | 4895 | $0.3007 |
 | stretch-quotes-top-authors | Browser Use | 3/3 | 20.0 | 3 | 3 | 3 | 0 | 31965 | 1387 | $0.0261 |
 | stretch-quotes-top-authors | Browser Use, default effort | 3/3 | 26.0 | 3 | 3 | 3 | 0 | 32012 | 2130 | $0.0306 |
+| stretch-quotes-top-authors | Browser Use Cloud, default | 3/3 | 16.0 | 4 | 3 | 4 | 0 | 52051 | 792 | $0.0032 |
+| stretch-quotes-top-authors | bu-ultrafast | 3/3 | 13.7 | 8 | 7 | 8 | 0 | 27402 | 551 | $0.0029 |
+| stretch-quotes-top-authors | bu-fast | 3/3 | 22.7 | 7 | 5 | 7 | 0 | 41493 | 1016 | $0.0022 |
 | saucedemo-checkout | fastbrowse | 3/3 | 13.0 | 12 | 12 | 0 | 41 | 0 | 0 | $0.0147 |
 | saucedemo-checkout | Browser Use | 3/3 | 49.9 | 7 | 14 | 7 | 0 | 90445 | 2483 | $0.0630 |
 | saucedemo-checkout | Browser Use, default effort | 3/3 | 54.9 | 7 | 14 | 7 | 0 | 90466 | 4007 | $0.0684 |
+| saucedemo-checkout | Browser Use Cloud, default | 3/3 | 30.8 | 12 | 11 | 12 | 0 | 169124 | 1473 | $0.0051 |
+| saucedemo-checkout | bu-ultrafast | 3/3 | 11.6 | 8 | 7 | 8 | 0 | 31250 | 288 | $0.0026 |
+| saucedemo-checkout | bu-fast | 3/3 | 16.1 | 9 | 7 | 9 | 0 | 36624 | 396 | $0.0014 |
 | **all long** | fastbrowse | 7/9 | 31.9 | 12 | 12 | 2 | 41 | 59491 | 654 | $0.1300 |
 | **all long** | Browser Use | 9/9 | 31.4 | 3 | 3 | 3 | 0 | 38906 | 1864 | $0.0429 |
 | **all long** | Browser Use, default effort | 9/9 | 41.5 | 4 | 4 | 4 | 0 | 58773 | 3849 | $0.0492 |
+| **all long** | Browser Use Cloud, default | 9/9 | 18.0 | 5 | 4 | 5 | 0 | 68815 | 928 | $0.0040 |
+| **all long** | bu-ultrafast | 9/9 | 12.3 | 8 | 7 | 8 | 0 | 31151 | 551 | $0.0031 |
+| **all long** | bu-fast | 9/9 | 15.6 | 7 | 5 | 7 | 0 | 36609 | 647 | $0.0017 |
 
 ## All tasks
 
@@ -78,6 +102,9 @@
 | **all six** | fastbrowse | 16/18 | 13.3 | 5 | 5 | 0 | 21 | 4057 | 82 | $0.0692 |
 | **all six** | Browser Use | 18/18 | 26.8 | 3 | 4 | 3 | 0 | 36941 | 1442 | $0.0357 |
 | **all six** | Browser Use, default effort | 18/18 | 32.7 | 4 | 4 | 4 | 0 | 43997 | 2294 | $0.0405 |
+| **all six** | Browser Use Cloud, default | 18/18 | 18.4 | 5 | 4 | 5 | 0 | 65509 | 796 | $0.0036 |
+| **all six** | bu-ultrafast | 15/18 | 12.1 | 6 | 6 | 6 | 0 | 23554 | 287 | $0.0028 |
+| **all six** | bu-fast | 18/18 | 15.2 | 7 | 5 | 7 | 0 | 24508 | 466 | $0.0017 |
 
 ## Tasks as asked
 
@@ -90,62 +117,116 @@
 
 ## Every run
 
-| Run | Started (UTC) | Passed | Ending | Wall (s) | Steps | Tool calls | LLM | Jev | All tokens in | All tokens out | Cost | Agent CPU (s) | Peak RSS (MiB) | Load before | Load after | Failure |
-|:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| books-travel-priciest.fastbrowse.1 | 2026-11-05T18:35:16+00:00 | yes | complete | 27.2 | 2 | 2 | 2 | 13 | 200890 | 10634 | $0.0224 | 0.4 | 57 | 0.52 | 0.52 |  |
-| books-travel-priciest.browser-use.1 | 2026-11-05T18:35:43+00:00 | yes | done | 19.4 | 3 | 3 | 3 | 0 | 35371 | 1623 | $0.0271 | 3.4 | 157 | 0.52 | 0.51 |  |
-| quotes-search.browser-use.1 | 2026-11-05T18:36:03+00:00 | yes | done | 42.1 | 4 | 5 | 4 | 0 | 44024 | 1111 | $0.0372 | 3.6 | 143 | 0.51 | 0.32 |  |
-| quotes-search.fastbrowse.1 | 2026-11-05T18:36:46+00:00 | yes | complete | 6.0 | 4 | 4 | 0 | 14 | 43279 | 2195 | $0.0018 | 0.3 | 52 | 0.32 | 0.29 |  |
-| dynamic-loading.fastbrowse.1 | 2026-11-05T18:36:52+00:00 | yes | complete | 9.3 | 3 | 3 | 0 | 11 | 90906 | 3455 | $0.0038 | 0.4 | 59 | 0.29 | 0.25 |  |
-| dynamic-loading.browser-use.1 | 2026-11-05T18:37:01+00:00 | yes | done | 26.6 | 3 | 4 | 3 | 0 | 30778 | 862 | $0.0208 | 3.6 | 143 | 0.25 | 0.67 |  |
-| stretch-books-nonfiction-five-star.browser-use.1 | 2026-11-05T18:37:28+00:00 | yes | done | 24.4 | 3 | 3 | 3 | 0 | 38505 | 1552 | $0.0347 | 3.8 | 159 | 0.67 | 0.76 |  |
-| stretch-books-nonfiction-five-star.fastbrowse.1 | 2026-11-05T18:37:53+00:00 | yes | complete | 31.9 | 7 | 7 | 1 | 30 | 698181 | 22486 | $0.0731 | 0.7 | 58 | 0.76 | 1.78 |  |
-| stretch-quotes-top-authors.fastbrowse.1 | 2026-11-05T18:38:25+00:00 | no | unverified | 238.8 | 110 | 110 | 8 | 332 | 6707488 | 138827 | $0.4775 | 3.0 | 57 | 1.78 | 0.66 | A composed claim is unsupported by its cited quotes. |
-| stretch-quotes-top-authors.browser-use.1 | 2026-11-05T18:42:24+00:00 | yes | done | 18.6 | 3 | 3 | 3 | 0 | 31965 | 1387 | $0.0292 | 3.5 | 145 | 0.66 | 0.61 |  |
-| saucedemo-checkout.browser-use.1 | 2026-11-05T18:42:43+00:00 | yes | done | 49.9 | 7 | 14 | 7 | 0 | 90439 | 2483 | $0.0662 | 4.1 | 149 | 0.61 | 0.89 |  |
-| saucedemo-checkout.fastbrowse.1 | 2026-11-05T18:43:33+00:00 | yes | complete | 13.6 | 12 | 12 | 0 | 42 | 359513 | 14583 | $0.0151 | 0.5 | 55 | 0.89 | 0.99 |  |
-| books-travel-priciest.browser-use.2 | 2026-11-05T18:43:47+00:00 | yes | done | 24.1 | 3 | 3 | 3 | 0 | 35371 | 1475 | $0.0266 | 3.4 | 157 | 0.99 | 1.07 |  |
-| books-travel-priciest.fastbrowse.2 | 2026-11-05T18:44:12+00:00 | yes | complete | 21.8 | 2 | 2 | 2 | 13 | 200135 | 10272 | $0.0210 | 0.4 | 57 | 1.07 | 0.78 |  |
-| quotes-search.fastbrowse.2 | 2026-11-05T18:44:34+00:00 | yes | complete | 6.3 | 4 | 4 | 0 | 14 | 43279 | 2195 | $0.0018 | 0.3 | 52 | 0.78 | 0.71 |  |
-| quotes-search.browser-use.2 | 2026-11-05T18:44:40+00:00 | yes | done | 39.0 | 4 | 5 | 4 | 0 | 43668 | 1316 | $0.0322 | 3.5 | 143 | 0.71 | 0.52 |  |
-| dynamic-loading.browser-use.2 | 2026-11-05T18:45:19+00:00 | yes | done | 23.7 | 3 | 4 | 3 | 0 | 30761 | 862 | $0.0208 | 3.4 | 143 | 0.52 | 0.87 |  |
-| dynamic-loading.fastbrowse.2 | 2026-11-05T18:45:43+00:00 | yes | complete | 8.8 | 3 | 3 | 0 | 11 | 93332 | 3502 | $0.0039 | 0.3 | 57 | 0.87 | 0.8 |  |
-| stretch-books-nonfiction-five-star.fastbrowse.2 | 2026-11-05T18:45:53+00:00 | yes | complete | 40.7 | 6 | 6 | 2 | 28 | 670055 | 20899 | $0.0729 | 0.6 | 58 | 0.8 | 0.67 |  |
-| stretch-books-nonfiction-five-star.browser-use.2 | 2026-11-05T18:46:34+00:00 | yes | done | 30.3 | 3 | 3 | 3 | 0 | 38906 | 1864 | $0.0362 | 3.6 | 160 | 0.67 | 0.64 |  |
-| stretch-quotes-top-authors.browser-use.2 | 2026-11-05T18:47:04+00:00 | yes | done | 37.2 | 3 | 3 | 3 | 0 | 26460 | 1410 | $0.0197 | 3.3 | 145 | 0.64 | 0.47 |  |
-| stretch-quotes-top-authors.fastbrowse.2 | 2026-11-05T18:47:42+00:00 | yes | complete | 59.8 | 23 | 23 | 4 | 77 | 1127597 | 29729 | $0.0989 | 0.8 | 58 | 0.47 | 0.48 |  |
-| saucedemo-checkout.fastbrowse.2 | 2026-11-05T18:48:42+00:00 | yes | complete | 13.0 | 12 | 12 | 0 | 41 | 344587 | 14461 | $0.0145 | 0.5 | 55 | 0.48 | 0.59 |  |
-| saucedemo-checkout.browser-use.2 | 2026-11-05T18:48:55+00:00 | yes | done | 41.9 | 7 | 14 | 7 | 0 | 90445 | 2310 | $0.0601 | 3.9 | 149 | 0.59 | 0.97 |  |
-| books-travel-priciest.fastbrowse.3 | 2026-11-05T18:49:37+00:00 | yes | complete | 10.3 | 2 | 2 | 2 | 12 | 198545 | 8634 | $0.0147 | 0.4 | 57 | 0.97 | 1.34 |  |
-| books-travel-priciest.browser-use.3 | 2026-11-05T18:49:48+00:00 | yes | done | 22.0 | 3 | 3 | 3 | 0 | 35377 | 1763 | $0.0331 | 3.3 | 156 | 1.34 | 1.15 |  |
-| quotes-search.browser-use.3 | 2026-11-05T18:50:10+00:00 | yes | done | 26.9 | 4 | 5 | 4 | 0 | 44042 | 1303 | $0.0379 | 3.7 | 143 | 1.15 | 0.94 |  |
-| quotes-search.fastbrowse.3 | 2026-11-05T18:50:37+00:00 | yes | complete | 4.0 | 4 | 4 | 0 | 14 | 43279 | 2195 | $0.0018 | 0.3 | 52 | 0.94 | 1.51 |  |
-| dynamic-loading.fastbrowse.3 | 2026-11-05T18:50:41+00:00 | yes | complete | 9.0 | 2 | 2 | 0 | 10 | 80118 | 2727 | $0.0034 | 0.4 | 56 | 1.51 | 1.51 |  |
-| dynamic-loading.browser-use.3 | 2026-11-05T18:50:51+00:00 | yes | done | 25.1 | 3 | 4 | 3 | 0 | 30746 | 874 | $0.0209 | 3.6 | 143 | 1.51 | 1.47 |  |
-| stretch-books-nonfiction-five-star.browser-use.3 | 2026-11-05T18:51:16+00:00 | yes | done | 31.4 | 4 | 4 | 4 | 0 | 57587 | 2811 | $0.0482 | 3.5 | 168 | 1.47 | 1.42 |  |
-| stretch-books-nonfiction-five-star.fastbrowse.3 | 2026-11-05T18:51:48+00:00 | yes | complete | 27.1 | 8 | 8 | 2 | 31 | 777867 | 23754 | $0.0782 | 0.6 | 59 | 1.42 | 1.27 |  |
-| stretch-quotes-top-authors.fastbrowse.3 | 2026-11-05T18:52:15+00:00 | no | unverified | 172.0 | 108 | 108 | 5 | 300 | 5650007 | 113200 | $0.3257 | 2.6 | 57 | 1.27 | 0.51 | A composed claim is unsupported by its cited quotes. |
-| stretch-quotes-top-authors.browser-use.3 | 2026-11-05T18:55:08+00:00 | yes | done | 20.0 | 3 | 3 | 3 | 0 | 32656 | 1333 | $0.0295 | 3.6 | 145 | 0.51 | 0.49 |  |
-| saucedemo-checkout.browser-use.3 | 2026-11-05T18:55:28+00:00 | yes | done | 57.8 | 7 | 14 | 7 | 0 | 90792 | 2946 | $0.0627 | 4.2 | 149 | 0.49 | 0.46 |  |
-| saucedemo-checkout.fastbrowse.3 | 2026-11-05T18:56:26+00:00 | yes | complete | 12.1 | 12 | 12 | 0 | 41 | 344124 | 14452 | $0.0145 | 0.4 | 55 | 0.46 | 0.39 |  |
-| books-travel-priciest.browser-use-default-effort.1 | 2026-11-05T18:56:39+00:00 | yes | done | 33.0 | 3 | 3 | 3 | 0 | 35371 | 2966 | $0.0267 | 3.8 | 157 | 0.39 | 0.44 |  |
-| quotes-search.browser-use-default-effort.1 | 2026-11-05T18:57:12+00:00 | yes | done | 29.6 | 4 | 5 | 4 | 0 | 44014 | 1599 | $0.0390 | 3.5 | 143 | 0.44 | 0.37 |  |
-| dynamic-loading.browser-use-default-effort.1 | 2026-11-05T18:57:42+00:00 | yes | done | 39.5 | 4 | 4 | 4 | 0 | 45334 | 1564 | $0.0289 | 3.4 | 146 | 0.37 | 0.26 |  |
-| stretch-books-nonfiction-five-star.browser-use-default-effort.1 | 2026-11-05T18:58:21+00:00 | yes | done | 37.3 | 3 | 3 | 3 | 0 | 40254 | 3365 | $0.0428 | 3.5 | 160 | 0.26 | 0.43 |  |
-| stretch-quotes-top-authors.browser-use-default-effort.1 | 2026-11-05T18:58:59+00:00 | yes | done | 23.1 | 3 | 3 | 3 | 0 | 31967 | 2130 | $0.0320 | 3.4 | 145 | 0.43 | 0.53 |  |
-| saucedemo-checkout.browser-use-default-effort.1 | 2026-11-05T18:59:23+00:00 | yes | done | 56.3 | 7 | 14 | 7 | 0 | 90300 | 4007 | $0.0663 | 4.2 | 149 | 0.53 | 0.81 |  |
-| books-travel-priciest.browser-use-default-effort.2 | 2026-11-05T19:00:19+00:00 | yes | done | 25.2 | 3 | 3 | 3 | 0 | 35406 | 2157 | $0.0346 | 3.6 | 157 | 0.81 | 1.1 |  |
-| quotes-search.browser-use-default-effort.2 | 2026-11-05T19:00:44+00:00 | yes | done | 24.5 | 4 | 5 | 4 | 0 | 44004 | 1241 | $0.0377 | 3.9 | 143 | 1.1 | 1.07 |  |
-| dynamic-loading.browser-use-default-effort.2 | 2026-11-05T19:01:09+00:00 | yes | done | 32.4 | 4 | 4 | 4 | 0 | 47515 | 1415 | $0.0300 | 4.0 | 150 | 1.07 | 0.99 |  |
-| stretch-books-nonfiction-five-star.browser-use-default-effort.2 | 2026-11-05T19:01:42+00:00 | yes | done | 41.5 | 4 | 4 | 4 | 0 | 58773 | 3954 | $0.0534 | 3.8 | 168 | 0.99 | 1.36 |  |
-| stretch-quotes-top-authors.browser-use-default-effort.2 | 2026-11-05T19:02:24+00:00 | yes | done | 30.1 | 3 | 3 | 3 | 0 | 32619 | 2410 | $0.0280 | 3.5 | 145 | 1.36 | 1.65 |  |
-| saucedemo-checkout.browser-use-default-effort.2 | 2026-11-05T19:02:54+00:00 | yes | done | 54.9 | 7 | 14 | 7 | 0 | 90741 | 4254 | $0.0785 | 4.5 | 149 | 1.65 | 1.39 |  |
-| books-travel-priciest.browser-use-default-effort.3 | 2026-11-05T19:03:49+00:00 | yes | done | 26.3 | 3 | 3 | 3 | 0 | 35386 | 2178 | $0.0292 | 3.7 | 157 | 1.39 | 1.19 |  |
-| quotes-search.browser-use-default-effort.3 | 2026-11-05T19:04:16+00:00 | yes | done | 37.3 | 4 | 5 | 4 | 0 | 43990 | 2747 | $0.0378 | 3.4 | 143 | 1.19 | 0.71 |  |
-| dynamic-loading.browser-use-default-effort.3 | 2026-11-05T19:04:53+00:00 | yes | done | 29.2 | 3 | 4 | 3 | 0 | 30777 | 1095 | $0.0217 | 4.0 | 143 | 0.71 | 0.48 |  |
-| stretch-books-nonfiction-five-star.browser-use-default-effort.3 | 2026-11-05T19:05:23+00:00 | yes | done | 43.6 | 4 | 4 | 4 | 0 | 58774 | 4421 | $0.0497 | 4.3 | 168 | 0.48 | 0.33 |  |
-| stretch-quotes-top-authors.browser-use-default-effort.3 | 2026-11-05T19:06:07+00:00 | yes | done | 26.0 | 3 | 3 | 3 | 0 | 32012 | 2060 | $0.0317 | 3.6 | 145 | 0.33 | 0.27 |  |
-| saucedemo-checkout.browser-use-default-effort.3 | 2026-11-05T19:12:41+00:00 | yes | done | 54.6 | 7 | 14 | 7 | 0 | 90466 | 3849 | $0.0604 | 3.9 | 149 | 0.82 | 0.45 |  |
+| Run | Preset | Started (UTC) | Passed | Ending | Wall (s) | Steps | Tool calls | LLM | Jev | All tokens in | All tokens out | Cost | Agent CPU (s) | Peak RSS (MiB) | Load before | Load after | Failure |
+|:--|:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
+| books-travel-priciest.fastbrowse.1 | not hosted | 2026-11-05T18:35:16+00:00 | yes | complete | 27.2 | 2 | 2 | 2 | 13 | 200890 | 10634 | $0.0224 | 0.4 | 57 | 0.52 | 0.52 |  |
+| books-travel-priciest.browser-use.1 | not hosted | 2026-11-05T18:35:43+00:00 | yes | done | 19.4 | 3 | 3 | 3 | 0 | 35371 | 1623 | $0.0271 | 3.4 | 157 | 0.52 | 0.51 |  |
+| quotes-search.browser-use.1 | not hosted | 2026-11-05T18:36:03+00:00 | yes | done | 42.1 | 4 | 5 | 4 | 0 | 44024 | 1111 | $0.0372 | 3.6 | 143 | 0.51 | 0.32 |  |
+| quotes-search.fastbrowse.1 | not hosted | 2026-11-05T18:36:46+00:00 | yes | complete | 6.0 | 4 | 4 | 0 | 14 | 43279 | 2195 | $0.0018 | 0.3 | 52 | 0.32 | 0.29 |  |
+| dynamic-loading.fastbrowse.1 | not hosted | 2026-11-05T18:36:52+00:00 | yes | complete | 9.3 | 3 | 3 | 0 | 11 | 90906 | 3455 | $0.0038 | 0.4 | 59 | 0.29 | 0.25 |  |
+| dynamic-loading.browser-use.1 | not hosted | 2026-11-05T18:37:01+00:00 | yes | done | 26.6 | 3 | 4 | 3 | 0 | 30778 | 862 | $0.0208 | 3.6 | 143 | 0.25 | 0.67 |  |
+| stretch-books-nonfiction-five-star.browser-use.1 | not hosted | 2026-11-05T18:37:28+00:00 | yes | done | 24.4 | 3 | 3 | 3 | 0 | 38505 | 1552 | $0.0347 | 3.8 | 159 | 0.67 | 0.76 |  |
+| stretch-books-nonfiction-five-star.fastbrowse.1 | not hosted | 2026-11-05T18:37:53+00:00 | yes | complete | 31.9 | 7 | 7 | 1 | 30 | 698181 | 22486 | $0.0731 | 0.7 | 58 | 0.76 | 1.78 |  |
+| stretch-quotes-top-authors.fastbrowse.1 | not hosted | 2026-11-05T18:38:25+00:00 | no | unverified | 238.8 | 110 | 110 | 8 | 332 | 6707488 | 138827 | $0.4775 | 3.0 | 57 | 1.78 | 0.66 | A composed claim is unsupported by its cited quotes. |
+| stretch-quotes-top-authors.browser-use.1 | not hosted | 2026-11-05T18:42:24+00:00 | yes | done | 18.6 | 3 | 3 | 3 | 0 | 31965 | 1387 | $0.0292 | 3.5 | 145 | 0.66 | 0.61 |  |
+| saucedemo-checkout.browser-use.1 | not hosted | 2026-11-05T18:42:43+00:00 | yes | done | 49.9 | 7 | 14 | 7 | 0 | 90439 | 2483 | $0.0662 | 4.1 | 149 | 0.61 | 0.89 |  |
+| saucedemo-checkout.fastbrowse.1 | not hosted | 2026-11-05T18:43:33+00:00 | yes | complete | 13.6 | 12 | 12 | 0 | 42 | 359513 | 14583 | $0.0151 | 0.5 | 55 | 0.89 | 0.99 |  |
+| books-travel-priciest.browser-use.2 | not hosted | 2026-11-05T18:43:47+00:00 | yes | done | 24.1 | 3 | 3 | 3 | 0 | 35371 | 1475 | $0.0266 | 3.4 | 157 | 0.99 | 1.07 |  |
+| books-travel-priciest.fastbrowse.2 | not hosted | 2026-11-05T18:44:12+00:00 | yes | complete | 21.8 | 2 | 2 | 2 | 13 | 200135 | 10272 | $0.0210 | 0.4 | 57 | 1.07 | 0.78 |  |
+| quotes-search.fastbrowse.2 | not hosted | 2026-11-05T18:44:34+00:00 | yes | complete | 6.3 | 4 | 4 | 0 | 14 | 43279 | 2195 | $0.0018 | 0.3 | 52 | 0.78 | 0.71 |  |
+| quotes-search.browser-use.2 | not hosted | 2026-11-05T18:44:40+00:00 | yes | done | 39.0 | 4 | 5 | 4 | 0 | 43668 | 1316 | $0.0322 | 3.5 | 143 | 0.71 | 0.52 |  |
+| dynamic-loading.browser-use.2 | not hosted | 2026-11-05T18:45:19+00:00 | yes | done | 23.7 | 3 | 4 | 3 | 0 | 30761 | 862 | $0.0208 | 3.4 | 143 | 0.52 | 0.87 |  |
+| dynamic-loading.fastbrowse.2 | not hosted | 2026-11-05T18:45:43+00:00 | yes | complete | 8.8 | 3 | 3 | 0 | 11 | 93332 | 3502 | $0.0039 | 0.3 | 57 | 0.87 | 0.8 |  |
+| stretch-books-nonfiction-five-star.fastbrowse.2 | not hosted | 2026-11-05T18:45:53+00:00 | yes | complete | 40.7 | 6 | 6 | 2 | 28 | 670055 | 20899 | $0.0729 | 0.6 | 58 | 0.8 | 0.67 |  |
+| stretch-books-nonfiction-five-star.browser-use.2 | not hosted | 2026-11-05T18:46:34+00:00 | yes | done | 30.3 | 3 | 3 | 3 | 0 | 38906 | 1864 | $0.0362 | 3.6 | 160 | 0.67 | 0.64 |  |
+| stretch-quotes-top-authors.browser-use.2 | not hosted | 2026-11-05T18:47:04+00:00 | yes | done | 37.2 | 3 | 3 | 3 | 0 | 26460 | 1410 | $0.0197 | 3.3 | 145 | 0.64 | 0.47 |  |
+| stretch-quotes-top-authors.fastbrowse.2 | not hosted | 2026-11-05T18:47:42+00:00 | yes | complete | 59.8 | 23 | 23 | 4 | 77 | 1127597 | 29729 | $0.0989 | 0.8 | 58 | 0.47 | 0.48 |  |
+| saucedemo-checkout.fastbrowse.2 | not hosted | 2026-11-05T18:48:42+00:00 | yes | complete | 13.0 | 12 | 12 | 0 | 41 | 344587 | 14461 | $0.0145 | 0.5 | 55 | 0.48 | 0.59 |  |
+| saucedemo-checkout.browser-use.2 | not hosted | 2026-11-05T18:48:55+00:00 | yes | done | 41.9 | 7 | 14 | 7 | 0 | 90445 | 2310 | $0.0601 | 3.9 | 149 | 0.59 | 0.97 |  |
+| books-travel-priciest.fastbrowse.3 | not hosted | 2026-11-05T18:49:37+00:00 | yes | complete | 10.3 | 2 | 2 | 2 | 12 | 198545 | 8634 | $0.0147 | 0.4 | 57 | 0.97 | 1.34 |  |
+| books-travel-priciest.browser-use.3 | not hosted | 2026-11-05T18:49:48+00:00 | yes | done | 22.0 | 3 | 3 | 3 | 0 | 35377 | 1763 | $0.0331 | 3.3 | 156 | 1.34 | 1.15 |  |
+| quotes-search.browser-use.3 | not hosted | 2026-11-05T18:50:10+00:00 | yes | done | 26.9 | 4 | 5 | 4 | 0 | 44042 | 1303 | $0.0379 | 3.7 | 143 | 1.15 | 0.94 |  |
+| quotes-search.fastbrowse.3 | not hosted | 2026-11-05T18:50:37+00:00 | yes | complete | 4.0 | 4 | 4 | 0 | 14 | 43279 | 2195 | $0.0018 | 0.3 | 52 | 0.94 | 1.51 |  |
+| dynamic-loading.fastbrowse.3 | not hosted | 2026-11-05T18:50:41+00:00 | yes | complete | 9.0 | 2 | 2 | 0 | 10 | 80118 | 2727 | $0.0034 | 0.4 | 56 | 1.51 | 1.51 |  |
+| dynamic-loading.browser-use.3 | not hosted | 2026-11-05T18:50:51+00:00 | yes | done | 25.1 | 3 | 4 | 3 | 0 | 30746 | 874 | $0.0209 | 3.6 | 143 | 1.51 | 1.47 |  |
+| stretch-books-nonfiction-five-star.browser-use.3 | not hosted | 2026-11-05T18:51:16+00:00 | yes | done | 31.4 | 4 | 4 | 4 | 0 | 57587 | 2811 | $0.0482 | 3.5 | 168 | 1.47 | 1.42 |  |
+| stretch-books-nonfiction-five-star.fastbrowse.3 | not hosted | 2026-11-05T18:51:48+00:00 | yes | complete | 27.1 | 8 | 8 | 2 | 31 | 777867 | 23754 | $0.0782 | 0.6 | 59 | 1.42 | 1.27 |  |
+| stretch-quotes-top-authors.fastbrowse.3 | not hosted | 2026-11-05T18:52:15+00:00 | no | unverified | 172.0 | 108 | 108 | 5 | 300 | 5650007 | 113200 | $0.3257 | 2.6 | 57 | 1.27 | 0.51 | A composed claim is unsupported by its cited quotes. |
+| stretch-quotes-top-authors.browser-use.3 | not hosted | 2026-11-05T18:55:08+00:00 | yes | done | 20.0 | 3 | 3 | 3 | 0 | 32656 | 1333 | $0.0295 | 3.6 | 145 | 0.51 | 0.49 |  |
+| saucedemo-checkout.browser-use.3 | not hosted | 2026-11-05T18:55:28+00:00 | yes | done | 57.8 | 7 | 14 | 7 | 0 | 90792 | 2946 | $0.0627 | 4.2 | 149 | 0.49 | 0.46 |  |
+| saucedemo-checkout.fastbrowse.3 | not hosted | 2026-11-05T18:56:26+00:00 | yes | complete | 12.1 | 12 | 12 | 0 | 41 | 344124 | 14452 | $0.0145 | 0.4 | 55 | 0.46 | 0.39 |  |
+| books-travel-priciest.browser-use-default-effort.1 | not hosted | 2026-11-05T18:56:39+00:00 | yes | done | 33.0 | 3 | 3 | 3 | 0 | 35371 | 2966 | $0.0267 | 3.8 | 157 | 0.39 | 0.44 |  |
+| quotes-search.browser-use-default-effort.1 | not hosted | 2026-11-05T18:57:12+00:00 | yes | done | 29.6 | 4 | 5 | 4 | 0 | 44014 | 1599 | $0.0390 | 3.5 | 143 | 0.44 | 0.37 |  |
+| dynamic-loading.browser-use-default-effort.1 | not hosted | 2026-11-05T18:57:42+00:00 | yes | done | 39.5 | 4 | 4 | 4 | 0 | 45334 | 1564 | $0.0289 | 3.4 | 146 | 0.37 | 0.26 |  |
+| stretch-books-nonfiction-five-star.browser-use-default-effort.1 | not hosted | 2026-11-05T18:58:21+00:00 | yes | done | 37.3 | 3 | 3 | 3 | 0 | 40254 | 3365 | $0.0428 | 3.5 | 160 | 0.26 | 0.43 |  |
+| stretch-quotes-top-authors.browser-use-default-effort.1 | not hosted | 2026-11-05T18:58:59+00:00 | yes | done | 23.1 | 3 | 3 | 3 | 0 | 31967 | 2130 | $0.0320 | 3.4 | 145 | 0.43 | 0.53 |  |
+| saucedemo-checkout.browser-use-default-effort.1 | not hosted | 2026-11-05T18:59:23+00:00 | yes | done | 56.3 | 7 | 14 | 7 | 0 | 90300 | 4007 | $0.0663 | 4.2 | 149 | 0.53 | 0.81 |  |
+| books-travel-priciest.browser-use-default-effort.2 | not hosted | 2026-11-05T19:00:19+00:00 | yes | done | 25.2 | 3 | 3 | 3 | 0 | 35406 | 2157 | $0.0346 | 3.6 | 157 | 0.81 | 1.1 |  |
+| quotes-search.browser-use-default-effort.2 | not hosted | 2026-11-05T19:00:44+00:00 | yes | done | 24.5 | 4 | 5 | 4 | 0 | 44004 | 1241 | $0.0377 | 3.9 | 143 | 1.1 | 1.07 |  |
+| dynamic-loading.browser-use-default-effort.2 | not hosted | 2026-11-05T19:01:09+00:00 | yes | done | 32.4 | 4 | 4 | 4 | 0 | 47515 | 1415 | $0.0300 | 4.0 | 150 | 1.07 | 0.99 |  |
+| stretch-books-nonfiction-five-star.browser-use-default-effort.2 | not hosted | 2026-11-05T19:01:42+00:00 | yes | done | 41.5 | 4 | 4 | 4 | 0 | 58773 | 3954 | $0.0534 | 3.8 | 168 | 0.99 | 1.36 |  |
+| stretch-quotes-top-authors.browser-use-default-effort.2 | not hosted | 2026-11-05T19:02:24+00:00 | yes | done | 30.1 | 3 | 3 | 3 | 0 | 32619 | 2410 | $0.0280 | 3.5 | 145 | 1.36 | 1.65 |  |
+| saucedemo-checkout.browser-use-default-effort.2 | not hosted | 2026-11-05T19:02:54+00:00 | yes | done | 54.9 | 7 | 14 | 7 | 0 | 90741 | 4254 | $0.0785 | 4.5 | 149 | 1.65 | 1.39 |  |
+| books-travel-priciest.browser-use-default-effort.3 | not hosted | 2026-11-05T19:03:49+00:00 | yes | done | 26.3 | 3 | 3 | 3 | 0 | 35386 | 2178 | $0.0292 | 3.7 | 157 | 1.39 | 1.19 |  |
+| quotes-search.browser-use-default-effort.3 | not hosted | 2026-11-05T19:04:16+00:00 | yes | done | 37.3 | 4 | 5 | 4 | 0 | 43990 | 2747 | $0.0378 | 3.4 | 143 | 1.19 | 0.71 |  |
+| dynamic-loading.browser-use-default-effort.3 | not hosted | 2026-11-05T19:04:53+00:00 | yes | done | 29.2 | 3 | 4 | 3 | 0 | 30777 | 1095 | $0.0217 | 4.0 | 143 | 0.71 | 0.48 |  |
+| stretch-books-nonfiction-five-star.browser-use-default-effort.3 | not hosted | 2026-11-05T19:05:23+00:00 | yes | done | 43.6 | 4 | 4 | 4 | 0 | 58774 | 4421 | $0.0497 | 4.3 | 168 | 0.48 | 0.33 |  |
+| stretch-quotes-top-authors.browser-use-default-effort.3 | not hosted | 2026-11-05T19:06:07+00:00 | yes | done | 26.0 | 3 | 3 | 3 | 0 | 32012 | 2060 | $0.0317 | 3.6 | 145 | 0.33 | 0.27 |  |
+| saucedemo-checkout.browser-use-default-effort.3 | not hosted | 2026-11-05T19:12:41+00:00 | yes | done | 54.6 | 7 | 14 | 7 | 0 | 90466 | 3849 | $0.0604 | 3.9 | 149 | 0.82 | 0.45 |  |
+| books-travel-priciest.bu-ultrafast.1 | bu-ultrafast | 2026-11-05T19:31:05+00:00 | no | completed | 6.1 | 4 | 2 | 4 | 0 | 15210 | 148 | $0.0019 | not measured | not measured | not measured | not measured | answer lacks ['A Year in Provence', '56.88'] |
+| books-travel-priciest.bu-fast.1 | bu-fast | 2026-11-05T19:31:11+00:00 | yes | completed | 8.6 | 5 | 3 | 5 | 0 | 22165 | 204 | $0.0012 | not measured | not measured | not measured | not measured |  |
+| books-travel-priciest.browser-use-cloud.1 | default | 2026-11-05T19:31:21+00:00 | yes | completed | 10.6 | 4 | 3 | 4 | 0 | 50880 | 383 | $0.0028 | not measured | not measured | not measured | not measured |  |
+| quotes-search.bu-fast.1 | bu-fast | 2026-11-05T19:31:32+00:00 | yes | completed | 18.1 | 8 | 6 | 8 | 0 | 25992 | 355 | $0.0011 | not measured | not measured | not measured | not measured |  |
+| quotes-search.browser-use-cloud.1 | default | 2026-11-05T19:31:50+00:00 | yes | completed | 18.8 | 6 | 5 | 6 | 0 | 93328 | 825 | $0.0044 | not measured | not measured | not measured | not measured |  |
+| quotes-search.bu-ultrafast.1 | bu-ultrafast | 2026-11-05T19:32:10+00:00 | yes | completed | 6.3 | 5 | 4 | 5 | 0 | 14348 | 153 | $0.0014 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.browser-use-cloud.1 | default | 2026-11-05T19:32:17+00:00 | yes | completed | 22.4 | 5 | 4 | 5 | 0 | 64858 | 441 | $0.0030 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.bu-ultrafast.1 | bu-ultrafast | 2026-11-05T19:32:39+00:00 | yes | completed | 19.8 | 7 | 6 | 7 | 0 | 29891 | 264 | $0.0027 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.bu-fast.1 | bu-fast | 2026-11-05T19:33:00+00:00 | yes | completed | 32.6 | 12 | 10 | 12 | 0 | 73911 | 924 | $0.0028 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.bu-ultrafast.1 | bu-ultrafast | 2026-11-05T19:33:33+00:00 | yes | completed | 14.1 | 8 | 6 | 8 | 0 | 63911 | 1020 | $0.0063 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.bu-fast.1 | bu-fast | 2026-11-05T19:33:48+00:00 | yes | completed | 14.6 | 5 | 3 | 5 | 0 | 22263 | 701 | $0.0015 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.browser-use-cloud.1 | default | 2026-11-05T19:34:03+00:00 | yes | completed | 19.1 | 5 | 4 | 5 | 0 | 72739 | 1156 | $0.0042 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.bu-fast.1 | bu-fast | 2026-11-05T19:34:22+00:00 | yes | completed | 154.5 | 8 | 6 | 8 | 0 | 54286 | 1613 | $0.0030 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.browser-use-cloud.1 | default | 2026-11-05T19:36:58+00:00 | yes | completed | 16.0 | 4 | 3 | 4 | 0 | 52642 | 881 | $0.0033 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.bu-ultrafast.1 | bu-ultrafast | 2026-11-05T19:37:14+00:00 | yes | completed | 13.7 | 8 | 7 | 8 | 0 | 27402 | 551 | $0.0029 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.browser-use-cloud.1 | default | 2026-11-05T19:37:28+00:00 | yes | completed | 30.0 | 12 | 11 | 12 | 0 | 169124 | 1314 | $0.0050 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.bu-ultrafast.1 | bu-ultrafast | 2026-11-05T19:37:59+00:00 | yes | completed | 12.7 | 8 | 7 | 8 | 0 | 31250 | 286 | $0.0025 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.bu-fast.1 | bu-fast | 2026-11-05T19:38:12+00:00 | yes | completed | 15.6 | 9 | 7 | 9 | 0 | 36609 | 386 | $0.0014 | not measured | not measured | not measured | not measured |  |
+| books-travel-priciest.bu-fast.2 | bu-fast | 2026-11-05T19:38:29+00:00 | yes | completed | 11.5 | 5 | 3 | 5 | 0 | 22183 | 210 | $0.0012 | not measured | not measured | not measured | not measured |  |
+| books-travel-priciest.browser-use-cloud.2 | default | 2026-11-05T19:38:41+00:00 | yes | completed | 11.8 | 4 | 3 | 4 | 0 | 52279 | 422 | $0.0029 | not measured | not measured | not measured | not measured |  |
+| books-travel-priciest.bu-ultrafast.2 | bu-ultrafast | 2026-11-05T19:38:53+00:00 | no | completed | 5.8 | 4 | 2 | 4 | 0 | 15185 | 150 | $0.0019 | not measured | not measured | not measured | not measured | answer lacks ['A Year in Provence', '56.88'] |
+| quotes-search.browser-use-cloud.2 | default | 2026-11-05T19:38:59+00:00 | yes | completed | 19.2 | 6 | 5 | 6 | 0 | 90806 | 862 | $0.0041 | not measured | not measured | not measured | not measured |  |
+| quotes-search.bu-ultrafast.2 | bu-ultrafast | 2026-11-05T19:39:19+00:00 | yes | completed | 7.3 | 5 | 3 | 5 | 0 | 14816 | 174 | $0.0015 | not measured | not measured | not measured | not measured |  |
+| quotes-search.bu-fast.2 | bu-fast | 2026-11-05T19:39:27+00:00 | yes | completed | 10.0 | 5 | 3 | 5 | 0 | 14388 | 202 | $0.0008 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.bu-ultrafast.2 | bu-ultrafast | 2026-11-05T19:39:37+00:00 | yes | completed | 24.7 | 9 | 8 | 9 | 0 | 40946 | 489 | $0.0033 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.bu-fast.2 | bu-fast | 2026-11-05T19:40:03+00:00 | yes | completed | 31.4 | 9 | 8 | 9 | 0 | 62712 | 610 | $0.0035 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.browser-use-cloud.2 | default | 2026-11-05T19:40:35+00:00 | yes | completed | 19.3 | 4 | 3 | 4 | 0 | 51028 | 558 | $0.0029 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.bu-fast.2 | bu-fast | 2026-11-05T19:40:55+00:00 | yes | completed | 14.8 | 4 | 3 | 4 | 0 | 16039 | 647 | $0.0013 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.browser-use-cloud.2 | default | 2026-11-05T19:41:10+00:00 | yes | completed | 18.0 | 5 | 4 | 5 | 0 | 68815 | 800 | $0.0035 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.bu-ultrafast.2 | bu-ultrafast | 2026-11-05T19:41:29+00:00 | yes | completed | 12.3 | 5 | 3 | 5 | 0 | 19542 | 784 | $0.0027 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.browser-use-cloud.2 | default | 2026-11-05T19:41:41+00:00 | yes | completed | 15.7 | 4 | 3 | 4 | 0 | 51819 | 759 | $0.0031 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.bu-ultrafast.2 | bu-ultrafast | 2026-11-05T19:41:58+00:00 | yes | completed | 19.6 | 12 | 11 | 12 | 0 | 37871 | 846 | $0.0030 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.bu-fast.2 | bu-fast | 2026-11-05T19:42:18+00:00 | yes | completed | 12.6 | 4 | 2 | 4 | 0 | 14124 | 574 | $0.0011 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.bu-ultrafast.2 | bu-ultrafast | 2026-11-05T19:42:31+00:00 | yes | completed | 11.6 | 9 | 7 | 9 | 0 | 36454 | 343 | $0.0027 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.bu-fast.2 | bu-fast | 2026-11-05T19:42:43+00:00 | yes | completed | 18.0 | 9 | 7 | 9 | 0 | 36903 | 424 | $0.0014 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.browser-use-cloud.2 | default | 2026-11-05T19:43:02+00:00 | yes | completed | 34.7 | 11 | 10 | 11 | 0 | 157142 | 1473 | $0.0050 | not measured | not measured | not measured | not measured |  |
+| books-travel-priciest.browser-use-cloud.3 | default | 2026-11-05T19:43:37+00:00 | yes | completed | 10.7 | 4 | 3 | 4 | 0 | 52561 | 413 | $0.0030 | not measured | not measured | not measured | not measured |  |
+| books-travel-priciest.bu-ultrafast.3 | bu-ultrafast | 2026-11-05T19:43:48+00:00 | no | completed | 5.7 | 4 | 2 | 4 | 0 | 15176 | 148 | $0.0019 | not measured | not measured | not measured | not measured | answer lacks ['A Year in Provence', '56.88'] |
+| books-travel-priciest.bu-fast.3 | bu-fast | 2026-11-05T19:43:55+00:00 | yes | completed | 9.9 | 5 | 3 | 5 | 0 | 22168 | 209 | $0.0012 | not measured | not measured | not measured | not measured |  |
+| quotes-search.bu-ultrafast.3 | bu-ultrafast | 2026-11-05T19:44:05+00:00 | yes | completed | 17.8 | 13 | 12 | 13 | 0 | 70364 | 760 | $0.0058 | not measured | not measured | not measured | not measured |  |
+| quotes-search.bu-fast.3 | bu-fast | 2026-11-05T19:44:25+00:00 | yes | completed | 13.0 | 7 | 5 | 7 | 0 | 23025 | 314 | $0.0010 | not measured | not measured | not measured | not measured |  |
+| quotes-search.browser-use-cloud.3 | default | 2026-11-05T19:44:39+00:00 | yes | completed | 16.8 | 5 | 4 | 5 | 0 | 72759 | 667 | $0.0037 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.bu-fast.3 | bu-fast | 2026-11-05T19:44:56+00:00 | yes | completed | 30.5 | 11 | 9 | 11 | 0 | 62089 | 509 | $0.0027 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.browser-use-cloud.3 | default | 2026-11-05T19:45:27+00:00 | yes | completed | 26.8 | 5 | 4 | 5 | 0 | 66160 | 387 | $0.0031 | not measured | not measured | not measured | not measured |  |
+| dynamic-loading.bu-ultrafast.3 | bu-ultrafast | 2026-11-05T19:45:54+00:00 | yes | completed | 13.4 | 4 | 3 | 4 | 0 | 11822 | 124 | $0.0014 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.browser-use-cloud.3 | default | 2026-11-05T19:46:09+00:00 | yes | completed | 16.5 | 4 | 3 | 4 | 0 | 52924 | 928 | $0.0033 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.bu-ultrafast.3 | bu-ultrafast | 2026-11-05T19:46:26+00:00 | yes | completed | 12.0 | 6 | 5 | 6 | 0 | 18740 | 865 | $0.0026 | not measured | not measured | not measured | not measured |  |
+| stretch-books-nonfiction-five-star.bu-fast.3 | bu-fast | 2026-11-05T19:46:38+00:00 | yes | completed | 14.0 | 4 | 3 | 4 | 0 | 15948 | 648 | $0.0013 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.bu-ultrafast.3 | bu-ultrafast | 2026-11-05T19:46:53+00:00 | yes | completed | 8.3 | 4 | 3 | 4 | 0 | 19705 | 271 | $0.0028 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.bu-fast.3 | bu-fast | 2026-11-05T19:47:01+00:00 | yes | completed | 22.7 | 7 | 5 | 7 | 0 | 41493 | 1016 | $0.0023 | not measured | not measured | not measured | not measured |  |
+| stretch-quotes-top-authors.browser-use-cloud.3 | default | 2026-11-05T19:47:25+00:00 | yes | completed | 16.9 | 4 | 3 | 4 | 0 | 52051 | 792 | $0.0032 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.bu-fast.3 | bu-fast | 2026-11-05T19:47:42+00:00 | yes | completed | 16.1 | 9 | 7 | 9 | 0 | 36624 | 396 | $0.0014 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.browser-use-cloud.3 | default | 2026-11-05T19:47:59+00:00 | yes | completed | 30.8 | 12 | 11 | 12 | 0 | 171914 | 1482 | $0.0052 | not measured | not measured | not measured | not measured |  |
+| saucedemo-checkout.bu-ultrafast.3 | bu-ultrafast | 2026-11-05T19:48:30+00:00 | yes | completed | 10.8 | 8 | 7 | 8 | 0 | 31151 | 288 | $0.0025 | not measured | not measured | not measured | not measured |  |
 
 ## Every answer
 
@@ -203,3 +284,57 @@
 - `stretch-books-nonfiction-five-star.browser-use-default-effort.3`: Across every page of the Nonfiction category, the three cheapest five-star-rated books and their prices are: 1. **Agnostic: A Spirited Manifesto** &#8211; £12.51 2. **Disrupted: My Misadventure in the Start-Up Bubble** &#8211; £15.28 3. **Mother, Can You Not?** &#8211; £16.89
 - `stretch-quotes-top-authors.browser-use-default-effort.3`: Across every page of https://quotes.toscrape.com/ (10 pages, 100 quotes total), the three authors with the most quotes attributed to them are: 1. **Albert Einstein** &#8212; 10 quotes 2. **J.K. Rowling** &#8212; 9 quotes 3. **Marilyn Monroe** &#8212; 7 quotes
 - `saucedemo-checkout.browser-use-default-effort.3`: The order has been completed successfully. The total is $43.18 (Item total: $39.98 + Tax: $3.20).
+- `books-travel-priciest.bu-ultrafast.1`: The most expensive book in the Travel category is *Full Moon over Noah&#8217;s Ark: An Odyssey to Mount Ararat and Beyond*, priced at £49.43.
+- `books-travel-priciest.bu-fast.1`: The most expensive book in the Travel category is **A Year in Provence (Provence #1)**, priced at **£56.88**.
+- `books-travel-priciest.browser-use-cloud.1`: The most expensive book in Travel is *A Year in Provence (Provence #1)* at **£56.88**.
+- `quotes-search.bu-fast.1`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221; &#8212; Albert Einstein
+- `quotes-search.browser-use-cloud.1`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221; &#8212; Albert Einstein.
+- `quotes-search.bu-ultrafast.1`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221;
+- `dynamic-loading.browser-use-cloud.1`: The text that appears is: **Hello World!**
+- `dynamic-loading.bu-ultrafast.1`: Hello World!
+- `dynamic-loading.bu-fast.1`: Hello World!
+- `stretch-books-nonfiction-five-star.bu-ultrafast.1`: The three cheapest five-star books in the Nonfiction category are: 1. *Agnostic: A Spirited Manifesto* &#8212; £12.51 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; £15.28 3. *Mother, Can You Not?* &#8212; £16.89 I compared prices and ratings across all six category pages.
+- `stretch-books-nonfiction-five-star.bu-fast.1`: Across all 110 books on the six Nonfiction pages, the three cheapest five-star-rated books are: 1. *Agnostic: A Spirited Manifesto* &#8212; £12.51 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; £15.28 3. *Mother, Can You Not?* &#8212; £16.89 Source: https://books.toscrape.com/catalogue/category/books/nonfiction_13/index.html
+- `stretch-books-nonfiction-five-star.browser-use-cloud.1`: The three cheapest five-star books across all six Nonfiction pages are: 1. *Agnostic: A Spirited Manifesto* &#8212; **£12.51** (page 2) 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; **£15.28** (page 5) 3. *Mother, Can You Not?* &#8212; **£16.89** (page 3)
+- `stretch-quotes-top-authors.bu-fast.1`: Across all 10 pages (100 quotes), the three authors with the most quotes are: 1. Albert Einstein &#8212; 10 2. J.K. Rowling &#8212; 9 3. Marilyn Monroe &#8212; 7 Source: [Quotes to Scrape](https://quotes.toscrape.com/) (pages [1](https://quotes.toscrape.com/page/1/)&#8211;[10](https://quotes.toscrape.com/page/10/)).
+- `stretch-quotes-top-authors.browser-use-cloud.1`: Across all 10 pages (100 quotes), the top three authors are: 1. Albert Einstein: 10 quotes 2. J.K. Rowling: 9 quotes 3. Marilyn Monroe: 7 quotes
+- `stretch-quotes-top-authors.bu-ultrafast.1`: Across the site&#8217;s 100 quotes, the top three authors are: 1. Albert Einstein &#8212; 10 quotes 2. J.K. Rowling &#8212; 9 quotes 3. Marilyn Monroe &#8212; 7 quotes
+- `saucedemo-checkout.browser-use-cloud.1`: Order completed successfully. The total was **$43.18** ($39.98 for the items plus $3.20 tax).
+- `saucedemo-checkout.bu-ultrafast.1`: Order completed successfully. The total was $43.18 (items $39.98 plus $3.20 tax).
+- `saucedemo-checkout.bu-fast.1`: Order completed for Ada Lovelace (postcode EC1A 1BB), with the Sauce Labs Backpack and Sauce Labs Bike Light. Verified total: $43.18 ($39.98 subtotal + $3.20 tax).
+- `books-travel-priciest.bu-fast.2`: The most expensive book in the Travel category is *A Year in Provence (Provence #1)*, priced at £56.88.
+- `books-travel-priciest.browser-use-cloud.2`: The most expensive book in Travel is **A Year in Provence (Provence #1)**, priced at **£56.88**.
+- `books-travel-priciest.bu-ultrafast.2`: The most expensive book in the Travel category is **Full Moon over Noah&#8217;s Ark: An Odyssey to Mount Ararat and Beyond**, priced at **£49.43**.
+- `quotes-search.browser-use-cloud.2`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221; &#8211; Albert Einstein
+- `quotes-search.bu-ultrafast.2`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221; &#8212; Albert Einstein
+- `quotes-search.bu-fast.2`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221; &#8212; Albert Einstein
+- `dynamic-loading.bu-ultrafast.2`: Hello World!
+- `dynamic-loading.bu-fast.2`: Hello World!
+- `dynamic-loading.browser-use-cloud.2`: The text that appears when loading finishes is **&#8220;Hello World!&#8221;**
+- `stretch-books-nonfiction-five-star.bu-fast.2`: Across all 110 books on the six Nonfiction category pages, the three cheapest five-star-rated books are: 1. *Agnostic: A Spirited Manifesto* &#8212; £12.51 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; £15.28 3. *Mother, Can You Not?* &#8212; £16.89 Source: [Books to Scrape &#8212; Nonfiction](https://books.toscrape.com/catalogue/category/books/nonfiction_13/index.html) (including all six pages).
+- `stretch-books-nonfiction-five-star.browser-use-cloud.2`: The three cheapest five-star books across all 110 Nonfiction listings are: 1. *Agnostic: A Spirited Manifesto* &#8212; **£12.51** 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; **£15.28** 3. *Mother, Can You Not?* &#8212; **£16.89**
+- `stretch-books-nonfiction-five-star.bu-ultrafast.2`: Across all 110 books in the Nonfiction category, the three cheapest five-star books are: 1. *Agnostic: A Spirited Manifesto* &#8212; £12.51 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; £15.28 3. *Mother, Can You Not?* &#8212; £16.89
+- `stretch-quotes-top-authors.browser-use-cloud.2`: Across all 10 pages (100 quotes), the top three authors are: 1. Albert Einstein: 10 quotes 2. J.K. Rowling: 9 quotes 3. Marilyn Monroe: 7 quotes
+- `stretch-quotes-top-authors.bu-ultrafast.2`: Across all 10 pages, the three most-quoted authors are: 1. Albert Einstein &#8212; 10 quotes 2. J.K. Rowling &#8212; 9 quotes 3. Marilyn Monroe &#8212; 7 quotes
+- `stretch-quotes-top-authors.bu-fast.2`: Across all 10 pages (100 quotes), the three authors with the most quotes are: 1. Albert Einstein &#8212; 10 2. J.K. Rowling &#8212; 9 3. Marilyn Monroe &#8212; 7
+- `saucedemo-checkout.bu-ultrafast.2`: Order placed successfully for Ada Lovelace (postcode EC1A 1BB). The Sauce Labs Backpack and Sauce Labs Bike Light were checked out. Verified total: $43.18 ($39.98 item total + $3.20 tax).
+- `saucedemo-checkout.bu-fast.2`: Order placed successfully. The verified total was $43.18 (item total $39.98 plus $3.20 tax).
+- `saucedemo-checkout.browser-use-cloud.2`: Order placed successfully. The total was **$43.18** ($39.98 in items plus $3.20 tax).
+- `books-travel-priciest.browser-use-cloud.3`: The most expensive book in the Travel category is **A Year in Provence (Provence #1)** at **£56.88**.
+- `books-travel-priciest.bu-ultrafast.3`: The most expensive book in the Travel category is &#8220;Full Moon over Noah&#8217;s Ark: An Odyssey to Mount Ararat and Beyond,&#8221; priced at £49.43.
+- `books-travel-priciest.bu-fast.3`: The most expensive book in the Travel category is *A Year in Provence (Provence #1)*, priced at £56.88.
+- `quotes-search.bu-ultrafast.3`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221;
+- `quotes-search.bu-fast.3`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221; &#8212; Albert Einstein
+- `quotes-search.browser-use-cloud.3`: &#8220;Try not to become a man of success. Rather become a man of value.&#8221; &#8212; Albert Einstein
+- `dynamic-loading.bu-fast.3`: Hello World!
+- `dynamic-loading.browser-use-cloud.3`: The text that appears is **&#8220;Hello World!&#8221;**
+- `dynamic-loading.bu-ultrafast.3`: Hello World!
+- `stretch-books-nonfiction-five-star.browser-use-cloud.3`: Across all six Nonfiction pages, the three cheapest five-star books are: | Book | Price | |---|---:| | *Agnostic: A Spirited Manifesto* | £12.51 | | *Disrupted: My Misadventure in the Start-Up Bubble* | £15.28 | | *Mother, Can You Not?* | £16.89 | [Nonfiction category](https://books.toscrape.com/catalogue/category/books/nonfiction_13/index.html)
+- `stretch-books-nonfiction-five-star.bu-ultrafast.3`: Across all 6 pages of the Nonfiction category, the three cheapest five-star books are: 1. *Agnostic: A Spirited Manifesto* &#8212; £12.51 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; £15.28 3. *Mother, Can You Not?* &#8212; £16.89
+- `stretch-books-nonfiction-five-star.bu-fast.3`: Across all 6 pages (110 books) in the Nonfiction category, the three cheapest five-star books are: 1. *Agnostic: A Spirited Manifesto* &#8212; £12.51 2. *Disrupted: My Misadventure in the Start-Up Bubble* &#8212; £15.28 3. *Mother, Can You Not?* &#8212; £16.89 Source: [Books to Scrape &#8212; Nonfiction](https://books.toscrape.com/catalogue/category/books/nonfiction_13/index.html).
+- `stretch-quotes-top-authors.bu-ultrafast.3`: Across all 10 pages, the top three authors are: 1. Albert Einstein &#8212; 10 quotes 2. J.K. Rowling &#8212; 9 quotes 3. Marilyn Monroe &#8212; 7 quotes
+- `stretch-quotes-top-authors.bu-fast.3`: Across all 10 pages (100 quotes), the three most-quoted authors are: 1. Albert Einstein &#8212; 10 quotes 2. J.K. Rowling &#8212; 9 quotes 3. Marilyn Monroe &#8212; 7 quotes Source: https://quotes.toscrape.com/ (pages 1&#8211;10).
+- `stretch-quotes-top-authors.browser-use-cloud.3`: Across all 10 pages (100 quotes), the top three authors are: 1. Albert Einstein: 10 quotes 2. J.K. Rowling: 9 quotes 3. Marilyn Monroe: 7 quotes
+- `saucedemo-checkout.bu-fast.3`: Order completed successfully for Ada Lovelace with postcode EC1A 1BB. The Sauce Labs Backpack and Sauce Labs Bike Light were in the cart. Verified total: $43.18 ($39.98 item total + $3.20 tax).
+- `saucedemo-checkout.browser-use-cloud.3`: The order was placed successfully. The total was **$43.18** ($39.98 for the items plus $3.20 tax).
+- `saucedemo-checkout.bu-ultrafast.3`: Order completed successfully. Total: $43.18 (items $39.98 + tax $3.20).

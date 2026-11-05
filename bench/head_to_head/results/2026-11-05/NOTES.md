@@ -19,3 +19,11 @@ What `runs.jsonl` cannot show on its own.
 - **Machine load.** The 1-minute load on this 4-vCPU machine stayed between 0.25 and 1.78 across the head-to-head.
 - **Traces.** fastbrowse's traces are 57 MB unpacked and 8.2 MB packed, so they are not in the repo. They were delivered with
   the results as `fastbrowse-head-to-head-2026-11-05-traces.tar.gz`.
+
+## The hosted arms, added at 19:30 UTC
+
+- **Timing.** The 54 hosted runs ran after the 36 head-to-head runs, started between 19:31 and 19:48 UTC, one at a time. The local runs were not repeated, because another benchmark was using this machine by then and would have skewed their clocks.
+- **No retries, no replacements.** Every hosted run is its first and only attempt. Two pilot runs on the checkout, made to check the harness, were discarded before the campaign, and they passed.
+- **`bu-ultrafast`'s three failures** are `books-travel-priciest`, each answering "Full Moon over Noah's Ark" at 49.43. The live page was read again after the runs: A Year in Provence is 56.88 and Full Moon 49.43, so the grader was right.
+- **An outlier.** `stretch-quotes-top-authors.bu-fast.1` took 154.5 s with 21.8 s of it in model calls. Its other two runs took 12.6 s and 22.7 s.
+- **Raw hosted events and run records** are not in the repo, since they carry account ids and Browser Use's internal event detail. They were delivered as `fastbrowse-head-to-head-2026-11-05-hosted-events.tar.gz`.

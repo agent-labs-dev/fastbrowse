@@ -1,4 +1,4 @@
-# Head-to-head: fastbrowse against Browser Use on one machine
+# Head-to-head: fastbrowse against Browser Use
 
 Runs fastbrowse and the open-source [Browser Use](https://github.com/browser-use/browser-use) agent on the same six
 public tasks, on one machine, one run at a time, and records every run. This is a small rerunnable comparison: it is
@@ -82,6 +82,37 @@ Length was assigned from the work a task needs, before any were timed.
   for the shared model, and dollars for the whole.
 - **Agent CPU and peak memory:** the agent process alone, from `wait4`. Chrome is not included.
 
+## The hosted arms
+
+`hosted.py` adds Browser Use's cloud agent to a campaign, with the same tasks, repeats and graders, in the same
+`runs.jsonl`. It needs `BROWSER_USE_API_KEY`:
+
+```sh
+python3 bench/head_to_head/hosted.py run --campaign NAME      # browser-use-cloud, bu-ultrafast, bu-fast
+python3 bench/head_to_head/hosted.py settle --campaign NAME   # at least 90 s later: each session's settled bill
+```
+
+| Arm | `model` sent | What Browser Use says it is |
+|:--|:--|:--|
+| `browser-use-cloud` | left out | The API's default: `gpt-6-luna` at high reasoning |
+| `bu-ultrafast` | `bu-ultrafast` | GPT-6 Luna at low reasoning on OpenAI's priority tier |
+| `bu-fast` | `bu-fast` | GPT-6 Luna at medium reasoning on the standard tier |
+
+Most of what "What is held the same" holds does not hold here, so read these arms with that in mind:
+
+- **Machine, network and browser are Browser Use's.** The presets are not in the open-source package. Only the clock
+  starts here: create request to the first poll that sees the run finished, at 0.25 s a poll. `server_seconds`, from
+  the run's own events, is beside it and excludes this machine's round trip.
+- **The model differs.** These arms run GPT-6 Luna and the local arms Gemini 3.8 Flash, so a gap can be the model.
+- **Proxy.** `proxyCountryCode` is sent as null on every hosted run, because the local arms have none and the docs and
+  the schema disagree on the default.
+- **Prompt.** The shared words, and on the checkout the two public credentials too: secret bindings need a vault.
+- **Steps** are the `step_start` events in the run's stream, one per model turn. **Tool calls** are its tool events.
+  These event types are not documented, so a newer API could change them.
+- **Final URL** is read from the browser over CDP before the harness stops it. **`dollars`** is the session's model and
+  search charges. The browser and proxy bill is apart, in `browser_dollars` and `proxy_dollars`.
+- **`model_seconds`** adds up each model request to its response, from the same stream.
+
 ## What a campaign leaves
 
 `results/<campaign>/`: `environment.json` (machine, Chrome, both versions, fastbrowse's commit), `runs.jsonl` (one line
@@ -95,4 +126,4 @@ traces also land in `raw/`, and `.gitignore` keeps them out of the repo, since t
   show how busy it was. The network, the sites and OpenRouter are live and vary.
 - Six tasks on practice sites predict little about hard or bot-walled sites, where headless Chrome is refused
   (`browser_refusal` in `src/fastbrowse/evals/live_tasks.py`).
-- Browser cost is not in any figure, since Chrome runs locally.
+- Browser cost is not in any local arm's figure, since Chrome runs locally.
