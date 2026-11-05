@@ -1197,7 +1197,11 @@ impl CdpPage {
             }
             let downloads_before = self.session.downloads_settled();
             let denials_before = self.session.denials();
-            let result = self.session.send("Page.navigate", json!({"url": url}), Some(&session_id)).await?;
+            let result = self
+                .session
+                .send("Page.navigate", json!({"url": url}), Some(&session_id))
+                .await
+                .map_err(|error| held_in_background(error, self.session.connection().foreground))?;
             if self.session.denials() != denials_before {
                 // A redirect left the grant; retrying would only repeat it.
                 return Err(BrowserError::OriginNotAllowed);
@@ -1566,9 +1570,35 @@ fn csv_rows(text: &str) -> Vec<&str> {
     rows.into_iter().map(|row| row.strip_suffix('\r').unwrap_or(row)).filter(|row| !row.trim().is_empty()).collect()
 }
 
+/// A run that is not `--foreground` opens its tab behind the window's current one, and a browser profile can hold such
+/// a tab's navigation until the command deadline: a signed-in Chrome held aliexpress.com for 63 s in the background and
+/// 0.6 s in front (#771). The failure says so, since nothing else points at the option.
+fn held_in_background(error: BrowserError, foreground: bool) -> BrowserError {
+    match error {
+        BrowserError::PageUnresponsive(message) if !foreground => BrowserError::PageUnresponsive(format!(
+            "{message}. The tab was opened behind the window's current tab, where a browser profile can hold a \
+             navigation; --foreground opens it in front"
+        )),
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A signed-in profile held a background tab's Page.navigate to aliexpress.com for 63 s while the same tab in front
+    // loaded in 0.6 s (#771), and the run ended unavailable with nothing pointing at --foreground.
+    #[test]
+    fn a_navigation_held_in_a_background_tab_names_the_foreground_option() {
+        let held = BrowserError::PageUnresponsive("Page.navigate exceeded its command deadline".into());
+        let told = held_in_background(held.clone(), false).to_string();
+        assert!(matches!(held_in_background(held.clone(), false), BrowserError::PageUnresponsive(_)));
+        assert!(told.contains("--foreground"), "{told}");
+        assert_eq!(held_in_background(held.clone(), true).to_string(), held.to_string());
+        let other = BrowserError::ContextLost("c".into());
+        assert_eq!(held_in_background(other.clone(), false).to_string(), other.to_string());
+    }
 
     #[test]
     fn same_origin_needs_http_and_matching_ports() {
