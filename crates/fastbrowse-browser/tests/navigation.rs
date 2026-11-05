@@ -1,9 +1,10 @@
 mod common;
 mod misc_support;
+mod safety_support;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{Harness, chrome, harness, harness_on, harness_with, sites};
 use fastbrowse_browser::error::BrowserError;
@@ -14,6 +15,7 @@ use fastbrowse_core::models::{BrowserConnection, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use misc_support::{eval_value, find, js, observe_until, try_eval, wait_until};
 use relay::{Relay, Verdict};
+use safety_support::{Reply, serve};
 use serde_json::{Value, json};
 use tokio::time::timeout;
 
@@ -184,6 +186,27 @@ fn navigate_to(url: &str) -> Action {
 
 fn click(target_id: &str) -> Action {
     Action { target_id: Some(target_id.to_owned()), ..Action::new(Operation::Click) }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_hung_input_reports_before_the_normal_command_deadline() {
+    let port = serve(|_| Reply::html(r#"<button id=a onclick="while(true){}">Go</button><button id=b>Next</button>"#));
+    let Some(h) = harness().await else { return };
+    let url = format!("http://127.0.0.1:{port}/");
+    h.page.navigate(&url, None).await.expect("navigate");
+    let observation = h.observe().await;
+    let started = Instant::now();
+    let error = timeout(Duration::from_secs(20), h.page.act(&click(&find(&observation, "Go").id), &observation))
+        .await
+        .expect("a hung input must not use the ordinary command deadline")
+        .expect_err("the renderer is hung");
+    assert!(error.to_string().contains("Input."), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(20));
+    h.page.navigate(&url, None).await.expect("fresh target");
+    let fresh = h.observe().await;
+    let result = h.page.act(&click(&find(&fresh, "Next").id), &fresh).await.expect("next");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    h.close().await;
 }
 
 // -- test_navigation.py: directed navigation to a caller-supplied address, through the real browser -------------

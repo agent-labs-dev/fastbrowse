@@ -360,6 +360,8 @@ pub(crate) struct RunState {
     /// The `step_key` of the capture the last read read.
     pub read_step: Option<String>,
     pub blank_opening_checked: bool,
+    /// The one renderer hang this run may recover without risking a replay of the action.
+    pub hung_page_reopened: bool,
     pub recovery_log: VecDeque<String>,
     /// `history.len()` when a tripwire last recovered the run. Evidence a recovery already acted on is spent:
     /// `history` only grows, so a repetition count that reached the limit once would hold forever.
@@ -528,6 +530,7 @@ impl RunState {
             unread_rereads: HashSet::new(),
             read_step: None,
             blank_opening_checked: false,
+            hung_page_reopened: false,
             recovery_log: VecDeque::new(),
             recovered_at: 0,
             attempts: HashMap::new(),

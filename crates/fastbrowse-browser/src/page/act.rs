@@ -164,7 +164,7 @@ impl CdpPage {
                 .find(|c| Some(&c.id) == action.target_id.as_ref())
                 .and_then(|c| c.value.clone())
                 .unwrap_or_default();
-            if !self.form_unchanged(target, &current).await {
+            if !self.form_unchanged(target, &current).await? {
                 return Ok(result(StepOutcome::Stale, false, "form changed before fill"));
             }
         }
@@ -192,6 +192,7 @@ impl CdpPage {
                     Ok(measured) => measured,
                     // The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
                     Err(_) => {
+                        self.session.client()?.missed_deadline(&active);
                         return Err(BrowserError::PageUnresponsive(
                             "page did not draw the measured layout before the deadline".into(),
                         ));
@@ -242,7 +243,8 @@ impl CdpPage {
         let downloads_before = self.session.downloads_settled();
         let (outcome, mut detail) = match self.dispatch(action, target.as_ref(), point, drawn).await {
             Ok(dispatched) => dispatched,
-            Err(error) if !action.form_fill => return Err(error),
+            // A hung renderer goes up whole, so the agent reopens the page instead of retrying into it.
+            Err(error) if !action.form_fill || matches!(error, BrowserError::PageUnresponsive(_)) => return Err(error),
             // An input handler can navigate before retention is checked. Its next field needs a fresh decision.
             Err(_) => return Ok(result(StepOutcome::Failed, true, "form changed during fill")),
         };
@@ -298,7 +300,7 @@ impl CdpPage {
             && let Some(target) = &target
             && !action.secret
         {
-            unchanged = self.form_unchanged(target, action.text.as_deref().unwrap_or_default()).await;
+            unchanged = self.form_unchanged(target, action.text.as_deref().unwrap_or_default()).await?;
         }
         Ok(ActResult {
             outcome: StepOutcome::Executed,
@@ -401,17 +403,22 @@ impl CdpPage {
         })
     }
 
-    pub(crate) async fn form_unchanged(&self, target: &Target, text: &str) -> bool {
+    /// Whether the form still holds `text`. Only `PageUnresponsive` is an error, so the agent's hang recovery sees it.
+    pub(crate) async fn form_unchanged(&self, target: &Target, text: &str) -> Result<bool, BrowserError> {
         if self.session.pending_dialog().is_some() || Some(&target.0) != self.session.active_session_id().ok().as_ref()
         {
-            return false;
+            return Ok(false);
         }
         // Other frame sessions can change independently of this renderer's guard.
         if !self.session.frame_sessions().is_empty() {
-            return false;
+            return Ok(false);
         }
         let script = format!("({})({})", self.page_js, py_json(&json!({"id": target.2, "text": text})));
-        matches!(self.until_dialog(self.evaluate(&target.0, &script)).await, Some(Ok(Value::Bool(true))))
+        match self.until_dialog(self.evaluate(&target.0, &script)).await {
+            Some(Ok(Value::Bool(true))) => Ok(true),
+            Some(Err(error @ BrowserError::PageUnresponsive(_))) => Err(error),
+            _ => Ok(false),
+        }
     }
 
     async fn dispatch(
@@ -431,6 +438,7 @@ impl CdpPage {
                 match self.navigate(url, None).await {
                     Err(error @ BrowserError::OriginNotAllowed) => Err(error),
                     Err(error) if error.is_unavailable() => Err(error),
+                    Err(error @ BrowserError::PageUnresponsive(_)) => Err(error),
                     Err(error) => Ok((StepOutcome::Failed, Some(error.to_string()))),
                     Ok(()) => Ok((StepOutcome::Executed, None)),
                 }

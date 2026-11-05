@@ -89,13 +89,13 @@ impl From<BrowserError> for PageError {
         match error {
             BrowserError::ContextLost(_) => PageError::ContextLost(message),
             BrowserError::Unavailable(_) | BrowserError::BrowserUnresponsive(_) => PageError::Unavailable(message),
+            BrowserError::PageUnresponsive(_) => PageError::PageUnresponsive(message),
             BrowserError::ScreenshotsUnavailable(_) => PageError::ScreenshotsUnavailable(message),
             BrowserError::NavigationTimeout(_) => PageError::NavigationTimeout(message),
             BrowserError::SiteUnreachable(_) => PageError::SiteUnreachable(message),
-            BrowserError::Failed(_)
-            | BrowserError::PageUnresponsive(_)
-            | BrowserError::OriginNotAllowed
-            | BrowserError::Script => PageError::Failed(message),
+            BrowserError::Failed(_) | BrowserError::OriginNotAllowed | BrowserError::Script => {
+                PageError::Failed(message)
+            }
         }
     }
 }
@@ -110,7 +110,7 @@ mod tests {
             (BrowserError::Failed("f".into()), PageError::Failed("f".into())),
             (BrowserError::ContextLost("c".into()), PageError::ContextLost("c".into())),
             (BrowserError::BrowserUnresponsive("b".into()), PageError::Unavailable("b".into())),
-            (BrowserError::PageUnresponsive("p".into()), PageError::Failed("p".into())),
+            (BrowserError::PageUnresponsive("p".into()), PageError::PageUnresponsive("p".into())),
             (BrowserError::OriginNotAllowed, PageError::Failed("the page is outside allowed_origins".into())),
             (BrowserError::SiteUnreachable("s".into()), PageError::SiteUnreachable("s".into())),
         ];

@@ -549,6 +549,7 @@ impl Agent {
             }
             Flow::Browser(error) => {
                 let unavailable = error.is_unavailable()
+                    || matches!(error, BrowserError::PageUnresponsive(_))
                     || (state.is_none()
                         && matches!(error, BrowserError::NavigationTimeout(_) | BrowserError::SiteUnreachable(_)));
                 self.failed(error.to_string(), unavailable, state, ledger)

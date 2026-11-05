@@ -203,9 +203,10 @@ be fine, and the same run later may pass.
 - Before the first step, the start page never loaded, or Chrome reported a dropped, refused or empty
   connection. A name that does not resolve is not counted here, since it can be a mistyped address.
 - The site answered HTTP 408, 419, 429 or a 5xx status, and recovery found no way on.
-- A browser command went unanswered. One that stays unanswered for 120 seconds ends the run, even if the
-  browser still answers health checks, and the error says the page did not answer or the browser stopped
-  answering.
+- A browser command went unanswered while the browser still answered health checks. An input event gets 15
+  seconds and any other command 120 seconds. The first page that stops answering an action is reopened once at
+  the same address; a second hang, or one outside an action, ends the run, and the error says the page did not
+  answer or the browser stopped answering.
 - The run's tab closed and no tab it owns remains.
 
 **Next step.**

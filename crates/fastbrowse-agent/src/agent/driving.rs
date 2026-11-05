@@ -12,7 +12,7 @@ use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, D
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::py::text;
-use fastbrowse_core::safety::{origin_of, starts_download};
+use fastbrowse_core::safety::{may_be_irreversible, origin_of, starts_download};
 use serde_json::Map;
 
 use super::helpers::{
@@ -574,8 +574,7 @@ impl Agent {
             return Ok(false);
         }
         self.event("challenge_reload", || Map::from_iter([("url".into(), challenge.url.clone().into())]));
-        let back_to = if state.invented.contains(&challenge.url) { state.started_url.clone() } else { None };
-        match self.page.navigate(&challenge.url, back_to.as_deref()).await {
+        match self.reload(state, &challenge.url).await {
             Err(error) if error.needs_browser() => return Err(error.into()),
             Err(_) => return Ok(false),
             Ok(()) => {}
@@ -627,8 +626,7 @@ impl Agent {
             return Ok(false);
         }
         self.event("blank_reload", || Map::from_iter([("url".into(), observation.url.clone().into())]));
-        let back_to = if state.invented.contains(&observation.url) { state.started_url.clone() } else { None };
-        self.page.navigate(&observation.url, back_to.as_deref()).await?;
+        self.reload(state, &observation.url).await?;
         Ok(true)
     }
 
@@ -744,9 +742,23 @@ impl Agent {
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
             let mut result = if options.follow_pager {
-                self.follow_pager(&action, &raw).await?
+                match self.follow_pager(&action, &raw).await {
+                    Ok(result) => result,
+                    Err(Flow::Browser(BrowserError::PageUnresponsive(_)))
+                        if Self::may_reopen(state, decision, &action) =>
+                    {
+                        return self.reopen_hung_page(state, observation, decision, decided_by, started, frame).await;
+                    }
+                    Err(error) => return Err(error),
+                }
             } else {
-                self.page.act(&action, &raw).await?
+                match self.page.act(&action, &raw).await {
+                    Ok(result) => result,
+                    Err(BrowserError::PageUnresponsive(_)) if Self::may_reopen(state, decision, &action) => {
+                        return self.reopen_hung_page(state, observation, decision, decided_by, started, frame).await;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             };
             state.form_continues = action.form_fill
                 && result.form_unchanged
@@ -882,7 +894,15 @@ impl Agent {
             {
                 // Choosing an option has an intended effect to check: a menu that closed without the value changing
                 // still changes the page, and Google Flights' "One way" was clicked to the step limit.
-                let landed = self.observe().await?;
+                let landed = match self.observe().await {
+                    Ok(landed) => landed,
+                    Err(Flow::Browser(BrowserError::PageUnresponsive(_)))
+                        if Self::may_reopen(state, decision, &action) =>
+                    {
+                        return self.reopen_hung_page(state, observation, decision, decided_by, started, frame).await;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let done = effect(observation, &landed, Some(target));
                 state.acted_from = None;
                 setting = done.set_something;
@@ -939,6 +959,75 @@ impl Agent {
             state.form_continues = false;
         }
         Ok(false)
+    }
+
+    async fn reopen_hung_page(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        decided_by: Decider,
+        started: Instant,
+        frame: Option<Vec<u8>>,
+    ) -> Step<bool> {
+        state.hung_page_reopened = true;
+        let label = decision_label(decision);
+        let label = label.as_deref();
+        // A click or navigation may have reached a new page before its renderer hung: reopen that page, not the one
+        // the step started on. The target metadata answers without the renderer.
+        let url = match self.page.active_url().await {
+            Ok(Some(url)) => url,
+            Ok(None) | Err(_) => observation.url.clone(),
+        };
+        state.moved_by_action = false;
+        state.acted_from = None;
+        state.pending_link = None;
+        self.event("hung_page_reload", || Map::from_iter([("url".into(), url.clone().into())]));
+        let effect = "The page stopped answering and was reopened.".to_string();
+        state.history.push(HistoryEntry {
+            effect: Some(effect.clone()),
+            ..HistoryEntry::new(Some(decision.operation), label, StepOutcome::Failed, false)
+        });
+        let step = StepResult {
+            index: state.steps.len() as i64,
+            operation: decision.operation,
+            decided_by,
+            outcome: StepOutcome::Failed,
+            page_changed: Some(url != observation.url),
+            url: url.clone(),
+            target: label.map(str::to_owned),
+            confidence: (decided_by == Decider::Jev).then(|| decision.confidence()),
+            note: Some(effect),
+            facts: Vec::new(),
+            duration_ms: started.elapsed().as_millis() as i64,
+            choices: Vec::new(),
+        };
+        self.record_step(state, step, false, frame).await?;
+        self.reload(state, &url).await?;
+        Ok(false)
+    }
+
+    /// A run reopens one hung page, and never after an authorized commit the renderer may have received: reopening
+    /// would let the run replay it.
+    fn may_reopen(state: &RunState, decision: &Decision, action: &Action) -> bool {
+        if state.hung_page_reopened {
+            return false;
+        }
+        if !state.authorization.irreversible_actions {
+            return true;
+        }
+        let accepts_dialog = decision.operation == Operation::Dialog && action.accept_dialog == Some(true);
+        // Visiting an address can commit with no control behind it.
+        let navigates = decision.operation == Operation::Navigate;
+        !accepts_dialog
+            && !navigates
+            && !decision.target.as_ref().is_some_and(|target| may_be_irreversible(decision.operation, Some(target)))
+    }
+
+    /// Load `url` again. On an address the run invented, BACK leads to where the run started.
+    async fn reload(&self, state: &RunState, url: &str) -> Result<(), BrowserError> {
+        let back_to = if state.invented.contains(url) { state.started_url.clone() } else { None };
+        self.page.navigate(url, back_to.as_deref()).await
     }
 
     pub(super) async fn follow_pager(&self, action: &Action, observation: &Observation) -> Step<ActResult> {
