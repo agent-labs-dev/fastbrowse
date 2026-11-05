@@ -374,7 +374,7 @@ def replay_start_gate(journal: list[dict[str, Any]], physical: dict[str, Any], l
 
 def internal_campaign(results: Path, unmeasured: Collection[str] = ()) -> Any:
     """The evidence campaign `fastbrowse-evals browser track-ledger` projects, built from the exact ledger bytes, without the lines
-    of `unmeasured` arms (`internal_group`)."""
+    of `unmeasured` arms (`internal_group`), with its semantic receipts and each attempt's raw ledger row."""
     from fastbrowse.evals import evidence
 
     def kept(line: str) -> bool:
@@ -390,7 +390,7 @@ def internal_campaign(results: Path, unmeasured: Collection[str] = ()) -> Any:
                 (folder / source.name).write_text("".join(line for line in body if not line.strip() or kept(line)))
         campaign = evidence.campaign(folder / results.name, Path(directory), kind="published")
         receipts = tracking.semantic_receipts(campaign, Path(directory))
-        return campaign, receipts
+        return campaign, receipts, tracking.ledger_rows(campaign, Path(directory))
 
 
 def measured_arms(group_id: str, run: dict[str, Any]) -> set[str]:
@@ -576,7 +576,7 @@ def internal_group(group_id: str, results: Path, catalog: dict[str, Any], digest
         ]
     if other == "jev-ultrafast":
         limits.append(f"Ultrafast text helper {catalog['ultrafast_text_model']}; spend is its provider metered cost")
-    campaign, receipts = internal_campaign(results, unmeasured)
+    campaign, receipts, ledger = internal_campaign(results, unmeasured)
     if len(receipts) != len(campaign.attempts):
         raise PublicationError(f"{group_id}: every physical attempt needs its complete semantic judge receipt")
     policies = {receipt.policy_sha256 for receipt in receipts.values()}
@@ -588,7 +588,7 @@ def internal_group(group_id: str, results: Path, catalog: dict[str, Any], digest
     if len(limits) > 12:
         raise PublicationError(f"{group_id}: more protocol notes than the public contract holds")
     group = build_group(group_id, digest, list(required), limits, rows, run)
-    tracked = tracking.project(campaign, Suite.INTERNAL, receipts=receipts)
+    tracked = tracking.project(campaign, Suite.INTERNAL, receipts=receipts, rows=ledger)
     return Collected(group, agent_sha, runner_sha, tracked, len(attempts))
 
 

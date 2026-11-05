@@ -445,6 +445,7 @@ jobs:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
         run: |
           test -s "$OUT" || { echo "::warning::no ledger to track"; exit 0; }
           cd harness/evals

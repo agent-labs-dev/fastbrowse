@@ -3,9 +3,12 @@
 No agent or grader runs here."""
 
 import hashlib
+import importlib.metadata
 import json
 import statistics
 from collections import defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +17,7 @@ from fastbrowse.evals.evidence import Campaign
 from parallax.judging import Judgment
 from parallax.models import Verdict
 from parallax.track import projection as tracking
+from parallax.track import sink
 from pydantic import BaseModel, Field
 
 from fastbrowse_evals.judging import browser_verdict
@@ -25,8 +29,8 @@ class SemanticReceipt(BaseModel):
     policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
-def semantic_receipts(campaign: Campaign, root: Path) -> dict[str, SemanticReceipt]:
-    """Recover complete semantic receipts from the exact hash-pinned raw source ledger."""
+def source_rows(campaign: Campaign, root: Path) -> list[tuple[Any, dict[str, Any]]]:
+    """Each projected attempt beside its row in the exact hash-pinned raw source ledger; empty without one."""
     ledgers = [source for source in campaign.sources if source.path.endswith(".attempts.jsonl")]
     if not ledgers:
         ledgers = [
@@ -35,7 +39,7 @@ def semantic_receipts(campaign: Campaign, root: Path) -> dict[str, SemanticRecei
             if source.path.endswith(".jsonl") and not source.path.endswith(".budget.jsonl")
         ]
     if not ledgers:
-        return {}
+        return []
     source = ledgers[-1]
     content = (root / source.path).read_bytes()
     if hashlib.sha256(content).hexdigest() != source.sha256:
@@ -43,8 +47,13 @@ def semantic_receipts(campaign: Campaign, root: Path) -> dict[str, SemanticRecei
     rows = [json.loads(line) for line in content.splitlines() if line.strip()]
     if len(rows) != len(campaign.attempts):
         raise ValueError(f"{source.path}: raw ledger and projected attempts differ")
+    return list(zip(campaign.attempts, rows, strict=True))
+
+
+def semantic_receipts(campaign: Campaign, root: Path) -> dict[str, SemanticReceipt]:
+    """Recover complete semantic receipts from the exact hash-pinned raw source ledger."""
     receipts = {}
-    for attempt, row in zip(campaign.attempts, rows, strict=True):
+    for attempt, row in source_rows(campaign, root):
         raw = row.get("attempt", row)
         receipt = raw.get("semantic_judge") or (raw.get("run") or {}).get("semantic_judge")
         if receipt is None and raw.get("grade"):
@@ -68,7 +77,102 @@ def semantic_receipts(campaign: Campaign, root: Path) -> dict[str, SemanticRecei
     return receipts
 
 
-def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticReceipt] | None = None) -> Any:
+@dataclass(frozen=True)
+class LedgerRun(tracking.TrackedRun):
+    """A tracked campaign with each item's semantic receipts, keyed by (trace version, item id). A receipt is one
+    attempt's whole judgment, so it travels in that item's evidence zip, not in run metadata."""
+
+    receipts: Mapping[tuple[str, str], tuple[dict[str, Any], ...]] = field(default_factory=dict)
+
+
+def ledger_rows(campaign: Campaign, root: Path) -> dict[str, dict[str, Any]]:
+    """Each attempt's raw ledger row by attempt id, from the same hash-pinned source as its receipt."""
+    return {attempt.id: row.get("attempt", row) for attempt, row in source_rows(campaign, root)}
+
+
+PARALLAX = f"parallax-evals=={importlib.metadata.version('parallax-evals')}"
+
+ROW_CONFIG = ("model", "text_model", "text_helpers", "step_cap", "step_cap_unit", "decision_cap")
+RUN_CONFIG = (
+    "providers",
+    "jev_ultrafast",
+    "timing_basis",
+    "session_open_limit_seconds",
+    "max_steps",
+    "max_seconds",
+    "max_dollars",
+    "agent_limits",
+    "hosted_max_cost_usd",
+    "cloud_browser_timeout_minutes",
+    "text_max_output_tokens",
+)
+"""What configures an arm, as a ledger row and its run record it. Concurrency, budget and argv choose how a campaign
+runs, not what an arm is, so two campaigns of one arm compare whatever they were scheduled with."""
+
+
+def provenance_of(row: dict[str, Any] | None) -> dict[str, Any]:
+    """The run record a ledger row carries (`live.provenance`), or empty for a row without one."""
+    run = (row or {}).get("run")
+    return run if isinstance(run, dict) and "git_sha" in run else {}
+
+
+def short_hash(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def arm_version(arm: str, run: dict[str, Any]) -> str:
+    """The arm's version as Parallax means it: the release a fastbrowse arm installed, else what the arm is pinned to.
+    The commit is the treatment a comparison measures, so it is metadata (`git_sha`), not the version."""
+    pin = str(((run.get("arms") or {}).get(arm) or {}).get("pin") or "")
+    if pin.startswith("run.fastbrowse_version"):
+        return str(run.get("fastbrowse_version") or "unknown")
+    return pin[: tracking.META_VALUE_MAX] or "unknown"
+
+
+def arm_config(arm: str, row: dict[str, Any] | None) -> str:
+    run = provenance_of(row)
+    if not run:
+        return "unknown"
+    return short_hash(
+        {
+            "arm": arm,
+            "pin": (run.get("arms") or {}).get(arm),
+            "browser": (run.get("browsers") or {}).get(arm),
+            **{key: (row or {}).get(key) for key in ROW_CONFIG},
+            **{key: run.get(key) for key in RUN_CONFIG},
+        }
+    )
+
+
+def judges_of(receipt: SemanticReceipt) -> set[str]:
+    """The judge models a receipt's verdict came from: each fallback call's model, and Jev when it was asked."""
+    models = {call.model for call in receipt.judgment.fallback_calls}
+    if receipt.judgment.jev_call is not None:
+        models.add("jev")
+    return models
+
+
+def run_metadata(runs: list[dict[str, Any]]) -> dict[str, object]:
+    """Every field of the run records behind a row, under `run.`: one value when the runs agree, else each value.
+    A resumed campaign holds several runs; the first is the one that started it."""
+    out: dict[str, object] = {}
+    for key in dict.fromkeys(key for run in runs for key in run):
+        values = list({json.dumps(run.get(key), sort_keys=True): run.get(key) for run in runs}.values())
+        out[f"run.{key}"] = values[0] if len(values) == 1 else values
+    return out
+
+
+def project(
+    campaign: Campaign,
+    suite: Suite,
+    *,
+    receipts: dict[str, SemanticReceipt] | None = None,
+    rows: dict[str, dict[str, Any]] | None = None,
+    extra: dict[str, object] | None = None,
+) -> Any:
+    """`rows` are the attempts' raw ledger rows (`ledger_rows`), which carry what configured and ran each attempt;
+    `extra` is run metadata from outside the ledger, such as the CI run that tracked it."""
+    known_rows = {} if rows is None else rows
     known_receipts = {} if receipts is None else receipts
     semantic = bool(known_receipts)
     benchmark = BENCHMARKS[suite]
@@ -107,15 +211,23 @@ def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticRec
             else []
         )
 
+    def agent_ms(attempt: Any) -> int | None:
+        seconds = known_rows.get(attempt.id, {}).get("agent_seconds")
+        return round(seconds * 1000) if isinstance(seconds, int | float) else None
+
     def detail(attempt: Any, index: int) -> Any:
         value = passed(attempt)
         verdict = Verdict.PASS if value is True else Verdict.FAIL if value is False else Verdict.UNGRADED
+        row = known_rows.get(attempt.id)
         return tracking.RepeatDetail(
             repeat=index,
             verdict=verdict if semantic else Verdict.UNGRADED,
             score=float(value is True),
             cost_usd=attempt.dollars,
-            agent_ms=None,
+            agent_ms=agent_ms(attempt),
+            config_hash=arm_config(attempt.arm, row),
+            harness_version=arm_version(attempt.arm, provenance_of(row)),
+            actual_models=tuple(m for m in ((row or {}).get("model"), (row or {}).get("text_model")) if m),
             wall_ms=round(attempt.seconds * 1000) if attempt.seconds is not None else None,
             invalid_reason=None
             if semantic and value is not None
@@ -148,11 +260,23 @@ def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticRec
                 raise ValueError(f"{key}: incompatible semantic policies in one campaign")
             policies[key] = receipt.policy_sha256
     items: dict[str, Any] = {}
+    evidence: dict[tuple[str, str], tuple[dict[str, Any], ...]] = {}
     runs = []
     for (arm, commit), attempts in groups.items():
         recorded_models = sorted({a.model for a in attempts if a.model is not None})
         model = ", ".join(recorded_models) or None
-        row = f"{arm}/{model or 'unknown'}/{commit or 'unknown'}"
+        # The row is what Parallax pairs across runs, so it names the arm and model, not the commit under test; a
+        # trace's version keeps the commit, which dashboards break a series down by.
+        label = f"{arm}/{model or 'unknown'}"
+        row = f"{label}/{commit or 'unknown'}"
+        group_rows = [known_rows[a.id] for a in attempts if a.id in known_rows]
+        group_runs = list(
+            {json.dumps(run, sort_keys=True): run for r in group_rows if (run := provenance_of(r))}.values()
+        )
+        versions = sorted({arm_version(arm, provenance_of(r)) for r in group_rows}) or ["unknown"]
+        configs = sorted({arm_config(arm, r) for r in group_rows}) or ["unknown"]
+        judges = sorted({m for a in attempts if a.id in known_receipts for m in judges_of(known_receipts[a.id])})
+        grading = sorted({known_receipts[a.id].judgment.policy for a in attempts if a.id in known_receipts})
         tasks: dict[str, list[Any]] = defaultdict(list)
         for attempt in attempts:
             # An unknown grader version cannot pair with another campaign's task by accident.
@@ -219,11 +343,16 @@ def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticRec
                 verdicts=verdicts if semantic else [],
                 failed_checks=[],
                 cost_usd=cost,
-                agent_ms=None,
-                harness_version=commit or "unknown",
-                config_hash=digest,
+                agent_ms=statistics.fmean(times) if (times := [t for a in selected if (t := agent_ms(a))]) else None,
+                harness_version=", ".join(versions),
+                config_hash=", ".join(configs),
                 actual_models=sorted({a.model for a in task_attempts if a.model is not None}),
                 repeats=[detail(a, i) for i, a in enumerate(task_attempts)],
+            )
+            evidence[row, iid] = tuple(
+                {"attempt": a.id, "repeat": a.repeat, "retry": a.retry, **known_receipts[a.id].model_dump(mode="json")}
+                for a in task_attempts
+                if a.id in known_receipts
             )
             traces.append(
                 tracking.TraceSpec(
@@ -255,9 +384,7 @@ def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticRec
             "kind": campaign.kind,
             "projection_sha256": digest,
             "grading": "recorded-semantic-judge" if semantic else "recorded-unclassified-grade",
-            "semantic_receipts": {
-                a.id: known_receipts[a.id].model_dump(mode="json") for a in attempts if a.id in known_receipts
-            },
+            "semantic_receipts": sum(a.id in known_receipts for a in attempts),
             "campaign_scheduled_slots": campaign.scheduled_slots,
             "campaign_covered_slots": covered if campaign.scheduled_slots is not None else None,
             "campaign_missing_slots": max(0, campaign.scheduled_slots - covered)
@@ -265,12 +392,44 @@ def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticRec
             else None,
             "coverage": "unknown" if campaign.scheduled_slots is None else "recorded",
             "git_sha": commit or "unknown",
+            "git_dirty": sorted({a.git_dirty for a in attempts}),
             "physical_attempts": str(len(attempts)),
             "sources": [s.model_dump() for s in campaign.sources],
+            **run_metadata(group_runs),
+            **dict(extra or {}),
         }
         selected = [a for a in attempts if a.selected and a.started]
         graded = [a for a in selected if passed(a) is not None]
+        group_starts = [datetime.fromisoformat(a.started_at) for a in attempts if a.started_at is not None]
+        # Parallax's own run metadata, last so nothing above replaces it: `parallax show` lists a row by it, and
+        # `parallax compare` pairs two rows only when their tasks, grading, judges, versions and configs agree.
+        metadata |= {
+            "run_id": digest,
+            "row": label,
+            "harness": arm,
+            "model": model,
+            "harness_versions": versions,
+            "config_hashes": configs,
+            "validity_control": False,
+            "parallax_version": PARALLAX,
+            "parallax_head": PARALLAX,
+            "judge": judges,
+            "judge_policy": short_hash({"grading_policy": grading or ["recorded-source-grade"], "judges": judges}),
+            "repeats": max((a.repeat for a in selected), default=-1) + 1,
+            "isolation": ", ".join(
+                sorted({str(((run.get("browsers") or {}).get(arm) or {}).get("mode")) for run in group_runs})
+            )
+            or None,
+            "selection_sha": short_hash(sorted(tasks))[:12],
+            "tasks": len(tasks),
+            "started_at": min(group_starts).isoformat() if group_starts else None,
+        }
+        # Langfuse holds a null as "", flattens an object into dotted keys and writes 30.0 as 30, so a value is sent
+        # as the compact JSON text Parallax reads it back as (`sink.metadata_value`), and a null is left out.
+        metadata = {key: sink.metadata_value(value) for key, value in metadata.items() if value is not None}
         scores = [
+            tracking.Score("valid_trials", float(len(graded)), "NUMERIC"),
+            tracking.Score("invalid_trials", float(len(selected) - len(graded)), "NUMERIC"),
             tracking.Score(
                 "semantic_passes" if semantic else "recorded_positive_results",
                 float(sum(passed(a) is True for a in graded)),
@@ -301,7 +460,7 @@ def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticRec
         runs.append(
             tracking.RunSpec(
                 name=f"{campaign.id}/{row}/{digest[:16]}",
-                row=row,
+                row=label,
                 harness=arm,
                 model=model,
                 description="Recorded semantic judgments and completion, no rerun or regrading."
@@ -315,10 +474,11 @@ def project(campaign: Campaign, suite: Suite, *, receipts: dict[str, SemanticRec
     starts = [a.started_at for a in campaign.attempts if a.started_at is not None]
     if not starts:
         raise ValueError(f"{campaign.id}: no recorded start time; cannot invent a historical timestamp")
-    return tracking.TrackedRun(
+    return LedgerRun(
         dataset=dataset,
         run_id=digest,
         created_at=min(datetime.fromisoformat(value) for value in starts),
         items=tuple(items.values()),
         runs=tuple(runs),
+        receipts=evidence,
     )

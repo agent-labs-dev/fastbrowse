@@ -101,10 +101,16 @@ def test_hash_pinned_browser_judgments_keep_semantic_verdicts_and_abstentions(
     scores = {s.name: s.value for s in run.runs[0].scores}
     assert scores["passed_and_completed_selected_rows"] == float(value is True)
     assert "e" * 64 in trace.task_id
-    assert (
-        run.runs[0].metadata["semantic_receipts"][attempt.id]["judgment"]["decisions"]["task_satisfied"]["passed"]
-        is value
-    )
+    assert run.runs[0].metadata["semantic_receipts"] == "1"
+    assert run.runs[0].metadata["row"] == "fastbrowse/unknown"
+    assert {"run_id", "judge_policy", "harness_versions", "config_hashes", "parallax_head"} <= run.runs[
+        0
+    ].metadata.keys()
+    assert all(isinstance(v, str) for v in run.runs[0].metadata.values())
+    assert {"valid_trials", "invalid_trials"} <= scores.keys()
+    (evidence,) = run.receipts.values()
+    assert evidence[0]["attempt"] == attempt.id
+    assert evidence[0]["judgment"]["decisions"]["task_satisfied"]["passed"] is value
     path.write_bytes(content + b" ")
     with pytest.raises(ValueError, match="source changed"):
         semantic_receipts(campaign, tmp_path)
