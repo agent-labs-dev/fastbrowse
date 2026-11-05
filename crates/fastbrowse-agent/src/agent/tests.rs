@@ -4859,3 +4859,17 @@ fn test_a_list_that_gave_the_task_no_note_is_not_the_one_it_reads() {
     read_one(&mut state, &home, true);
     assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://shop.test/catalogue/page-2.html"));
 }
+
+#[test]
+fn test_returning_to_a_lists_first_page_keeps_its_later_pages() {
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    let second = paged("https://list.test/page/2/", "/page/3/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    read_one(&mut state, &second, true);
+    state.note_pager_pages(&second);
+    // Back on page 1 from a record page, the list is the same one, and page 3 is still unread.
+    state.note_pager_pages(&first);
+    assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://list.test/page/3/"));
+}

@@ -192,8 +192,9 @@ struct Reader<'a> {
     /// An open `<li class="next">`, the pager markup most sites use instead of `rel="next"`; its link is the next page.
     pager_item: bool,
     /// Open pagination containers, by tag: a `nav`, or an element whose class or label names paging. A `next` class
-    /// outside one marks a carousel, a wizard or a next article as often as a list's next page.
-    paging: Vec<String>,
+    /// outside one marks a carousel, a wizard or a next article as often as a list's next page. Each counts the
+    /// elements of its own tag open inside it, so an inner `</div>` closes the inner div, not the container.
+    paging: Vec<(String, usize)>,
 }
 
 impl<'a> Reader<'a> {
@@ -267,6 +268,12 @@ impl<'a> Reader<'a> {
 
     fn start(&mut self, tag: &str, attrs: &[Attribute]) {
         let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| &*a.value);
+        // Counted before any early return, as `end` sees the closing tag of every element, hidden or not.
+        if let Some((open, nested)) = self.paging.last_mut()
+            && open == tag
+        {
+            *nested += 1;
+        }
         if SKIPPED.contains(&tag) {
             self.skip += 1;
             return;
@@ -287,7 +294,13 @@ impl<'a> Reader<'a> {
         self.control(tag, attrs);
         let pages = |value: Option<&str>| value.is_some_and(|value| value.to_ascii_lowercase().contains("pag"));
         if tag == "nav" || pages(get("class")) || pages(get("aria-label")) {
-            self.paging.push(tag.to_string());
+            if let Some((open, nested)) = self.paging.last_mut()
+                && open == tag
+            {
+                // Counted above as nested, it is a container of its own.
+                *nested -= 1;
+            }
+            self.paging.push((tag.to_string(), 0));
         }
         if tag == "li" {
             self.pager_item = get("class").is_some_and(|class| class.split_whitespace().any(|class| class == "next"));
@@ -358,8 +371,14 @@ impl<'a> Reader<'a> {
         if tag == "li" {
             self.pager_item = false;
         }
-        if self.paging.last().is_some_and(|open| open == tag) {
-            self.paging.pop();
+        if let Some((open, nested)) = self.paging.last_mut()
+            && open == tag
+        {
+            if *nested == 0 {
+                self.paging.pop();
+            } else {
+                *nested -= 1;
+            }
         }
         if let Some((index, _, text)) = self.labelling.take_if(|(_, open, _)| open == tag) {
             // What the element says for itself names it before any attribute does.
@@ -656,6 +675,16 @@ mod tests {
         let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
         assert_eq!(next, [Some(true), None, Some(true), None, None, None, None]);
         assert_eq!(controls[0].context.as_deref(), Some("Pages"));
+    }
+
+    #[test]
+    fn a_nested_element_of_the_containers_tag_does_not_close_the_pagination() {
+        let (_, _, controls) = read(
+            "<div class='pagination'><div>Page 1 of 3</div><a class='next' href='/page/2'>Next</a></div>",
+            "https://a.example/list",
+        );
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].next_page, Some(true));
     }
 
     #[test]

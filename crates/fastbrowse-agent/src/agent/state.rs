@@ -423,7 +423,9 @@ impl RunState {
             .filter(|page| page.origin() == here.origin())
             .map(String::from)
             .collect();
-        if !named.is_empty() && !self.pager_pages.contains(&here.to_string()) {
+        let continues =
+            self.pager_start.as_deref() == Some(here.as_str()) || self.pager_pages.contains(&here.to_string());
+        if !named.is_empty() && !continues {
             self.pager_pages.clear();
             self.pager_start = Some(here.to_string());
         }

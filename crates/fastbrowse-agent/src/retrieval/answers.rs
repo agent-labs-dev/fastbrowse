@@ -491,6 +491,7 @@ async fn review_claims(
     let mut questions = IndexMap::new();
     let mut required = vec![Vec::new(); claims.len()];
     let mut counts = IndexMap::new();
+    let mut breakdowns = IndexMap::new();
     for (index, claim) in claims.iter().enumerate() {
         let sources = cited_quotes(claim, notes);
         if sources.is_empty() {
@@ -502,6 +503,9 @@ async fn review_claims(
             && let Some(question) = count_question(claim, &sources)
         {
             counts.insert(format!("claim{index}"), question);
+        }
+        if row.is_none() && breakdown_sum(&claim.text).is_some() {
+            breakdowns.insert(format!("claim{index}/breakdown"), Question::Noul(breakdown_question(claim)));
         }
         let checks: Vec<_> = match row {
             Some((columns, cells)) => columns.iter().zip(cells).enumerate().map(|(cell, (column, value))| {
@@ -538,11 +542,13 @@ async fn review_claims(
     let oversized_coverage =
         questions.get("coverage").is_some_and(|question| state_chars > tokens.input_chars(&[question.dump_json()]));
     let oversized = oversized_claim || oversized_coverage;
-    // Which number a claim states as its count is asked beside its support, in the same requests.
+    // Which number a claim states as its count, and whether its parts break that count down, are asked beside its
+    // support, in the same requests.
     let asked: IndexMap<String, Question> = questions
         .iter()
         .map(|(key, question)| (key.clone(), question.clone()))
         .chain(counts.iter().map(|(key, question)| (format!("{key}/count"), question.clone())))
+        .chain(breakdowns.iter().map(|(key, question)| (key.clone(), question.clone())))
         .collect();
     let (answered, failure) =
         match evaluate_batches(JevPurpose::Verify, jev, &state, &asked, &tokens, ledger, None, false).await {
@@ -583,8 +589,11 @@ async fn review_claims(
             _ => None,
         });
         // An unsupported claim is counted too: a miscount is often why it failed, and the count is the repair.
+        let breaks_down = answered.as_ref().is_some_and(|pass| {
+            matches!(pass.answers.get(&format!("claim{index}/breakdown")), Some(Answer::Noul(answer)) if answer.probability > 0.5)
+        });
         if let Some(stated) = stated
-            && let Some(sum) = breakdown_sum(&claim.text)
+            && let Some(sum) = breakdown_sum(&claim.text).filter(|_| breaks_down)
             && sum != stated
         {
             miscounts.push(json!({"claim": index, "states": stated, "breakdown_sums_to": sum}));
@@ -705,6 +714,19 @@ fn count_question(claim: &Claim, quotes: &[serde_json::Value]) -> Option<Questio
         ),
         criteria,
     )))
+}
+
+/// Asks whether the numbered parts after a claim's headline split the records its headline counts, so code may add them.
+/// "10 books (2 authors, 5 genres)" has the shape of a breakdown and counts other things, which only reading tells.
+fn breakdown_question(claim: &Claim) -> NoulQuestion {
+    NoulQuestion::new(
+        format!(
+            "{UNTRUSTED}\nDoes this claim split the records its headline counts into numbered parts, such as how many are on each page, so that the parts together make up the headline's total? Parts that count other things, such as authors or genres, are not a split. {}",
+            json!({"claim": claim.text})
+        ),
+        Some("Each numbered part counts some of the same records the headline counts, and no record is in two parts."),
+        Some("The numbered parts count something other than the headline's records, or may overlap."),
+    )
 }
 
 /// The sum of the breakdown a claim gives after its headline, as in "8 quotes are by Albert Einstein: 3 on page 1, 1 on
@@ -1428,6 +1450,8 @@ mod tests {
         sureness: f64,
         /// The probability Jev gives each claim's support and the answer's coverage.
         support: f64,
+        /// The probability Jev gives that a claim's numbered parts split its headline count.
+        breakdown: f64,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
     }
 
@@ -1442,7 +1466,7 @@ mod tests {
         > {
             use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation, NoulAnswer, NoulTag};
             self.asked.lock().unwrap().push(questions.clone());
-            let answer = |question: &Question| match question {
+            let answer = |key: &str, question: &Question| match question {
                 Question::Choice(choice) => {
                     let pick = if choice.criteria.contains_key("none") {
                         self.stated
@@ -1459,9 +1483,12 @@ mod tests {
                         confidence: sureness,
                     })
                 }
+                _ if key.ends_with("/breakdown") => {
+                    Answer::Noul(NoulAnswer { kind: NoulTag, probability: self.breakdown })
+                }
                 _ => Answer::Noul(NoulAnswer { kind: NoulTag, probability: self.support }),
             };
-            let answers = questions.iter().map(|(key, question)| (key.clone(), answer(question))).collect();
+            let answers = questions.iter().map(|(key, question)| (key.clone(), answer(key, question))).collect();
             Box::pin(async move {
                 Ok(Evaluation {
                     model: "test".into(),
@@ -1486,7 +1513,14 @@ mod tests {
         for (stated, rejected) in [("5", true), ("6", false)] {
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(vec![Claim::new(&format!("There are {stated} quotes by J.K. Rowling."), ids.clone())]);
-            let jev = Counting { stated, per_quote: "1", sureness: 0.9, support: 0.61, asked: Mutex::new(Vec::new()) };
+            let jev = Counting {
+                stated,
+                per_quote: "1",
+                sureness: 0.9,
+                support: 0.61,
+                breakdown: 0.9,
+                asked: Mutex::new(Vec::new()),
+            };
             let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
             assert_eq!(reviewed.answer.claims.is_empty(), rejected, "a count of {stated}");
             let Some(rejection) = reviewed.rejection else {
@@ -1519,8 +1553,14 @@ mod tests {
                      1 on page 5, 1 on page 6, and 1 on page 9.";
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new(claim, ids)]);
-        let jev =
-            Counting { stated: "8", per_quote: "1", sureness: 0.72, support: 0.61, asked: Mutex::new(Vec::new()) };
+        let jev = Counting {
+            stated: "8",
+            per_quote: "1",
+            sureness: 0.72,
+            support: 0.61,
+            breakdown: 0.9,
+            asked: Mutex::new(Vec::new()),
+        };
         let task = "How many quotes by Albert Einstein are on the site?";
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         assert!(reviewed.answer.claims.is_empty());
@@ -1536,11 +1576,41 @@ mod tests {
         let ids: Vec<String> = (0..9).map(|index| format!("e{index}")).collect();
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("There are 8 quotes by J.K. Rowling across the whole site.", ids)]);
-        let jev = Counting { stated: "8", per_quote: "1", sureness: 0.9, support: 0.16, asked: Mutex::new(Vec::new()) };
+        let jev = Counting {
+            stated: "8",
+            per_quote: "1",
+            sureness: 0.9,
+            support: 0.16,
+            breakdown: 0.9,
+            asked: Mutex::new(Vec::new()),
+        };
         let task = "How many quotes by J.K. Rowling are there across the whole site?";
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().unwrap()).unwrap();
         assert_eq!(feedback["miscounted_claims"], json!([{"claim": 0, "states": 8, "records_in_cited_quotes": 9}]));
+    }
+
+    /// Parts that count other things are not a breakdown, though they have its shape.
+    #[tokio::test]
+    async fn separate_counts_after_a_headline_are_not_summed_against_it() {
+        let notes = Notes::new(
+            (0..10).map(|index| fact(index, format!("Book {index}, author {}, genre {}", index % 2, index % 5))),
+        );
+        let ids = (0..10).map(|index| format!("e{index}")).collect();
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("There are 10 books (2 authors, 5 genres).", ids)]);
+        let jev = Counting {
+            stated: "10",
+            per_quote: "1",
+            sureness: 0.9,
+            support: 0.99,
+            breakdown: 0.1,
+            asked: Mutex::new(Vec::new()),
+        };
+        let task = "How many books, authors and genres are listed?";
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
+        assert_eq!(reviewed.rejection, None);
+        assert_eq!(reviewed.answer.claims.len(), 1);
     }
 
     #[test]
@@ -1569,8 +1639,14 @@ mod tests {
         ]);
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("Page 2 lists 1 quote by Albert Einstein.", vec!["e0".into(), "e1".into()])]);
-        let jev =
-            Counting { stated: "1", per_quote: "1", sureness: 0.43, support: 0.61, asked: Mutex::new(Vec::new()) };
+        let jev = Counting {
+            stated: "1",
+            per_quote: "1",
+            sureness: 0.43,
+            support: 0.61,
+            breakdown: 0.9,
+            asked: Mutex::new(Vec::new()),
+        };
         let task = "How many quotes by Albert Einstein are there across the whole site?";
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         assert_eq!(reviewed.rejection, None);
@@ -1590,6 +1666,7 @@ mod tests {
             per_quote: STATED_TOTAL,
             sureness: 0.9,
             support: 0.61,
+            breakdown: 0.9,
             asked: Mutex::new(Vec::new()),
         };
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
@@ -1605,8 +1682,14 @@ mod tests {
         let ids: Vec<String> = (0..14).map(|index| format!("e{index}")).collect();
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("The shop lists 14 products.", ids)]);
-        let jev =
-            Counting { stated: "14", per_quote: "0", sureness: 0.6, support: 0.61, asked: Mutex::new(Vec::new()) };
+        let jev = Counting {
+            stated: "14",
+            per_quote: "0",
+            sureness: 0.6,
+            support: 0.61,
+            breakdown: 0.9,
+            asked: Mutex::new(Vec::new()),
+        };
         let reviewed =
             compose_reviewed(&jev, &llm, "How many products does the shop list?", &notes, None, None, true).await;
         assert_eq!(reviewed.unwrap().rejection, None);
