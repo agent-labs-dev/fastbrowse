@@ -1,6 +1,6 @@
 """Browser outcome contracts shared by fixture and publication checks.
 
-Maintainer benchmark tasks and orchestration live in Parallax.
+Maintainer benchmark tasks and orchestration live in the `evals/` project, `fastbrowse_evals`.
 """
 
 from collections.abc import Awaitable, Callable, Mapping
