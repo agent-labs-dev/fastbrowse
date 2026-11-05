@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use fastbrowse_core::BoxFuture;
@@ -26,14 +27,14 @@ use indexmap::IndexMap;
 use serde_json::json;
 
 use super::Agent;
-use super::driving::edit_progress;
+use super::driving::{StepOptions, edit_progress};
 use super::helpers::{
     access_inspection, answer_evidence, answered, code_decision, follow_recovery, guessed, guessed_page, history,
     next_page_control, next_value, plan_ids, record, try_unsure, unread, unread_output_section, verified, visited,
     without_missing,
 };
 use super::reading::covered;
-use super::state::{RunState, Spawned};
+use super::state::{Flow, RunState, Spawned};
 use crate::memory::{Fact, Notes, Tally, fact_id};
 use crate::planner::{OutputTarget, Plan, Requirement, RequirementKind};
 use crate::policy::{Decision, HistoryEntry};
@@ -1152,6 +1153,169 @@ async fn test_a_new_step_at_the_same_address_still_renews_recovery() {
     let second = Observation { url: FILES.into(), ..observation(&[textbox("Email"), button("Next")]) };
     agent.settle(&mut state, &second);
     assert_eq!(state.recoveries, 0);
+}
+
+struct HungPage {
+    hangs: AtomicUsize,
+    navigations: AtomicUsize,
+}
+
+impl HungPage {
+    fn new(hangs: usize) -> HungPage {
+        HungPage { hangs: AtomicUsize::new(hangs), navigations: AtomicUsize::new(0) }
+    }
+
+    fn next_hang(&self) -> bool {
+        self.hangs
+            .fetch_update(
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |remaining| {
+                    if remaining > 0 { Some(remaining - 1) } else { None }
+                },
+            )
+            .is_ok()
+    }
+}
+
+impl Page for HungPage {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        Box::pin(async { Ok(observation(&[])) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.navigations.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Ok(capture(&[])) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        let hang = self.next_hang();
+        Box::pin(async move {
+            if hang {
+                Err(BrowserError::PageUnresponsive("the renderer stopped answering".into()))
+            } else {
+                Ok(ActResult {
+                    outcome: StepOutcome::Executed,
+                    page_changed: false,
+                    detail: None,
+                    form_unchanged: false,
+                    moved: false,
+                })
+            }
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("no frame".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        Box::pin(async { Ok("https://example.test/".into()) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+fn hung_step_options(target: &Control) -> StepOptions {
+    StepOptions {
+        gate: false,
+        prepared_action: Some(Action { target_id: Some(target.id.clone()), ..Action::new(Operation::Click) }),
+        ..StepOptions::default()
+    }
+}
+
+#[tokio::test]
+async fn test_a_hung_page_is_reopened_once_and_the_next_step_continues() {
+    let page = Arc::new(HungPage::new(1));
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    let page_state = at("https://example.test/", &[button("Go")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+
+    assert!(
+        !agent
+            .step(&mut state, &page_state, &decision, Decider::Jev, hung_step_options(&page_state.controls[0]))
+            .await
+            .unwrap()
+    );
+    assert_eq!(page.navigations.load(Ordering::SeqCst), 1);
+    assert!(state.hung_page_reopened);
+    assert_eq!(state.steps[0].outcome, StepOutcome::Failed);
+    assert_eq!(state.steps[0].note.as_deref(), Some("The page stopped answering and was reopened."));
+
+    assert!(
+        !agent
+            .step(&mut state, &page_state, &decision, Decider::Jev, hung_step_options(&page_state.controls[0]))
+            .await
+            .unwrap()
+    );
+    assert_eq!(page.navigations.load(Ordering::SeqCst), 1);
+    assert_eq!(state.steps[1].outcome, StepOutcome::Executed);
+}
+
+#[tokio::test]
+async fn test_a_second_hung_page_ends_unavailable() {
+    let page = Arc::new(HungPage::new(2));
+    let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    let page_state = at("https://example.test/", &[button("Go")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+    let options = hung_step_options(&page_state.controls[0]);
+
+    agent.step(&mut state, &page_state, &decision, Decider::Jev, options).await.unwrap();
+    let Err(Flow::Browser(error)) =
+        agent.step(&mut state, &page_state, &decision, Decider::Jev, hung_step_options(&page_state.controls[0])).await
+    else {
+        panic!("the second hang was recovered or converted to another flow");
+    };
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(Flow::Browser(error), Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::Unavailable);
+}
+
+#[tokio::test]
+async fn test_an_authorized_submission_that_hangs_is_not_reopened() {
+    let page = Arc::new(HungPage::new(1));
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    state.authorization = Authorization { irreversible_actions: true };
+    let page_state = at("https://example.test/", &[button("Submit")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+    let Err(Flow::Browser(BrowserError::PageUnresponsive(_))) =
+        agent.step(&mut state, &page_state, &decision, Decider::Jev, hung_step_options(&page_state.controls[0])).await
+    else {
+        panic!("the authorized submission was replayed or recovered");
+    };
+    assert_eq!(page.navigations.load(Ordering::SeqCst), 0);
+    assert!(!state.hung_page_reopened);
 }
 
 // -- tests/test_accuracy_fixes.py: a stopping run commits an answer ------------------------------------------------
