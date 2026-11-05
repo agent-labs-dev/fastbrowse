@@ -1715,12 +1715,12 @@ async fn review_authorized_navigation_that_hangs_is_not_reopened() {
 #[test]
 fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     use super::state::HttpFailure;
-    use fastbrowse_core::models::WallKind;
     let forbidden =
         HttpFailure { url: "https://www.curseforge.com/wow/addons/tweaks-forever/files".into(), status: 403 };
     let stop = forbidden.stop();
     assert_eq!(stop.status, Status::Blocked);
-    assert_eq!(stop.wall, Some(WallKind::BotCheck));
+    // The status alone does not prove a bot check: the page's own classification names one.
+    assert_eq!(stop.wall, None);
     let error = stop.error.expect("an error names the refusal");
     assert!(error.contains("HTTP 403"), "{error}");
     assert!(error.contains("access or bot check"), "{error}");
@@ -1736,4 +1736,27 @@ fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     assert_eq!(unavailable.status, Status::Unavailable);
     assert_eq!(unavailable.wall, None);
     assert!(unavailable.error.unwrap().contains(recorded));
+}
+
+
+#[test]
+fn review_http_403_with_a_password_form_does_not_claim_a_bot_check() {
+    use super::state::HttpFailure;
+    use fastbrowse_core::models::WallKind;
+
+    let agent = agent();
+    let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    let mut observation = at("https://shop.test/login", &[password, button("Sign in")]);
+    observation.response_status = Some(403);
+    agent.seen().raw = Some(observation.clone());
+    agent.seen().observed = Some(observation);
+
+    let stop = HttpFailure { url: "https://shop.test/login".into(), status: 403 }.stop();
+    let wall = agent.wall(&stop);
+    assert_ne!(
+        wall.as_ref().map(|wall| wall.kind),
+        Some(WallKind::BotCheck),
+        "HTTP 403 alone does not prove an automated-traffic check; the page offers a password form"
+    );
 }
