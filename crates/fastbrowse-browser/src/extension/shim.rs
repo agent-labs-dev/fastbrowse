@@ -80,8 +80,8 @@ struct Tabs {
     children: HashMap<String, i64>,
     discover: bool,
     auto_attach: bool,
-    /// The last frame from another extension each tab started loading, as its `chrome-extension://` origin.
-    foreign_frames: HashMap<i64, String>,
+    /// The frames from another extension each tab holds, by frame id, as their `chrome-extension://` origin.
+    foreign_frames: HashMap<i64, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -131,10 +131,21 @@ fn foreign_frame_detach(origin: &str) -> String {
     )
 }
 
-/// Record one relay message in the run's trace, whole: `direction` is `to_extension` or `from_extension`.
+/// Record one relay message in the run's trace: `direction` is `to_extension` or `from_extension`.
+///
+/// Everything is kept but images. A screenshot or screencast frame can show a secret just typed, which redacting
+/// values cannot catch, so its `data` is replaced by its length.
 fn trace_message(trace: &Trace, direction: &str, message: &Value) {
     trace.event("extension", || {
-        Map::from_iter([("direction".into(), direction.into()), ("message".into(), message.clone())])
+        let mut message = message.clone();
+        for pointer in ["/params/data", "/result/data"] {
+            if let Some(data) = message.pointer_mut(pointer)
+                && let Some(length) = data.as_str().map(str::len)
+            {
+                *data = format!("<{length} characters of image data, not traced>").into();
+            }
+        }
+        Map::from_iter([("direction".into(), direction.into()), ("message".into(), message)])
     });
 }
 
@@ -309,6 +320,32 @@ impl Relay {
         }
     }
 
+    /// Keep `foreign_frames` current from a tab's frame events: a frame that starts loading another extension's page
+    /// is added, and one that leaves it or goes is removed.
+    fn track_frame(&self, tab: i64, method: &str, params: &Value) {
+        let (frame, url) = match method {
+            "Page.frameRequestedNavigation" | "Page.frameStartedNavigating" => (&params["frameId"], &params["url"]),
+            "Page.frameNavigated" => (&params["frame"]["id"], &params["frame"]["url"]),
+            "Page.frameDetached" => (&params["frameId"], &Value::Null),
+            _ => return,
+        };
+        let Some(frame) = frame.as_str() else { return };
+        // `frameStartedNavigating` can carry an empty address before the request goes: it changes nothing.
+        if method == "Page.frameStartedNavigating" && url.as_str() == Some("") {
+            return;
+        }
+        let mut tabs = self.tabs.lock().unwrap();
+        let frames = tabs.foreign_frames.entry(tab).or_default();
+        match url.as_str().and_then(foreign_extension) {
+            Some(origin) => {
+                frames.insert(frame.to_owned(), origin);
+            }
+            None => {
+                frames.remove(frame);
+            }
+        }
+    }
+
     /// One event from the extension, and why the connection must end when the event ends the run.
     fn event(&self, message: &Value) -> Option<String> {
         let tab = message["tabId"].as_i64().unwrap_or_default();
@@ -316,12 +353,7 @@ impl Relay {
             "cdp" => {
                 let method = message["method"].as_str().unwrap_or_default();
                 let params = &message["params"];
-                let url = [&params["url"], &params["frame"]["url"], &params["targetInfo"]["url"]]
-                    .into_iter()
-                    .find_map(|url| url.as_str().and_then(foreign_extension));
-                if let Some(origin) = url {
-                    self.tabs.lock().unwrap().foreign_frames.insert(tab, origin);
-                }
+                self.track_frame(tab, method, params);
                 let session = match message["sessionId"].as_str() {
                     Some(child) => child.to_owned(),
                     None => top_session(tab),
@@ -379,7 +411,13 @@ impl Relay {
             }
             "detached" => {
                 let closed = message["reason"] == "target_closed";
-                let foreign = self.tabs.lock().unwrap().foreign_frames.get(&tab).cloned();
+                let foreign = self
+                    .tabs
+                    .lock()
+                    .unwrap()
+                    .foreign_frames
+                    .remove(&tab)
+                    .and_then(|frames| frames.into_values().next());
                 self.trace.event("extension_tab_lost", || {
                     Map::from_iter([
                         ("tab".into(), tab.into()),
@@ -570,7 +608,7 @@ mod tests {
     }
 
     fn frame(url: &str) -> Value {
-        json!({"event": "cdp", "tabId": 7, "method": "Page.frameRequestedNavigation", "params": {"url": url}})
+        json!({"event": "cdp", "tabId": 7, "method": "Page.frameRequestedNavigation", "params": {"frameId": "F", "url": url}})
     }
 
     const DETACHED: &str = r#"{"event": "detached", "tabId": 7, "reason": "target_closed"}"#;
@@ -595,5 +633,30 @@ mod tests {
         relay.event(&frame(&format!("chrome-extension://{}/popup.html", EXTENSION_IDS[0])));
         relay.event(&frame("https://example.com/"));
         assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None);
+    }
+
+    #[test]
+    fn only_a_frame_still_holding_another_extensions_page_counts() {
+        let relay = relay();
+        let request = json!({"event": "cdp", "tabId": 7, "method": "Network.requestWillBeSent",
+            "params": {"url": "chrome-extension://abcdefgh/icon.png"}});
+        relay.event(&request);
+        assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "an extension's image is no frame");
+        relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html"));
+        relay.event(&json!({"event": "cdp", "tabId": 7, "method": "Page.frameDetached", "params": {"frameId": "F"}}));
+        assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "the frame went before the detach");
+    }
+
+    #[test]
+    fn image_data_stays_out_of_the_trace() {
+        let trace = Trace::collecting();
+        let frame =
+            json!({"event": "cdp", "method": "Page.screencastFrame", "params": {"data": "AAAA", "sessionId": 1}});
+        trace_message(&trace, "from_extension", &frame);
+        trace_message(&trace, "from_extension", &json!({"id": 3, "result": {"data": "BBBBBB"}}));
+        let events = trace.events();
+        assert_eq!(events[0]["message"]["params"]["data"], "<4 characters of image data, not traced>");
+        assert_eq!(events[0]["message"]["params"]["sessionId"], 1);
+        assert_eq!(events[1]["message"]["result"]["data"], "<6 characters of image data, not traced>");
     }
 }

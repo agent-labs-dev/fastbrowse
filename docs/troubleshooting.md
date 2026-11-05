@@ -267,8 +267,8 @@ the page loaded a frame from another extension (chrome-extension://<id>)`.
 
 **Next step.** Open `chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run
 again. The extension then adds its frame only on pages where you click it. With `--trace FILE`, every message
-between the run and the extension is in the trace as an `extension` event, and an `extension_tab_lost` event
-names the frame that took the tab.
+between the run and the extension is in the trace as an `extension` event, with screenshots and screencast
+frames replaced by their length, and an `extension_tab_lost` event names the frame that took the tab.
 
 ### DevToolsActivePort and finding the DevTools address
 

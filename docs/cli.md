@@ -37,7 +37,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
-| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension, to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
+| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): reuse saved values when Jev selects a matching action on the same page |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
@@ -83,6 +83,13 @@ browser. With the extension in more than one browser, label each one in its popu
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
 organization;
 `fastbrowse extension uninstall` removes what `install` wrote.
+
+**Other extensions can take the run's tab away.** Chrome lets no extension debug a tab while the page holds a frame
+from another extension, and some extensions add one to every page: screen recorders, password managers and writing
+assistants are common ones. When that happens the run ends `unavailable` and names the extension. Open
+`chrome://extensions`, choose **Details** on that extension, and set **Site access** to **On click**: it then adds
+its frame only where you click it, and runs work again. See
+[Another extension's frame takes the tab away](troubleshooting.md#another-extensions-frame-takes-the-tab-away).
 
 ### A profile of its own
 
