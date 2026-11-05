@@ -381,7 +381,9 @@ jobs:
       - name: Report progress
         env:
           GH_TOKEN: ${{ github.token }}
-        run: nohup python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.label }}" > /dev/null 2>&1 &
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+        # Campaigns run side by side on one harness commit, so each reports under its own campaign id.
+        run: nohup python3 ci/scripts/eval_progress.py "$OUT" "$CAMPAIGN_ID / ${{ matrix.label }}" > /dev/null 2>&1 &
       # The pool serves fastbrowse-hosted's customers and is reachable only inside its cluster, so it is never
       # exposed: this job signs in as fastbrowse-evals-pool, which may only port-forward to the pool in its namespace
       # and read the pool's token, and leases through the forward.
@@ -433,7 +435,8 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.label }}" --final
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+        run: python3 ci/scripts/eval_progress.py "$OUT" "$CAMPAIGN_ID / ${{ matrix.label }}" --final
       - name: Send the ledger to Langfuse
         # A stopped group is tracked too: every arm's experiment lists what ran.
         if: always()
