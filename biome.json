@@ -4,6 +4,7 @@
     "includes": [
       "crates/fastbrowse-browser/js/capture.js",
       "crates/fastbrowse-browser/js/snapshot.js",
+      "crates/fastbrowse-browser/extension/*.js",
       "packages/sdk/**/*.ts",
       "!packages/sdk/dist",
       "!packages/sdk/src/protocol.ts"

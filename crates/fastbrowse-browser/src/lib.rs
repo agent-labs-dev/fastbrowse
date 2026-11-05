@@ -9,6 +9,7 @@ pub mod cdp;
 #[cfg(feature = "cursor")]
 pub mod cursor;
 pub mod error;
+pub mod extension;
 pub mod helper;
 pub mod page;
 mod pdf;

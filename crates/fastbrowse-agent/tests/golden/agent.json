@@ -248,7 +248,8 @@
      "Password"
     ],
     "seen_at_ms": 0
-   }
+   },
+   "browser": null
   },
   "events": []
  },
@@ -441,7 +442,8 @@
     "origin": "https://shop.test",
     "fields": [],
     "seen_at_ms": 0
-   }
+   },
+   "browser": null
   },
   "events": []
  },
@@ -771,7 +773,8 @@
     "origin": "https://shop.test",
     "fields": [],
     "seen_at_ms": 0
-   }
+   },
+   "browser": null
   },
   "events": []
  },
@@ -1046,7 +1049,8 @@
    "error": "click 'Place order' needs confirmation",
    "final_url": "https://shop.test/cart",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -1383,7 +1387,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://books.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -1490,7 +1495,8 @@
    "error": "the task names no page to start from, and none was given",
    "final_url": null,
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": []
  },
@@ -1815,7 +1821,8 @@
    "error": null,
    "final_url": "https://shop.test/missing",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": []
  },
@@ -2250,7 +2257,8 @@
    "error": "click 'Download 2.0' downloads a file, and the task rules out downloading",
    "final_url": "https://files.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -2860,7 +2868,8 @@
    "error": "step limit 2 reached",
    "final_url": "https://forms.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -3453,7 +3462,8 @@
    "error": "step limit 2 reached",
    "final_url": "https://forms.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -3802,7 +3812,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://acme.test/login",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -4134,7 +4145,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://travel.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -4450,7 +4462,8 @@
    "error": "dialog 'Discard this draft?' needs confirmation",
    "final_url": "https://mail.test/draft",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -5256,7 +5269,8 @@
    "error": null,
    "final_url": "https://site.test",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -5834,7 +5848,8 @@
    "error": "step limit 3 reached",
    "final_url": "https://app.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -6284,7 +6299,8 @@
    "error": "step limit 2 reached",
    "final_url": "https://shop.test/menu",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -6649,7 +6665,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://jobs.test/apply",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -6986,7 +7003,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://news.test/signup",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -7369,7 +7387,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://bank.test/login",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -7637,7 +7656,8 @@
    "error": "Jev call limit 2 reached",
    "final_url": "https://app.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": []
  },
@@ -8369,7 +8389,8 @@
    "error": null,
    "final_url": "https://shop.test/contact/sent",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -9184,7 +9205,8 @@
    "error": "no_progress (3)",
    "final_url": "https://app.test/panel",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -9557,7 +9579,8 @@
      "Password"
     ],
     "seen_at_ms": 0
-   }
+   },
+   "browser": null
   },
   "events": []
  },
@@ -9841,7 +9864,8 @@
      "Password"
     ],
     "seen_at_ms": 0
-   }
+   },
+   "browser": null
   },
   "events": []
  },
@@ -10198,7 +10222,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://files.test/",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {
@@ -10516,7 +10541,8 @@
    "error": "step limit 1 reached",
    "final_url": "https://mail.test/inbox",
    "recordings": [],
-   "wall": null
+   "wall": null,
+   "browser": null
   },
   "events": [
    {

@@ -605,6 +605,7 @@ impl Agent {
         let start = self.seen().artifact_start;
         let artifacts = self.page.artifacts();
         RunResult {
+            browser: None,
             status,
             budget: outcome.budget,
             answer: outcome.answer,
@@ -974,6 +975,7 @@ fn browser_failure_kind(error: &BrowserError) -> String {
 
 fn blocked_without_browser(message: String) -> RunResult {
     RunResult {
+        browser: None,
         status: Status::Blocked,
         budget: None,
         answer: None,

@@ -341,6 +341,7 @@ fn run_task(
                             steps: answered.steps.clone(),
                             cost: answered.cost.clone(),
                             recordings: answered.recordings.clone(),
+                            browser: answered.browser.clone().map(Box::new),
                         }
                         .dump_json()
                         .into_pyobject(py)?

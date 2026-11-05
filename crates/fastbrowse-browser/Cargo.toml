@@ -30,7 +30,7 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 serde = { version = "1.0.229", features = ["derive"] }
 # Objects keep insertion order, as Python dicts do: a reply parsed and written back keeps its keys where they were.
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
-tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "process", "io-util", "fs"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "process", "io-util", "io-std", "fs"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 webpki-roots = "1.0.11"

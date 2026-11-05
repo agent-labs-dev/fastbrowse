@@ -27,13 +27,31 @@ their declared origin; models see secret names. An MCP caller cannot add credent
 them with server `--secret NAME=ENV_VAR@ORIGIN` or `--bitwarden ITEM`. Use only secrets the server offers.
 The CLI also supports `--bitwarden ITEM` for a user-selected login from an unlocked Bitwarden CLI.
 
+## The user's own signed-in Chrome
+
+When the task needs the user's everyday Chrome, where they are already signed in, pass `--extension`. It reaches
+that Chrome through the fastbrowse extension with no approval prompt, works in a tab group of its own and closes
+its tabs when it ends. The user sets it up once with `fastbrowse extension install` and by adding the extension;
+do not install it for them.
+
+```sh
+uvx --from fastbrowse fastbrowse \
+  'Report the delivery date of my most recent order without changing it.' \
+  --start https://www.amazon.com/ --extension --json
+```
+
+With no browser connected the run ends `unavailable` and names the install step; tell the user rather than
+switching to another browser. With the extension in more than one browser, the error lists their labels; pass
+the one the user chooses with `--extension-browser LABEL`. A run the user stops in the browser ends `cancelled`:
+report that it was stopped and do not retry it.
+
 ## An existing browser or Electron window
 
 Use a DevTools endpoint only when the user names it, with `--cdp-url URL` or `--cdp-port PORT`. Never look for
 one in the user's everyday Chrome, such as the `DevToolsActivePort` file in its user data directory: that
 endpoint exists only when remote debugging is switched on in `chrome://inspect`, and Chrome then stops every
 connection on an "Allow remote debugging?" prompt that takes the user's focus and waits for their click, once
-per run. An endpoint that answers 404 on `/json/version` is that kind.
+per run. An endpoint that answers 404 on `/json/version` is that kind. For that browser, use `--extension`.
 
 When the user names that browser themselves, `--cdp-port` cannot reach it, because it serves no
 `/json/version`. Read its `DevToolsActivePort` file, which holds the port on the first line and the browser

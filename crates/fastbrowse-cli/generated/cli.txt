@@ -7,7 +7,8 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
                   [--downloads DOWNLOADS] [--json] [--record FILE]
                   [--recipe FILE] [--save-recipe FILE] [--fetch]
-                  [--browser] [--trace FILE] [--cursor | --no-cursor]
+                  [--browser] [--extension] [--extension-browser LABEL]
+                  [--trace FILE] [--cursor | --no-cursor]
                   task
 
 Run one browser task.
@@ -70,6 +71,13 @@ options:
                         run blocked
   --browser             start a browser from the first step, rather than reading
                         over HTTP until the run needs one
+  --extension           run in your own Chrome, signed in as you are, through
+                        the fastbrowse extension (see: fastbrowse extension
+                        install)
+  --extension-browser LABEL
+                        which browser to use when the extension is connected
+                        in more than one, by the label its popup shows
+                        (implies --extension)
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every

@@ -16,7 +16,8 @@ import java.util.List;
 public record CancellationReceipt(
     @JsonProperty("steps") List<StepResult> steps,
     @JsonProperty("cost") CostBreakdown cost,
-    @JsonProperty("recordings") List<String> recordings) {
+    @JsonProperty("recordings") List<String> recordings,
+    @JsonProperty("browser") BrowserUsed browser) {
 
     /** A builder for a {@code CancellationReceipt}, every field unset. */
     public static Builder builder() {
@@ -28,6 +29,7 @@ public record CancellationReceipt(
         private List<StepResult> steps;
         private CostBreakdown cost;
         private List<String> recordings;
+        private BrowserUsed browser;
 
         private Builder() {}
 
@@ -46,8 +48,13 @@ public record CancellationReceipt(
             return this;
         }
 
+        public Builder browser(BrowserUsed browser) {
+            this.browser = browser;
+            return this;
+        }
+
         public CancellationReceipt build() {
-            return new CancellationReceipt(steps, cost, recordings);
+            return new CancellationReceipt(steps, cost, recordings, browser);
         }
     }
 }
