@@ -21,12 +21,13 @@ TASKS = ("table-extract", "mock-sign-in", "mock-upload-document")
 
 async def replayed(task: BenchTask, logs: Path) -> dict[str, Any]:
     proxy = Proxy(Cassette.load(CASSETTES / f"{task.id}.jsonl.gz"), forward=None, replay=True, latency=Latency.ZERO)
-    entry = await bench_task(task, agent_argv=[IN_PROCESS], proxy=proxy, logs=logs)
-    return entry["result"]
+    return await bench_task(task, agent_argv=[IN_PROCESS], proxy=proxy, logs=logs)
 
 
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("task", [task for task in corpus() if task.id in TASKS], ids=lambda task: task.id)
 async def test_a_recorded_task_passes(task: BenchTask, tmp_path: Path) -> None:
-    result = await replayed(task, tmp_path)
-    assert result["grade"]["passed"], result
+    entry = await replayed(task, tmp_path)
+    # A miss names only the request's purpose; its diff against the nearest recording says what changed.
+    misses = "\n\n".join(f"{miss['purpose']}:\n{miss['diff']}" for miss in entry["misses"])
+    assert entry["result"]["grade"]["passed"], f"{entry['result']}\n\n{misses}"
