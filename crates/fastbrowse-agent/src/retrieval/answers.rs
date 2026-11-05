@@ -78,13 +78,8 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes) -> ComposedAnswer {
         .enumerate()
         .map(|(index, (fact, evidence))| {
             let (quote, deep_link) = cited_quote(evidence, notes, str::to_owned);
-            let citation = Citation {
-                id: index as i64 + 1,
-                text: fact.text.clone(),
-                url: evidence.url.clone(),
-                quote,
-                deep_link,
-            };
+            let citation =
+                Citation { id: index as i64 + 1, text: fact.text.clone(), url: evidence.url.clone(), quote, deep_link };
             (fact_id(fact), citation)
         })
         .collect();
