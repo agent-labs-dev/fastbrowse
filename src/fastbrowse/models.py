@@ -251,8 +251,8 @@ class CostBreakdown(Frozen):
     lines: tuple[CostLine, ...] = ()
 
     def seconds_by_call(self) -> dict[str, float]:
-        """Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), so the sum
-        can exceed the run's wall time."""
+        """Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), and the browser's
+        line covers the whole time it was held, so the sum can exceed the run's wall time."""
         totals: dict[str, float] = {}
         for line in self.lines:
             if line.seconds is not None:

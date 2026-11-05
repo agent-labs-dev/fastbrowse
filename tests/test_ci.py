@@ -60,13 +60,13 @@ def _binaries_pathspecs() -> list[str]:
 
 def test_every_file_a_rust_crate_embeds_rebuilds_the_binaries() -> None:
     """The Rust binary compiles in files (the page scripts), so a change to one of them must rebuild and smoke the
-    binaries, or the shipped binary breaks on a page script it was never run against. A file under a crate's
+    binaries, or the shipped binary breaks on a page script it was never run against. A file in a crate's own
     `tests/` directory is a test fixture, which no shipped binary compiles in."""
     embedded = set()
     for source in Path("crates").rglob("*.rs"):
         for included in re.findall(r'include_(?:str|bytes)!\("([^"]+)"\)', source.read_text(encoding="utf-8")):
             path = (source.parent / included).resolve().relative_to(Path.cwd())
-            if "tests" not in path.parts:
+            if path.parts[2] != "tests":
                 embedded.add(path.as_posix())
     assert "crates/fastbrowse-browser/js/snapshot.js" in embedded
     covered = subprocess.run(

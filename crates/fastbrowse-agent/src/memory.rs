@@ -233,8 +233,7 @@ pub struct Notes {
     answering: IndexSet<String>,
     retired: HashSet<String>,
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
-    /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it. Not
-    /// part of `NotesState`: notes rebuilt from one cite their quotes as cut.
+    /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it.
     tables: HashMap<String, Arc<[TableBlock]>>,
 }
 

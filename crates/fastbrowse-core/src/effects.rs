@@ -170,9 +170,8 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     }
     // A player's clock and paused state live outside its controls, and the policy sees only the current reading, so
     // a step can confirm playback started, stopped or was moved only from what each earlier step is told it changed.
-    // A playing clock moves by itself, like a page's own clock: a site's voice assistant playing through a whole run
-    // told every step "elapsed: 15 s -> 20 s", so no step ever read as changing nothing. Players pair up by position
-    // within one document; a new document's players are new.
+    // A playing clock moves by itself, like a page's own clock, so its elapsed time is told only for a player paused on
+    // both readings. Players pair up by position within one document; a new document's players are new.
     if !replaced && before.media.len() == after.media.len() {
         for (was, now) in before.media.iter().zip(&after.media) {
             let name = match now.label.as_ref().or(now.heading.as_ref()) {

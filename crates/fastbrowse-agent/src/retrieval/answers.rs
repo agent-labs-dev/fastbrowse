@@ -68,7 +68,7 @@ pub(crate) fn cited_quote(evidence: &Evidence, notes: &Notes, redact: impl Fn(&s
         return (redact(&evidence.quote), url);
     }
     let quote = redact(&page_text(&evidence.quote, evidence.start, notes.table_blocks(evidence)));
-    // Python raises on a quote of only whitespace; a capture never cuts one, so the address stands in.
+    // `text_fragment` refuses a quote of only whitespace; a capture never cuts one, so the address stands in.
     let deep_link = text_fragment(&url, &quote).unwrap_or(url);
     (quote, deep_link)
 }
