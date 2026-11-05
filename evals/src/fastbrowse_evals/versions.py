@@ -13,6 +13,11 @@ from fastbrowse.evals.versions import provenance as core_provenance
 
 LOCK = Path(__file__).with_name("versions.json")
 
+# A measured build from before the internal tasks moved into this package hashes only its own helpers and
+# `parallax.browser_use`'s; these tasks' helpers count toward their fingerprint whichever build is installed.
+if "fastbrowse_evals" not in contract._OWN:
+    contract._OWN = (*contract._OWN, "fastbrowse_evals")
+
 
 def load_lock() -> dict[str, dict[str, Any]]:
     return json.loads(LOCK.read_text())
@@ -41,10 +46,9 @@ def provenance(*, benchmark_origin: str = "fastbrowse-internal", **extra: object
 
     from fastbrowse_evals.catalog import render
 
+    # The measured build may predate these tasks' catalog (a gate against main or a release); publication, not the
+    # measurement, refuses a candidate whose catalog differs from the build's (`publication.candidate`).
     canonical = render().encode()
-    if canonical != installed_catalog():
-        raise ValueError("installed Fastbrowse benchmark metadata differs from the canonical fastbrowse_evals tasks")
-
     return core_provenance(
         **extra,
         benchmark_family="browser-use",

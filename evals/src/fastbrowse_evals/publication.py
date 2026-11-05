@@ -51,6 +51,7 @@ from fastbrowse_evals.live import (
     judged_unavailable,
 )
 from fastbrowse_evals.registry import Suite
+from fastbrowse_evals.versions import installed_catalog
 
 PROJECT = langfuse_runs.PROJECT
 INTERNAL_REPEATS = 3
@@ -1141,6 +1142,8 @@ def export(
     raw = catalog.read_bytes()
     if raw != render().encode():
         raise PublicationError("the catalog is not the canonical export of the current internal tasks")
+    if raw != installed_catalog():
+        raise PublicationError("the measured Fastbrowse build ships a different benchmark catalog than these tasks")
     digest = hashlib.sha256(raw).hexdigest()
     catalog_data = json.loads(raw)
 

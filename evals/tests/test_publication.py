@@ -503,12 +503,19 @@ def test_mind2web_cannot_publish_a_partial_grade(tmp_path: Path) -> None:
         h.export()
 
 
-def test_noncanonical_catalog_bytes_and_failed_readback_publish_nothing(tmp_path: Path) -> None:
+def test_noncanonical_catalog_bytes_and_failed_readback_publish_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     h = Harness(tmp_path)
     h.catalog.write_text(render().rstrip("\n"))
     with pytest.raises(PublicationError, match="canonical export"):
         h.export()
     h.catalog.write_text(render())
+    # A gate may measure a build older than these tasks; such a run is never published.
+    with monkeypatch.context() as m:
+        m.setattr(publication, "installed_catalog", lambda: b"an older build's catalog")
+        with pytest.raises(PublicationError, match="different benchmark catalog"):
+            h.export()
 
     def missing(_: Any) -> None:
         raise PublicationError("not fully uploaded")

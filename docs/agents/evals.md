@@ -27,7 +27,10 @@ A claim about the agent rests on a run made for it, on the build it names:
 
 - Smoke a few tasks live before a full suite. A full suite is for a build whose smoke already passes.
 - Compare a candidate with a baseline measured on the same harness, judge and task set. Figures from
-  different harnesses, judges or task sets are not a comparison.
+  different harnesses, judges or task sets are not a comparison. `benchmark-campaign.yml` measures the build at
+  `fastbrowse_ref` with the tasks at `harness_sha`, and refuses a build whose grading differs from those tasks'
+  versions (`grading changed without a task version update`), so take the baseline from a build with the same
+  task versions, not an older release. Only a build that ships the harness's catalog can be published.
 - Report LLM calls by purpose beside pass rates; the ledger records each call's purpose.
 - Change a default model only on measured runs: measure the candidate on the fixture suites against the
   current default, and record the figures beside the default (`crates/fastbrowse-clients/src/environment.rs`

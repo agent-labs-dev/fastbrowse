@@ -1,18 +1,12 @@
 import pytest
 from fastbrowse.evals.catalog import PATH
 
-from fastbrowse_evals import catalog, versions
+from fastbrowse_evals import catalog
 from fastbrowse_evals.catalog import export
 
 
 def test_public_catalog_is_an_exact_export_of_the_private_tasks() -> None:
     export(PATH, check=True)
-
-
-def test_run_provenance_refuses_a_stale_installed_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(catalog, "render", lambda: "stale metadata")
-    with pytest.raises(ValueError, match="canonical fastbrowse_evals tasks"):
-        versions.provenance()
 
 
 def test_retired_tasks_are_listed_with_a_reason_and_run_nowhere() -> None:

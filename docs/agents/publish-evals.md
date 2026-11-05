@@ -128,7 +128,7 @@ Official results reach the same candidate through their public rows. A run direc
 and upstream records, so it leaves `official-benchmarks.yml` only encrypted, and that job also writes the
 `official-rows-<suite>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after Parallax
 has held the run to every publication rule. Dispatch it first, then dispatch `benchmark-campaign.yml` on the same
-`fastbrowse_ref` and `parallax_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
+`fastbrowse_ref` and `harness_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
 dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage adds each
 suite as a group; its run facts take each suite's date and judge from those rows.
 
