@@ -89,6 +89,24 @@ jobs:
         env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
+  # evals/ is its own project (fastbrowse_evals, the benchmark harness as a Parallax plugin) with its own lock.
+  evals:
+    if: ${{ !inputs.task }}
+    permissions: {contents: read}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    defaults: {run: {working-directory: evals}}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - run: rustup show
+      # The lock builds this checkout's fastbrowse, Rust core included; share the dependency build.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with: {shared-key: python-core}
+      - run: uv sync --locked
+      - run: uv run pytest -q
+
   project-rules:
     if: ${{ !inputs.task }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
@@ -281,11 +299,12 @@ jobs:
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    needs: [gate, project-rules, sdk, rust, secrets, changes, binaries, aur]
+    needs: [gate, evals, project-rules, sdk, rust, secrets, changes, binaries, aur]
     if: ${{ always() && !inputs.task }}
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
+          EVALS_RESULT: ${{ needs.evals.result }}
           PROJECT_RULES_RESULT: ${{ needs.project-rules.result }}
           SDK_RESULT: ${{ needs.sdk.result }}
           RUST_RESULT: ${{ needs.rust.result }}
@@ -295,6 +314,7 @@ jobs:
           AUR_RESULT: ${{ needs.aur.result }}
         run: |
           test "$GATE_RESULT" = success
+          test "$EVALS_RESULT" = success
           test "$PROJECT_RULES_RESULT" = success
           test "$SDK_RESULT" = success
           test "$RUST_RESULT" = success
