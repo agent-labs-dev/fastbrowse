@@ -45,7 +45,7 @@ use state::{Flow, RunState, Stop};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposedAnswer, compose, draft_answer, marked_partial, partial_answer};
+use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, partial_answer};
 use crate::verification::RecordSchema;
 
 /// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
@@ -658,18 +658,19 @@ impl Agent {
         Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
     }
 
-    fn public_fact(&self, fact: &Fact) -> StepFact {
+    fn public_fact(&self, fact: &Fact, notes: &Notes) -> StepFact {
         let text = self.redact(&fact.text);
         let Some(evidence) = &fact.evidence else {
             return StepFact { text, quote: None, url: None, reader: fact.reader, deep_link: None };
         };
-        let (url, quote) = (self.redact(&evidence.url), self.redact(&evidence.quote));
-        let deep_link = if evidence.rendered_text {
-            text_fragment(&url, &quote).unwrap_or_else(|_| url.clone())
-        } else {
-            url.clone()
-        };
-        StepFact { text, quote: Some(quote), url: Some(url), reader: fact.reader, deep_link: Some(deep_link) }
+        let (quote, deep_link) = cited_quote(evidence, notes, |value| self.redact(value));
+        StepFact {
+            text,
+            quote: Some(quote),
+            url: Some(self.redact(&evidence.url)),
+            reader: fact.reader,
+            deep_link: Some(deep_link),
+        }
     }
 
     /// The answer and its citations with secrets redacted, links included.

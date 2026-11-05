@@ -3,6 +3,7 @@ self-hosted-runner:
     # CodSpeed's bare-metal runners, which it registers in the organization for each queued job.
     - codspeed-macro
     # Blacksmith's runners, which the organization's Blacksmith app serves.
+    - blacksmith-2vcpu-ubuntu-2404
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404-arm
