@@ -6,7 +6,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
+use std::sync::Arc;
 
+use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
 use fastbrowse_core::page::Capture;
 use fastbrowse_core::py::datetime::DateTime;
@@ -231,6 +233,9 @@ pub struct Notes {
     answering: IndexSet<String>,
     retired: HashSet<String>,
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
+    /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it. Not
+    /// part of `NotesState`: notes rebuilt from one cite their quotes as cut.
+    tables: HashMap<String, Arc<[TableBlock]>>,
 }
 
 impl fmt::Debug for Notes {
@@ -254,6 +259,12 @@ impl Notes {
         self.pages
             .entry((capture.sha256.clone(), capture.url.clone(), capture.captured_at))
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
+        self.tables.entry(capture.sha256.clone()).or_insert_with(|| table_blocks(capture).into());
+    }
+
+    /// The table blocks of the capture `evidence` was cut from; none when that capture was never remembered.
+    pub fn table_blocks(&self, evidence: &Evidence) -> &[TableBlock] {
+        self.tables.get(&evidence.capture_sha256).map_or(&[], |tables| tables)
     }
 
     pub fn captured_page(&self, evidence: &Evidence) -> Option<&CapturedPage> {
