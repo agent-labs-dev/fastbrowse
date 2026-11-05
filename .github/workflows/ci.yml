@@ -1,13 +1,19 @@
 name: CI
 on:
   pull_request:
+    # `labeled` so adding `build-binaries` starts a run that builds them; see `changes`.
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
 permissions: {}
+# A push to a pull request makes the run on its previous commit moot. Runs on `main` each finish.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   secrets:
     permissions: {contents: read}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -22,7 +28,7 @@ jobs:
         run: gitleaks detect --source . --no-banner --redact --log-opts=HEAD
   gate:
     permissions: {contents: read, actions: read}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +42,10 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "${{ matrix.python }}"
+      - run: rustup show
+      # `uv sync` compiles the Rust core (dev profile) into `target/`; restore the dependency build the other jobs share.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with: {shared-key: python-core}
       # tests/test_ci.py imports yaml; without the extra, ty sees a different tree than we do.
       - run: uv sync --locked --all-extras
       - run: uv run ruff check .
@@ -72,7 +82,7 @@ jobs:
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
   project-rules:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +91,8 @@ jobs:
         with: {python-version: "3.13"}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22"}
-      - run: uv sync --locked
+      # The rules and actionlint run from the tools alone; the package, and the Rust core it compiles, are not needed.
+      - run: uv sync --locked --no-install-project
       - run: npm ci --ignore-scripts
       - run: npm run check:browser
       - run: uv run --no-sync actionlint
@@ -94,7 +105,7 @@ jobs:
         run: uvx zizmor==1.32.0 --offline .github/workflows
 
   sdk:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,6 +114,10 @@ jobs:
         with: {python-version: "3.13"}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: {node-version: "22"}
+      - run: rustup show
+      # `uv sync` compiles the Rust core (dev profile) into `target/`; restore the dependency build the other jobs share.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with: {shared-key: python-core}
       # The SDK's tests start `fastbrowse serve --stdio` from this environment, so they meet the real server.
       - run: uv sync --locked
       - run: npm ci --ignore-scripts
@@ -187,20 +202,23 @@ jobs:
         working-directory: dotnet
       # Builds the package and its Rust core, `fastbrowse._native`, which the SDK suite's own server runs on.
       - run: uv sync --locked
-      - run: cargo build -p fastbrowse-node --release --locked
-      - run: cp target/release/libfastbrowse_node.so crates/fastbrowse-node/fastbrowse.node
+      # A debug addon: these are behaviour checks, and the release addon, a full LTO build, is built and smoke-tested in
+      # `binaries`. The release build took 86 s of this job on every run.
+      - run: cargo build -p fastbrowse-node --locked
+      - run: cp target/debug/libfastbrowse_node.so crates/fastbrowse-node/fastbrowse.node
       - run: node --test crates/fastbrowse-node/test/core.test.ts
       # The SDK suite again, its runs on the addon in this process instead of a fastbrowse process.
       - run: npm ci --ignore-scripts
       - run: FASTBROWSE_TEST_ADDON="$PWD/crates/fastbrowse-node/fastbrowse.node" npm run check:sdk
 
   # The builds on their own runners cost more than the rest of CI together, so a pull request pays for them only
-  # when it touches what is built, what builds it, what packs it for npm, or the SDK that the install smoke
-  # packs and starts it with. The eval and audit packages are not in the binary.
-  # Every push to `main` builds, so a change the filter misjudged is still caught before a release. CI builds the
+  # when it changes how they are built or packed (the toolchain, the profiles, the lockfile, the packaging and smoke
+  # scripts, the SDK manifest the install smoke packs) or a file the binary compiles in (the page scripts, the
+  # generated schemas), or carries the `build-binaries` label. A change to the code
+  # alone is built on the push to `main`, which always builds, so a break still shows before a release. CI builds the
   # Linux and Windows targets; the two macOS ones, the costliest runners and the slowest to start, run in the release.
   changes:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
       binaries: ${{ steps.built.outputs.binaries }}
@@ -210,14 +228,16 @@ jobs:
         # A pull request is checked out as its merge into the base, whose first parent is the base.
         with: {fetch-depth: 2, persist-credentials: false}
       - id: built
-        env: {EVENT: "${{ github.event_name }}"}
+        env:
+          EVENT: "${{ github.event_name }}"
+          LABELLED: "${{ contains(github.event.pull_request.labels.*.name, 'build-binaries') }}"
         run: |
-          if [ "$EVENT" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- \
-            src/fastbrowse ':!src/fastbrowse/evals' ':!src/fastbrowse/audit' pyproject.toml uv.lock \
-            scripts/smoke_binary.py .github/workflows/binaries.yml .github/workflows/ci.yml \
-            scripts/npm_platform_package.py scripts/smoke_npm_install.py \
-            packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json packages/sdk/src \
-            crates Cargo.toml Cargo.lock rust-toolchain.toml
+          if [ "$EVENT" != pull_request ] || [ "$LABELLED" = true ] || ! git diff --quiet HEAD^1 HEAD -- \
+            .github/workflows/binaries.yml .github/workflows/ci.yml pyproject.toml \
+            scripts/smoke_binary.py scripts/npm_platform_package.py scripts/smoke_npm_install.py \
+            packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json \
+            Cargo.toml Cargo.lock rust-toolchain.toml 'crates/*/Cargo.toml' 'crates/*/build.rs' \
+            crates/fastbrowse-browser/js crates/fastbrowse-cli/generated
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
           fi
@@ -248,7 +268,7 @@ jobs:
   # It passes only when the Python matrix, secret scan, project rules, SDK and Rust checks pass, and the binaries and the
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     needs: [gate, project-rules, sdk, rust, secrets, changes, binaries, aur]
     if: always()
     steps:

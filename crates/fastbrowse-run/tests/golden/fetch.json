@@ -201,15 +201,7 @@
    },
    {
     "kind": "table",
-    "text": "| City | Region | Population |",
-    "heading_path": [
-     "Largest cities in France"
-    ],
-    "href": null
-   },
-   {
-    "kind": "table",
-    "text": "| --- | --- | --- |",
+    "text": "| City | Region | Population |\n| --- | --- | --- |",
     "heading_path": [
      "Largest cities in France"
     ],
@@ -785,13 +777,7 @@
   "blocks": [
    {
     "kind": "table",
-    "text": "| Film | Winner | Seen |",
-    "heading_path": [],
-    "href": null
-   },
-   {
-    "kind": "table",
-    "text": "| --- | --- | --- |",
+    "text": "| Film | Winner | Seen |\n| --- | --- | --- |",
     "heading_path": [],
     "href": null
    },
@@ -884,16 +870,7 @@
    },
    {
     "kind": "table",
-    "text": "| Name | Score |",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Table"
-    ],
-    "href": null
-   },
-   {
-    "kind": "table",
-    "text": "| --- | --- |",
+    "text": "| Name | Score |\n| --- | --- |",
     "heading_path": [
      "Fastbrowse fixture",
      "Table"
@@ -1296,16 +1273,7 @@
    },
    {
     "kind": "table",
-    "text": "| Team | Points |",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Rankings"
-    ],
-    "href": null
-   },
-   {
-    "kind": "table",
-    "text": "| --- | --- |",
+    "text": "| Team | Points |\n| --- | --- |",
     "heading_path": [
      "Fastbrowse fixture",
      "Rankings"
@@ -2774,13 +2742,7 @@
   "blocks": [
    {
     "kind": "table",
-    "text": "| a | bc |",
-    "heading_path": [],
-    "href": null
-   },
-   {
-    "kind": "table",
-    "text": "| --- | --- |",
+    "text": "| a | bc |\n| --- | --- |",
     "heading_path": [],
     "href": null
    },
