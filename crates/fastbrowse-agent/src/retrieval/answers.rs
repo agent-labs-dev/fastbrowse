@@ -707,10 +707,12 @@ const STATED_TOTAL: &str = "total";
 const SURE_OF_A_QUOTE: f64 = 0.8;
 
 /// The fewest and most records Jev says the claim's cited quotes hold toward the count it states, a record repeated
-/// by a later quote counted once: a quote counts toward the fewest when Jev is sure it holds one, and toward the most
-/// unless Jev is sure it holds none. Asked of 14 product names, Jev was unsure of three and the exact count missed the
-/// total they made. None when a quote holds several records or states the claim's number as its own total, or Jev
-/// leaves a quote unanswered, so code cannot count and the claim's support check decides it.
+/// by a later quote counted once: a quote counts toward the fewest when Jev picks one record for it, and toward the
+/// most unless Jev is sure it holds none. Asked of 14 product names, Jev was unsure of three, leant towards none, and
+/// the exact count missed the total they made, so the most stays generous. On quote pages Jev picked one record for
+/// each of 10 quotes at about 0.72, and counting only the quotes it was sure of let a headline of 8 stand (#800).
+/// None when a quote holds several records or states the claim's number as its own total, or Jev leaves a quote
+/// unanswered, so code cannot count and the claim's support check decides it.
 async fn counted_records(
     jev: &dyn DecisionClient,
     task: &str,
@@ -754,7 +756,7 @@ async fn counted_records(
             answer.probabilities.get(option).copied().unwrap_or(if answer.choice == option { 1.0 } else { 0.0 })
                 >= SURE_OF_A_QUOTE
         };
-        least += u64::from(sure(ONE_RECORD));
+        least += u64::from(answer.choice == ONE_RECORD);
         most += u64::from(!sure("0"));
     }
     Ok(Some((least, most)))
@@ -1465,6 +1467,31 @@ mod tests {
             let Question::Choice(count) = &asked[0]["claim0/count"] else { panic!("the count is a choice") };
             assert_eq!(count.criteria.keys().collect::<Vec<_>>(), ["none", "5"]);
         }
+    }
+
+    /// A dev-suite run (907bc907, quotes-einstein-count r0) cited 10 quotes, broke them down page by page to 10, and
+    /// headed the claim with 8; the claim and coverage checks passed it as `complete` (#800). Jev picks one record for
+    /// each quote but, as recorded on quote pages, at about 0.72: below the sureness that once alone set the fewest.
+    #[tokio::test]
+    async fn a_headline_count_that_contradicts_its_own_breakdown_is_rejected() {
+        let pages = [1, 1, 1, 2, 3, 3, 4, 5, 6, 9];
+        let notes = Notes::new(
+            pages
+                .iter()
+                .enumerate()
+                .map(|(index, page)| fact(index, format!("Quote {index} by Albert Einstein, page {page}"))),
+        );
+        let ids: Vec<String> = (0..pages.len()).map(|index| format!("e{index}")).collect();
+        let claim = "Across the site, 8 quotes are by Albert Einstein: 3 on page 1, 1 on page 2, 2 on page 3, 1 on page 4, \
+                     1 on page 5, 1 on page 6, and 1 on page 9.";
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new(claim, ids)]);
+        let jev = Counting { stated: "8", per_quote: "1", sureness: 0.72, asked: Mutex::new(Vec::new()) };
+        let task = "How many quotes by Albert Einstein are on the site?";
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
+        assert!(reviewed.answer.claims.is_empty());
+        let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().unwrap()).unwrap();
+        assert_eq!(feedback["miscounted_claims"], json!([{"claim": 0, "states": 8, "records_in_cited_quotes": 10}]));
     }
 
     /// A results page that states its own total, such as `27 results returned.`, supports a claim of that total even
