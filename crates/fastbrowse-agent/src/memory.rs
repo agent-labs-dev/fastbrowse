@@ -122,17 +122,18 @@ pub(crate) fn split_scheme(url: &str) -> (String, String) {
     (String::new(), url)
 }
 
-/// A text's words in order, lowercased. A currency sign stays on its amount, since "£12.29" and "$12.29" differ, and
-/// so does a minus sign that starts one, since "-$10.00" and "$10.00" differ.
+/// A text's words in order, lowercased. A currency sign or unit stays on its amount, since "£12.29" and "$12.29"
+/// differ and so do "5%" and "5‰", and so does a minus sign that starts one, since "-$10.00" and "$10.00" differ.
 fn words(text: &str) -> Vec<String> {
     const CURRENCY: &[char] = &['£', '$', '€', '¥', '₹', '₩', '₽', '¢', '₺', '₪'];
+    const UNITS: &[char] = &['%', '‰', '‱', '°'];
     let chars: Vec<char> = text.to_lowercase().chars().collect();
     let kept = |index: usize| {
         let c = chars[index];
         let signs_amount = matches!(c, '-' | '\u{2212}')
             && index.checked_sub(1).is_none_or(|before| !chars[before].is_alphanumeric())
             && chars.get(index + 1).is_some_and(|next| next.is_ascii_digit() || CURRENCY.contains(next));
-        c.is_alphanumeric() || c == '.' || CURRENCY.contains(&c) || signs_amount
+        c.is_alphanumeric() || c == '.' || CURRENCY.contains(&c) || UNITS.contains(&c) || signs_amount
     };
     let mut words = Vec::new();
     let mut word = String::new();
@@ -733,6 +734,10 @@ mod tests {
         assert!(notes.repeats_page_text("Account balance $10.00", url));
         assert!(!notes.repeats_page_text("Account balance -$10.00", url));
         assert!(!notes.repeats_page_text("Account balance \u{2212}10.00", url));
+        assert!(!notes.repeats_page_text("Account balance 10.00%", url));
+        let rate = Notes::new([quoted("Annual interest rate 5%", "capture", url)]);
+        assert!(rate.repeats_page_text("Annual interest rate 5%", url));
+        assert!(!rate.repeats_page_text("Annual interest rate 5\u{2030}", url));
         // A hyphen between words is still a break, as before.
         assert_eq!(words("well-known -5 a-1"), ["well", "known", "-5", "a", "1"]);
     }
