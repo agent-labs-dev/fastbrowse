@@ -3,9 +3,10 @@ mod misc_support;
 
 use std::collections::HashSet;
 
-use common::{harness, sites};
-use fastbrowse_core::page::BlockKind;
-use misc_support::{eval_active, text_of};
+use common::{eval_active, harness, sites};
+use fastbrowse_core::models::Operation;
+use fastbrowse_core::page::{Action, BlockKind};
+use misc_support::text_of;
 
 // -- test_comment_context.py: reply controls belong to their comment record, including when only one form is open --
 
@@ -90,7 +91,7 @@ async fn test_a_list_that_hosts_a_shadow_root_is_not_frameless() {
 // -- test_image_evidence.py: rendered image elements need DOM evidence even when they contain no text -----------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_a_figure_is_visual_content_but_an_icon_sized_drawing_is_not() {
+async fn test_a_drawing_in_the_viewport_is_visual_content() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(
@@ -102,14 +103,7 @@ async fn test_a_figure_is_visual_content_but_an_icon_sized_drawing_is_not() {
     )
     .await;
     assert!(h.observe().await.visual_content);
-    eval_active(
-        &h.session,
-        r#"
-        document.body.innerHTML = '<h1>Report</h1><p>' + 'word '.repeat(40) + '</p>' +
-          '<canvas width="16" height="16"></canvas>';
-        "#,
-    )
-    .await;
+    eval_active(&h.session, "document.querySelector('canvas').remove()").await;
     assert!(!h.observe().await.visual_content);
     h.close().await;
 }
@@ -130,6 +124,70 @@ async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
     // Scrolled into view, the same drawing is page state the screenshot does carry.
     eval_active(&h.session, "scrollTo(0, document.body.scrollHeight)").await;
     assert!(h.observe().await.visual_content);
+    h.close().await;
+}
+
+// A media QA run pressed Play and Pause until its step limit: native players draw their clock in shadow DOM, so
+// neither the page text nor a read said whether anything played.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_players_state_is_observed_and_read() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        const rate = 8000, n = rate * 30, wav = new DataView(new ArrayBuffer(44 + n));
+        const tag = (at, s) => [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+        tag(0, 'RIFF'); wav.setUint32(4, 36 + n, true); tag(8, 'WAVEfmt '); wav.setUint32(16, 16, true);
+        wav.setUint16(20, 1, true); wav.setUint16(22, 1, true); wav.setUint32(24, rate, true);
+        wav.setUint32(28, rate, true); wav.setUint16(32, 1, true); wav.setUint16(34, 8, true);
+        tag(36, 'data'); wav.setUint32(40, n, true); new Uint8Array(wav.buffer, 44).fill(128);
+        const src = URL.createObjectURL(new Blob([wav.buffer], { type: 'audio/wav' }));
+        document.body.innerHTML = '<h2>Lesson one</h2><audio controls aria-label="Lesson one audio">Not supported</audio>' +
+          '<h2>Lesson two</h2><table><tr><th>Comment</th></tr></table><fieldset hidden><legend>Font Family</legend></fieldset>' +
+          '<audio controls>Not supported</audio>';
+        for (const player of document.querySelectorAll('audio')) player.src = src;
+        const first = document.querySelector('audio');
+        first.muted = true;
+        const play = document.createElement('button');
+        play.textContent = 'Play lesson one';
+        play.onclick = () => first.play();
+        document.body.prepend(play);
+        "#,
+    )
+    .await;
+    // Chrome plays only after a user gesture, so the player starts from a click the way a run would start it.
+    let page = h.observe().await;
+    let play = page.controls.iter().find(|c| c.label == "Play lesson one").expect("play button");
+    let click = Action { target_id: Some(play.id.clone()), ..Action::new(Operation::Click) };
+    h.page.act(&click, &page).await.expect("act");
+    let mut media = Vec::new();
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        media = h.observe().await.media;
+        if media.len() == 2 && media[0].elapsed_seconds > 0.5 && media[1].duration_seconds.is_some() {
+            break;
+        }
+    }
+    assert_eq!(media.len(), 2, "{media:?}");
+    let (playing, idle) = (&media[0], &media[1]);
+    assert_eq!(playing.kind, "audio");
+    assert_eq!(playing.label.as_deref(), Some("Lesson one audio"));
+    assert!(!playing.paused && playing.muted && playing.elapsed_seconds > 0.5, "{playing:?}");
+    assert_eq!(playing.duration_seconds, Some(30.0));
+    assert_eq!((idle.label.as_deref(), idle.heading.as_deref()), (None, Some("Lesson two")));
+    assert!(idle.paused && idle.elapsed_seconds == 0.0, "{idle:?}");
+    let capture = h.page.capture().await.expect("capture");
+    let read: Vec<String> = capture
+        .blocks
+        .iter()
+        .filter(|b| b.kind == BlockKind::Observation)
+        .map(|b| text_of(&capture, b))
+        .filter(|t| t.starts_with("Audio element state"))
+        .collect();
+    assert_eq!(read.len(), 2, "{read:?}");
+    assert!(read[0].contains(r#""label":"Lesson one audio""#) && read[0].contains(r#""paused":false"#), "{read:?}");
+    assert!(read[1].contains(r#""heading":"Lesson two""#) && read[1].contains(r#""paused":true"#), "{read:?}");
     h.close().await;
 }
 
@@ -175,7 +233,25 @@ async fn test_capture_does_not_copy_inline_image_payload() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_image_observations_are_bounded_and_ignore_decode_state() {
+async fn test_an_image_line_names_the_image_and_not_what_it_cannot_show() {
+    // The absence sentence was cut as a span and quoted as a fact: a Street View run answered "Pixels are not
+    // described" 33 times over a task about what the view shows. The metadata is the quotable part.
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        r#"document.body.innerHTML = '<img alt="Chart of exports" src="https://example.test/a.png">';"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let line = capture.text.lines().find(|line| line.starts_with("Image element DOM metadata")).expect("an image line");
+    assert!(line.contains("\"alt\":\"Chart of exports\""), "{line}");
+    assert!(line.contains("\"pixels_described\":false"), "{line}");
+    assert!(!line.contains("Pixels are not described"), "{line}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_every_image_is_observed_and_decode_state_is_ignored() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(
@@ -187,7 +263,7 @@ async fn test_image_observations_are_bounded_and_ignore_decode_state() {
     )
     .await;
     let before = h.page.capture().await.expect("capture");
-    assert_eq!(before.text.matches("Image element DOM metadata").count(), 32);
+    assert_eq!(before.text.matches("Image element DOM metadata").count(), 300);
     assert!(before.text.contains("blob:[identifier omitted]"));
     eval_active(
         &h.session,
@@ -243,7 +319,58 @@ async fn test_capture_reports_icon_link_destination_with_its_row() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_icon_link_observations_are_bounded() {
+async fn test_an_image_link_does_not_borrow_its_articles_text() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<article><p><a href="/demo.gif"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a></p>' +
+          '<h1>Project</h1><p>A package with its own installation instructions.</p></article>' +
+          '<table><tr><td>Release 2</td><td><span><a href="/release.zip"><svg></svg></a></span></td></tr></table>' +
+          '<div style="display:flex"><span>Flex release</span><span><a href="/flex.zip"><svg></svg></a></span></div>' +
+          '<div style="display:grid"><span>Grid release</span><div><a href="/grid.zip"><svg></svg></a></div></div>' +
+          '<table><tr><td><ul><li>First release <a href="/first.zip"><svg></svg></a></li>' +
+          '<li>Second release <a href="/second.zip"><svg></svg></a></li></ul></td></tr></table>' +
+          '<div>Wrapped release<div><a href="/wrapped.zip"><svg></svg></a></div></div>' +
+          '<li>Floating release<div style="float:right"><a href="/floating.zip"><svg></svg></a></div></li>' +
+          '<article style="display:flex;flex-direction:column"><p><a href="/flex-demo.gif"><img alt=""></a></p><p>Unrelated article text</p></article>' +
+          '<div><a href="/empty.zip"><svg></svg></a></div>' +
+          '<article><h2>Card release</h2><a href="/card.zip"><svg></svg></a></article>' +
+          '<dl><dt>Definition release</dt><dd><a href="/definition.zip"><svg></svg></a></dd></dl>';
+        "#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let links: Vec<_> = capture.text.lines().filter(|line| line.starts_with("Link element DOM metadata")).collect();
+    let demo = links.iter().find(|line| line.contains("/demo.gif")).unwrap();
+    assert!(demo.contains("\"near\":null"), "{demo}");
+    assert!(!demo.contains("installation instructions"));
+    let release = links.iter().find(|line| line.contains("/release.zip")).unwrap();
+    assert!(release.contains("Release 2"), "{release}");
+    for (href, own, other) in [
+        ("/flex.zip", "Flex release", "Grid release"),
+        ("/grid.zip", "Grid release", "Flex release"),
+        ("/first.zip", "First release", "Second release"),
+        ("/second.zip", "Second release", "First release"),
+        ("/wrapped.zip", "Wrapped release", "Floating release"),
+        ("/floating.zip", "Floating release", "Wrapped release"),
+        ("/card.zip", "Card release", "Definition release"),
+        ("/definition.zip", "Definition release", "Card release"),
+    ] {
+        let link = links.iter().find(|line| line.contains(href)).unwrap();
+        assert!(link.contains(own), "{link}");
+        assert!(!link.contains(other), "{link}");
+    }
+    for href in ["/flex-demo.gif", "/empty.zip"] {
+        let link = links.iter().find(|line| line.contains(href)).unwrap();
+        assert!(link.contains("\"near\":null"), "{link}");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_every_icon_link_destination_is_observed_whole() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(
@@ -255,8 +382,7 @@ async fn test_icon_link_observations_are_bounded() {
     )
     .await;
     let capture = h.page.capture().await.expect("capture");
-    assert_eq!(capture.text.matches("Link element DOM metadata").count(), 32);
-    assert!(capture.text.contains("Additional link destinations omitted."));
-    assert!(capture.text.chars().count() < 100_000);
+    assert_eq!(capture.text.matches("Link element DOM metadata").count(), 100);
+    assert!(capture.text.contains(&format!("/f/99?k={}", "x".repeat(4000))));
     h.close().await;
 }

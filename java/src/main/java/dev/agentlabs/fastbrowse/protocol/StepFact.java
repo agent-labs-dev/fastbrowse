@@ -9,7 +9,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public record StepFact(
     @JsonProperty("text") String text,
-    @JsonProperty("requirement_id") String requirementId,
     @JsonProperty("quote") String quote,
     @JsonProperty("url") String url,
     @JsonProperty("reader") FactReader reader,
@@ -23,7 +22,6 @@ public record StepFact(
     /** Builds a {@code StepFact}. A field left unset is null, or the zero of a primitive. */
     public static final class Builder {
         private String text;
-        private String requirementId;
         private String quote;
         private String url;
         private FactReader reader;
@@ -33,11 +31,6 @@ public record StepFact(
 
         public Builder text(String text) {
             this.text = text;
-            return this;
-        }
-
-        public Builder requirementId(String requirementId) {
-            this.requirementId = requirementId;
             return this;
         }
 
@@ -62,7 +55,7 @@ public record StepFact(
         }
 
         public StepFact build() {
-            return new StepFact(text, requirementId, quote, url, reader, deepLink);
+            return new StepFact(text, quote, url, reader, deepLink);
         }
     }
 }

@@ -45,9 +45,10 @@ def _jobs() -> dict[str, Any]:
 
 def test_the_rust_job_runs_on_every_pull_request() -> None:
     """The Rust crates read fixtures from outside crates/, so a change elsewhere can break them.
-    A path filter on the job would let that change merge without the Rust checks seeing it."""
+    A path filter on the job would let that change merge without the Rust checks seeing it. Only a
+    real-site dispatch, which checks no change, skips it."""
     rust = _jobs()["rust"]
-    assert "if" not in rust
+    assert rust["if"] == "${{ !inputs.task }}"
     assert "needs" not in rust
 
 
@@ -59,11 +60,14 @@ def _binaries_pathspecs() -> list[str]:
 
 def test_every_file_a_rust_crate_embeds_rebuilds_the_binaries() -> None:
     """The Rust binary compiles in files (the page scripts), so a change to one of them must rebuild and smoke the
-    binaries, or the shipped binary breaks on a page script it was never run against."""
+    binaries, or the shipped binary breaks on a page script it was never run against. A file in a crate's own
+    `tests/` directory is a test fixture, which no shipped binary compiles in."""
     embedded = set()
     for source in Path("crates").rglob("*.rs"):
         for included in re.findall(r'include_(?:str|bytes)!\("([^"]+)"\)', source.read_text(encoding="utf-8")):
-            embedded.add((source.parent / included).resolve().relative_to(Path.cwd()).as_posix())
+            path = (source.parent / included).resolve().relative_to(Path.cwd())
+            if path.parts[2] != "tests":
+                embedded.add(path.as_posix())
     assert "crates/fastbrowse-browser/js/snapshot.js" in embedded
     covered = subprocess.run(
         ["git", "ls-files", "--", *_binaries_pathspecs()], capture_output=True, text=True, check=True
@@ -95,15 +99,32 @@ def test_a_campaign_refuses_a_bad_payload_and_runs_with_none(payload: str, passe
     [
         ("null", True),
         ("{}", True),
-        ('{"groups": "all", "suites": "core", "browser": "local"}', True),
+        ('{"groups": "all", "suites": "core"}', True),
         ('{"groups": ""}', False),
         ('{"suites": ""}', False),
-        ('{"browser": ""}', False),
     ],
 )
 def test_a_campaign_refuses_an_empty_choice_rather_than_widening(payload: str, passes: bool) -> None:
     workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
-    start = workflow.index("for key in groups suites browser")
+    start = workflow.index("for key in groups suites")
+    check = workflow[start : workflow.index("done\n", start) + 4]
+    result = subprocess.run(["bash", "-c", check], env={**os.environ, "PAYLOAD": payload}, capture_output=True)
+    assert (result.returncode == 0) is passes
+
+
+@pytest.mark.parametrize(
+    ("payload", "passes"),
+    [
+        ("null", True),
+        ('{"smoke": true, "refresh_competitors": false}', True),
+        ('{"smoke": "true"}', False),
+        ('{"refresh_competitors": 1}', False),
+    ],
+)
+def test_a_campaign_takes_only_a_json_boolean_for_smoke(payload: str, passes: bool) -> None:
+    # A string "true" is not true to the workflow's expressions, so it would start a full paid run.
+    workflow = Path(".github/workflows/benchmark-campaign.yml").read_text()
+    start = workflow.index("for key in smoke refresh_competitors")
     check = workflow[start : workflow.index("done\n", start) + 4]
     result = subprocess.run(["bash", "-c", check], env={**os.environ, "PAYLOAD": payload}, capture_output=True)
     assert (result.returncode == 0) is passes

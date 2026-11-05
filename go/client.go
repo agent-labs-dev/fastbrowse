@@ -121,8 +121,9 @@ func (c *Client) request(ctx context.Context, method string, params any) (json.R
 // option, for a missing key, and with ErrorCodeBusy while another run on this Client is active. A run that fails
 // after that returns StatusError. It is a *ProcessExitedError when the fastbrowse process is gone.
 //
-// Cancelling ctx stops the run. Run then returns once the run's browser has closed, with an error that wraps
-// ctx's cause. A ctx that is already done starts no run.
+// Cancelling ctx stops the run. Run then returns once the run's browser has closed, with a *CancelledError that
+// wraps ctx's cause and carries the receipt of what the run did and spent. A ctx that is already done starts no
+// run.
 func (c *Client) Run(ctx context.Context, task string, options RunOptions) (*RunResult, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, fmt.Errorf("fastbrowse: the run was not started: %w", err)
@@ -130,7 +131,7 @@ func (c *Client) Run(ctx context.Context, task string, options RunOptions) (*Run
 	runID := newRunID()
 	params, err := runParams(runID, task, c.browser, options)
 	if err != nil {
-		return nil, fmt.Errorf("fastbrowse: the output schema could not be written: %w", err)
+		return nil, fmt.Errorf("fastbrowse: %w", err)
 	}
 	var cancelling sync.Once
 	cancel := func() {
@@ -167,18 +168,26 @@ func (c *Client) Run(ctx context.Context, task string, options RunOptions) (*Run
 	c.mu.Unlock()
 	var refused *RPCError
 	cancelled := errors.As(r.err, &refused) && refused.Code == ErrorCodeCancelled
+	var receipt CancellationReceipt
+	if cancelled && refused.Receipt != nil {
+		receipt = *refused.Receipt
+	}
 	switch {
-	case failure != "" && (r.err == nil || cancelled):
-		// A run can finish before the cancellation reaches it, and its callback failed all the same.
-		return endedBy(failure), nil
+	case failure != "" && cancelled:
+		return endedBy(failure, receipt), nil
 	case cancelled && ctx.Err() != nil:
-		return nil, fmt.Errorf("fastbrowse: the run was stopped: %w", context.Cause(ctx))
+		return nil, &CancelledError{Receipt: receipt, cause: context.Cause(ctx)}
 	case r.err != nil:
 		return nil, r.err
 	}
 	var result RunResult
 	if err := json.Unmarshal(r.result, &result); err != nil {
 		return nil, fmt.Errorf("fastbrowse: the result could not be read: %w", err)
+	}
+	if failure != "" {
+		// A run can finish before the cancellation reaches it, and its callback failed all the same.
+		spent := CancellationReceipt{Steps: result.Steps, Cost: result.Cost, Recordings: result.Recordings}
+		return endedBy(failure, spent), nil
 	}
 	return &result, nil
 }
@@ -237,7 +246,8 @@ func (c *Client) notify(method string, params json.RawMessage) {
 			RunID string `json:"run_id"`
 			Event Event  `json:"event"`
 		}
-		if json.Unmarshal(params, &message) != nil {
+		if err := json.Unmarshal(params, &message); err != nil {
+			c.undecodable(params, ServerMethodRunEvent, err)
 			return
 		}
 		if run := c.run(message.RunID); run != nil && run.options.OnEvent != nil && !c.failed(run) {
@@ -247,11 +257,13 @@ func (c *Client) notify(method string, params json.RawMessage) {
 		}
 	case ServerMethodRunFrame:
 		var message RunFrame
-		if json.Unmarshal(params, &message) != nil {
+		if err := json.Unmarshal(params, &message); err != nil {
+			c.undecodable(params, ServerMethodRunFrame, err)
 			return
 		}
 		jpeg, err := base64.StdEncoding.DecodeString(message.Frame)
 		if err != nil {
+			c.undecodable(params, ServerMethodRunFrame, err)
 			return
 		}
 		if run := c.run(message.RunID); run != nil && run.options.OnFrame != nil && !c.failed(run) {
@@ -259,6 +271,19 @@ func (c *Client) notify(method string, params json.RawMessage) {
 				c.fail(run, ServerMethodRunFrame, err)
 			}
 		}
+	}
+}
+
+// undecodable ends the run a notification belongs to: its callback would otherwise miss what the run did.
+func (c *Client) undecodable(params json.RawMessage, method ServerMethod, err error) {
+	var message struct {
+		RunID string `json:"run_id"`
+	}
+	if json.Unmarshal(params, &message) != nil {
+		return
+	}
+	if run := c.run(message.RunID); run != nil {
+		c.fail(run, method, err)
 	}
 }
 
@@ -309,17 +334,27 @@ func newRunID() string {
 	return hex.EncodeToString(id)
 }
 
-// endedBy is the result of a run that a failing callback ended, in the shape the server gives one.
-func endedBy(failure string) *RunResult {
+// endedBy is the result of a run that a failing callback ended, in the shape the server gives one, with the
+// steps, cost and videos of what it did.
+func endedBy(failure string, spent CancellationReceipt) *RunResult {
+	if spent.Steps == nil {
+		spent.Steps = []StepResult{}
+	}
+	if spent.Cost.Lines == nil {
+		spent.Cost.Lines = []CostLine{}
+	}
+	if spent.Recordings == nil {
+		spent.Recordings = []string{}
+	}
 	return &RunResult{
 		Status:     StatusError,
 		Data:       json.RawMessage("null"),
 		Evidence:   []Evidence{},
-		Steps:      []StepResult{},
-		Cost:       CostBreakdown{Lines: []CostLine{}},
+		Steps:      spent.Steps,
+		Cost:       spent.Cost,
 		Artifacts:  []Artifact{},
 		Citations:  []Citation{},
 		Error:      &failure,
-		Recordings: []string{},
+		Recordings: spent.Recordings,
 	}
 }

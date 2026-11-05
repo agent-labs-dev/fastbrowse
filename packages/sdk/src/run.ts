@@ -1,5 +1,5 @@
 // What a caller passes to `run`, and the `run` request it becomes. Options are camelCase, and the wire keeps the
-// Python models' snake_case names.
+// protocol's snake_case names.
 
 import { type OutputSchema, wireSchema } from './output.ts';
 import type { Authorization, BrowserEvent, Limits, LocalChrome, RunParams, SecretRef, StepEvent } from './protocol.ts';
@@ -8,7 +8,7 @@ type Camel<Name extends string> = Name extends `${infer Head}_${infer Tail}`
   ? `${Head}${Capitalize<Camel<Tail>>}`
   : Name;
 
-/** A wire model with its field names in camelCase, so its fields follow the Python model without a second list. */
+/** A wire model with its field names in camelCase, so its fields follow the wire model without a second list. */
 export type CamelKeys<Model> = { [Name in keyof Model as Camel<Name & string>]: Model[Name] };
 
 /** Which browser a run drives. Given to `Fastbrowse.start`, these are the defaults of every run it makes. */
@@ -31,7 +31,10 @@ export interface BrowserOptions {
   /** The two-letter country a cloud browser browses from. */
   proxyCountry?: string;
   viewport?: [width: number, height: number];
-  cloudAllowResizing?: boolean;
+  /** Up to three IDs of ready extensions on the Browser Use Cloud account, loaded into a cloud browser. */
+  cloudExtensions?: string[];
+  /** How long a cloud browser may live, in minutes: 15 when none is given, and the service allows up to 240. */
+  cloudTimeoutMinutes?: number;
 }
 
 export interface Attachment {
@@ -79,8 +82,22 @@ export interface RunOptions extends PerRun<BrowserOptions> {
   downloads?: string;
   /** Where to write a video of the run. The server needs ffmpeg for it. */
   record?: string;
+  /** Replay a recipe file and heal unmatched steps. */
+  recipe?: string;
+  /** Save completed steps to a recipe file. */
+  saveRecipe?: string;
   /** The agent's cursor over visible local Chrome on Linux X11 with Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off. */
   cursor?: boolean;
+  /**
+   * The only `http(s)://host[:port]` origins whose documents the run may open, read and control, each exact. A
+   * navigation, redirect, frame or popup elsewhere is refused before it is sent. It scopes documents, not the
+   * network, and a scoped run sends no frames and cannot `record`. Without it the run is unscoped.
+   */
+  allowedOrigins?: string[];
+  /** Read every page over HTTP and start no browser, for a task that only reads. */
+  fetch?: boolean;
+  /** Start a browser from the first step, rather than reading over HTTP until the task needs one. */
+  browser?: boolean;
   secrets?: Secrets;
   /** Called with the address the run ended on. Anything but true keeps the run from `complete`. */
   until?: (url: string) => MaybePromise<boolean>;
@@ -132,7 +149,8 @@ function browserFields(options: PerRun<BrowserOptions>): Sparse<RunParams> {
     foreground: options.foreground,
     proxy_country: options.proxyCountry,
     viewport: options.viewport,
-    cloud_allow_resizing: options.cloudAllowResizing,
+    cloud_extensions: options.cloudExtensions,
+    cloud_timeout_minutes: options.cloudTimeoutMinutes,
   });
 }
 
@@ -159,7 +177,12 @@ export function runParams(runId: string, task: string, defaults: Partial<RunPara
       output_schema: options.output && wireSchema(options.output),
       downloads: options.downloads,
       record: options.record,
+      recipe: options.recipe,
+      save_recipe: options.saveRecipe,
       cursor: options.cursor,
+      allowed_origins: options.allowedOrigins,
+      fetch: options.fetch,
+      browser: options.browser,
       secrets: options.secrets?.refs,
       // The wire carries whether a callback is held, and the callback stays here.
       frames: options.onFrame && true,

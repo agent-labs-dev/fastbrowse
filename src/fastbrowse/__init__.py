@@ -7,7 +7,7 @@ browser across runs. Everything under them is importable, and stable only in the
 """
 
 from fastbrowse.models import Citation, CloudBrowser, CloudBrowserError, CloudBrowserUnavailable, RunResult
-from fastbrowse.run import connect_cdp, open_cloud_browser, resolve_cdp_port, run_task, stop_cloud_browser
+from fastbrowse.run import connect_cdp, open_cloud_browser, run_task, stop_cloud_browser
 from fastbrowse.telemetry import traced
 
 __all__ = [
@@ -18,7 +18,6 @@ __all__ = [
     "RunResult",
     "connect_cdp",
     "open_cloud_browser",
-    "resolve_cdp_port",
     "run_task",
     "stop_cloud_browser",
     "traced",

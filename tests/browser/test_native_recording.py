@@ -96,8 +96,9 @@ async def test_a_run_cancelled_during_the_result_card_still_writes_both_videos(
     evaluate = jev.evaluate
 
     async def judged(state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
-        # The done check is the run's last question; the card is shown right after it.
-        if "complete" in questions:
+        # The plan requires nothing, so the done check asks Jev nothing and the step that chose done is the run's
+        # last question; the card is shown right after it.
+        if "operation" in questions:
             finished.set()
         return await evaluate(state, questions)
 

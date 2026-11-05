@@ -89,13 +89,16 @@ fn content(message: &Message) -> Result<Value, LLMError> {
     Ok(Value::Array(blocks))
 }
 
+/// The Messages API requires `max_tokens`, so every request sends the documented output maximum of the current Claude
+/// models.
+const MAX_OUTPUT_TOKENS: i64 = 128_000;
+
 /// The Messages request for one generation. System messages become the top-level `system`, as the API takes them.
 pub(crate) fn body(
     extra: &Map<String, Value>,
     model: &str,
     messages: &[Message],
     schema: &Value,
-    max_output_tokens: i64,
     effort: Option<ReasoningEffort>,
 ) -> Result<Map<String, Value>, LLMError> {
     let system: Vec<&str> =
@@ -110,7 +113,7 @@ pub(crate) fn body(
     }
     let mut body = extra.clone();
     body.insert("model".into(), model.into());
-    body.insert("max_tokens".into(), max_output_tokens.into());
+    body.insert("max_tokens".into(), MAX_OUTPUT_TOKENS.into());
     if !system.is_empty() {
         body.insert("system".into(), system.join("\n\n").into());
     }
@@ -170,10 +173,9 @@ impl AnthropicLLM {
         base_url: &str,
         models: HashMap<LLMPurpose, String>,
         effort: Option<ReasoningEffort>,
-        purpose_effort: HashMap<LLMPurpose, ReasoningEffort>,
         extra_body: Map<String, Value>,
     ) -> Result<AnthropicLLM, String> {
-        if effort == Some(ReasoningEffort::None) || purpose_effort.values().any(|e| *e == ReasoningEffort::None) {
+        if effort == Some(ReasoningEffort::None) {
             return Err("Claude takes a reasoning effort of low, medium or high, not none".into());
         }
         let clashes: Vec<&str> =
@@ -181,12 +183,7 @@ impl AnthropicLLM {
         if !clashes.is_empty() {
             return Err(format!("extra request fields replace ones fastbrowse sets: {}", clashes.join(", ")));
         }
-        let options = LLMOptions {
-            reasoning_effort: effort,
-            purpose_reasoning: purpose_effort,
-            provider_routing: None,
-            ..LLMOptions::default()
-        };
+        let options = LLMOptions { reasoning_effort: effort, provider_routing: None, ..LLMOptions::default() };
         OpenAICompatibleLLM::with_wire(api_key, http, base_url, models, options, Wire::AnthropicMessages, extra_body)
             .map(AnthropicLLM)
     }
@@ -198,9 +195,12 @@ impl LLMClient for AnthropicLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
-        self.0.generate_value(purpose, messages, schema, max_output_tokens, ledger)
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+
+    fn context_tokens(&self, purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
+        self.0.context_tokens(purpose)
     }
 }

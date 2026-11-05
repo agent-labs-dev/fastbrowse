@@ -1,6 +1,7 @@
 package dev.agentlabs.fastbrowse;
 
 import dev.agentlabs.fastbrowse.protocol.LocalChrome;
+import java.util.List;
 
 /**
  * Which browser a run drives: a Browser Use Cloud browser by default, local Chrome with {@code local}, or a browser
@@ -17,7 +18,9 @@ import dev.agentlabs.fastbrowse.protocol.LocalChrome;
  * @param proxyCountry the two-letter country a cloud browser browses from
  * @param viewportWidth the page's width in CSS pixels, with {@code viewportHeight}
  * @param viewportHeight the page's height in CSS pixels, with {@code viewportWidth}
- * @param cloudAllowResizing let a cloud browser's window be resized
+ * @param cloudExtensions up to three IDs of ready extensions on the Browser Use Cloud account, loaded into a cloud
+ *     browser
+ * @param cloudTimeoutMinutes how long a cloud browser may live: 15 when null, and the service allows up to 240
  */
 public record BrowserOptions(
         boolean local,
@@ -31,7 +34,8 @@ public record BrowserOptions(
         String proxyCountry,
         Integer viewportWidth,
         Integer viewportHeight,
-        boolean cloudAllowResizing) {
+        List<String> cloudExtensions,
+        Integer cloudTimeoutMinutes) {
 
     /** The default: a Browser Use Cloud browser. */
     public static final BrowserOptions CLOUD = builder().build();
@@ -52,7 +56,8 @@ public record BrowserOptions(
         private String proxyCountry;
         private Integer viewportWidth;
         private Integer viewportHeight;
-        private boolean cloudAllowResizing;
+        private List<String> cloudExtensions;
+        private Integer cloudTimeoutMinutes;
 
         private Builder() {}
 
@@ -107,14 +112,19 @@ public record BrowserOptions(
             return this;
         }
 
-        public Builder cloudAllowResizing(boolean cloudAllowResizing) {
-            this.cloudAllowResizing = cloudAllowResizing;
+        public Builder cloudExtensions(List<String> cloudExtensions) {
+            this.cloudExtensions = List.copyOf(cloudExtensions);
+            return this;
+        }
+
+        public Builder cloudTimeoutMinutes(int cloudTimeoutMinutes) {
+            this.cloudTimeoutMinutes = cloudTimeoutMinutes;
             return this;
         }
 
         public BrowserOptions build() {
             return new BrowserOptions(local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground,
-                    proxyCountry, viewportWidth, viewportHeight, cloudAllowResizing);
+                    proxyCountry, viewportWidth, viewportHeight, cloudExtensions, cloudTimeoutMinutes);
         }
     }
 }

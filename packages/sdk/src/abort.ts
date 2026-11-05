@@ -7,8 +7,8 @@ import { ErrorCode } from './protocol.ts';
  * Make the `run` request with `send`, and call `cancel` if `signal` aborts while it is waiting on its reply.
  *
  * The server answers a cancelled run with the `cancelled` error once the run's browser has closed, and that
- * reply is what rejects with `AbortError`. A run that finished before the cancellation reached it resolves
- * with its result.
+ * reply is what rejects with `AbortError`, carrying the receipt of what the run did and spent. A run that
+ * finished before the cancellation reached it resolves with its result.
  */
 export async function abortable<Result>(
   signal: AbortSignal | undefined,
@@ -23,7 +23,7 @@ export async function abortable<Result>(
   } catch (error) {
     // `shutdown` cancels a run too, and that one the caller did not abort.
     if (signal.aborted && error instanceof RpcError && error.code === ErrorCode.CANCELLED)
-      throw new AbortError(signal.reason);
+      throw new AbortError(signal.reason, error.receipt);
     throw error;
   } finally {
     signal.removeEventListener('abort', cancel);

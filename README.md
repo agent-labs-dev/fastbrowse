@@ -45,29 +45,20 @@ here. See [How it compares](#how-it-compares).
 
 ## Try it
 
-You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, Chrome or Chromium, and an
-[OpenRouter](https://openrouter.ai/) key:
+You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, an
+[OpenRouter](https://openrouter.ai/) key and a [Browser Use](https://browser-use.com/) key:
 
 ```sh
-export OPENROUTER_API_KEY=...
-uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/ --local
-```
-
-That one key serves both models: the LLM that plans, reads and writes, and Jev, the model that picks each action.
-`--local` runs the Chrome on your machine; `FASTBROWSE_CHROME` names the binary if it is not found.
-
-For regular use, add two keys and drop `--local`:
-
-```sh
-export TYPESAFE_API_KEY=...     # Jev direct from Typesafe, the recommended route
-export BROWSER_USE_API_KEY=...  # a Browser Use Cloud browser
+export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages, written field values and composed answers
+export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
 With a Browser Use key the cloud browser is the default, because it passes bot checks a fresh local Chrome fails;
 it also prints a URL to watch the run live. Without the key or `--local`, the command stops and asks for one.
-`AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. Jev can also run
-through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
+`AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. With both keys,
+the automatically selected OpenRouter LLM moves to the gateway for the rest of the run if OpenRouter refuses its key.
+Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
 [Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
 
 Keys can live in a `.env` file in the working directory ([`.env.example`](.env.example) lists every setting), but
@@ -85,8 +76,8 @@ uv run fastbrowse "What is the title of the top story right now?" --start https:
 ```
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
-prints the full result: every step, the quotes behind the answer, and cost by component. The exit code is the
-status, and only `complete` exits 0.
+prints the full result: every step, the quotes behind the answer, cost by component, and the build that ran it. The
+exit code is the status, and only `complete` exits 0.
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -119,7 +110,7 @@ Benchmarking makes three comparisons:
   fastbrowse passed 99.3% at $0.0268 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 6 tasks: not yet measured. Browser Use's own
+- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 47 tasks: not yet measured. Browser Use's own
   Ultrafast is not measured by us either: its vendor-reported 22 seconds and $0.0064 a task cover the model and
   the search only, with the browser and proxy billed separately, so they are not comparable with our figures.
 
@@ -135,10 +126,10 @@ campaign measures.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img src="assets/architecture.svg" alt="The task is planned and the start page opened in parallel; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, and the answer cites every claim.">
+  <img src="assets/architecture.svg" alt="The run opens its start page; each step indexes the page, Jev picks an operation and target, code gates it and acts; reads keep verbatim quotes, Jev decides when it is done, and the answer cites every claim.">
 </picture>
 
-The LLM plans, reads and writes. Jev picks each action. Code owns the gates: irreversible actions stop without
+Jev picks each action, reads each page and decides when the run is done. An LLM proposes the first address when none is given and writes an answer that has to be composed. Code owns the gates: irreversible actions stop without
 `--authorize`, secrets reach models by name only, and supported cookie banners are refused through autoconsent.
 More in [docs/design.md](docs/design.md).
 
@@ -180,11 +171,20 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-**Choosing the browser.** With no browser argument, `run_task` runs local Chrome. `browser_api_key=` starts a
-cloud browser, and `cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into
-it. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
+**Choosing the browser.** With no browser argument, `run_task` starts a Browser Use Cloud browser with
+`BROWSER_USE_API_KEY`, or the key in `browser_api_key=`. `chrome=LocalChrome()` runs local Chrome instead, and
+`cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into a cloud browser. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
+
+**Recipes and recordings.** `save_recipe=Path("recipe.json")` stores the actions of a completed run. A write failure is logged without changing the task status; check the file before replay.
+Pass `recipe=Path("recipe.json")` with the same task to reuse values when Jev selects a matching live action.
+A changed page or control falls back to the agent. Reading and completion are always checked live.
+Naming the same file for both arguments saves the healed sequence after another completed run.
+Recipes can contain personal information from ordinary fields; stored secrets are kept only by name.
+`fastbrowse.recipes.validate_recipe()` checks recipe JSON with the same Rust parser as the file loader;
+`recipe_schema()` exports its JSON Schema for client validation.
+`record=Path("run.mp4")` writes captioned and plain videos, and needs ffmpeg. The action cursor also needs ffprobe; if frame dimensions cannot be read, the cursor is omitted with a warning.
 
 **A cloud browser that outlives a run.** `open_cloud_browser(browser_api_key=...)` starts a Browser Use Cloud
 browser no run owns and returns a `CloudBrowser` with its `id`, `cdp_url` and `live_url`. It takes `run_task`'s
@@ -205,8 +205,7 @@ async def main() -> None:
         await stop_cloud_browser(browser, browser_api_key=KEY)
 ```
 
-**Your own script on the page.** `connect_cdp()` hands you the attached page without the agent, and
-`resolve_cdp_port(port)` returns the `ws://` URL behind a DevTools port:
+**Your own script on the page.** `connect_cdp()` hands you the attached page without the agent:
 
 ```python
 from fastbrowse import connect_cdp
@@ -217,38 +216,62 @@ async def main() -> None:
         print(await page.observe())
 ```
 
-**Access controls** that only the Python API offers:
+**Moving from 0.8.** The Python modules that 0.9 removed with the Python core have these replacements:
+
+| 0.8 import | Now |
+|---|---|
+| `fastbrowse.adapters.browser_use_cloud.BrowserUseCloudBrowser` | `open_cloud_browser` to start one and `stop_cloud_browser` to stop it, without the `http=` and `allow_resizing=` arguments |
+| `fastbrowse.models.BrowserConnection` | `fastbrowse.CloudBrowser`, holding `id`, `cdp_url` and `live_url` |
+| `fastbrowse.clients.environment.Settings` | `run_task(settings={...})`, keyed by the environment variable names |
+| `fastbrowse.adapters.totp` (`TotpError`, `one_time_code`) | `fastbrowse.totp` |
+
+**Access controls:**
 
 - `allowed_origins=["https://app.example.com"]` limits the documents a run may read and control to those exact
   origins. Navigations, redirects, frames and popups elsewhere are refused before they are sent, so a sign-in
   that redirects through another origin needs it listed too. It scopes documents, not the network, and a scoped
-  run sends no live frames or screenshots and cannot record.
-- `check_access=` is an async callback awaited before the browser starts and before every read, navigation and
-  action. If it raises, the run ends with status `error` (`connect_cdp` raises `BrowserError`), naming only the
+  run sends no live frames or screenshots and cannot record. The JavaScript, Go, Java and .NET clients take it as
+  `allowedOrigins` or `AllowedOrigins`.
+- `check_access=`, which only the Python API offers, is an async callback awaited before the browser starts and
+  before every read, navigation and action. If it raises, the run ends with status `error` (`connect_cdp` raises `BrowserError`), naming only the
   exception's type.
 
 **Citations.** `result.citations` holds a `Citation` per numbered link in `result.answer`: `id`, `text`,
-`requirement_id`, `url`, `quote` and `deep_link`. Counts, totals and superlatives cite every record they were
-derived from. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a
-[text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that scrolls to the quote; it may not
-resolve on a page that changes or needs a session.
+`url`, `quote` and `deep_link`. Counts, totals and superlatives cite every record they were
+derived from. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
+scrolls to the quote; it may not resolve on a page that changes or needs a session. Each page a quote was read from
+is kept as a `capture` artifact in `result.artifacts`, holding the masked page text, and the quote's `Evidence`
+names it in `capture_artifact`; `start` and `end` index into that text. Captures go where downloads go, so pass
+`downloads` or `artifact_sink` to keep them past the run. A page fetched over HTTP keeps none.
 
 **Watching a run.**
 
 - `on_event=` gets a `BrowserEvent` with a cloud browser's live-view URL, then a `StepEvent` per step, carrying the
   facts that step added. `Config(step_frames=True)` adds a PNG of each step's page.
+- A task requesting a final screenshot receives a safe PNG in `result.final_frame` without enabling step frames.
+  JSON clients receive a `screenshot` artifact with a base64 data URI. A missing requested image leaves a
+  completed task `unverified`.
 - `Config(step_choices=True)` adds `choices` to each step Jev decided: the controls it was offered, each with its
   `id`, `role`, masked `label` and `context` (the card or row that tells twins apart) and `operations`, and the one
   it picked marked `chosen` (a drag marks its destination too). It shows whether the element
   a run should have used was there to pick. Off, a step has no `choices` key.
 - `on_frame=` gets JPEG frames of the active tab as they render. The handler runs on your event loop, so it
   must honour cancellation: one that swallows `CancelledError` keeps `asyncio.run` waiting at shutdown.
+
+  A cancelled `run_task` raises `fastbrowse.models.RunCancelled`, an `asyncio.CancelledError` with a `receipt`
+  of reported steps, known cost lines and finished recordings once the browser closes. A cancellation before
+  the core starts may have no receipt. The receipt has no status or answer; unpriced charges stay `unknown`.
+  `ConfigurationError` and `RecordingError` also carry a `receipt` when they stop a run after work or charges
+  have accrued; otherwise their `receipt` is `None`. JSON-RPC preserves this receipt in error data, or in the
+  error result for recording failures. MCP keeps it in `_meta["fastbrowse.ai/receipt"]` beside the tool error.
+  A callback failure raises the original exception with a `receipt` attribute when the core retains one,
+  including when the callback fails as the run completes.
 - `with traced() as events:` collects the run's trace in-process, as `--trace` writes it.
 
 No frame or screenshot is sent while a resolved secret may show on the page.
 
-`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; see
-[Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
+`run_task(jev=...)` and `run_task(llm=...)` take your own decision model or LLM client; a `jev` client is asked at
+Jev's limits and thresholds. See [Jev routing](docs/jev.md#provider-failover) and `fastbrowse.llm`.
 
 **Choosing the model backend without the environment.** New in 0.9.1.
 `run_task(settings={...})` takes the same names as the
@@ -275,7 +298,6 @@ as the CLI does.
 
 ```sh
 npm install fastbrowse zod
-export TYPESAFE_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
 
@@ -378,7 +400,7 @@ Desktop, Cursor or any MCP client. It returns the answer with numbered citation 
 for, the quotes behind them, the status and what to do next, and reports progress every step.
 
 ```sh
-claude mcp add fastbrowse -e TYPESAFE_API_KEY=... -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
+claude mcp add fastbrowse -e OPENROUTER_API_KEY=... -e BROWSER_USE_API_KEY=... \
   -- uvx --from fastbrowse fastbrowse-mcp --max-dollars 0.25
 ```
 
@@ -390,7 +412,7 @@ For a client configured by JSON, such as Claude Desktop:
     "fastbrowse": {
       "command": "uvx",
       "args": ["--from", "fastbrowse", "fastbrowse-mcp"],
-      "env": { "TYPESAFE_API_KEY": "...", "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
+      "env": { "OPENROUTER_API_KEY": "...", "BROWSER_USE_API_KEY": "..." }
     }
   }
 }
@@ -416,12 +438,11 @@ timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
 ## Safety model
 
 - **Irreversible actions.** Jev judges each click, Enter press and dialog acceptance. Without authorization, a
-  confident irreversible action stops at `needs_confirmation`, and an uncertain one goes to recovery. This is a
+  irreversible action stops at `needs_confirmation`. This is a
   classifier, not a guarantee: a page can word a harmful control to look harmless.
 - **Secrets.** Models see names only. A value is resolved at the moment it is typed, only on its declared origin,
   and redacted from everything the run returns. A password field is typed only from a stored secret.
-- **Page content is data.** Reader and verifier prompts say so, and completion is judged against quotes and page
-  state, not the model's say-so.
+- **Page content is data.** Every prompt says so, and what a run reports is copied from quotes on the page.
 
 ## Evals and development
 

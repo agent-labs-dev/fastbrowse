@@ -141,7 +141,7 @@ func (c *conn) receive(line []byte) bool {
 	}
 	answered := reply{result: m.Result}
 	if m.Error != nil {
-		answered = reply{err: &RPCError{Code: m.Error.Code, Message: m.Error.Message}}
+		answered = reply{err: &RPCError{Code: m.Error.Code, Message: m.Error.Message, Receipt: m.Error.Data}}
 	}
 	// After the notifications before it, so a run's events have all been delivered when its reply is.
 	c.queue(func() { waiting <- answered })

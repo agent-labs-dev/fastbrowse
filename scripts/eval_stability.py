@@ -1,11 +1,11 @@
 """A fixture eval run's per-task pass rate, which is the suite's stability budget.
 
-    uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl [--target 1.0] [--suite local mock --repeat 3]
+    uv run python scripts/eval_stability.py artifacts/evals/nightly.jsonl [--suite local mock --repeat 3]
     uv run python scripts/eval_stability.py --check-providers
 
 A suite that passes once is not a suite that passes. One task that passes three times in five moves a published
 figure on its own, and the run it happens to be in decides whether anyone sees it. This reads the rows a run
-wrote, prints each task's rate over its repeats, and exits non-zero when any task is below the target, so a flaky
+wrote, prints each task's rate over its repeats, and exits non-zero when any task failed any run, so a flaky
 task fails the job rather than quietly feeding a headline number.
 
 Given the suites and the repeat count the run was asked for, it also refuses rows that do not cover them: a runner
@@ -23,6 +23,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from fastbrowse.evals.harness import environment
+from fastbrowse.evals.judge import JEV_KEYS, jev_source
 
 
 def rows(path: Path) -> list[dict[str, object]]:
@@ -41,28 +42,14 @@ def rates(rows: Sequence[dict[str, object]]) -> list[tuple[str, str, int, int]]:
     return [(suite, task, passed[(suite, task)], seen[(suite, task)]) for suite, task in sorted(seen)]
 
 
-# Each Jev source and its key, in the order the core picks the first keyed one when FASTBROWSE_DECISION_SOURCE is unset.
-_JEV_SECRET = {"typesafe": "TYPESAFE_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}
-
-
-def jev_source(env: Mapping[str, str]) -> str:
-    """The source Jev starts on: FASTBROWSE_DECISION_SOURCE (formerly FASTBROWSE_JEV_SOURCE), else the first keyed
-    one, else the gateway."""
-    if chosen := env.get("FASTBROWSE_DECISION_SOURCE") or env.get("FASTBROWSE_JEV_SOURCE"):
-        if chosen not in _JEV_SECRET:
-            raise ValueError(f"FASTBROWSE_DECISION_SOURCE is {chosen!r}, not one of {', '.join(_JEV_SECRET)}")
-        return chosen
-    return next((source for source, key in _JEV_SECRET.items() if env.get(key)), "gateway")
-
-
 def provider_gaps(env: Mapping[str, str]) -> list[str]:
     """The model settings a fixture run needs but `env` does not supply, each naming the setting."""
     gaps: dict[str, str] = {}
     if not env.get("OPENROUTER_API_KEY") and not env.get("AI_GATEWAY_API_KEY"):
         gaps["OPENROUTER_API_KEY or AI_GATEWAY_API_KEY"] = "the LLM needs a configured provider"
     source = jev_source(env)
-    if not env.get(_JEV_SECRET[source]):
-        gaps.setdefault(_JEV_SECRET[source], f"Jev starts on the {source} route")
+    if not env.get(JEV_KEYS[source]):
+        gaps.setdefault(JEV_KEYS[source], f"Jev starts on the {source} route")
     return [f"{setting}: {reason}" for setting, reason in gaps.items()]
 
 
@@ -82,9 +69,8 @@ def uncovered(measured: Sequence[tuple[str, str, int, int]], suites: Sequence[st
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="check a fixture eval run against a per-task pass target")
+    parser = argparse.ArgumentParser(description="check that every task of a fixture eval run passed every run")
     parser.add_argument("rows", nargs="?", type=Path, help="the JSONL file the runner wrote")
-    parser.add_argument("--target", type=float, default=1.0, help="the pass rate every task must reach")
     parser.add_argument("--suite", nargs="+", choices=["local", "mock"], default=[], help="suites the run covers")
     parser.add_argument("--repeat", type=int, default=1, help="runs each task of those suites must have")
     parser.add_argument(
@@ -118,14 +104,14 @@ def main(argv: list[str]) -> int:
         print(f"no eval rows: {args.rows} is empty, so the runner executed no task")
         return 1
     width = max(len(task) for _, task, _, _ in measured)
-    below = [entry for entry in measured if entry[2] / entry[3] < args.target]
+    below = [entry for entry in measured if entry[2] < entry[3]]
     for suite, task, passed, runs in measured:
-        mark = "ok   " if passed / runs >= args.target else "FLAKY"
+        mark = "ok   " if passed == runs else "FLAKY"
         print(f"{mark} {suite:5} {task:{width}} {passed}/{runs}")
-    summary = f"{len(measured) - len(below)}/{len(measured)} tasks at {args.target:.0%} or better"
+    summary = f"{len(measured) - len(below)}/{len(measured)} tasks passed every run"
     print(f"{summary} over {len(recorded)} runs")
     if below:
-        print("below target: " + ", ".join(task for _, task, _, _ in below))
+        print("failed a run: " + ", ".join(task for _, task, _, _ in below))
     missing = uncovered(measured, args.suite, args.repeat)
     if missing:
         print("incomplete run: " + ", ".join(missing))

@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from pydantic import BaseModel, JsonValue
 
 from fastbrowse.jev import Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer, NoulQuestion, Question
-from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, Message
+from fastbrowse.llm import Generation, Message
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Frozen, LLMPurpose, Operation
 from fastbrowse.telemetry import Ledger
 
@@ -40,8 +40,8 @@ class ScriptedJev:
     """Answers each choice as the script's current step says, and every yes/no so that the run goes on.
 
     A run's options do not cross the protocol, so the thresholds are the shipped ones. A flat probability
-    cannot serve them all: the walls and the irreversible check stop a run above theirs, and the done check
-    stops it below its own.
+    cannot serve them all: the walls and the irreversible check stop a run above theirs, and the check that the
+    answer covers the task stops it below its own.
     """
 
     def __init__(self, script: Sequence[Step]) -> None:
@@ -66,7 +66,7 @@ class ScriptedJev:
                         confidence=1.0,
                     )
                 case NoulQuestion():
-                    answers[key] = NoulAnswer(probability=float(key == "complete"))
+                    answers[key] = NoulAnswer(probability=float(key == "coverage"))
                 case _:
                     raise AssertionError(f"the scripted Jev has no answer for {key!r}")
         return Evaluation(
@@ -95,16 +95,10 @@ class ScriptedJev:
 
 
 class ScriptedLLM:
-    """A plan that requires nothing, no shortcut, and a verifier that agrees: the answer by what is asked.
+    """Proposes `start` as the start page, the one thing a run asks an LLM."""
 
-    Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
-    """
-
-    _REPLIES: Mapping[LLMPurpose, JsonValue] = {
-        LLMPurpose.PLAN: {"requirements": [], "answer_expected": False},
-        LLMPurpose.SHORTCUT: {"url": None},
-        LLMPurpose.VERIFY: {"complete": True, "missing": []},
-    }
+    def __init__(self, start: str | None = None) -> None:
+        self.start = start
 
     async def generate[T: BaseModel](
         self,
@@ -112,12 +106,11 @@ class ScriptedLLM:
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         if ledger is not None:
             ledger.reserve(CostComponent.LLM)
         return Generation(
-            data=schema.model_validate(self._REPLIES[purpose]),
+            data=schema.model_validate({"url": self.start}),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.ESTIMATED, dollars=0.0, purpose=purpose),
         )

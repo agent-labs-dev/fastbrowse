@@ -697,18 +697,55 @@
     "href": null
    },
    {
-    "kind": "paragraph",
-    "text": "[User Avatar]",
+    "kind": "heading",
+    "text": "name: ada",
     "heading_path": [
      "Team"
     ],
     "href": null
    },
    {
+    "kind": "link",
+    "text": "View profile",
+    "heading_path": [
+     "Team",
+     "name: ada"
+    ],
+    "href": "https://shop.example.com/users/1"
+   },
+   {
+    "kind": "paragraph",
+    "text": "[User Avatar]",
+    "heading_path": [
+     "Team",
+     "name: ada"
+    ],
+    "href": null
+   },
+   {
+    "kind": "heading",
+    "text": "name: grace",
+    "heading_path": [
+     "Team",
+     "name: ada"
+    ],
+    "href": null
+   },
+   {
+    "kind": "link",
+    "text": "View profile",
+    "heading_path": [
+     "Team",
+     "name: grace"
+    ],
+    "href": "https://shop.example.com/users/2"
+   },
+   {
     "kind": "list_item",
     "text": "Products",
     "heading_path": [
-     "Team"
+     "Team",
+     "name: grace"
     ],
     "href": null
    },
@@ -716,7 +753,8 @@
     "kind": "link",
     "text": "Pricing",
     "heading_path": [
-     "Team"
+     "Team",
+     "name: grace"
     ],
     "href": "https://shop.example.com/pricing"
    },
@@ -724,7 +762,8 @@
     "kind": "link",
     "text": "About",
     "heading_path": [
-     "Team"
+     "Team",
+     "name: grace"
     ],
     "href": "https://shop.example.com/about"
    }
@@ -2637,7 +2676,7 @@
     "kind": "link",
     "text": "q",
     "heading_path": [],
-    "href": "https://shop.example.com/q?a=1&b=2&ampc=3&amp=4<"
+    "href": "https://shop.example.com/q?a=1&b=2&ampc=3&amp=4%3C"
    }
   ]
  },
@@ -2698,12 +2737,24 @@
  {
   "name": "nested-table",
   "url": "https://shop.example.com/a/page.html",
-  "html": "<table><tr><th>a</th><td>b<table><tr><td>c</td></tr></table></td></tr><tr><td>x|y</td></tr></table>",
+  "html": "<table><tr><th>a</th><td>b<table><tr><td>c</td></tr></table>more</td></tr><tr><td>x|y</td></tr></table>",
   "title": "",
   "blocks": [
    {
     "kind": "table",
-    "text": "| a | bc |\n| --- | --- |",
+    "text": "| a | b |\n| --- | --- |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| c |",
+    "heading_path": [],
+    "href": null
+   },
+   {
+    "kind": "table",
+    "text": "| more |",
     "heading_path": [],
     "href": null
    },
@@ -2868,6 +2919,12 @@
     "text": "x",
     "heading_path": [],
     "href": null
+   },
+   {
+    "kind": "paragraph",
+    "text": "hidden",
+    "heading_path": [],
+    "href": null
    }
   ]
  },
@@ -2919,7 +2976,7 @@
   "blocks": [
    {
     "kind": "paragraph",
-    "text": "ab",
+    "text": "a y ]]>b",
     "heading_path": [],
     "href": null
    }
@@ -2931,6 +2988,12 @@
   "html": "<div hidden><style>.k{display:none}</style></div><p class=k>k</p><p>after</p>",
   "title": "",
   "blocks": [
+   {
+    "kind": "paragraph",
+    "text": "k",
+    "heading_path": [],
+    "href": null
+   },
    {
     "kind": "paragraph",
     "text": "after",

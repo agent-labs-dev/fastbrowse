@@ -1,3 +1,5 @@
+import type { CancellationReceipt } from './protocol.ts';
+
 /** Every error this package throws, so one `instanceof` tells its failures from the caller's own. */
 export class FastbrowseError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -25,8 +27,15 @@ export class ProcessExitedError extends FastbrowseError {
  * is a `TimeoutError`.
  */
 export class AbortError extends FastbrowseError {
-  constructor(reason: unknown) {
+  /**
+   * What the run did and spent before it stopped. Undefined when no run started, or when the server sent no
+   * receipt.
+   */
+  readonly receipt: CancellationReceipt | undefined;
+
+  constructor(reason: unknown, receipt?: CancellationReceipt) {
     super('the run was aborted', { cause: reason });
+    this.receipt = receipt;
   }
 }
 
@@ -38,9 +47,12 @@ export function messageOf(thrown: unknown): string {
 /** The server's error reply to a request. `code` is one of the protocol's error codes. */
 export class RpcError extends FastbrowseError {
   readonly code: number;
+  /** On the `cancelled` error, what the run did and spent before it stopped; undefined on every other. */
+  readonly receipt: CancellationReceipt | undefined;
 
-  constructor(code: number, message: string) {
+  constructor(code: number, message: string, receipt?: CancellationReceipt) {
     super(message);
     this.code = code;
+    this.receipt = receipt;
   }
 }

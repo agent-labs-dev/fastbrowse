@@ -5,6 +5,8 @@ Every flag, browser option, model setting and exit status of the `fastbrowse` co
 [README](../README.md#try-it) has the first run; [troubleshooting](troubleshooting.md) takes each status
 from cause to next step.
 
+A task must contain non-whitespace text. Empty tasks are refused before model or browser setup.
+
 ## Flags
 
 Steps go to stderr; the status, cost, step count, why a run stopped short, and the answer go to stdout. `--json`
@@ -20,12 +22,13 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so sign-ins persist (implies `--local`) |
 | `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--fetch-first` | read over HTTP, and start a browser only if the task needs one |
+| `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
 | `--cdp-url URL`, `--cdp-port PORT` | drive a browser already running, at a `ws://` URL or on `127.0.0.1:PORT` |
+| `--viewport WIDTHxHEIGHT` | set the CSS viewport for owned local Chrome, or the screen size requested from cloud Chrome; does not emulate mobile, touch, device scale or user agent |
 | `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab |
 | `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--foreground` | bring the run's tab to the front instead of working behind the current one |
-| `--proxy-country CC` | browse from that country (`uk`, `de`, ...; default `us`) |
+| `--proxy-country CC` | browse from that country (`uk`, `de`, ...; default `us`); starts the cloud browser before reading |
 | `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation` |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only |
 | `--bitwarden ITEM` | use a vault login on the origin its saved URIs match, including its one-time code |
@@ -34,6 +37,8 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
+| `--recipe FILE` | replay a [recipe](design.md#recipes): reuse saved values when Jev selects a matching action on the same page |
+| `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
 | `--no-cursor` | don't draw the agent's cursor. By default it is drawn with [Cua Driver](https://github.com/trycua/cua) over a Chrome window that shows the run (`--foreground`, or an attached front tab; needs `cua-driver`, and X11 on Linux), and skipped anywhere else |
 | `--cursor` | also bring the window to the front, so the cursor is always drawn |
 
@@ -67,7 +72,9 @@ fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 ```
 
 To change a password, add the replacement as an origin-scoped secret named `new_password`, refer to it in the
-task, and pass `--authorize`. fastbrowse never generates a password or reuses the old one.
+task, and pass `--authorize`. fastbrowse never generates a password or reuses the old one. A single field marked
+`autocomplete=new-password` can also appear on a sign-in page. Jev uses the task and form context to choose its
+role; when the role is unclear, the run stops at `needs_input`.
 
 ## Open windows and Electron apps
 
@@ -103,14 +110,13 @@ restart it without the flag, when you are done.
 
 ## Models
 
-The LLM defaults to `google/gemini-3.8-flash` at low reasoning effort, with `google/gemini-3.5-flash-lite` for
-proposing a direct address and typing field text.
+The LLM defaults to `deepseek/deepseek-v4.1-flash-1017`, for proposing a first address when no
+`start` is given and for writing an answer that must be composed from more than one fact.
 
 | Setting | Effect |
 |:--|:--|
 | `FASTBROWSE_LLM_MODEL` | the model for every purpose |
-| `FASTBROWSE_LLM_MODEL_<PURPOSE>` | the model for one purpose: `PLAN`, `READ`, `FIELD_TEXT`, `SHORTCUT`, `RECOVER`, `COMPOSE` or `VERIFY` |
-| `FASTBROWSE_LLM_REASONING`, `FASTBROWSE_LLM_REASONING_<PURPOSE>` | `none`, `low`, `medium` or `high`; `none` turns reasoning off for a model such as DeepSeek V4.1 Flash that otherwise reasons at every effort |
+| `FASTBROWSE_LLM_REASONING` | `none`, `low`, `medium` or `high`; `none` turns reasoning off for a model such as DeepSeek V4.1 Flash that otherwise reasons at every effort |
 | `FASTBROWSE_LLM_PROVIDER` | `openrouter`, `gateway`, `openai`, `anthropic`, `gemini`, `groq`, `together`, `mistral`, `deepseek`, `xai`, `fireworks`, `azure`, `ollama`, `lmstudio`, `vllm` or `custom`; each reads its own key, such as `OPENAI_API_KEY`, and sends it to that provider alone |
 | `FASTBROWSE_LLM_BASE_URL`, `FASTBROWSE_LLM_API_KEY` | any OpenAI-compatible endpoint, such as a local vLLM at `http://127.0.0.1:8000/v1`; it needs `FASTBROWSE_LLM_MODEL`, and never receives the OpenRouter or gateway key |
 | `FASTBROWSE_LLM_STRICT=0`, `FASTBROWSE_LLM_EXTRA_BODY` | for that endpoint: send schemas in non-strict form, and add a JSON object to every request |
@@ -137,13 +143,13 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 
 | Status | Exit | Meaning |
 |:--|--:|:--|
-| `complete` | 0 | every information requirement is backed by a quote, and every action that changes the site is confirmed on the page |
-| `unverified` | 10 | it believes it finished but could not back every claim |
+| `complete` | 0 | Jev judged the task done |
+| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
 | `needs_input` | 5 | a required value or file is missing, or an upload exceeds the configured size limit |
-| `stuck` | 9 | recovery ran out without reaching a page state the run had not seen |
+| `stuck` | 9 | the stall budget ran out without reaching a page state the run had not seen |
 | `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
 | `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
 | `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
@@ -156,13 +162,21 @@ The JSON result says why a run stopped where a caller can act on it:
 - `wall` describes a `needs_login` or `blocked` page: its `kind` (`password`, `one_time_code`, `sign_in` or
   `bot_check`), `origin`, the `fields` it asked for and `seen_at_ms`. A caller that can read the user's email or
   texts can answer a `one_time_code` wall with a secret scoped to that origin and run again.
-- A `stuck` or `unverified` run that read evidence still returns a cited answer, starting `Answer (unverified)`.
+- A run that stops before completion can retain a cited partial answer from checked claims while their
+  source evidence remains unchanged. A `stuck` or `unverified` run can also compose an answer from evidence
+  it read. Partial answers may start with `Partial evidence only.`; the status determines whether the task
+  completed.
 
 A cost a provider omits is looked up from its receipt, or bounded from OpenRouter's listed prices. A cost that
 cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A page that stops
 answering (15 seconds for an input event, 120 for any other command) is reopened once during an action; a second
 hang returns `unavailable`. Step and dollar limits do not bound elapsed time:
 `Limits(max_seconds=...)` does.
+
+A run's `proxy` cost line on a Browser Use Cloud browser has the basis `unsettled`: the service meters proxy data
+about 30 seconds after a browser stops, and a run returns without waiting, so the figure can read low. An unsettled
+line makes the total incomplete, even when it carries a provisional dollar figure. The
+`browser_id` in the run's browser event reads the settled figure from `GET /browsers/{id}` once that time has passed.
 
 ## Troubleshooting
 

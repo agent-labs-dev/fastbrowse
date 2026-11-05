@@ -4,7 +4,7 @@ import type { Readable, Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
-import { ErrorCode } from './protocol.ts';
+import { ErrorCode, type Error as WireError } from './protocol.ts';
 
 type Id = number | string;
 type Params = Record<string, unknown>;
@@ -51,10 +51,6 @@ export class Connection {
     });
   }
 
-  notify(method: string, params: Params = {}): void {
-    if (!this.#ended) this.#send({ method, params });
-  }
-
   /** Serve a method the server calls on this side. */
   onRequest(method: string, handler: RequestHandler): void {
     this.#requests.set(method, handler);
@@ -94,8 +90,8 @@ export class Connection {
     if (!pending) return;
     this.#pending.delete(message.id as Id);
     if (message.error) {
-      const { code, message: text } = message.error as { code: number; message: string };
-      pending.reject(new RpcError(code, text));
+      const { code, message: text, data } = message.error as WireError;
+      pending.reject(new RpcError(code, text, data ?? undefined));
     } else {
       pending.resolve(message.result);
     }

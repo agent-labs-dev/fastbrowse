@@ -6,16 +6,18 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{Harness, chrome, harness, harness_on, harness_with, sites};
+use common::{
+    Harness, chrome, eval_value, find, harness, harness_on, harness_with, js, observe_until, sites, try_eval,
+    wait_until,
+};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing::misc::rereads;
-use fastbrowse_core::config::{Config, ObservationLimits};
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{BrowserConnection, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
-use misc_support::{eval_value, find, js, observe_until, try_eval, wait_until};
 use relay::{Relay, Verdict};
-use safety_support::{Reply, serve};
+use safety_support::{Reply, serve_on};
 use serde_json::{Value, json};
 use tokio::time::timeout;
 
@@ -190,18 +192,22 @@ fn click(target_id: &str) -> Action {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_hung_input_reports_before_the_normal_command_deadline() {
-    let port = serve(|_| Reply::html(r#"<button id=a onclick="while(true){}">Go</button><button id=b>Next</button>"#));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let page = r#"<button id=a onclick="while(true){}">Go</button><button id=b>Next</button>"#;
+    let port = serve_on(listener, Arc::new(move |_: &str| Reply::html(page)));
     let Some(h) = harness().await else { return };
     let url = format!("http://127.0.0.1:{port}/");
     h.page.navigate(&url, None).await.expect("navigate");
     let observation = h.observe().await;
     let started = Instant::now();
-    let error = timeout(Duration::from_secs(20), h.page.act(&click(&find(&observation, "Go").id), &observation))
+    // The input event waits 10 seconds for its answer and the page as long again for a read, well inside the
+    // 120 second command deadline.
+    let error = timeout(Duration::from_secs(30), h.page.act(&click(&find(&observation, "Go").id), &observation))
         .await
         .expect("a hung input must not use the ordinary command deadline")
         .expect_err("the renderer is hung");
-    assert!(error.to_string().contains("Input."), "{error}");
-    assert!(started.elapsed() < Duration::from_secs(20));
+    assert!(matches!(error, BrowserError::PageUnresponsive(_)), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(30));
     h.page.navigate(&url, None).await.expect("fresh target");
     let fresh = h.observe().await;
     let result = h.page.act(&click(&find(&fresh, "Next").id), &fresh).await.expect("next");
@@ -337,6 +343,13 @@ async fn test_failed_navigation_is_a_recoverable_step_unreachable() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_failed_navigation_is_a_recoverable_step_browser() {
+    // A mistyped address is the caller's own: the failure says nothing about the site.
+    failed_navigation("net::ERR_NAME_NOT_RESOLVED", "ERR_NAME_NOT_RESOLVED").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failed_navigation_is_a_recoverable_step_certificate() {
+    // A chain the browser refuses is the site giving nothing, as a refused connection is.
     failed_navigation("net::ERR_CERT_AUTHORITY_INVALID", "ERR_CERT_AUTHORITY_INVALID").await;
 }
 
@@ -414,7 +427,7 @@ async fn push_state_between_history_and_snapshot(pushes: u32) {
             return Verdict::Forward;
         }
         let (command, relay, snapped) = (command.clone(), relay.clone(), snapped.clone());
-        if method(&command) == "Runtime.evaluate" && expression(&command).contains(")('snapshot', ") {
+        if method(&command) == "Runtime.evaluate" && expression(&command).contains(")('snapshot')") {
             // snapshot_first: the snapshot's reply is let through before history is read.
             return Verdict::Later(Box::pin(async move {
                 let reply = relay.call(&command).await;
@@ -729,22 +742,11 @@ async fn test_a_javascript_error_is_not_read_again() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_offered() {
-    // The listing is sized against a 40-control offscreen cap; the default pool now holds all of it.
-    let max_offscreen_controls = 40;
-    let config = Config {
-        observation: ObservationLimits { max_offscreen_controls, ..ObservationLimits::default() },
-        ..Config::default()
-    };
-    let Some(h) = harness_with(config, SessionOptions::default()).await else { return };
+    let Some(h) = harness_with(Config::default(), SessionOptions::default()).await else { return };
     h.goto("/long-list.html").await;
-    let observation = observe_until(&h.page, "Book 1", 5.0).await;
+    let observation = observe_until(&h.page, "Book 1").await;
     let labels: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
-    assert!(observation.omitted_controls > 0, "the page must be long enough to hit the cap");
     assert!(labels.contains(&"next"));
     assert!(labels.contains(&"Show more books"));
-    assert!(
-        labels.len() as i64
-            <= max_offscreen_controls + observation.controls.iter().filter(|c| !c.offscreen).count() as i64
-    );
     h.close().await;
 }

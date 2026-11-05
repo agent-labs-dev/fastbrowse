@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer
 
+if TYPE_CHECKING:
+    from fastbrowse.protocol import CancellationReceipt
+
 
 class Frozen(BaseModel):
-    # A field's docstring is the model's only guidance for that field when the class is a response schema.
+    # A field's docstring is its description in `model_json_schema`, which embedders read.
     model_config = ConfigDict(frozen=True, extra="forbid", use_attribute_docstrings=True)
 
 
@@ -49,9 +53,26 @@ class Unavailable(RuntimeError):
 class ConfigurationError(RuntimeError):
     """A missing key or an invalid setting in the environment, reported without a traceback."""
 
+    receipt: CancellationReceipt | None = None
+    """Work already done before configuration prevented the run from continuing."""
+
 
 class RecordingError(RuntimeError):
     """ffmpeg is missing. Later failures are logged instead: a video is never worth a run's result."""
+
+    receipt: CancellationReceipt | None = None
+    """Work and browser charges incurred before recording could start."""
+
+
+class RunCancelled(asyncio.CancelledError):
+    """A run that was cancelled, raised once its browser has closed. It is a `CancelledError`, so `asyncio`
+    treats it as one, and `receipt` holds what the run did and spent before it stopped: the steps it reported,
+    every known charge, an unpriced one as an `unknown` line, and its finished videos. A cancelled run proved
+    nothing, so the receipt has no status and no answer."""
+
+    def __init__(self, *args: object, receipt: CancellationReceipt) -> None:
+        super().__init__(*args)
+        self.receipt = receipt
 
 
 class Operation(StrEnum):
@@ -59,6 +80,7 @@ class Operation(StrEnum):
     HOVER = "hover"
     DRAG = "drag"
     FILL = "fill"
+    BLUR = "blur"
     SELECT = "select"
     ENTER = "enter"
     ESCAPE = "escape"
@@ -68,18 +90,18 @@ class Operation(StrEnum):
     SWITCH_TAB = "switch_tab"
     UPLOAD = "upload"
     DIALOG = "dialog"
+    WAIT = "wait"
     READ = "read"
     DONE = "done"
-    ESCALATE = "escalate"
     NAVIGATE = "navigate"
 
 
 class Decider(StrEnum):
-    """The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-    reader's, because the reader asked for the rest of the list."""
+    """Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev."""
 
     JEV = "jev"
-    LLM = "llm"
+    CODE = "code"
+    RECIPE = "recipe"
 
 
 class StepOutcome(StrEnum):
@@ -113,13 +135,14 @@ class Evidence(Frozen):
     """False for typed DOM observations whose quote is not literal rendered page text."""
     heading_path: tuple[str, ...] = ()
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
+    capture_artifact: str | None = Field(default=None, exclude_if=lambda uri: uri is None)
+    """The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept."""
 
 
 class Citation(Frozen):
     id: int = Field(ge=1)
     """The number used by this fact's links in the answer, stable within a run."""
     text: str
-    requirement_id: str | None = None
     url: str
     quote: str
     deep_link: str
@@ -127,12 +150,11 @@ class Citation(Frozen):
 
 class FactReader(StrEnum):
     JEV_CHOICE = "jev_choice"
-    LLM = "llm"
+    LLM_IMAGE = "llm_image"
 
 
 class StepFact(Frozen):
     text: str
-    requirement_id: str | None = None
     quote: str | None = None
     """None for a count, total or winner derived from other facts rather than read from the page."""
     url: str | None = None
@@ -154,6 +176,8 @@ class StepChoice(Frozen):
 
 class ArtifactKind(StrEnum):
     DOWNLOAD = "download"
+    SCREENSHOT = "screenshot"
+    CAPTURE = "capture"
 
 
 class Artifact(Frozen):
@@ -181,18 +205,26 @@ class CostBasis(StrEnum):
     BOUNDED = "bounded"
     """No charge was reported, and `dollars` is the most the call could have cost: its model's whole context
     window at the highest token price any of its routes lists. Never less than the charge."""
+    UNSETTLED = "unsettled"
+    """The provider's figure so far, read before it finished metering: the final charge can be higher."""
     UNKNOWN = "unknown"
     """No charge information; never counted as zero."""
 
 
 class LLMPurpose(StrEnum):
-    PLAN = "plan"
-    READ = "read"
-    FIELD_TEXT = "field_text"
-    RECOVER = "recover"
-    VERIFY = "verify"
+    START = "start"
     COMPOSE = "compose"
-    SHORTCUT = "shortcut"
+    IMAGE_READ = "image_read"
+    FILL = "fill"
+
+
+class JevPurpose(StrEnum):
+    ACTION = "action"
+    AUTHORIZATION = "authorization"
+    RELEVANCE = "relevance"
+    READ = "read"
+    VERIFY = "verify"
+    LOCATE = "locate"
 
 
 class CostLine(Frozen):
@@ -200,13 +232,18 @@ class CostLine(Frozen):
     basis: CostBasis
     dollars: float | None = Field(default=None, ge=0)
     purpose: LLMPurpose | None = None
+    decision_purpose: JevPurpose | None = Field(default=None, exclude_if=lambda purpose: purpose is None)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     seconds: float | None = Field(default=None, ge=0)
     """Wall time of the call, retries included, or the time a metered browser was held. None when unknown."""
+    physical_requests: int | None = Field(default=None, ge=0, exclude_if=lambda requests: requests is None)
+    """Physical provider requests represented by this line; absent on historical receipts."""
 
     @property
     def label(self) -> str:
+        if self.component == CostComponent.JEV and self.decision_purpose is not None:
+            return f"{self.component.value}:{self.decision_purpose.value}"
         return self.component.value if self.purpose is None else f"{self.component.value}:{self.purpose.value}"
 
 
@@ -214,8 +251,8 @@ class CostBreakdown(Frozen):
     lines: tuple[CostLine, ...] = ()
 
     def seconds_by_call(self) -> dict[str, float]:
-        """Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), so the sum
-        can exceed the run's wall time."""
+        """Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), and the browser's
+        line covers the whole time it was held, so the sum can exceed the run's wall time."""
         totals: dict[str, float] = {}
         for line in self.lines:
             if line.seconds is not None:
@@ -228,7 +265,7 @@ class CostBreakdown(Frozen):
 
     @property
     def has_unknown(self) -> bool:
-        return any(line.basis is CostBasis.UNKNOWN for line in self.lines)
+        return any(line.basis in (CostBasis.UNKNOWN, CostBasis.UNSETTLED) for line in self.lines)
 
 
 class StepResult(Frozen):
@@ -244,7 +281,7 @@ class StepResult(Frozen):
     facts: tuple[StepFact, ...] = ()
     """Facts added to the notes by this step, with resolved secrets redacted."""
     page_changed: bool | None = None
-    """Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."""
+    """Whether the page's fingerprint changed; None for steps that do not act (read)."""
     duration_ms: int = Field(ge=0)
     choices: tuple[StepChoice, ...] = Field(default=(), exclude_if=lambda choices: not choices)
     """The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them."""
@@ -294,7 +331,7 @@ class RunResult(Frozen):
     final_url: str | None = None
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
     final_frame: bytes | None = Field(default=None, exclude=True, repr=False)
-    """A safe final PNG when step frames are enabled; kept out of text results."""
+    """A safe final PNG requested by the task or enabled with step frames; kept out of text results."""
     recordings: tuple[Path, ...] = ()
     """The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed."""
     wall: Wall | None = None
@@ -303,6 +340,22 @@ class RunResult(Frozen):
     @property
     def succeeded(self) -> bool:
         return self.status is Status.COMPLETE
+
+
+class Build(Frozen):
+    """The build that produced a result."""
+
+    fastbrowse_version: str | None
+    git_sha: str | None
+    """The full commit, or None when no commit is known (the standalone binary or a released wheel)."""
+    git_dirty: bool | None
+    """Whether the tree had uncommitted changes; None outside a checkout."""
+
+
+class CliResult(RunResult):
+    """What `fastbrowse --json` prints: the run's result and the build that produced it."""
+
+    build: Build
 
 
 class LocalChrome(Frozen):
@@ -332,9 +385,6 @@ class CloudBrowser(Frozen):
     """Browser-level DevTools WebSocket URL (`ws://` or `wss://`), for `run_task(cdp_url=..., attach=True)`."""
     live_url: str | None = None
     """The service's live view of the browser, when it gave one."""
-    api: Literal["v3", "v4"]
-    """The API version the browser was created on, which its stop goes to as well: a browser with extensions is
-    a V4 one, and the service's V3 and V4 ids are not interchangeable."""
 
 
 class Attachment(Frozen):

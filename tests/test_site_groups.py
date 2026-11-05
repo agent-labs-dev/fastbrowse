@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from fastbrowse.evals.site_groups import RunFacts, group_files
+from fastbrowse.evals.site_groups import GroupFacts, RunFacts, group_files
 
 STAGED = Path("docs/results/benchmark-candidate.json")
 PUBLISHED = Path("docs/results/benchmarks.json")
@@ -18,7 +18,7 @@ def test_the_live_suite_names_the_head_to_head_group_and_its_exact_rows() -> Non
     files = group_files(content, FACTS, CURRENT)
     candidate = json.loads(content)
     rows = f"data/benchmark-{candidate['campaign_id']}.json"
-    assert set(files) == {rows, "data/benchmarks/live-suite.json"}
+    assert set(files) == {rows, "data/benchmarks/live-suite.json", "data/benchmarks/live-suite-fastbrowse.json"}
     assert files[rows] == content
     live = json.loads(files["data/benchmarks/live-suite.json"])
     assert (live["tasks"], live["repeats"], live["published"]) == (None, None, [])
@@ -49,10 +49,12 @@ def test_a_vendor_without_a_cost_or_without_rows_has_its_own_state() -> None:
     assert live["not_measured"] == ["browser-use-ultrafast", "browser-harness"]
 
 
-def test_a_fastbrowse_only_campaign_shows_fastbrowse_alone() -> None:
-    live = json.loads(group_files(PUBLISHED.read_bytes(), FACTS, CURRENT)["data/benchmarks/live-suite.json"])
-    assert live["measured"]["group"] == "internal-fastbrowse"
-    assert live["measured"]["systems"] == {"fastbrowse": "fastbrowse"}
+def test_a_fastbrowse_only_campaign_has_its_own_card_and_writes_it_the_first_time() -> None:
+    files = group_files(PUBLISHED.read_bytes(), FACTS, {**CURRENT, "live-suite": {"measured": None}})
+    assert "data/benchmarks/live-suite.json" not in files
+    alone = json.loads(files["data/benchmarks/live-suite-fastbrowse.json"])
+    assert alone["measured"]["group"] == "internal-fastbrowse"
+    assert alone["measured"]["systems"] == {"fastbrowse": "fastbrowse"}
 
 
 def test_a_group_bound_to_an_earlier_campaign_is_refused() -> None:
@@ -98,3 +100,18 @@ def test_a_measured_official_group_keeps_only_vendor_rows_on_its_task_set() -> N
 
     assert published(same) == [same]
     assert published(other, summary) == []
+
+    reference = {"system": "browser-use", "suite": "BU Bench V1", "summary": {"attempts": 100, "passed": 78}}
+    facts = FACTS.model_copy(
+        update={"groups": {"online-mind2web": GroupFacts(run_on="2026-10-29", judge="upstream judge")}}
+    )
+    current = {
+        **CURRENT,
+        "live-suite": PUBLISHED_ONLY,
+        "online-mind2web": {"measured": None, "published": [], "reference": reference},
+    }
+    written = json.loads(
+        group_files(json.dumps(candidate).encode(), facts, current)["data/benchmarks/online-mind2web.json"]
+    )
+    assert written["reference"] == reference
+    assert (written["measured"]["run_on"], written["measured"]["judge"]) == ("2026-10-29", "upstream judge")

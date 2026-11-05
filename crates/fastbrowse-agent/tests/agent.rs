@@ -1,6 +1,10 @@
 //! Replays whole agent loops recorded in `tests/golden/agent.json`: the same scripted site, every model request
-//! looked up by its bytes (so requests sent side by side may leave in any order), and the same result. The recordings
-//! are fixed: they came from the Python implementation the core replaced, and the core must still match them.
+//! looked up by its bytes (so requests sent side by side may leave in any order), and the same result.
+//!
+//! `FASTBROWSE_UPDATE_GOLDEN=1` re-records them after an intended behaviour change: recorded answers are kept, a new
+//! request is answered from the case's `jev` and `llm` scripts, and the diff of `agent.json` is the behaviour change.
+
+mod common;
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -64,6 +68,18 @@ impl Page for FakeSite {
         Vec::new()
     }
 
+    fn keep_capture<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        let kept = self.site["keeps_captures"].as_bool().unwrap_or(false).then(|| Artifact {
+            kind: fastbrowse_core::models::ArtifactKind::Capture,
+            name: name.into(),
+            mime_type: "text/plain; charset=utf-8".into(),
+            size_bytes: text.len() as i64,
+            sha256: fastbrowse_core::py::sha256_hex(text.as_bytes()),
+            uri: format!("memory://{name}"),
+        });
+        ready(Ok(kept))
+    }
+
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         // A screen that `settles` turns into another once it has been observed `after` times.
         let settles = self.screen()["settles"].clone();
@@ -110,13 +126,8 @@ impl Page for FakeSite {
 
     fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         let mut at = self.at.lock().unwrap();
-        let result = |outcome: StepOutcome, page_changed: bool| ActResult {
-            outcome,
-            page_changed,
-            detail: None,
-            form_unchanged: false,
-            moved: false,
-        };
+        let result =
+            |outcome: StepOutcome, page_changed: bool| ActResult { outcome, page_changed, detail: None, moved: false };
         if action.operation == Operation::Navigate
             && let Some(screen) = action.url.as_deref().and_then(|url| self.site["urls"][url].as_str())
         {
@@ -182,56 +193,186 @@ impl Page for FakeSite {
 }
 
 /// Recorded answers by the bytes of the request that got them; identical requests are answered in recorded order.
+///
+/// With `FASTBROWSE_UPDATE_GOLDEN=1` a request with no recorded answer keeps the answer recorded at its place in the
+/// case where that still fits the request, and is otherwise answered from the case's script. Every call made is kept so
+/// the case can be written back with its new calls, result and events.
 struct Replies {
     name: String,
+    kind: &'static str,
     answers: Mutex<HashMap<String, VecDeque<Value>>>,
+    ordered: Vec<Value>,
+    log: Option<Arc<Mutex<Vec<Value>>>>,
 }
 
 impl Replies {
-    fn new(case: &Value, kind: &str, key: impl Fn(&Value) -> String) -> Replies {
+    fn new(
+        case: &Value,
+        kind: &'static str,
+        log: Option<Arc<Mutex<Vec<Value>>>>,
+        key: impl Fn(&Value) -> String,
+    ) -> Replies {
         let mut answers: HashMap<String, VecDeque<Value>> = HashMap::new();
+        let mut ordered = Vec::new();
         for call in case["calls"].as_array().unwrap() {
             if let Some(request) = call.get(kind) {
                 answers.entry(key(request)).or_default().push_back(call["response"].clone());
+                ordered.push(call.clone());
             }
         }
-        Replies { name: case["name"].as_str().unwrap().to_string(), answers: Mutex::new(answers) }
+        Replies { name: case["name"].as_str().unwrap().to_string(), kind, answers: Mutex::new(answers), ordered, log }
     }
 
-    fn take(&self, key: &str) -> Value {
+    fn take(&self, key: &str, request: Value, script: impl FnOnce(&[Value]) -> Value) -> Value {
         let mut answers = self.answers.lock().unwrap();
-        if answers.get(key).is_none_or(|queue| queue.is_empty()) {
-            // Show where the nearest request Python made parts from this one.
-            let shared = |other: &str| key.bytes().zip(other.bytes()).take_while(|(a, b)| a == b).count();
-            let nearest = answers.keys().max_by_key(|other| shared(other)).cloned().unwrap_or_default();
-            let at = shared(&nearest);
-            let around =
-                |text: &str| text.get(at.saturating_sub(200)..(at + 300).min(text.len())).unwrap_or("").to_string();
-            panic!(
-                "{}: a request Python never made, parting at byte {at}:\nRust:   {}\nPython: {}",
-                self.name,
-                around(key),
-                around(&nearest)
-            );
-        }
-        let queue = answers.get_mut(key).unwrap();
-        queue.pop_front().unwrap()
+        let recorded = answers.get_mut(key).and_then(VecDeque::pop_front);
+        let Some(log) = &self.log else {
+            return recorded.unwrap_or_else(|| self.missing(key, &answers));
+        };
+        let mut log = log.lock().unwrap();
+        let response = recorded.unwrap_or_else(|| {
+            let made = log.iter().filter(|call| call.get(self.kind).is_some()).count();
+            let scripted = script(&log);
+            match self.ordered.get(made) {
+                Some(old) => in_place(self.kind, old, &request, scripted),
+                None => scripted,
+            }
+        });
+        log.push(serde_json::json!({self.kind: request, "response": response}));
+        response
+    }
+
+    fn missing(&self, key: &str, answers: &HashMap<String, VecDeque<Value>>) -> ! {
+        // Show where the nearest recorded request parts from this one.
+        let shared = |other: &str| key.bytes().zip(other.bytes()).take_while(|(a, b)| a == b).count();
+        let nearest = answers.keys().max_by_key(|other| shared(other)).cloned().unwrap_or_default();
+        let at = shared(&nearest);
+        let around =
+            |text: &str| text.get(at.saturating_sub(200)..(at + 300).min(text.len())).unwrap_or("").to_string();
+        panic!(
+            "{}: a request never recorded, parting at byte {at}:\nRust:     {}\nRecorded: {}",
+            self.name,
+            around(key),
+            around(&nearest)
+        );
     }
 
     fn finish(&self) {
+        if self.log.is_some() {
+            return;
+        }
         let answers = self.answers.lock().unwrap();
         let left: Vec<&String> = answers.iter().filter(|(_, queue)| !queue.is_empty()).map(|(key, _)| key).collect();
-        assert!(left.is_empty(), "{}: requests Python made and Rust did not:\n{left:#?}", self.name);
+        assert!(left.is_empty(), "{}: requests recorded and not made:\n{left:#?}", self.name);
     }
+}
+
+/// The answer recorded at a request's place in the case, where it still fits: an LLM answer for the same schema, or
+/// each Jev answer whose question is still asked with its recorded choice still offered. The script answers the rest.
+fn in_place(kind: &str, old: &Value, request: &Value, scripted: Value) -> Value {
+    if kind == "llm" {
+        return if old["llm"]["schema_name"] == request["schema_name"] { old["response"].clone() } else { scripted };
+    }
+    let mut response = scripted;
+    let Some(recorded) = old["response"]["evaluation"]["answers"].as_object() else { return response };
+    let Some(answers) = response["evaluation"]["answers"].as_object_mut() else { return response };
+    for (key, answer) in answers.iter_mut() {
+        let Some(kept) = recorded.get(key) else { continue };
+        let offered = answer["probabilities"]
+            .as_object()
+            .is_none_or(|p| kept["choice"].as_str().is_some_and(|c| p.contains_key(c)));
+        if kept["type"] == answer["type"] && offered {
+            *answer = kept.clone();
+        }
+    }
+    response
+}
+
+/// The `n`th entry of a scripted answer that is a list, the last repeated, or the answer itself.
+fn nth(script: &Value, n: usize) -> Option<&Value> {
+    match script.as_array() {
+        Some(list) => list.get(n.min(list.len().saturating_sub(1))),
+        None => (!script.is_null()).then_some(script),
+    }
+}
+
+/// Jev's answer from a case's `jev` script: `pick` names a choice per question key (a list is taken in turn), `pick`
+/// under `pick` any other choice, `nouls` a probability per noul (a list is taken in turn) and `noul` the rest, `confidence` the pick's.
+/// The wall questions default to no.
+fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value]) -> Value {
+    let asked_again = state.get("problem").is_some();
+    let confidence = if asked_again { 0.0 } else { script["confidence"].as_f64().unwrap_or(0.9) };
+    let answered = |key: &str| {
+        log.iter()
+            .filter(|call| {
+                call["jev"]["questions"].as_str().is_some_and(|q| q.contains(&format!("\"{key}\":")))
+                    && !call["jev"]["state"].as_str().unwrap_or_default().contains("\"problem\":")
+            })
+            .count()
+    };
+    let mut answers = serde_json::Map::new();
+    for (key, question) in questions.as_object().unwrap() {
+        if question["type"] == "noul" {
+            // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
+            let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure") {
+                0.0
+            } else if key == "coverage" || key.starts_with("claim") {
+                1.0
+            } else {
+                script["noul"].as_f64().unwrap_or(0.0)
+            };
+            let probability = nth(&script["nouls"][key], answered(key)).and_then(Value::as_f64).unwrap_or(default);
+            answers.insert(key.clone(), serde_json::json!({"type": "noul", "probability": probability}));
+            continue;
+        }
+        let options: Vec<&String> = question["criteria"].as_object().unwrap().keys().collect();
+        let general = (key != "operation" && !key.ends_with("_target") && !key.ends_with("_group"))
+            .then(|| &script["pick"]["pick"]);
+        let picked = nth(&script["pick"][key], answered(key))
+            .or_else(|| general.and_then(|pick| nth(pick, 0)))
+            .and_then(Value::as_str)
+            .map(String::from)
+            .or_else(|| (key == "operation").then(|| "done".to_string()));
+        let choice = picked.filter(|p| options.contains(&p)).unwrap_or_else(|| options[0].clone());
+        let probabilities: serde_json::Map<String, Value> =
+            options.iter().map(|o| ((*o).clone(), Value::from(if **o == choice { 1.0 } else { 0.0 }))).collect();
+        answers.insert(
+            key.clone(),
+            serde_json::json!({"type": "choice", "choice": choice, "probabilities": probabilities, "confidence": confidence}),
+        );
+    }
+    serde_json::json!({"evaluation": {"model": "test", "answers": answers, "input_tokens": 0, "cost": {"component": "jev", "basis": "estimated", "dollars": 0.0, "purpose": null, "input_tokens": 0, "output_tokens": 0, "seconds": null}, "requests": 1}})
+}
+
+/// The LLM's answer from a case's `llm` script: the next of the schema's listed answers, the last repeated. A schema
+/// the script does not list repeats the last answer the case recorded for it. An answer that is `{"raise": ...}` fails.
+fn scripted_llm(case: &Value, purpose: &str, schema_name: &str, log: &[Value]) -> Value {
+    let made = log.iter().filter(|call| call["llm"]["schema_name"] == schema_name).count();
+    let cost = serde_json::json!({"component": "llm", "basis": "metered", "dollars": 0.001, "purpose": purpose, "input_tokens": 0, "output_tokens": 0, "seconds": null});
+    if let Some(data) = nth(&case["llm"][schema_name], made) {
+        if data.get("raise").is_some() {
+            return data.clone();
+        }
+        return serde_json::json!({"data": data, "cost": cost});
+    }
+    let calls = case["calls"].as_array().unwrap();
+    let recorded = calls.iter().rev().find(|call| call["llm"]["schema_name"] == schema_name);
+    recorded
+        .map(|call| call["response"].clone())
+        .unwrap_or_else(|| panic!("{}: no scripted {schema_name} answer", case["name"]))
 }
 
 fn jev_key(state: &str, questions: &str) -> String {
     format!("{state}\n{questions}")
 }
 
-struct ReplayJev(Replies);
+struct ReplayJev(Replies, Value);
 
 impl DecisionClient for ReplayJev {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
@@ -239,17 +380,21 @@ impl DecisionClient for ReplayJev {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let written: serde_json::Map<String, Value> =
             questions.iter().map(|(key, question)| (key.clone(), question.dump())).collect();
-        let key = jev_key(&write(state, Style::HTTPX), &write(&Value::Object(written), Style::HTTPX));
-        let response = self.0.take(&key);
+        let (state, questions) = (write(state, Style::HTTPX), write(&Value::Object(written.clone()), Style::HTTPX));
+        let key = jev_key(&state, &questions);
+        let request = serde_json::json!({"state": state, "questions": questions});
+        let response = self.0.take(&key, request, |log| {
+            scripted_jev(&self.1, &serde_json::from_str(&state).unwrap(), &Value::Object(written), log)
+        });
         ready(Ok(serde_json::from_value(response["evaluation"].clone()).expect("evaluation")))
     }
 }
 
-fn llm_key(purpose: &str, messages: &str, schema_name: &str, schema: &str, cap: i64) -> String {
-    format!("{purpose}\n{schema_name}\n{cap}\n{schema}\n{messages}")
+fn llm_key(purpose: &str, messages: &str, schema_name: &str, schema: &str) -> String {
+    format!("{purpose}\n{schema_name}\n{schema}\n{messages}")
 }
 
-struct ReplayLLM(Replies);
+struct ReplayLLM(Replies, Value);
 
 impl LLMClient for ReplayLLM {
     fn generate_value<'a>(
@@ -257,22 +402,22 @@ impl LLMClient for ReplayLLM {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
             if let Some(ledger) = ledger {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
-            let written = Value::Array(messages.iter().map(Dump::dump).collect());
-            let key = llm_key(
-                purpose.as_str(),
-                &write(&written, Style::HTTPX),
-                &schema.name(),
-                &dumps(&schema.json_schema()),
-                max_output_tokens,
-            );
-            let response = self.0.take(&key);
+            let written = write(&Value::Array(messages.iter().map(Dump::dump).collect()), Style::HTTPX);
+            let (schema_name, schema_text) = (schema.name(), dumps(&schema.json_schema()));
+            let key = llm_key(purpose.as_str(), &written, &schema_name, &schema_text);
+            let request = serde_json::json!({
+                "purpose": purpose.as_str(),
+                "messages": written,
+                "schema_name": schema_name,
+                "schema": schema_text,
+            });
+            let response = self.0.take(&key, request, |log| scripted_llm(&self.1, purpose.as_str(), &schema_name, log));
             if let Some(failure) = response["raise"].as_str() {
                 return Err(LLMError::Failed(failure.to_string()));
             }
@@ -299,27 +444,37 @@ fn normalized(mut outcome: Value) -> Value {
     outcome
 }
 
-async fn replay(case: Value) {
+/// Replays `case`, or with `log` records it: the case comes back with the calls made, the result and the events.
+async fn replay(mut case: Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> Value {
     let name = case["name"].as_str().unwrap().to_string();
-    let (result, events) = play(&case).await;
+    let (result, events) = play(&case, log.clone()).await;
+    let events = Value::Array(events);
+    if let Some(log) = log {
+        case["calls"] = Value::Array(log.lock().unwrap().clone());
+        case["outcome"] = normalized(result);
+        case["events"] = events;
+        return case;
+    }
     assert_eq!(normalized(result), normalized(case["outcome"].clone()), "{name}: result");
-    assert_eq!(Value::Array(events), case["events"], "{name}: step events");
+    assert_eq!(events, case["events"], "{name}: step events");
+    case
 }
 
 /// The result and step events of a run against the case's scripted site and recorded model replies.
-async fn play(case: &Value) -> (Value, Vec<Value>) {
-    let jev = Arc::new(ReplayJev(Replies::new(case, "jev", |r| {
+async fn play(case: &Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> (Value, Vec<Value>) {
+    let jev = Replies::new(case, "jev", log.clone(), |r| {
         jev_key(r["state"].as_str().unwrap(), r["questions"].as_str().unwrap())
-    })));
-    let llm = Arc::new(ReplayLLM(Replies::new(case, "llm", |r| {
+    });
+    let jev = Arc::new(ReplayJev(jev, case["jev"].clone()));
+    let llm = Replies::new(case, "llm", log.clone(), |r| {
         llm_key(
             r["purpose"].as_str().unwrap(),
             r["messages"].as_str().unwrap(),
             r["schema_name"].as_str().unwrap(),
             r["schema"].as_str().unwrap(),
-            r["max_output_tokens"].as_i64().unwrap(),
         )
-    })));
+    });
+    let llm = Arc::new(ReplayLLM(llm, case.clone()));
     let events: Arc<Mutex<Vec<Value>>> = Arc::default();
     let sink = events.clone();
     let on_event: EventHandler = Arc::new(move |event: Event| {
@@ -377,9 +532,100 @@ async fn play(case: &Value) -> (Value, Vec<Value>) {
 
 #[tokio::test(start_paused = true)]
 async fn whole_loops_match_python() {
+    let update = common::capture::updating();
+    let mut cases_out = Vec::new();
     for case in cases() {
-        replay(case).await;
+        cases_out.push(replay(case, update.then(Arc::default)).await);
     }
+    if update {
+        common::save("agent.json", &Value::Array(cases_out));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_blank_navigation_waits_for_its_content_before_asking_jev() {
+    let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+    case["name"] = "a blank navigation waits for its content".into();
+    case["calls"] = serde_json::json!([]);
+    case["limits"]["max_steps"] = 2.into();
+    case["jev"]["pick"] = serde_json::json!({"operation": "click", "click_target": ["go", "next"]});
+    let mut home = case["site"]["screens"]["home"].clone();
+    home["observation"]["controls"] = serde_json::json!([
+        {"id": "go", "frame_id": null, "role": "button", "label": "Go", "operations": ["click"]}
+    ]);
+    let mut loading = case["site"]["screens"]["blank"].clone();
+    loading["observation"]["url"] = "https://books.test/catalogue".into();
+    loading["observation"]["page_key"] = "loading".into();
+    loading["observation"]["document_key"] = "catalogue".into();
+    loading["settles"] = serde_json::json!({"after": 1, "to": "catalogue"});
+    let mut catalogue = home.clone();
+    catalogue["observation"]["url"] = "https://books.test/catalogue".into();
+    catalogue["observation"]["page_key"] = "catalogue-ready".into();
+    catalogue["observation"]["document_key"] = "catalogue".into();
+    catalogue["observation"]["controls"] = serde_json::json!([
+        {"id": "next", "frame_id": null, "role": "button", "label": "Next", "operations": ["click"]}
+    ]);
+    case["site"] = serde_json::json!({
+        "start": "home", "urls": {"https://books.test/": "home"},
+        "screens": {"home": home, "loading": loading, "catalogue": catalogue},
+        "actions": [{"screen": "home", "operation": "click", "target": "go", "next": "loading"}]
+    });
+    let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let (outcome, _) = play(&case, Some(log.clone())).await;
+    assert_eq!(outcome["status"], "budget_exceeded");
+    let log = log.lock().unwrap();
+    for call in log.iter().filter(|call| call["jev"].is_object()) {
+        let questions: Value = serde_json::from_str(call["jev"]["questions"].as_str().unwrap()).unwrap();
+        if questions.get("operation").is_some() {
+            let state: Value = serde_json::from_str(call["jev"]["state"].as_str().unwrap()).unwrap();
+            assert!(!state["elements"].as_array().unwrap().is_empty(), "Jev was asked on the loading document");
+        }
+    }
+    assert_eq!(outcome["steps"][1]["target"], "Next");
+}
+
+/// Transient site failures, each a scripted site run from its script alone and checked against what it must do: the
+/// status it ends with, the steps it must take in order, the address it ends on and the words its error must carry.
+#[tokio::test(start_paused = true)]
+async fn transient_site_failures_are_retried_and_never_answer() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/site_failures.json");
+    let cases: Vec<Value> = serde_json::from_str(&fs::read_to_string(path).expect("site_failures.json")).expect("JSON");
+    let mut failures = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().unwrap().to_string();
+        let expect = case["expect"].clone();
+        let ran = replay(case, Some(Arc::default())).await;
+        let outcome = &ran["outcome"];
+        let steps: Vec<String> = outcome["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| format!("{} {}", step["operation"].as_str().unwrap(), step["target"].as_str().unwrap_or("")))
+            .map(|step| step.trim().to_string())
+            .collect();
+        let ran = format!("{name}: {} after {steps:?}, error {}", outcome["status"], outcome["error"]);
+        if outcome["status"] != expect["status"] {
+            failures.push(format!("{ran}: expected {}", expect["status"]));
+        }
+        let mut taken = steps.iter();
+        for wanted in expect["steps"].as_array().into_iter().flatten() {
+            let wanted = wanted.as_str().unwrap();
+            if !taken.any(|step| step == wanted) {
+                failures.push(format!("{ran}: no {wanted:?} in order"));
+            }
+        }
+        if let Some(url) = expect["final_url"].as_str()
+            && outcome["final_url"] != url
+        {
+            failures.push(format!("{ran}: ended on {}, expected {url}", outcome["final_url"]));
+        }
+        if let Some(words) = expect["error"].as_str()
+            && !outcome["error"].as_str().unwrap_or_default().contains(words)
+        {
+            failures.push(format!("{ran}: error lacks {words:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 /// Asking for the choices adds them to the steps Jev decided and changes nothing else about the run: not the steps, the
@@ -387,7 +633,7 @@ async fn whole_loops_match_python() {
 #[tokio::test(start_paused = true)]
 async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
     let names = [
-        "the field writer types a search, Enter submits it, and the read answer completes with its citation",
+        "a select asks Jev which option, then a step limit ends the run",
         "a stored secret is typed at fill time and never shown to a model",
     ];
     let picked: Vec<Value> =
@@ -399,7 +645,7 @@ async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
             case["config"] = serde_json::json!({});
         }
         case["config"]["step_choices"] = true.into();
-        let (mut result, mut events) = play(&case).await;
+        let (mut result, mut events) = play(&case, None).await;
         let mut listed = 0;
         let steps = result["steps"].as_array_mut().unwrap().iter_mut();
         for step in steps.chain(events.iter_mut().map(|event| &mut event["step"])) {
@@ -417,5 +663,161 @@ async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
         assert!(listed > 0, "{name}: no step listed its choices");
         assert_eq!(normalized(result), normalized(case["outcome"].clone()), "{name}: result");
         assert_eq!(Value::Array(events), case["events"], "{name}: step events");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn sign_in_judgments_get_the_navigation_source_and_still_decide_whether_it_blocks() {
+    for (name, login, opening_wall, expected) in [
+        ("public alternative", 0.2, false, "budget_exceeded"),
+        ("authenticated destination", 0.95, false, "needs_login"),
+        ("opening sign-in wall", 0.95, true, "needs_login"),
+    ] {
+        let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+        case["name"] = name.into();
+        case["calls"] = serde_json::json!([]);
+        case["limits"]["max_steps"] = 3.into();
+        case["jev"]["pick"] = serde_json::json!({
+            "operation": ["click", "back", "click"], "click_target": ["query", "public"]
+        });
+        case["jev"]["nouls"]["login_required"] =
+            if opening_wall { serde_json::json!([login]) } else { serde_json::json!([0.12, login, 0.12]) };
+        let mut home = case["site"]["screens"]["home"].clone();
+        home["observation"]["document_key"] = "public-document".into();
+        home["observation"]["viewport_text"] = "Browse public inventory or query your account".into();
+        home["observation"]["controls"] = serde_json::json!([
+            {"id": "query", "frame_id": null, "role": "button", "label": "Account query", "operations": ["click"]},
+            {"id": "public", "frame_id": null, "role": "button", "label": "Public inventory", "operations": ["click"]}
+        ]);
+        let mut wall = home.clone();
+        wall["observation"]["url"] = "https://books.test/login".into();
+        wall["observation"]["document_key"] = "login-document".into();
+        wall["observation"]["page_key"] = "login".into();
+        wall["observation"]["can_go_back"] = (!opening_wall).into();
+        wall["observation"]["viewport_text"] = "Sign in to query your account".into();
+        wall["observation"]["controls"] = serde_json::json!([
+            {"id": "password", "frame_id": null, "role": "textbox", "label": "Password",
+             "operations": ["fill"], "input_type": "password"}
+        ]);
+        case["site"] = serde_json::json!({
+            "start": if opening_wall {"wall"} else {"home"},
+            "urls": {"https://books.test/": if opening_wall {"wall"} else {"home"}},
+            "screens": {"home": home, "wall": wall},
+            "actions": [{"screen": "home", "operation": "click", "target": "query", "next": "wall"}]
+        });
+        let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let (outcome, _) = play(&case, Some(log.clone())).await;
+        assert_eq!(outcome["status"], expected, "{name}: {outcome}");
+        let log = log.lock().unwrap();
+        let wall_call = log
+            .iter()
+            .find_map(|call| {
+                let state: Value = serde_json::from_str(call["jev"]["state"].as_str()?).ok()?;
+                (state["page"]["url"] == "https://books.test/login").then_some((call, state))
+            })
+            .expect("login judgment");
+        let facts = wall_call.1["page_facts"].to_string();
+        assert_eq!(facts.contains("Public inventory"), !opening_wall, "{name}: {facts}");
+        if !opening_wall {
+            assert!(facts.contains("login_required_probability") && facts.contains("0.12"));
+            let questions: Value = serde_json::from_str(wall_call.0["jev"]["questions"].as_str().unwrap()).unwrap();
+            assert!(
+                questions["login_required"]["instructions"]
+                    .as_str()
+                    .unwrap()
+                    .contains("A restricted route does not make the whole task require sign-in")
+            );
+        }
+        if expected == "budget_exceeded" {
+            assert_eq!(outcome["steps"][1]["operation"], "back");
+            assert_eq!(outcome["steps"][2]["target"], "Public inventory");
+        }
+    }
+}
+
+/// A status page whose line a wait changes, read before and after the wait: two captures, each quoted once.
+fn status_case() -> Value {
+    let mut case = cases()
+        .into_iter()
+        .find(|case| case["name"] == "an HTTP 404 page goes to Jev, and its DONE ends the run")
+        .unwrap();
+    case["name"] = "read, wait, read".into();
+    case["calls"] = serde_json::json!([]);
+    case["task"] = "Open https://status.test/ and report its status line, then wait a few seconds and report the \
+                    status line again"
+        .into();
+    case["start"] = "https://status.test/".into();
+    case["jev"]["pick"] = serde_json::json!({"operation": ["read", "wait", "read", "done"]});
+    // Jev holds each claim supported by its quote, and the two together to cover the task.
+    case["jev"]["nouls"] = serde_json::json!({"claim0": 0.9, "claim1": 0.9, "coverage": 0.9});
+    case["llm"]["AnswerDraft"] = serde_json::json!([{"claims": [
+        {"text": "First: live, updated 16:59:21", "evidence_ids": ["e0"]},
+        {"text": "After waiting: live, updated 16:59:27", "evidence_ids": ["e1"]}
+    ]}]);
+    let screen = |key: &str, text: &str| {
+        let mut screen = case["site"]["screens"]["missing"].clone();
+        let observation = &mut screen["observation"];
+        observation["url"] = "https://status.test/".into();
+        observation["title"] = "Status".into();
+        observation["page_key"] = key.into();
+        observation["document_key"] = "status".into();
+        observation["viewport_text"] = text.into();
+        observation.as_object_mut().unwrap().remove("response_status");
+        let capture = &mut screen["capture"];
+        capture["url"] = "https://status.test/".into();
+        capture["title"] = "Status".into();
+        capture["sha256"] = fastbrowse_core::py::sha256_hex(text.as_bytes()).into();
+        capture["text"] = text.into();
+        capture["blocks"] = serde_json::json!([
+            {"source_id": "s0", "kind": "paragraph", "frame_id": null, "start": 0, "end": text.chars().count()}
+        ]);
+        screen
+    };
+    case["site"] = serde_json::json!({
+        "start": "blank",
+        "urls": {"https://status.test/": "early"},
+        "screens": {
+            "blank": case["site"]["screens"]["blank"].clone(),
+            "early": screen("early", "live, updated 16:59:21"),
+            "later": screen("later", "live, updated 16:59:27"),
+        },
+        "actions": [{"screen": "early", "operation": "wait", "next": "later"}]
+    });
+    case
+}
+
+/// A task that reads a value, waits and reads it again finishes: Jev can pick a wait, the page moves on under it, and
+/// the second read cites what the page shows afterwards.
+#[tokio::test(start_paused = true)]
+async fn a_task_that_reads_waits_and_reads_again_completes_with_both_readings() {
+    let (outcome, _) = play(&status_case(), Some(Arc::default())).await;
+    let operations: Vec<&str> =
+        outcome["steps"].as_array().unwrap().iter().map(|step| step["operation"].as_str().unwrap()).collect();
+    assert!(operations.contains(&"wait"), "no wait was taken: {operations:?}");
+    let quotes: Vec<&str> =
+        outcome["evidence"].as_array().unwrap().iter().map(|e| e["quote"].as_str().unwrap()).collect();
+    assert!(quotes.contains(&"live, updated 16:59:21"), "{outcome}");
+    assert!(quotes.contains(&"live, updated 16:59:27"), "{outcome}");
+    assert_eq!(outcome["status"], "complete", "{outcome}");
+}
+
+/// Each page a citation quotes is kept as a `capture` artifact, and the evidence names it, so the quote can be checked
+/// against the text it was cut from.
+#[tokio::test(start_paused = true)]
+async fn each_cited_capture_is_kept_as_an_artifact_the_evidence_names() {
+    let mut case = status_case();
+    case["site"]["keeps_captures"] = true.into();
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "complete", "{outcome}");
+    let artifacts = outcome["artifacts"].as_array().unwrap();
+    let evidence = outcome["evidence"].as_array().unwrap();
+    assert_eq!(evidence.len(), 2, "{outcome}");
+    for quoted in evidence {
+        let uri = quoted["capture_artifact"].as_str().unwrap_or_else(|| panic!("no capture kept: {quoted}"));
+        let artifact = artifacts.iter().find(|artifact| artifact["uri"] == uri).expect("the named artifact");
+        assert_eq!(artifact["kind"], "capture");
+        // The kept bytes are the page text the quote was cut from: its digest is the evidence's capture digest.
+        assert_eq!(artifact["sha256"], quoted["capture_sha256"]);
+        assert_eq!(artifact["size_bytes"], quoted["quote"].as_str().unwrap().len());
     }
 }

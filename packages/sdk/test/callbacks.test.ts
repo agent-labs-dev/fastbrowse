@@ -234,6 +234,12 @@ test('an onEvent that rejects stops a run that would have gone on, and its brows
     });
     assert.equal(result.status, 'error');
     assert.equal(result.error, 'run/event: the progress bar broke');
+    // The run's receipt is folded into the result, so what it did and spent before it stopped is kept.
+    assert.equal(result.steps.length, 1);
+    assert.deepEqual(
+      result.cost.lines.map(line => line.dollars),
+      [0.004, null],
+    );
     assert.ok(existsSync(marker));
     assert.equal((await fb.run('Count the runs', ownBrowser)).status, 'complete');
   });

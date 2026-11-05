@@ -1,0 +1,5 @@
+# PDF offsets and stream lengths refer to bytes, so checkout must preserve them.
+*.pdf -text
+# The schema drift check compares the generator's LF-terminated output byte for byte.
+protocol/schema.json text eol=lf
+protocol/recipe.schema.json text eol=lf

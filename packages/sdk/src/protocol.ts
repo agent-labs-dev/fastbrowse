@@ -1,31 +1,13 @@
 // Generated from protocol/schema.json, which crates/fastbrowse-core/src/protocol.rs writes.
 // Do not edit: change the types there, then run `npm run generate:sdk`.
 
-export type ArtifactKind = 'download';
-export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unknown';
-export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
-export type LLMPurpose = 'plan' | 'read' | 'field_text' | 'recover' | 'verify' | 'compose' | 'shortcut';
-/**
- * The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
- * reader's, because the reader asked for the rest of the list.
- */
-export type Decider = 'jev' | 'llm';
-/**
- * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
- */
-export type ErrorCode = -32700 | -32600 | -32601 | -32602 | -32603 | -32001 | -32002 | -32003 | -32004;
-export type RequestId = number | string;
-export type FactReader = 'jev_choice' | 'llm';
-export type JsonValue = unknown;
-/**
- * What the server sends without being asked.
- */
-export type ServerMethod = 'run/event' | 'run/frame' | 'run/until' | 'secrets/resolve';
+export type ArtifactKind = 'download' | 'screenshot' | 'capture';
 export type Operation =
   | 'click'
   | 'hover'
   | 'drag'
   | 'fill'
+  | 'blur'
   | 'select'
   | 'enter'
   | 'escape'
@@ -35,11 +17,30 @@ export type Operation =
   | 'switch_tab'
   | 'upload'
   | 'dialog'
+  | 'wait'
   | 'read'
   | 'done'
-  | 'escalate'
   | 'navigate';
+/**
+ * Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
+ */
+export type Decider = 'jev' | 'code' | 'recipe';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
+export type FactReader = 'jev_choice' | 'llm_image';
+export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
+export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
+export type LLMPurpose = 'start' | 'compose' | 'image_read' | 'fill';
+export type JevPurpose = 'action' | 'authorization' | 'relevance' | 'read' | 'verify' | 'locate';
+/**
+ * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
+ */
+export type ErrorCode = -32700 | -32600 | -32601 | -32602 | -32603 | -32001 | -32002 | -32003 | -32004;
+export type RequestId = number | string;
+export type JsonValue = unknown;
+/**
+ * What the server sends without being asked.
+ */
+export type ServerMethod = 'run/event' | 'run/frame' | 'run/until' | 'secrets/resolve';
 export type Status =
   | 'complete'
   | 'unverified'
@@ -92,16 +93,71 @@ export interface BudgetStop {
   resource: 'steps' | 'dollars' | 'seconds' | 'jev_calls' | 'llm_calls';
   limit: number;
 }
-export interface Citation {
-  /**
-   * The number used by this fact's links in the answer, stable within a run.
-   */
-  id: number;
-  text: string;
-  requirement_id: string | null;
+/**
+ * What a cancelled run did before it stopped: the `data` of its `cancelled` error.
+ *
+ * A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+ * whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+ * `unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent
+ * was never reported, so it is not among the steps.
+ */
+export interface CancellationReceipt {
+  steps: StepResult[];
+  cost: CostBreakdown;
+  recordings: string[];
+}
+export interface StepResult {
+  index: number;
+  operation: Operation;
+  decided_by: Decider;
+  outcome: StepOutcome;
   url: string;
-  quote: string;
-  deep_link: string;
+  /**
+   * Human-readable label of the chosen element; never contains a secret value.
+   */
+  target: string | null;
+  confidence: number | null;
+  note: string | null;
+  /**
+   * Facts added to the notes by this step, with resolved secrets redacted.
+   */
+  facts: StepFact[];
+  /**
+   * Whether the page's fingerprint changed; None for steps that do not act (read).
+   */
+  page_changed: boolean | null;
+  duration_ms: number;
+  /**
+   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
+   */
+  choices?: StepChoice[];
+}
+export interface StepFact {
+  text: string;
+  /**
+   * None for a count, total or winner derived from other facts rather than read from the page.
+   */
+  quote: string | null;
+  url: string | null;
+  reader: FactReader;
+  deep_link: string | null;
+}
+export interface StepChoice {
+  id: string;
+  role: string;
+  /**
+   * The label as Jev read it, with resolved secrets masked.
+   */
+  label: string;
+  /**
+   * The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
+   */
+  context: string | null;
+  operations: Operation[];
+  /**
+   * Whether Jev chose this control: the target, and for a drag the destination too.
+   */
+  chosen: boolean;
 }
 export interface CostBreakdown {
   lines: CostLine[];
@@ -111,16 +167,32 @@ export interface CostLine {
   basis: CostBasis;
   dollars: number | null;
   purpose: LLMPurpose | null;
+  decision_purpose?: JevPurpose | null;
   input_tokens: number;
   output_tokens: number;
   /**
    * Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
    */
   seconds: number | null;
+  /**
+   * Physical provider requests represented by this line; absent on historical receipts.
+   */
+  physical_requests?: number | null;
+}
+export interface Citation {
+  /**
+   * The number used by this fact's links in the answer, stable within a run.
+   */
+  id: number;
+  text: string;
+  url: string;
+  quote: string;
+  deep_link: string;
 }
 export interface Error {
   code: ErrorCode;
   message: string;
+  data?: CancellationReceipt | null;
 }
 export interface ErrorResponse {
   jsonrpc: '2.0';
@@ -149,6 +221,10 @@ export interface Evidence {
    * The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
    */
   heading_path: string[];
+  /**
+   * The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
+   */
+  capture_artifact?: string | null;
 }
 export interface SourceControl {
   role: string;
@@ -269,60 +345,6 @@ export interface StepEvent {
    */
   frame: string | null;
 }
-export interface StepResult {
-  index: number;
-  operation: Operation;
-  decided_by: Decider;
-  outcome: StepOutcome;
-  url: string;
-  /**
-   * Human-readable label of the chosen element; never contains a secret value.
-   */
-  target: string | null;
-  confidence: number | null;
-  note: string | null;
-  /**
-   * Facts added to the notes by this step, with resolved secrets redacted.
-   */
-  facts: StepFact[];
-  /**
-   * Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
-   */
-  page_changed: boolean | null;
-  duration_ms: number;
-  /**
-   * The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.
-   */
-  choices?: StepChoice[];
-}
-export interface StepFact {
-  text: string;
-  requirement_id: string | null;
-  /**
-   * None for a count, total or winner derived from other facts rather than read from the page.
-   */
-  quote: string | null;
-  url: string | null;
-  reader: FactReader;
-  deep_link: string | null;
-}
-export interface StepChoice {
-  id: string;
-  role: string;
-  /**
-   * The label as Jev read it, with resolved secrets masked.
-   */
-  label: string;
-  /**
-   * The card or row that tells this control from its twins, as Jev read it, with resolved secrets masked.
-   */
-  context: string | null;
-  operations: Operation[];
-  /**
-   * Whether Jev chose this control: the target, and for a drag the destination too.
-   */
-  chosen: boolean;
-}
 /**
  * The params of `run/frame`: the active tab as it looked a moment ago. Sent only to a run that set `frames`.
  */
@@ -331,13 +353,16 @@ export interface RunFrame {
   frame: string;
 }
 /**
- * One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+ * One run: the run's arguments, and what the server needs to talk to the client about it.
  *
  * The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
  * environment the server inherited.
  */
 export interface RunParams {
   run_id: string;
+  secrets?: SecretRef[];
+  frames?: boolean;
+  until?: boolean;
   task: string;
   start?: string | null;
   context?: string | null;
@@ -350,11 +375,10 @@ export interface RunParams {
   output_schema?: {
     [k: string]: unknown;
   } | null;
-  secrets?: SecretRef[];
-  frames?: boolean;
-  until?: boolean;
   downloads?: string | null;
   record?: string | null;
+  recipe?: string | null;
+  save_recipe?: string | null;
   cursor?: boolean | null;
   local?: boolean;
   chrome?: LocalChrome | null;
@@ -366,7 +390,11 @@ export interface RunParams {
   foreground?: boolean;
   proxy_country?: string | null;
   viewport?: [number, number] | null;
-  cloud_allow_resizing?: boolean;
+  cloud_extensions?: string[];
+  cloud_timeout_minutes?: number | null;
+  allowed_origins?: string[] | null;
+  fetch?: boolean;
+  browser?: boolean;
 }
 export interface SecretRef {
   name: string;
@@ -462,7 +490,7 @@ export const Method = {
   RUN_CANCEL: 'run/cancel',
   SHUTDOWN: 'shutdown',
 } as const;
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const ServerMethod = {
   RUN_EVENT: 'run/event',
   RUN_FRAME: 'run/frame',

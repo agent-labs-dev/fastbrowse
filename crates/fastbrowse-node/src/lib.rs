@@ -85,14 +85,14 @@ fn nothing(_: Value) -> std::result::Result<(), String> {
 }
 
 fn boolean(value: Value) -> std::result::Result<bool, String> {
-    value.as_bool().ok_or_else(|| "the result cannot be used: Input should be a valid boolean".into())
+    value.as_bool().ok_or_else(|| "the result cannot be used: expected true or false".into())
 }
 
 fn secret(value: Value) -> std::result::Result<Option<String>, String> {
     match value {
         Value::Null => Ok(None),
         Value::String(value) => Ok(Some(value)),
-        _ => Err("the result cannot be used: Input should be a valid string".into()),
+        _ => Err("the result cannot be used: expected a string or null".into()),
     }
 }
 
@@ -119,12 +119,12 @@ impl RunHost {
     }
 }
 
-/// `{"result": RunResult}`, or `{"error": {"code", "message"}}` for a run refused before it began: a JSON-RPC
-/// reply without its id.
+/// `{"result": RunResult}`, or `{"error": {"code", "message"}}` for a run refused before it began, with `data` for a
+/// cancelled one: a JSON-RPC reply without its id.
 fn reply(outcome: std::result::Result<fastbrowse_core::models::RunResult, fastbrowse_cli::serve::Refused>) -> String {
     match outcome {
         Ok(result) => json!({"result": result.dump()}).to_string(),
-        Err(refused) => json!({"error": {"code": refused.code.code(), "message": refused.message}}).to_string(),
+        Err(refused) => json!({"error": refused.error().dump()}).to_string(),
     }
 }
 
@@ -176,6 +176,14 @@ pub fn run_task<'env>(
     cancel: Option<&RunCancel>,
 ) -> Result<PromiseRaw<'env, String>> {
     start(env, Arc::new(Embedded::new(Vec::new())), params_json, host, cancel)
+}
+
+/// Read PDFs with `path`, a fastbrowse binary of this version run as a helper process, which a run kills when its
+/// time is up. Node has no program of its own to run again, so the SDK names the binary its platform package carries.
+/// The first path set stands: false when one already was.
+#[napi]
+pub fn set_pdf_helper(path: String) -> bool {
+    fastbrowse_cli::helper::register(fastbrowse_cli::helper::HelperCommand::new(path))
 }
 
 /// The version of the core and of the protocol its params and replies follow.

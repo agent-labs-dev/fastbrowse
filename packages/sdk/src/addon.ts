@@ -6,9 +6,9 @@ import { dirname, join } from 'node:path';
 
 import { Callbacks } from './callbacks.ts';
 import { abortable } from './abort.ts';
-import { platformPackage } from './binary.ts';
+import { platformPackage, resolveBinary } from './binary.ts';
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
-import { ErrorCode, type RunParams, type RunResult } from './protocol.ts';
+import { ErrorCode, type RunParams, type RunResult, type Error as WireError } from './protocol.ts';
 import type { RunOptions } from './run.ts';
 
 /** A host function of the addon. It answers `{"ok": value}` or `{"error": message}` as JSON, and never rejects. */
@@ -30,12 +30,20 @@ export interface Addon {
   Core: new (
     env?: Record<string, string>,
   ) => {
-    /** Resolves with `{"result": RunResult}` or `{"error": {"code", "message"}}` as JSON. */
+    /** Resolves with `{"result": RunResult}` or `{"error": {"code", "message", "data"?}}` as JSON. */
     runTask(params: string, host?: AddonHost, cancel?: AddonCancel): Promise<string>;
   };
   RunCancel: new () => AddonCancel;
   version(): string;
   protocolVersion(): number;
+  /**
+   * Read PDFs by running this fastbrowse binary as a helper process. False when a helper was already set.
+   *
+   * Optional because an addon built before it still speaks protocol 2 and must still load with its original PDF
+   * handling. Make it required when the protocol version next changes, since the check in `Fastbrowse.start` then
+   * refuses every addon that lacks it before `readPdfsWith` is called.
+   */
+  setPdfHelper?(path: string): boolean;
 }
 
 /**
@@ -51,6 +59,23 @@ export function loadAddon(addonPath: string | undefined, env: NodeJS.ProcessEnv)
       cause: error,
     });
   }
+}
+
+/**
+ * Have `addon` read PDFs with the fastbrowse binary `env` resolves to, once its protocol is known to match. A PDF is
+ * read in a process the run can kill, and Node is no program the addon can run again for that: the binary beside it
+ * is. Without a binary, the current addon still runs and says of each PDF that its text went unread. An older
+ * addon without this method retains its original PDF handling.
+ */
+export function readPdfsWith(addon: Addon, env: NodeJS.ProcessEnv, binaryPath?: string): void {
+  if (typeof addon.setPdfHelper !== 'function') return;
+  let binary: string;
+  try {
+    binary = resolveBinary(binaryPath, env);
+  } catch {
+    return;
+  }
+  addon.setPdfHelper(binary);
 }
 
 /** The JSON a host function answers with. What a callback threw reaches the core as its message alone. */
@@ -97,13 +122,13 @@ export class InProcess {
       }
       const done = this.#core.runTask(JSON.stringify(params), host, cancel);
       this.#active = { runId, cancel, done };
-      let reply: { result?: RunResult; error?: { code: number; message: string } };
+      let reply: { result?: RunResult; error?: WireError };
       try {
         reply = JSON.parse(await done);
       } finally {
         this.#active = undefined;
       }
-      if (reply.error) throw new RpcError(reply.error.code, reply.error.message);
+      if (reply.error) throw new RpcError(reply.error.code, reply.error.message, reply.error.data ?? undefined);
       return reply.result as RunResult;
     };
     const stop = () => cancel.cancel();

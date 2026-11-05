@@ -63,12 +63,14 @@ fn civil_from_days(days: i64) -> (i32, u8, u8) {
     (year, month, day)
 }
 
-fn days_in_month(year: i32, month: u8) -> u8 {
+/// Days in a Gregorian calendar month, or None for an invalid month.
+pub fn days_in_month(year: i32, month: u8) -> Option<u8> {
     match month {
-        4 | 6 | 9 | 11 => 30,
-        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
-        2 => 28,
-        _ => 31,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
+        4 | 6 | 9 | 11 => Some(30),
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => Some(29),
+        2 => Some(28),
+        _ => None,
     }
 }
 
@@ -202,7 +204,8 @@ impl DateTime {
         }
         let month = digits(5..7).ok_or_else(invalid)? as u8;
         let day = digits(8..10).ok_or_else(invalid)? as u8;
-        if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+        let days = days_in_month(year, month).ok_or_else(invalid)?;
+        if day == 0 || day > days {
             return Err(invalid());
         }
         let mut result = DateTime::new(year, month, day, 0, 0, 0);

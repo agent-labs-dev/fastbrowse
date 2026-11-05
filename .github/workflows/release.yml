@@ -102,11 +102,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
 
-  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, the
-  # live campaign (every group and suite, three repeats) and both official suites (three repeats), all on this tag.
-  # A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is a
-  # dispatch, so a campaign that runs for hours never holds this run open, and the campaign opens the site pull
-  # request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
+  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, both
+  # official suites for fastbrowse (three repeats), then the live campaign (every group and suite, three repeats), all
+  # on this tag. A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is
+  # a dispatch, so runs that take hours never hold this run open. The official workflow dispatches the campaign itself
+  # once it has passed, naming its own rows, so every group lands in one candidate on one build, and the campaign opens
+  # the site pull request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
   benchmarks:
     needs: [build, github-release]
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -135,7 +136,7 @@ jobs:
             echo "$GITHUB_REF_NAME is a patch release without 'Benchmarks: run' in its tag message; no benchmarks run"
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Dispatch the evals, the campaign and the official suites
+      - name: Dispatch the evals and the official suites, which dispatch the campaign
         if: steps.decide.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -143,13 +144,11 @@ jobs:
           PARALLAX_SHA: ${{ vars.PARALLAX_SHA }}
         run: |
           test -n "$PARALLAX_SHA" || { echo "::error::missing repository variable PARALLAX_SHA"; exit 1; }
-          # The release already ran the fixture suites, as a called workflow; a candidate binds to a dispatched run.
+          # A benchmark candidate binds to a dispatched fixture run on this tag.
           gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
-          gh workflow run benchmark-campaign.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f campaign_id="release-$VERSION" -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" \
-            -f groups=all
           gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all
+            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all \
+            -f campaign_id="release-$VERSION"
 
   pypi:
     needs: github-release
@@ -374,7 +373,7 @@ jobs:
         with:
           pattern: fastbrowse-rust-*
           path: ${{ runner.temp }}/rust
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with: {dotnet-version: "10.0.x"}
       # The release's targets by the runtime identifiers .NET names them with.
       - name: Stage the binaries
@@ -433,13 +432,11 @@ jobs:
 
   # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container,
   # then pushed to the AUR so Arch users get the release without anyone copying two files by hand. Its
-  # PKGBUILD and .SRCINFO are this run's `aur` artifact too, and it opens the PR that keeps `packaging/aur` on
-  # `main` at the same version, which is what the weekly AUR check compares against.
+  # PKGBUILD and .SRCINFO are this run's `aur` artifact too. The separate `aur-sync` job updates the
+  # committed package through a pull request.
   aur:
     needs: [build, pypi]
-    permissions:
-      contents: write
-      pull-requests: write
+    permissions: {contents: read}
     uses: ./.github/workflows/aur.yml
     with:
       version: ${{ needs.build.outputs.version }}
@@ -477,16 +474,21 @@ jobs:
             exit 0
           fi
           branch="chore/aur-$VERSION"
+          # Branch checkout must start clean, while the renderer's release bytes survive the switch.
+          rendered="$RUNNER_TEMP/aur-package"
+          mkdir -p "$rendered"
+          cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO "$rendered/"
+          git restore --source=HEAD --staged --worktree -- packaging/aur/PKGBUILD packaging/aur/.SRCINFO
           # A rerun after a failure later in this job finds the branch it already pushed, so it is reused rather
           # than pushed over. Rerunning the failed jobs is the documented way to recover a half-finished release.
           git remote set-url origin "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git"
           git fetch --quiet origin "$branch" || true
           if git rev-parse --verify --quiet "origin/$branch" > /dev/null; then
             git checkout --quiet -B "$branch" "origin/$branch"
-            git checkout --quiet "$GITHUB_SHA" -- packaging/aur
           else
             git checkout --quiet -b "$branch"
           fi
+          cp "$rendered/PKGBUILD" "$rendered/.SRCINFO" packaging/aur/
           git add packaging/aur
           if git diff --cached --quiet; then
             echo "the branch already carries this package"

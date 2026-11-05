@@ -10,7 +10,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record Citation(
     @JsonProperty("id") long id,
     @JsonProperty("text") String text,
-    @JsonProperty("requirement_id") String requirementId,
     @JsonProperty("url") String url,
     @JsonProperty("quote") String quote,
     @JsonProperty("deep_link") String deepLink) {
@@ -24,7 +23,6 @@ public record Citation(
     public static final class Builder {
         private long id;
         private String text;
-        private String requirementId;
         private String url;
         private String quote;
         private String deepLink;
@@ -38,11 +36,6 @@ public record Citation(
 
         public Builder text(String text) {
             this.text = text;
-            return this;
-        }
-
-        public Builder requirementId(String requirementId) {
-            this.requirementId = requirementId;
             return this;
         }
 
@@ -62,7 +55,7 @@ public record Citation(
         }
 
         public Citation build() {
-            return new Citation(id, text, requirementId, url, quote, deepLink);
+            return new Citation(id, text, url, quote, deepLink);
         }
     }
 }

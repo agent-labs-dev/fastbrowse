@@ -5,18 +5,12 @@ package dev.agentlabs.fastbrowse.protocol;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public enum LLMPurpose {
-    @JsonProperty("plan")
-    PLAN,
-    @JsonProperty("read")
-    READ,
-    @JsonProperty("field_text")
-    FIELD_TEXT,
-    @JsonProperty("recover")
-    RECOVER,
-    @JsonProperty("verify")
-    VERIFY,
+    @JsonProperty("start")
+    START,
     @JsonProperty("compose")
     COMPOSE,
-    @JsonProperty("shortcut")
-    SHORTCUT
+    @JsonProperty("image_read")
+    IMAGE_READ,
+    @JsonProperty("fill")
+    FILL
 }

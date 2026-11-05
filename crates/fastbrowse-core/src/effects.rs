@@ -1,14 +1,11 @@
-//! Port of `src/fastbrowse/effects.py`: what an action visibly did, told back to the policy so that a no-op cannot
-//! pass for progress.
+//! What an action visibly did, told back to the policy so that a no-op cannot pass for progress.
 
 use indexmap::IndexMap;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::page::{BlockKind, Capture, Control, Observation};
+use crate::models::Operation;
+use crate::page::{Control, Observation};
 use crate::py::{json::dumps, sha256_hex, text};
-
-const SHOWN: usize = 4;
-const TEXT: usize = 60;
 
 /// Clicking one of these is choosing a value, so it should leave some value, selection or address changed.
 pub const SETTING_ROLES: [&str; 6] = ["option", "checkbox", "radio", "switch", "menuitemradio", "menuitemcheckbox"];
@@ -18,38 +15,36 @@ pub struct Effect {
     pub summary: String,
     /// The address, or a surviving control's label, value, checked or selected state, changed.
     pub set_something: bool,
+    /// The page stayed and its content or controls changed beyond focus, losing no control.
+    pub added: bool,
+    /// Something a person would see differs: a control, the address or the text in the viewport.
+    pub changed: bool,
+}
+
+/// Whether a field can be left: an editable control the browser reports holds keyboard focus. Focus a browser never
+/// reported is not guessed, and a control's own operation list is not trusted to say it.
+pub fn leavable(control: &Control) -> bool {
+    control.focused == Some(true) && control.operations.contains(&Operation::Fill)
 }
 
 /// Identify a page state by what can be done on it, ignoring text that changes on its own (clocks, ads).
+///
+/// A field that can be left is marked, since leaving it is an operation the state offers; every other control keys as
+/// it did before focus was observed, so a page whose focus was never reported keeps its state.
 pub fn state_key(observation: &Observation) -> String {
     let mut controls: Vec<String> = observation
         .controls
         .iter()
-        .map(|c| dumps(&json!([c.role, c.label, c.context, c.value, c.checked, c.selected, c.expanded])))
+        .map(|c| {
+            let mut key = json!([c.role, c.label, c.context, c.value, c.checked, c.selected, c.expanded]);
+            if leavable(c) {
+                key.as_array_mut().expect("an array").push(true.into());
+            }
+            dumps(&key)
+        })
         .collect();
     controls.sort();
     sha256_hex(dumps(&json!([observation.url, controls])).as_bytes())
-}
-
-/// Identify which step or content state a capture shows: its page state and the shape of its text.
-///
-/// A wizard's Review and Submit steps can share an address and their Back and Next buttons, so `state_key` takes one
-/// for the other. Each block's kind and the headings over it tell them apart, while a block's own words are left
-/// out: a countdown or a corrected name changes them on every capture of the same step.
-pub fn step_key(observation: &Observation, capture: &Capture) -> String {
-    let shape: Vec<Value> = capture
-        .blocks
-        .iter()
-        .filter(|block| block.kind != BlockKind::Observation)
-        .map(|block| json!([block.kind, block.frame_id, block.heading_path]))
-        .collect();
-    let headings: Vec<&str> = capture
-        .blocks
-        .iter()
-        .filter(|block| block.kind == BlockKind::Heading)
-        .map(|block| capture.block_text(block))
-        .collect();
-    sha256_hex(dumps(&json!([state_key(observation), shape, headings])).as_bytes())
 }
 
 /// A control attribute as `str()` shows it.
@@ -79,22 +74,21 @@ impl Shown {
 
 fn short(value: &Shown) -> String {
     let squashed = if *value == Shown::Missing { String::new() } else { text::squash(&value.str()) };
-    let shown = if squashed.is_empty() { "empty".to_string() } else { squashed };
-    if text::len(&shown) <= TEXT { shown } else { format!("{}\u{2026}", text::prefix(&shown, TEXT - 1)) }
+    if squashed.is_empty() { "empty".to_string() } else { squashed }
 }
 
 fn listed(controls: &[&Control]) -> String {
     let count = format!("{} control{}", controls.len(), if controls.len() == 1 { "" } else { "s" });
-    let names: Vec<String> = controls.iter().take(SHOWN).map(|c| short(&Shown::Text(c.label.clone()))).collect();
-    let more = if controls.len() > SHOWN { format!(" and {} more", controls.len() - SHOWN) } else { String::new() };
-    format!("{count}: {}{more}", names.join(", "))
+    let names: Vec<String> = controls.iter().map(|c| short(&Shown::Text(c.label.clone()))).collect();
+    format!("{count}: {}", names.join(", "))
 }
 
 fn plain(text: &str) -> String {
     text::casefold(&text::squash(text))
 }
 
-/// Whether a field now shows `choice`, whole or as the start of it ("London" for "London, United Kingdom").
+/// Whether a field now shows `choice`, whole or as its first comma-separated part ("London" for "London, United
+/// Kingdom"). A fragment of the choice is only what was typed on the way to it.
 fn shows(control: &Control, choice: &str) -> bool {
     let mut shown = Vec::new();
     if let Some(value) = control.value.as_deref().filter(|v| !v.is_empty()) {
@@ -103,13 +97,18 @@ fn shows(control: &Control, choice: &str) -> bool {
     if control.role == "combobox" {
         shown.push(plain(&control.label));
     }
-    shown.iter().filter(|t| !t.is_empty()).any(|t| choice.contains(t.as_str()) || choice.starts_with(t.as_str()))
+    let first = choice.split(',').next().unwrap_or(choice).trim();
+    shown.iter().filter(|t| !t.is_empty()).any(|t| t.contains(choice) || t == first)
 }
 
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as
 /// a value set: an autocomplete choice can leave the text that was typed exactly as it was.
 pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control>) -> Effect {
-    let old: IndexMap<&str, &Control> = before.controls.iter().map(|c| (c.id.as_str(), c)).collect();
+    let replaced = before.document_key != after.document_key;
+    // Each document starts its control ids again. Matching those ids after navigation invents edits to controls
+    // that belonged to the page left behind, even when a reload kept the same address and field labels.
+    let old: IndexMap<&str, &Control> =
+        before.controls.iter().filter(|_| !replaced).map(|c| (c.id.as_str(), c)).collect();
     let new: IndexMap<&str, &Control> = after.controls.iter().map(|c| (c.id.as_str(), c)).collect();
     let mut parts = Vec::new();
     let navigated = before.url != after.url;
@@ -120,12 +119,13 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         parts.push(format!("HTTP {status}: destination did not load successfully"));
     }
     let mut changes = Vec::new();
+    let mut content_changed = before.viewport_text != after.viewport_text;
     let mut setting = false;
     // A picker can open as an overlay with its own copy of the field, so the field the choice fills is a different
     // element before and after. A control unmatched by id is compared with the one earlier control sharing its role
     // and label, if exactly one did.
     let mut by_name: IndexMap<(&str, &str), Vec<&Control>> = IndexMap::new();
-    for control in &before.controls {
+    for control in old.values() {
         by_name.entry((control.role.as_str(), text::strip(&control.label))).or_default().push(control);
     }
     for (key, now) in &new {
@@ -146,6 +146,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         for (name, a, b) in attributes {
             let differs = if name == "label" { plain(&was.label) != plain(&now.label) } else { a != b };
             if differs {
+                content_changed = true;
                 changes.push(format!(
                     "{} {name}: {} -> {}",
                     short(&Shown::Text(was.label.clone())),
@@ -156,42 +157,92 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
                 setting = setting || name != "expanded";
             }
         }
+        // Focus is told where both readings know it and the control is a field leaving is offered for. Entering or
+        // leaving a field is what happened, so it is told and counts as a change, but it sets no value. A reading that
+        // never reported focus invents no transition.
+        if let (Some(a), Some(b)) = (was.focused, now.focused)
+            && a != b
+            && now.operations.contains(&Operation::Fill)
+        {
+            let name = short(&Shown::Text(was.label.clone()));
+            changes.push(format!("{name} focused: {} -> {}", Shown::Flag(a).str(), Shown::Flag(b).str()));
+        }
+    }
+    // A player's clock and paused state live outside its controls, and the policy sees only the current reading, so
+    // a step can confirm playback started, stopped or was moved only from what each earlier step is told it changed.
+    // A playing clock moves by itself, like a page's own clock, so its elapsed time is told only for a player paused on
+    // both readings. Players pair up by position within one document; a new document's players are new.
+    if !replaced && before.media.len() == after.media.len() {
+        for (was, now) in before.media.iter().zip(&after.media) {
+            let name = match now.label.as_ref().or(now.heading.as_ref()) {
+                Some(named) => format!("{} {named}", now.kind),
+                None => now.kind.clone(),
+            };
+            for (attribute, a, b) in
+                [("paused", was.paused, now.paused), ("ended", was.ended, now.ended), ("muted", was.muted, now.muted)]
+            {
+                if a != b {
+                    changes.push(format!("{name} {attribute}: {} -> {}", Shown::Flag(a).str(), Shown::Flag(b).str()));
+                }
+            }
+            if was.paused && now.paused && was.elapsed_seconds != now.elapsed_seconds {
+                changes.push(format!("{name} elapsed: {} s -> {} s", was.elapsed_seconds, now.elapsed_seconds));
+            }
+        }
     }
     if !changes.is_empty() {
-        let more = if changes.len() > SHOWN { format!(" and {} more", changes.len() - SHOWN) } else { String::new() };
-        parts.push(format!("changed {}{more}", changes[..changes.len().min(SHOWN)].join("; ")));
+        parts.push(format!("changed {}", changes.join("; ")));
     }
     let shown: Vec<&Control> = new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect();
-    let hidden: Vec<&Control> = old.iter().filter(|(key, _)| !new.contains_key(*key)).map(|(_, c)| *c).collect();
+    let hidden: Vec<&Control> =
+        before.controls.iter().filter(|c| replaced || !new.contains_key(c.id.as_str())).collect();
+    let stayed_whole = !navigated && !replaced && hidden.is_empty();
     if !shown.is_empty() {
         parts.push(format!("showed {}", listed(&shown)));
     }
     if !hidden.is_empty() {
         parts.push(format!("removed {}", listed(&hidden)));
     }
-    if let Some(chosen) = chosen {
+    if let Some(chosen) = chosen.filter(|_| !replaced) {
         let choice = plain(&chosen.label);
         setting =
             setting || after.controls.iter().any(|c| !SETTING_ROLES.contains(&c.role.as_str()) && shows(c, &choice));
     }
-    let mut summary = if parts.is_empty() { "nothing visible changed".to_string() } else { parts.join("; ") };
-    // A submit a form refuses moves nothing or reopens a picker, and says why only in the fields it marks: Search on a
-    // round trip with no return date reopened the date picker, and the run clicked Done and Search in turn.
-    if !(navigated || setting) {
-        let blocking: Vec<&Control> = after.controls.iter().filter(|c| c.blocking == Some(true)).collect();
-        if !blocking.is_empty() {
-            summary.push_str(&format!("; fields the form still needs: {}", listed(&blocking)));
-        }
+    // A form that refuses a submit can say why in its text alone, as Sauce Demo's checkout shows "Error: First Name is
+    // required" and changes no control.
+    let changed = !parts.is_empty() || before.viewport_text != after.viewport_text;
+    let summary = if !parts.is_empty() {
+        parts.join("; ")
+    } else if changed {
+        "only the page text changed".to_string()
+    } else {
+        "nothing visible changed".to_string()
+    };
+    Effect {
+        summary,
+        set_something: navigated || setting,
+        added: stayed_whole && (content_changed || !shown.is_empty()),
+        changed,
     }
-    Effect { summary, set_something: navigated || setting }
 }
 
 #[cfg(test)]
 mod tests {
-    //! tests/test_effects.py.
     use super::*;
     use crate::models::Operation;
+    use crate::page::Media;
     use crate::py::datetime::DateTime;
+
+    #[test]
+    fn test_a_fragment_of_the_choice_does_not_count_as_showing_it() {
+        let mut field = Control::new("f", "combobox", "City", [Operation::Fill]);
+        field.value = Some("Lon".into());
+        assert!(!shows(&field, "london, united kingdom"));
+        field.value = Some("London".into());
+        assert!(shows(&field, "london, united kingdom"));
+        field.value = Some("London, United Kingdom".into());
+        assert!(shows(&field, "london"));
+    }
 
     fn observation(controls: Vec<Control>) -> Observation {
         Observation {
@@ -202,9 +253,10 @@ mod tests {
             response_status: None,
             document_key: String::new(),
             controls,
-            omitted_controls: 0,
             viewport_text: String::new(),
+            offscreen_text: String::new(),
             visual_content: false,
+            media: Vec::new(),
             tabs: vec![],
             dialog: None,
             inaccessible_frames: 0,
@@ -254,6 +306,36 @@ mod tests {
         let done = effect(&before, &after, None);
         assert!(done.set_something);
         assert!(done.summary.contains("Ticket type value: Round trip -> One way"));
+    }
+
+    #[test]
+    fn test_control_ids_do_not_survive_a_new_document_at_the_same_address() {
+        let mut before = observation(vec![trigger()]);
+        before.document_key = "first".into();
+        let mut after = observation(vec![with(&trigger(), |c| c.value = Some("One way".into()))]);
+        after.document_key = "second".into();
+        let done = effect(&before, &after, None);
+        assert!(!done.set_something, "a different document did not edit the old field");
+        assert!(!done.added);
+        assert!(done.changed);
+        assert!(!done.summary.contains("changed Ticket type"), "{}", done.summary);
+        assert!(done.summary.contains("showed 1 control: Ticket type"));
+        assert!(done.summary.contains("removed 1 control: Ticket type"));
+        assert!(!effect(&before, &after, Some(&options()[0])).set_something);
+    }
+
+    #[test]
+    fn test_new_documents_do_not_match_fields_by_name() {
+        let mut before = observation(vec![trigger()]);
+        before.document_key = "first".into();
+        let mut after = observation(vec![with(&trigger(), |c| {
+            c.id = "another".into();
+            c.value = Some("One way".into());
+        })]);
+        after.document_key = "second".into();
+        let done = effect(&before, &after, None);
+        assert!(!done.set_something);
+        assert!(!done.summary.contains("changed Ticket type"), "{}", done.summary);
     }
 
     #[test]
@@ -309,28 +391,104 @@ mod tests {
     }
 
     #[test]
-    fn test_an_action_that_set_nothing_names_the_fields_the_form_still_needs() {
-        let search = Control::new("s", "button", "Search", [Operation::Click]);
-        let needed = with(&Control::new("r", "textbox", "Return", [Operation::Fill]), |c| c.blocking = Some(true));
-        let form = observation(vec![search.clone(), needed.clone()]);
-        assert_eq!(
-            effect(&form, &form, None).summary,
-            "nothing visible changed; fields the form still needs: 1 control: Return"
-        );
-        let filled = observation(vec![
-            search,
-            with(&needed, |c| {
-                c.value = Some("Oct 23".into());
-                c.blocking = Some(false);
-            }),
-        ]);
-        assert!(!effect(&form, &filled, None).summary.contains("still needs"));
+    fn test_an_action_that_changed_only_the_text_says_so() {
+        let form = observation(vec![Control::new("s", "button", "Continue", [Operation::Click])]);
+        let refused = Observation { viewport_text: "Error: First Name is required".into(), ..form.clone() };
+        let done = effect(&form, &refused, None);
+        assert_eq!(done.summary, "only the page text changed");
+        assert!(!done.set_something);
+        assert!(done.added, "text-only changes remain observable without claiming added records");
     }
 
     #[test]
-    fn a_long_name_is_cut_with_an_ellipsis() {
+    fn text_only_appended_rows_remain_observable() {
+        let before = Observation {
+            viewport_text: "Record A".into(),
+            ..observation(vec![Control::new("m", "button", "More", [Operation::Click])])
+        };
+        let after = Observation { viewport_text: "Record A\nRecord B".into(), ..before.clone() };
+        let done = effect(&before, &after, before.controls.first());
+        assert!(done.changed);
+        assert!(done.added);
+        assert_eq!(done.summary, "only the page text changed");
+    }
+
+    fn field(focused: Option<bool>) -> Control {
+        let mut c = Control::new("ref", "textbox", "Reference", [Operation::Fill, Operation::Enter]);
+        c.value = Some("Alpha-17".into());
+        c.focused = focused;
+        c
+    }
+
+    #[test]
+    fn test_leaving_a_field_is_told_and_is_a_new_state_but_sets_nothing() {
+        let typing = observation(vec![field(Some(true))]);
+        let left = observation(vec![field(Some(false))]);
+        let done = effect(&typing, &left, None);
+        assert_eq!(done.summary, "changed Reference focused: True -> False");
+        assert!(done.changed && !done.set_something);
+        assert!(!done.added, "leaving a field adds no controls or records");
+        let entered = effect(&left, &typing, None);
+        assert_eq!(entered.summary, "changed Reference focused: False -> True");
+        assert!(!entered.set_something);
+        assert_ne!(state_key(&typing), state_key(&left));
+    }
+
+    #[test]
+    fn test_focus_a_reading_never_reported_is_no_transition() {
+        let unknown = observation(vec![field(None)]);
+        for known in [Some(false), Some(true)] {
+            let known = observation(vec![field(known)]);
+            assert_eq!(effect(&unknown, &known, None).summary, "nothing visible changed");
+            assert_eq!(effect(&known, &unknown, None).summary, "nothing visible changed");
+        }
+        // An unfocused field offers nothing an unknown one does not, so the page state is the same one.
+        assert_eq!(state_key(&unknown), state_key(&observation(vec![field(Some(false))])));
+        // A button's focus offers no way to leave it, and is not told.
+        let button = |focused| Control { focused, ..control("go", "Go", "button") };
+        let done = effect(&observation(vec![button(Some(false))]), &observation(vec![button(Some(true))]), None);
+        assert_eq!(done.summary, "nothing visible changed");
+    }
+
+    #[test]
+    fn every_name_is_told_whole() {
         let long = "x".repeat(70);
-        assert_eq!(short(&Shown::Text(long)), format!("{}\u{2026}", "x".repeat(59)));
+        assert_eq!(short(&Shown::Text(long.clone())), long);
         assert_eq!(short(&Shown::Missing), "empty");
+        let many: Vec<Control> = (0..6).map(|i| control(&format!("c{i}"), &format!("Item {i}"), "link")).collect();
+        let done = effect(&observation(vec![]), &observation(many), None);
+        assert_eq!(done.summary, "showed 6 controls: Item 0, Item 1, Item 2, Item 3, Item 4, Item 5");
+    }
+
+    fn player(paused: bool, elapsed_seconds: f64) -> Media {
+        Media {
+            kind: "audio".into(),
+            label: None,
+            heading: Some("Gymnopedie No. 1".into()),
+            paused,
+            ended: false,
+            muted: false,
+            elapsed_seconds,
+            duration_seconds: Some(204.8),
+        }
+    }
+
+    #[test]
+    fn test_a_players_change_is_told_so_a_later_step_can_confirm_it() {
+        let page = observation(vec![Control::new("p", "button", "Pause", [Operation::Click])]);
+        let playing = Observation { media: vec![player(false, 12.0)], ..page.clone() };
+        let later = Observation { media: vec![player(false, 15.5)], ..page.clone() };
+        let paused = Observation { media: vec![player(true, 15.6)], ..page.clone() };
+        let sought = Observation { media: vec![player(true, 90.0)], ..page.clone() };
+        // A playing clock moves by itself: a step that left it playing changed nothing about it.
+        assert_eq!(effect(&playing, &later, None).summary, "nothing visible changed");
+        assert_eq!(effect(&later, &paused, None).summary, "changed audio Gymnopedie No. 1 paused: False -> True");
+        assert_eq!(effect(&paused, &sought, None).summary, "changed audio Gymnopedie No. 1 elapsed: 15.6 s -> 90 s");
+        assert_eq!(effect(&paused, &paused, None).summary, "nothing visible changed");
+        let unnamed = |media: &Observation| Observation {
+            media: media.media.iter().map(|m| Media { heading: None, ..m.clone() }).collect(),
+            ..media.clone()
+        };
+        assert_eq!(effect(&unnamed(&later), &unnamed(&paused), None).summary, "changed audio paused: False -> True");
     }
 }

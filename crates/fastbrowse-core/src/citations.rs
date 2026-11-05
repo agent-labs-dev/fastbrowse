@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/citations.py`: WICG text-fragment deep links derived from captured quotes.
+//! Citation text as the page shows it, and WICG text-fragment deep links to it.
 
 use std::fmt;
 
@@ -199,7 +199,6 @@ impl Cells {
 
 #[cfg(test)]
 mod tests {
-    //! Mirrors tests/test_citations.py.
     use super::*;
     use percent_encoding::percent_decode_str;
 

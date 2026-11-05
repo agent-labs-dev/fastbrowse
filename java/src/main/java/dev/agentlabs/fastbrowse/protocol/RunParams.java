@@ -3,18 +3,21 @@
 package dev.agentlabs.fastbrowse.protocol;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
+import tools.jackson.databind.JsonNode;
 
 /**
- * One run. Apart from {@code run_id}, each field is the {@code run_task} argument or the CLI flag of the same name.
+ * One run: the run's arguments, and what the server needs to talk to the client about it.
  *
  * The reply is the {@code RunResult}. No API key is among the fields: model and browser keys come from the
  * environment the server inherited.
  */
 public record RunParams(
     @JsonProperty("run_id") String runId,
+    @JsonProperty("secrets") List<SecretRef> secrets,
+    @JsonProperty("frames") Boolean frames,
+    @JsonProperty("until") Boolean until,
     @JsonProperty("task") String task,
     @JsonProperty("start") String start,
     @JsonProperty("context") String context,
@@ -23,11 +26,10 @@ public record RunParams(
     @JsonProperty("limits") Limits limits,
     @JsonProperty("authorization") Authorization authorization,
     @JsonProperty("output_schema") JsonNode outputSchema,
-    @JsonProperty("secrets") List<SecretRef> secrets,
-    @JsonProperty("frames") Boolean frames,
-    @JsonProperty("until") Boolean until,
     @JsonProperty("downloads") String downloads,
     @JsonProperty("record") String record,
+    @JsonProperty("recipe") String recipe,
+    @JsonProperty("save_recipe") String saveRecipe,
     @JsonProperty("cursor") Boolean cursor,
     @JsonProperty("local") Boolean local,
     @JsonProperty("chrome") LocalChrome chrome,
@@ -39,7 +41,15 @@ public record RunParams(
     @JsonProperty("foreground") Boolean foreground,
     @JsonProperty("proxy_country") String proxyCountry,
     @JsonProperty("viewport") List<Long> viewport,
-    @JsonProperty("cloud_allow_resizing") Boolean cloudAllowResizing) {
+    @JsonProperty("cloud_extensions") List<String> cloudExtensions,
+    @JsonProperty("cloud_timeout_minutes") Long cloudTimeoutMinutes,
+    @JsonProperty("allowed_origins") List<String> allowedOrigins,
+    @JsonProperty("fetch") Boolean fetch,
+    @JsonProperty("browser") Boolean browser) {
+
+    public RunParams(String runId, List<SecretRef> secrets, Boolean frames, Boolean until, String task, String start, String context, Map<String, String> inputs, List<RunAttachment> attachments, Limits limits, Authorization authorization, JsonNode outputSchema, String downloads, String record, Boolean cursor, Boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl, Long cdpPort, Boolean attach, String targetMatch, Boolean foreground, String proxyCountry, List<Long> viewport, List<String> cloudExtensions, Long cloudTimeoutMinutes, List<String> allowedOrigins, Boolean fetch, Boolean browser) {
+        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, null, null, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser);
+    }
 
     /** A builder for a {@code RunParams}, every field unset. */
     public static Builder builder() {
@@ -49,6 +59,9 @@ public record RunParams(
     /** Builds a {@code RunParams}. A field left unset is null, or the zero of a primitive. */
     public static final class Builder {
         private String runId;
+        private List<SecretRef> secrets;
+        private Boolean frames;
+        private Boolean until;
         private String task;
         private String start;
         private String context;
@@ -57,11 +70,10 @@ public record RunParams(
         private Limits limits;
         private Authorization authorization;
         private JsonNode outputSchema;
-        private List<SecretRef> secrets;
-        private Boolean frames;
-        private Boolean until;
         private String downloads;
         private String record;
+        private String recipe;
+        private String saveRecipe;
         private Boolean cursor;
         private Boolean local;
         private LocalChrome chrome;
@@ -73,12 +85,31 @@ public record RunParams(
         private Boolean foreground;
         private String proxyCountry;
         private List<Long> viewport;
-        private Boolean cloudAllowResizing;
+        private List<String> cloudExtensions;
+        private Long cloudTimeoutMinutes;
+        private List<String> allowedOrigins;
+        private Boolean fetch;
+        private Boolean browser;
 
         private Builder() {}
 
         public Builder runId(String runId) {
             this.runId = runId;
+            return this;
+        }
+
+        public Builder secrets(List<SecretRef> secrets) {
+            this.secrets = secrets;
+            return this;
+        }
+
+        public Builder frames(Boolean frames) {
+            this.frames = frames;
+            return this;
+        }
+
+        public Builder until(Boolean until) {
+            this.until = until;
             return this;
         }
 
@@ -122,21 +153,6 @@ public record RunParams(
             return this;
         }
 
-        public Builder secrets(List<SecretRef> secrets) {
-            this.secrets = secrets;
-            return this;
-        }
-
-        public Builder frames(Boolean frames) {
-            this.frames = frames;
-            return this;
-        }
-
-        public Builder until(Boolean until) {
-            this.until = until;
-            return this;
-        }
-
         public Builder downloads(String downloads) {
             this.downloads = downloads;
             return this;
@@ -144,6 +160,16 @@ public record RunParams(
 
         public Builder record(String record) {
             this.record = record;
+            return this;
+        }
+
+        public Builder recipe(String recipe) {
+            this.recipe = recipe;
+            return this;
+        }
+
+        public Builder saveRecipe(String saveRecipe) {
+            this.saveRecipe = saveRecipe;
             return this;
         }
 
@@ -202,13 +228,33 @@ public record RunParams(
             return this;
         }
 
-        public Builder cloudAllowResizing(Boolean cloudAllowResizing) {
-            this.cloudAllowResizing = cloudAllowResizing;
+        public Builder cloudExtensions(List<String> cloudExtensions) {
+            this.cloudExtensions = cloudExtensions;
+            return this;
+        }
+
+        public Builder cloudTimeoutMinutes(Long cloudTimeoutMinutes) {
+            this.cloudTimeoutMinutes = cloudTimeoutMinutes;
+            return this;
+        }
+
+        public Builder allowedOrigins(List<String> allowedOrigins) {
+            this.allowedOrigins = allowedOrigins;
+            return this;
+        }
+
+        public Builder fetch(Boolean fetch) {
+            this.fetch = fetch;
+            return this;
+        }
+
+        public Builder browser(Boolean browser) {
+            this.browser = browser;
             return this;
         }
 
         public RunParams build() {
-            return new RunParams(runId, task, start, context, inputs, attachments, limits, authorization, outputSchema, secrets, frames, until, downloads, record, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudAllowResizing);
+            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser);
         }
     }
 }

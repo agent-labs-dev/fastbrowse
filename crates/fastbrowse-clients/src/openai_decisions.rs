@@ -77,6 +77,8 @@ pub fn wire_questions(questions: &IndexMap<String, Question>) -> Value {
                     .collect();
                 json!({"type": "score", "name": name, "instructions": q.instructions, "levels": levels})
             }
+            // The Decisions API documents no box, and refuses the request; only a route sent images is asked one.
+            Question::Box(q) => json!({"type": "box", "name": name, "instructions": q.instructions}),
         })
         .collect();
     Value::Array(wire)
@@ -162,7 +164,14 @@ impl OpenAIDecisionsClient {
         split_batch: bool,
     ) -> Result<Evaluation, AskError> {
         // The span covers the parse as well as the request: a 200 whose body is not a valid answer is a failed call.
-        self.http.trace.call_span("jev", Map::new(), self.request(state, &questions, start_attempt, split_batch)).await
+        self.http
+            .trace
+            .call_span(
+                "jev",
+                crate::validation::jev_trace_fields(),
+                self.request(state, &questions, start_attempt, split_batch),
+            )
+            .await
     }
 
     async fn request(
@@ -178,7 +187,7 @@ impl OpenAIDecisionsClient {
         let url = format!("{}/v1/decisions", self.base_url);
         let price = self.profile.dollars_per_input_token;
         let response =
-            post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch, price).await?;
+            post(&self.http, &url, &self.api_key, &body, &[], &sent, start_attempt, split_batch, price, None).await?;
         let sent = sent.snapshot();
         let parsed = (|| {
             let payload = json_object(&response)?;

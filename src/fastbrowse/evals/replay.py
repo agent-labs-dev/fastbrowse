@@ -17,10 +17,12 @@ A miss is the signal that two runs asked different questions. Each is logged wit
 unified diff against the nearest body recorded on the same path.
 """
 
+import contextlib
 import difflib
 import gzip
 import hashlib
 import json
+import math
 import re
 import sys
 import threading
@@ -48,8 +50,6 @@ OPENROUTER_PROVIDER_ROUTING = {"require_parameters": True, "sort": "latency"}
 MISS_STATUS = 404
 """Not a status the clients retry, so a miss ends the call at once instead of costing a backoff."""
 
-MAX_DIFF_LINES = 200
-
 
 class Latency(StrEnum):
     ZERO = "zero"
@@ -60,20 +60,19 @@ class Latency(StrEnum):
 
 _WEEKDAY = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
 _MONTH = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+_COLUMN = r"[A-Z][a-z]{2}(?: \d{1,2})+"
+_MONTH_LINE = rf"{_MONTH} \d{{4}}: {_COLUMN}(?:; {_COLUMN}){{6}}"
+_NEWLINE = r"(?:\n|\\+n)"
+"""A line break as it reads in a plain string or inside JSON a prompt carries as text."""
 
 CANONICAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    # Fixture sites are served on fixed ports, but a port is never what tells two questions apart.
+    # Fixture sites may use different loopback ports, but a port is never what tells two questions apart.
     (re.compile(r"(?<=//127\.0\.0\.1:)\d{1,5}|(?<=//localhost:)\d{1,5}|(?<=//\[::1\]:)\d{1,5}"), "<port>"),
     (re.compile(r"(?<=\b127\.0\.0\.1:)\d{1,5}|(?<=\blocalhost:)\d{1,5}"), "<port>"),
-    # `Observation.today`: the capture date, its weekday and the two months after it.
-    (
-        re.compile(
-            rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)\. In one month: {_MONTH} \d{{4}}; in two months: {_MONTH} \d{{4}}"
-        ),
-        "<today>",
-    ),
-    # `page.next_days`: the week after the capture date.
-    (re.compile(rf"\b{_WEEKDAY} \d{{4}}-\d{{2}}-\d{{2}}\b"), "<next day>"),
+    # `Observation.today`: the capture date, its weekday and the calendar under it.
+    (re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)(?:{_NEWLINE}{_MONTH_LINE})+"), "<today>"),
+    # A screenshot sent to Jev as an asset is named by its pixels' digest, which differs from run to run.
+    (re.compile(r"\bscreenshot-[0-9a-f]{64}\b"), "screenshot-<image>"),
     # A capture time, should one reach a prompt.
     (re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b"), "<timestamp>"),
 )
@@ -127,6 +126,9 @@ def canonical_value(value: Any) -> Any:
     if isinstance(value, list):
         return [canonical_value(item) for item in value]
     if isinstance(value, dict):
+        if value.get("type") == "image" and "data_base64" in value:
+            # A screenshot asset's pixels, for the reason a data URL's are keyed as one image.
+            value = {**value, "data_base64": "<image>"}
         return {canonical_text(str(key)): canonical_value(item) for key, item in value.items()}
     raise TypeError(f"not a JSON value: {type(value).__name__}")
 
@@ -169,6 +171,48 @@ def translate_targets(response: str, recorded: Any, requested: Any) -> str:
     return TARGET_ID.sub(lambda match: swaps.get(match.group(), match.group()), response)
 
 
+def translate_origin(response: str, recorded_origin: str | None, requested_origin: str | None) -> str:
+    """Replace the exact fixture origin in a recorded response, without touching other URLs or port-shaped text."""
+    if not recorded_origin or not requested_origin or recorded_origin == requested_origin:
+        return response
+    escaped = re.escape(recorded_origin)
+    return re.sub(rf"(?<![\w.@-]){escaped}(?![\w@])", requested_origin, response)
+
+
+def translate_response_origin(response: str, recorded_origin: str | None, requested_origin: str | None) -> str:
+    """Translate fixture URLs in JSON string values, retaining the original body when nothing changes."""
+    try:
+        decoded = json.loads(response)
+    except (TypeError, ValueError):
+        return translate_origin(response, recorded_origin, requested_origin)
+
+    def visit(value: Any) -> tuple[Any, bool]:
+        if isinstance(value, str):
+            translated = translate_origin(value, recorded_origin, requested_origin)
+            changed = translated != value
+            try:
+                embedded = json.loads(translated)
+            except ValueError:
+                return translated, changed
+            if not isinstance(embedded, (dict, list)):
+                return translated, changed
+            nested, nested_changed = visit(embedded)
+            if nested_changed:
+                translated = json.dumps(nested, ensure_ascii=False, separators=(",", ":"))
+                changed = True
+            return translated, changed
+        if isinstance(value, list):
+            values = [visit(item) for item in value]
+            return [item for item, _ in values], any(changed for _, changed in values)
+        if isinstance(value, dict):
+            values = {key: visit(item) for key, item in value.items()}
+            return {key: item for key, (item, _) in values.items()}, any(changed for _, changed in values.values())
+        return value, False
+
+    translated, changed = visit(decoded)
+    return json.dumps(translated, ensure_ascii=False, separators=(",", ":")) if changed else response
+
+
 def request_key(path: str, body: bytes | str | Any) -> str:
     return hashlib.sha256(f"{path}\n{canonical_json(body)}".encode()).hexdigest()
 
@@ -187,7 +231,7 @@ def describe_request(path: str, body: Any) -> tuple[str, str | None]:
     names = sorted(questions) if isinstance(questions, dict) else []
     if isinstance(questions, list):
         names = sorted(str(q.get("id") or q.get("name") or "?") for q in questions if isinstance(q, dict))
-    return f"jev:{','.join(names)[:120]}", model
+    return f"jev:{','.join(names)}", model
 
 
 def _pretty(body: Any) -> list[str]:
@@ -198,14 +242,11 @@ def _pretty(body: Any) -> list[str]:
         return keyed.splitlines()
 
 
-def miss_diff(body: Any, nearest: Any | None, *, limit: int = MAX_DIFF_LINES) -> str:
-    """A unified diff from the nearest recorded body to the one that missed, cut at `limit` lines."""
+def miss_diff(body: Any, nearest: Any | None) -> str:
+    """A unified diff from the nearest recorded body to the one that missed."""
     if nearest is None:
         return "(nothing recorded on this path)"
-    lines = list(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
-    if len(lines) > limit:
-        lines = [*lines[:limit], f"... {len(lines) - limit} more lines"]
-    return "\n".join(lines)
+    return "\n".join(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
 
 
 def nearest_body(body: Any, candidates: Iterable[Any]) -> Any | None:
@@ -239,6 +280,7 @@ class Exchange:
     body: str
     latency: float
     cost: float | None = None
+    fixture_origin: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -252,6 +294,7 @@ class Exchange:
             "cost": self.cost,
             "request": self.request,
             "body": self.body,
+            "fixture_origin": self.fixture_origin,
         }
 
     @classmethod
@@ -267,6 +310,7 @@ class Exchange:
             body=data["body"],
             latency=data["latency"],
             cost=data.get("cost"),
+            fixture_origin=data.get("fixture_origin"),
         )
 
 
@@ -313,10 +357,6 @@ class Cassette:
         head.pop("cassette")
         return cls(task=task, exchanges=exchanges, meta=head)
 
-    @property
-    def cost(self) -> float:
-        return sum(exchange.cost or 0.0 for exchange in self.exchanges)
-
 
 def response_cost(body: str) -> float | None:
     """The dollars OpenRouter reported for a response, for Jev and the LLM alike."""
@@ -325,7 +365,13 @@ def response_cost(body: str) -> float | None:
         cost = usage.get("cost") if isinstance(usage, dict) else None
     except (ValueError, AttributeError):
         return None
-    return float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else None
+    if not isinstance(cost, int | float) or isinstance(cost, bool):
+        return None
+    try:
+        dollars = float(cost)
+    except OverflowError:
+        return None
+    return dollars if math.isfinite(dollars) and dollars >= 0 else None
 
 
 type Forward = Callable[[str, bytes], tuple[int, str, str]]
@@ -373,7 +419,6 @@ class Proxy:
         forward: Forward | None = None,
         replay: bool = True,
         latency: Latency = Latency.ZERO,
-        on_miss: Callable[[Miss], None] | None = None,
     ) -> None:
         if forward is None and not replay:
             raise ValueError("a proxy that neither replays nor forwards has nothing to answer with")
@@ -381,7 +426,6 @@ class Proxy:
         self._forward = forward
         self._replay = replay
         self._latency = latency
-        self._on_miss = on_miss
         self._lock = threading.Lock()
         self._served: dict[str, int] = {}
         self._by_key: dict[str, list[Exchange]] = {}
@@ -392,6 +436,20 @@ class Proxy:
         self.requests = 0
         self.forwarded = 0
         self._server: ThreadingHTTPServer | None = None
+        self._fixture_origin: tuple[str, str] | None = None
+        self._requested_origin: str | None = None
+        self._recording = forward is not None and not replay
+
+    def set_fixture_origin(self, requested_origin: str) -> None:
+        """Set the live fixture origin used when translating URLs in recorded model responses."""
+        self._requested_origin = requested_origin
+        if self._recording:
+            with contextlib.suppress(ValueError, IndexError):
+                self.cassette.meta["port"] = int(requested_origin.rsplit(":", 1)[1])
+            return
+        recorded_port = self.cassette.meta.get("recorded_port", self.cassette.meta.get("port"))
+        if isinstance(recorded_port, int) and 0 < recorded_port <= 65535:
+            self._fixture_origin = (f"http://127.0.0.1:{recorded_port}", requested_origin)
 
     def answer(self, path: str, raw: bytes) -> tuple[int, str, str, float]:
         """The response to one request, and how long to hold it before sending."""
@@ -410,14 +468,18 @@ class Proxy:
                 exchange = stored[min(index, len(stored) - 1)]
                 hold = exchange.latency if self._latency is Latency.RECORDED else 0.0
                 text = translate_targets(exchange.body, exchange.request, body)
+                if exchange.fixture_origin and self._requested_origin:
+                    recorded, requested = exchange.fixture_origin, self._requested_origin
+                    text = translate_response_origin(text, recorded, requested)
+                elif self._fixture_origin:
+                    recorded, requested = self._fixture_origin
+                    text = translate_response_origin(text, recorded, requested)
                 return exchange.status, exchange.content_type, text, hold
         if self._replay:
             nearest = nearest_body(body, (e.request for e in self.cassette.exchanges if e.path == path))
             miss = Miss(path=path, purpose=purpose, model=model, key=key, diff=miss_diff(body, nearest))
             with self._lock:
                 self.misses.append(miss)
-            if self._on_miss is not None:
-                self._on_miss(miss)
         if self._forward is None:
             message = f"replay miss: no recorded response for {purpose} ({model}) on {path}"
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
@@ -434,6 +496,7 @@ class Proxy:
             body=text,
             latency=time.monotonic() - started,
             cost=response_cost(text),
+            fixture_origin=self._requested_origin,
         )
         with self._lock:
             self.forwarded += 1

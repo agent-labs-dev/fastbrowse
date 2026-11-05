@@ -10,7 +10,7 @@ use lifecycle_support::FakeChrome;
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn form_precheck_preserves_an_unresponsive_renderer_error() {
+async fn a_fill_preserves_an_unresponsive_renderer_error() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
     let page = CdpPage::new(session.clone(), Config::default());
@@ -32,7 +32,6 @@ async fn form_precheck_preserves_an_unresponsive_renderer_error() {
     let action = Action {
         target_id: Some(observation.controls[0].id.clone()),
         text: Some("Alice".into()),
-        form_fill: true,
         ..Action::new(Operation::Fill)
     };
     let active = session.active_session_id().unwrap();
@@ -46,6 +45,6 @@ async fn form_precheck_preserves_an_unresponsive_renderer_error() {
     session.close().await.unwrap();
     assert!(
         matches!(result, Err(BrowserError::PageUnresponsive(_))),
-        "a hung renderer during the form precheck must reach the agent's recovery handler, got {result:?}"
+        "a hung renderer during a fill must reach the agent's recovery handler, got {result:?}"
     );
 }

@@ -104,7 +104,7 @@ class Generator:
         imports = ["com.fasterxml.jackson.annotation.JsonProperty"]
         body = " ".join(java for _, _, java, _ in fields)
         if "JsonNode" in body:
-            imports.append("com.fasterxml.jackson.databind.JsonNode")
+            imports.append("tools.jackson.databind.JsonNode")
         if "List<" in body:
             imports.append("java.util.List")
         if "Map<" in body:
@@ -118,6 +118,13 @@ class Generator:
             out.append(javadoc(doc + ("\n\n" if doc and params else "") + params, ""))
         components = [f'    @JsonProperty("{key}") {java} {field}' for key, field, java, _ in fields]
         out.append(f"public record {name}(\n" + ",\n".join(components) + ") {\n\n")
+        if name == "RunParams":
+            # Keep source compatibility for callers compiled against the pre-recipe protocol shape.
+            legacy = [(field, java) for key, field, java, _ in fields if key not in {"recipe", "save_recipe"}]
+            signature = ", ".join(f"{java} {field}" for field, java in legacy)
+            values = ", ".join("null" if key in {"recipe", "save_recipe"} else field for key, field, _, _ in fields)
+            out.append(f"    public {name}({signature}) {{\n")
+            out.append(f"        this({values});\n    }}\n\n")
         out.append(f"    /** A builder for a {{@code {name}}}, every field unset. */\n")
         out.append("    public static Builder builder() {\n        return new Builder();\n    }\n\n")
         out.append(f"    /** Builds a {{@code {name}}}. A field left unset is null, or the zero of a primitive. */\n")

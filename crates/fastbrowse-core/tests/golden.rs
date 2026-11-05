@@ -5,7 +5,7 @@ use std::path::Path;
 
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{Evaluation, Question};
-use fastbrowse_core::effects::{effect, state_key, step_key};
+use fastbrowse_core::effects::{effect, state_key};
 use fastbrowse_core::llm::Message;
 use fastbrowse_core::models::*;
 use fastbrowse_core::navigation::{navigation_urls, task_urls};
@@ -19,6 +19,7 @@ use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{self, Redactor, downloads_question, irreversible_question};
 use fastbrowse_core::schema::{Schema, Ty, json_schema, strict_schema};
 use fastbrowse_core::telemetry::dollars;
+use fastbrowse_core::validation::validate_typed;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -127,6 +128,19 @@ fn every_schema_is_the_one_pydantic_writes() {
     }
 }
 
+#[test]
+fn evaluation_validation_accepts_and_rejects_box_answers() {
+    let valid = r#"{"model":"jev","answers":{"target":{"type":"box","box":{"top":0.1,"bottom":0.3,"left":0.2,"right":0.4},"confidence":null}},"input_tokens":1,"cost":{"component":"jev","basis":"metered","dollars":0.01}}"#;
+    let parsed = validate_typed::<Evaluation>(valid).expect("valid box answer");
+    assert!(
+        matches!(&parsed.answers["target"], fastbrowse_core::decision::Answer::Box(answer) if answer.edges.right == 0.4 && answer.confidence.is_none())
+    );
+    let invalid = valid.replace("\"right\":0.4", "\"right\":\"bad\"");
+    assert!(validate_typed::<Evaluation>(&invalid).is_err(), "invalid box edge must be rejected");
+    let invalid_confidence = valid.replace("\"confidence\":null", "\"confidence\":1.1");
+    assert!(validate_typed::<Evaluation>(&invalid_confidence).is_err(), "confidence above one must be rejected");
+}
+
 fn fixtures() -> (Observation, Capture) {
     let models = golden("models.json");
     let find = |name: &str| {
@@ -161,10 +175,8 @@ fn floats_and_strings_are_spelled_as_python_spells_them() {
 #[test]
 fn page_keys_and_dates_match_python() {
     let functions = golden("functions.json");
-    let (observation, capture) = fixtures();
+    let (observation, _) = fixtures();
     assert_eq!(state_key(&observation), text_of(&functions, "state_key"));
-    assert_eq!(step_key(&observation, &capture), text_of(&functions, "step_key"));
-    assert_eq!(capture.read_key(), text_of(&functions, "read_key"));
     let dates = [
         observation.captured_at,
         DateTime::new(2026, 1, 31, 0, 0, 0),
@@ -209,20 +221,14 @@ fn the_questions_jev_is_asked_are_the_bytes_python_sends() {
     target.submit_semantics = Some("POST /delete".into());
     let mut destination = Control::new("d", "listitem", "Trash", [Operation::Click]);
     destination.context = Some("Sidebar".into());
-    let irreversible = irreversible_question("Tidy up \u{e9}", Operation::Click, &target, Some(&destination));
+    let irreversible = irreversible_question(Operation::Click, &target, Some(&destination), &[]);
     assert_eq!(irreversible.dump_json(), text_of(questions, "irreversible"));
-    assert_eq!(
-        irreversible_question("Send it", Operation::Enter, &target, None).dump_json(),
-        text_of(questions, "enter")
-    );
+    assert_eq!(irreversible_question(Operation::Enter, &target, None, &[]).dump_json(), text_of(questions, "enter"));
     // A link names where it goes, unless its label already says so; only a click follows it.
     let mut link = Control::new("l1", "link", "Next \u{203a}", [Operation::Click]);
     link.href = Some("/page/2".into());
-    assert_eq!(irreversible_question("Go on", Operation::Click, &link, None).dump_json(), text_of(questions, "link"));
-    assert_eq!(
-        irreversible_question("Go on", Operation::Enter, &link, None).dump_json(),
-        text_of(questions, "link_enter")
-    );
+    assert_eq!(irreversible_question(Operation::Click, &link, None, &[]).dump_json(), text_of(questions, "link"));
+    assert_eq!(irreversible_question(Operation::Enter, &link, None, &[]).dump_json(), text_of(questions, "link_enter"));
     assert_eq!(
         downloads_question("Read the report, do not save anything").dump_json(),
         text_of(questions, "downloads")

@@ -13,15 +13,15 @@ crate-type = ["cdylib"]
 [dependencies]
 fastbrowse-agent = { workspace = true }
 fastbrowse-browser = { workspace = true }
-# The CLI the `fastbrowse` command runs, with the hidden `--run-task` stand-ins the binary has (the Python CLI ships
-# its own), so the smoke test drives the wheel as it drives the binary.
-fastbrowse-cli = { workspace = true }
+# The CLI the `fastbrowse` command runs, with the hidden `--run-task` stand-ins, so the smoke test drives the wheel as
+# it drives the binary.
+fastbrowse-cli = { workspace = true, features = ["scripted"] }
 fastbrowse-clients = { workspace = true }
 fastbrowse-core = { workspace = true }
 fastbrowse-run = { workspace = true }
-indexmap = { version = "2", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+indexmap = { version = "2.14.2", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
 # abi3: one wheel per platform serves every CPython from 3.13 on.
-pyo3 = { version = "0.30", features = ["extension-module", "abi3-py313"] }
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py313"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "macros"] }

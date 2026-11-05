@@ -1,6 +1,6 @@
 # Benchmark
 
-This directory holds the cassettes and the Python baseline for `src/fastbrowse/evals/bench.py`. The harness runs
+This directory holds the cassettes and results for `src/fastbrowse/evals/bench.py`. The harness runs
 every fixture task (the `local` and `mock` suites) against any program that speaks `fastbrowse serve --stdio`, with
 the model traffic played back from a cassette. It checks two things: given the same model responses, the agent
 reaches the same results, and how much time, CPU and memory it takes to get there.
@@ -9,8 +9,7 @@ reaches the same results, and how much time, CPU and memory it takes to get ther
 
 For each task the harness:
 
-1. serves the fixture site on a fixed port (47300 plus the task's position in the suite), because the address
-   reaches the prompts and the model writes it back;
+1. serves the fixture site on an ephemeral loopback port, because the address reaches the prompts and the model writes it back;
 2. starts one headless Chrome and hands it to the agent as `cdp_url`, so Chrome's CPU and memory are not counted
    against the agent;
 3. starts a proxy on a free port and points the agent at it with `FASTBROWSE_DECISION_BASE_URL` and
@@ -29,7 +28,7 @@ asked.
 ## Commands
 
 Every command takes `--agent "<command>"`. The default is this checkout's `.venv/bin/fastbrowse serve --stdio`;
-a Rust build is `--agent "target/release/fastbrowse serve --stdio"`. `--agent in-process` calls `fastbrowse.run_task`
+a Rust build is `--agent "$PWD/target/release/fastbrowse serve --stdio"`. `--agent in-process` calls `fastbrowse.run_task`
 in the harness's own process instead, on the Rust core through
 `fastbrowse.native`. It measures no startup, and its CPU and peak RSS are the harness's.
 
@@ -84,5 +83,6 @@ Timings come from a shared laptop and vary run to run. Compare medians from runs
 ## Files
 
 - `cassettes/<task>.jsonl.gz`: one gzip JSONL file per task. The first line holds the recording date, version and
-  models; every other line is one request and its response, in the order they arrived.
-- `baseline/python.json`: the Python numbers (`report --json`), with `baseline/python.md` as the table.
+  models; every other line is one request and its response, in the order they arrived. When selected exchanges are
+  recorded again, `rerecorded_exchanges` names their request keys, models and request timestamps. Their response
+  bodies, usage costs and latency come from those new requests; unchanged exchanges retain their original recording.
