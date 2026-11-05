@@ -164,7 +164,7 @@ impl CdpPage {
                 .find(|c| Some(&c.id) == action.target_id.as_ref())
                 .and_then(|c| c.value.clone())
                 .unwrap_or_default();
-            if !self.form_unchanged(target, &current).await {
+            if !self.form_unchanged(target, &current).await? {
                 return Ok(result(StepOutcome::Stale, false, "form changed before fill"));
             }
         }
@@ -300,7 +300,7 @@ impl CdpPage {
             && let Some(target) = &target
             && !action.secret
         {
-            unchanged = self.form_unchanged(target, action.text.as_deref().unwrap_or_default()).await;
+            unchanged = self.form_unchanged(target, action.text.as_deref().unwrap_or_default()).await?;
         }
         Ok(ActResult {
             outcome: StepOutcome::Executed,
@@ -403,17 +403,22 @@ impl CdpPage {
         })
     }
 
-    pub(crate) async fn form_unchanged(&self, target: &Target, text: &str) -> bool {
+    /// Whether the form still holds `text`. Only `PageUnresponsive` is an error, so the agent's hang recovery sees it.
+    pub(crate) async fn form_unchanged(&self, target: &Target, text: &str) -> Result<bool, BrowserError> {
         if self.session.pending_dialog().is_some() || Some(&target.0) != self.session.active_session_id().ok().as_ref()
         {
-            return false;
+            return Ok(false);
         }
         // Other frame sessions can change independently of this renderer's guard.
         if !self.session.frame_sessions().is_empty() {
-            return false;
+            return Ok(false);
         }
         let script = format!("({})({})", self.page_js, py_json(&json!({"id": target.2, "text": text})));
-        matches!(self.until_dialog(self.evaluate(&target.0, &script)).await, Some(Ok(Value::Bool(true))))
+        match self.until_dialog(self.evaluate(&target.0, &script)).await {
+            Some(Ok(Value::Bool(true))) => Ok(true),
+            Some(Err(error @ BrowserError::PageUnresponsive(_))) => Err(error),
+            _ => Ok(false),
+        }
     }
 
     async fn dispatch(
