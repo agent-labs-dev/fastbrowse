@@ -101,6 +101,16 @@ on:
         required: false
         type: string
         default: ""
+      only:
+        description: Smoke only. Space separated task ids of the chosen suites to run instead of all of them
+        required: false
+        type: string
+        default: ""
+      concurrency:
+        description: Smoke only. Runs in flight at once; empty keeps the default of 8
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -119,6 +129,8 @@ env:
   REFRESH: ${{ inputs.refresh_competitors || github.event.client_payload.refresh_competitors == true }}
   GROUPS_CHOSEN: ${{ inputs.groups || github.event.client_payload.groups || 'all' }}
   OFFICIAL_RUNS: ${{ inputs.official_runs || github.event.client_payload.official_runs || '' }}
+  ONLY: ${{ inputs.only || github.event.client_payload.only || '' }}
+  RUN_CONCURRENCY: ${{ inputs.concurrency || github.event.client_payload.concurrency || '' }}
 
 jobs:
   resolve:
@@ -185,6 +197,17 @@ jobs:
           esac
           case "$OFFICIAL_RUNS" in
             *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
+          esac
+          # A published comparison covers every task of its suites under one setting, so only a smoke narrows either.
+          if test "$SMOKE" != true && { test -n "$ONLY" || test -n "$RUN_CONCURRENCY"; }; then
+            echo "::error::only and concurrency need smoke"; exit 1
+          fi
+          case "$ONLY" in
+            *[!a-z0-9\ -]*) echo "::error::only must be task ids separated by spaces"; exit 1 ;;
+          esac
+          case "$RUN_CONCURRENCY" in
+            '') ;;
+            *[!0-9]*|0) echo "::error::concurrency must be a positive integer, got '$RUN_CONCURRENCY'"; exit 1 ;;
           esac
           # The site stores the candidate as data/benchmark-<campaign_id>.json.
           printf '%s' "$CAMPAIGN_ID" | grep -Eq '^[a-zA-Z0-9_.-]+$' \
@@ -357,11 +380,16 @@ jobs:
           mkdir -p "$(dirname "$OUT")"
           read -ra arms <<< "$ARMS"
           read -ra suites <<< "$SUITES"
+          read -ra only <<< "$ONLY"
+          narrow=()
+          test "${#only[@]}" -eq 0 || narrow+=(--only "${only[@]}")
+          test -z "$RUN_CONCURRENCY" || narrow+=(--concurrency "$RUN_CONCURRENCY")
           uv run --no-sync fastbrowse-evals browser internal \
             --arms "${arms[@]}" \
             --suite "${suites[@]}" \
             --repeat "$REPEAT" \
             --budget "$BUDGET" \
+            "${narrow[@]}" \
             --out "$OUT"
       - name: Report the final progress
         if: always()
