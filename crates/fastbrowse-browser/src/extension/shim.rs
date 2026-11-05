@@ -11,11 +11,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use serde_json::{Value, json};
+use fastbrowse_core::telemetry::Trace;
+use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
-use super::protocol::{HostRecord, PROTOCOL};
+use super::protocol::{EXTENSION_IDS, HostRecord, PROTOCOL};
 use crate::error::BrowserError;
 
 /// Domains the session enables with `<Domain>.enable`, which the extension must relay.
@@ -79,6 +80,8 @@ struct Tabs {
     children: HashMap<String, i64>,
     discover: bool,
     auto_attach: bool,
+    /// The frames from another extension each tab holds, by frame id, as their `chrome-extension://` origin.
+    foreign_frames: HashMap<i64, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -109,6 +112,41 @@ struct Relay {
     /// CDP JSON for the reader: replies and events.
     to_cdp: mpsc::UnboundedSender<String>,
     hello: Value,
+    trace: Trace,
+}
+
+/// The `chrome-extension://<id>` origin of `url` when it belongs to an extension other than fastbrowse.
+fn foreign_extension(url: &str) -> Option<String> {
+    let id = url.strip_prefix("chrome-extension://")?.split('/').next()?;
+    (!id.is_empty() && !EXTENSION_IDS.contains(&id)).then(|| format!("chrome-extension://{id}"))
+}
+
+/// Why a run lost its tab when Chrome detached it right after `origin`'s frame appeared in it.
+fn foreign_frame_detach(origin: &str) -> String {
+    let id = origin.trim_start_matches("chrome-extension://");
+    format!(
+        "Chrome detached fastbrowse from the run's tab when the page loaded a frame from another extension ({origin}). \
+         Chrome lets no extension debug a tab that holds another extension's frame: set that extension's Site access \
+         to On click at chrome://extensions/?id={id}, then run again"
+    )
+}
+
+/// Record one relay message in the run's trace: `direction` is `to_extension` or `from_extension`.
+///
+/// Everything is kept but images. A screenshot or screencast frame can show a secret just typed, which redacting
+/// values cannot catch, so its `data` is replaced by its length.
+fn trace_message(trace: &Trace, direction: &str, message: &Value) {
+    trace.event("extension", || {
+        let mut message = message.clone();
+        for pointer in ["/params/data", "/result/data"] {
+            if let Some(data) = message.pointer_mut(pointer)
+                && let Some(length) = data.as_str().map(str::len)
+            {
+                *data = format!("<{length} characters of image data, not traced>").into();
+            }
+        }
+        Map::from_iter([("direction".into(), direction.into()), ("message".into(), message)])
+    });
 }
 
 impl Relay {
@@ -122,6 +160,7 @@ impl Relay {
         self.pending.lock().unwrap().insert(id, tx);
         body["id"] = id.into();
         body["op"] = op.into();
+        trace_message(&self.trace, "to_extension", &body);
         if self.out.send(body.to_string()).is_err() {
             self.pending.lock().unwrap().remove(&id);
             return Err("the extension's host closed the connection".into());
@@ -281,13 +320,40 @@ impl Relay {
         }
     }
 
-    /// One event from the extension.
-    fn event(&self, message: &Value) {
+    /// Keep `foreign_frames` current from a tab's frame events: a frame that starts loading another extension's page
+    /// is added, and one that leaves it or goes is removed.
+    fn track_frame(&self, tab: i64, method: &str, params: &Value) {
+        let (frame, url) = match method {
+            "Page.frameRequestedNavigation" | "Page.frameStartedNavigating" => (&params["frameId"], &params["url"]),
+            "Page.frameNavigated" => (&params["frame"]["id"], &params["frame"]["url"]),
+            "Page.frameDetached" => (&params["frameId"], &Value::Null),
+            _ => return,
+        };
+        let Some(frame) = frame.as_str() else { return };
+        // `frameStartedNavigating` can carry an empty address before the request goes: it changes nothing.
+        if method == "Page.frameStartedNavigating" && url.as_str() == Some("") {
+            return;
+        }
+        let mut tabs = self.tabs.lock().unwrap();
+        let frames = tabs.foreign_frames.entry(tab).or_default();
+        match url.as_str().and_then(foreign_extension) {
+            Some(origin) => {
+                frames.insert(frame.to_owned(), origin);
+            }
+            None => {
+                frames.remove(frame);
+            }
+        }
+    }
+
+    /// One event from the extension, and why the connection must end when the event ends the run.
+    fn event(&self, message: &Value) -> Option<String> {
         let tab = message["tabId"].as_i64().unwrap_or_default();
         match message["event"].as_str().unwrap_or_default() {
             "cdp" => {
                 let method = message["method"].as_str().unwrap_or_default();
                 let params = &message["params"];
+                self.track_frame(tab, method, params);
                 let session = match message["sessionId"].as_str() {
                     Some(child) => child.to_owned(),
                     None => top_session(tab),
@@ -332,7 +398,7 @@ impl Relay {
             "tabUpdated" => {
                 let info = {
                     let mut tabs = self.tabs.lock().unwrap();
-                    let Some(known) = tabs.attached.get_mut(&tab) else { return };
+                    let known = tabs.attached.get_mut(&tab)?;
                     if let Some(url) = message["url"].as_str() {
                         url.clone_into(&mut known.url);
                     }
@@ -345,6 +411,25 @@ impl Relay {
             }
             "detached" => {
                 let closed = message["reason"] == "target_closed";
+                let foreign = self
+                    .tabs
+                    .lock()
+                    .unwrap()
+                    .foreign_frames
+                    .remove(&tab)
+                    .and_then(|frames| frames.into_values().next());
+                self.trace.event("extension_tab_lost", || {
+                    Map::from_iter([
+                        ("tab".into(), tab.into()),
+                        ("reason".into(), message["reason"].clone()),
+                        ("foreign_frame".into(), foreign.clone().into()),
+                    ])
+                });
+                // Chrome reports a tab it took away for another extension's frame as `target_closed`, though the tab
+                // is still open: the run is told why rather than that its tab closed.
+                if closed && let Some(origin) = foreign {
+                    return Some(foreign_frame_detach(&origin));
+                }
                 let known = {
                     let mut tabs = self.tabs.lock().unwrap();
                     tabs.children.retain(|_, owner| *owner != tab);
@@ -369,6 +454,7 @@ impl Relay {
             }
             _ => {}
         }
+        None
     }
 }
 
@@ -389,7 +475,7 @@ pub struct Endpoint {
 }
 
 /// Dial the host listening at `record.socket` and agree on the protocol.
-pub async fn connect(record: &HostRecord, task: &str) -> Result<Endpoint, BrowserError> {
+pub async fn connect(record: &HostRecord, task: &str, trace: Trace) -> Result<Endpoint, BrowserError> {
     let stream = dial(&record.socket).await?;
     let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read).lines();
@@ -402,8 +488,9 @@ pub async fn connect(record: &HostRecord, task: &str) -> Result<Endpoint, Browse
         }
         let _ = write.shutdown().await;
     });
-    let hello_line = json!({"id": 0, "op": "hello", "protocol": PROTOCOL, "task": task}).to_string();
-    out.send(hello_line).map_err(|_| unavailable("the extension's host closed the connection"))?;
+    let hello_message = json!({"id": 0, "op": "hello", "protocol": PROTOCOL, "task": task});
+    trace_message(&trace, "to_extension", &hello_message);
+    out.send(hello_message.to_string()).map_err(|_| unavailable("the extension's host closed the connection"))?;
     let hello = loop {
         let line = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
             .await
@@ -411,6 +498,7 @@ pub async fn connect(record: &HostRecord, task: &str) -> Result<Endpoint, Browse
             .map_err(|_| unavailable("the extension's host closed the connection"))?
             .ok_or_else(|| unavailable("the extension's host closed the connection"))?;
         let message: Value = serde_json::from_str(&line).unwrap_or_default();
+        trace_message(&trace, "from_extension", &message);
         if message["id"] == 0 {
             break message;
         }
@@ -436,6 +524,7 @@ pub async fn connect(record: &HostRecord, task: &str) -> Result<Endpoint, Browse
         tabs: Mutex::default(),
         to_cdp,
         hello: hello.clone(),
+        trace,
     });
     let reader = Arc::clone(&relay);
     tokio::spawn(async move {
@@ -443,11 +532,14 @@ pub async fn connect(record: &HostRecord, task: &str) -> Result<Endpoint, Browse
             match lines.next_line().await {
                 Ok(Some(line)) => {
                     let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+                    trace_message(&reader.trace, "from_extension", &message);
                     if message["event"] == "stop" {
-                        break CANCELLED;
+                        break CANCELLED.to_owned();
                     }
                     if message["event"].is_string() {
-                        reader.event(&message);
+                        if let Some(why) = reader.event(&message) {
+                            break why;
+                        }
                     } else if let Some(id) = message["id"].as_u64() {
                         let waiter = reader.pending.lock().unwrap().remove(&id);
                         if let Some(waiter) = waiter {
@@ -459,7 +551,7 @@ pub async fn connect(record: &HostRecord, task: &str) -> Result<Endpoint, Browse
                         }
                     }
                 }
-                _ => break "ConnectionClosed",
+                _ => break "ConnectionClosed".to_owned(),
             }
         };
         reader.pending.lock().unwrap().clear();
@@ -495,4 +587,76 @@ async fn dial(socket: &Path) -> Result<tokio::net::windows::named_pipe::NamedPip
     tokio::net::windows::named_pipe::ClientOptions::new()
         .open(socket)
         .map_err(|_| unavailable("the fastbrowse extension's host is not listening: open the browser, or reinstall"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn relay() -> Relay {
+        let (out, _) = mpsc::unbounded_channel();
+        let (to_cdp, _) = mpsc::unbounded_channel();
+        Relay {
+            out,
+            pending: Mutex::default(),
+            next: Mutex::new(0),
+            tabs: Mutex::default(),
+            to_cdp,
+            hello: Value::Null,
+            trace: Trace::collecting(),
+        }
+    }
+
+    fn frame(url: &str) -> Value {
+        json!({"event": "cdp", "tabId": 7, "method": "Page.frameRequestedNavigation", "params": {"frameId": "F", "url": url}})
+    }
+
+    const DETACHED: &str = r#"{"event": "detached", "tabId": 7, "reason": "target_closed"}"#;
+
+    #[test]
+    fn a_tab_chrome_takes_away_for_another_extensions_frame_ends_the_run_naming_it() {
+        let relay = relay();
+        assert_eq!(relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html")), None);
+        let why = relay.event(&serde_json::from_str(DETACHED).unwrap()).expect("the run ends");
+        assert!(
+            why.contains("chrome-extension://abcdefgh") && why.contains("chrome://extensions/?id=abcdefgh"),
+            "{why}"
+        );
+        let lost: Vec<Value> =
+            relay.trace.events().into_iter().filter(|event| event["event"] == "extension_tab_lost").collect();
+        assert_eq!(lost[0]["foreign_frame"], "chrome-extension://abcdefgh");
+    }
+
+    #[test]
+    fn a_closed_tab_and_fastbrowses_own_frames_still_read_as_a_closed_tab() {
+        let relay = relay();
+        relay.event(&frame(&format!("chrome-extension://{}/popup.html", EXTENSION_IDS[0])));
+        relay.event(&frame("https://example.com/"));
+        assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None);
+    }
+
+    #[test]
+    fn only_a_frame_still_holding_another_extensions_page_counts() {
+        let relay = relay();
+        let request = json!({"event": "cdp", "tabId": 7, "method": "Network.requestWillBeSent",
+            "params": {"url": "chrome-extension://abcdefgh/icon.png"}});
+        relay.event(&request);
+        assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "an extension's image is no frame");
+        relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html"));
+        relay.event(&json!({"event": "cdp", "tabId": 7, "method": "Page.frameDetached", "params": {"frameId": "F"}}));
+        assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "the frame went before the detach");
+    }
+
+    #[test]
+    fn image_data_stays_out_of_the_trace() {
+        let trace = Trace::collecting();
+        let frame =
+            json!({"event": "cdp", "method": "Page.screencastFrame", "params": {"data": "AAAA", "sessionId": 1}});
+        trace_message(&trace, "from_extension", &frame);
+        trace_message(&trace, "from_extension", &json!({"id": 3, "result": {"data": "BBBBBB"}}));
+        let events = trace.events();
+        assert_eq!(events[0]["message"]["params"]["data"], "<4 characters of image data, not traced>");
+        assert_eq!(events[0]["message"]["params"]["sessionId"], 1);
+        assert_eq!(events[1]["message"]["result"]["data"], "<6 characters of image data, not traced>");
+    }
 }

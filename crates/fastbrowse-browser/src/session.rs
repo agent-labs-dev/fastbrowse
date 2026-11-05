@@ -14,6 +14,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, FrameHandler};
 use fastbrowse_core::origins::OriginGrant;
 use fastbrowse_core::page::{Dialog, Tab};
+use fastbrowse_core::telemetry::Trace;
 use futures_util::future::{BoxFuture as FBoxFuture, try_join_all};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -176,6 +177,8 @@ pub struct SessionOptions {
     pub viewport: Option<(u32, u32)>,
     /// Called when the user stops the run in their browser, over the extension backend.
     pub on_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// The run's trace. Over the extension backend it records every message to and from the extension.
+    pub trace: Trace,
 }
 
 impl Default for SessionOptions {
@@ -187,6 +190,7 @@ impl Default for SessionOptions {
             check_access: None,
             viewport: None,
             on_stop: None,
+            trace: Trace::disabled(),
         }
     }
 }
@@ -334,6 +338,7 @@ pub(crate) struct Shared {
     pub(crate) new_document_scripts: Vec<String>,
     pub(crate) on_frame: Option<FrameHandler>,
     pub(crate) on_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub(crate) trace: Trace,
     pub(crate) viewport: Option<(u32, u32)>,
     pub(crate) client: Mutex<Option<Cdp>>,
     pub(crate) state: Mutex<State>,
@@ -393,6 +398,7 @@ impl BrowserSession {
             new_document_scripts,
             on_frame,
             on_stop: options.on_stop,
+            trace: options.trace,
             viewport: options.viewport,
             client: Mutex::new(None),
             state: Mutex::default(),
@@ -434,7 +440,7 @@ impl BrowserSession {
     pub async fn open(&self) -> Result<(), BrowserError> {
         self.check_access().await?;
         self.0.state.lock().unwrap().closing = false;
-        let client = Cdp::connect(&self.0.connection.cdp_url).await?;
+        let client = Cdp::connect(&self.0.connection.cdp_url, &self.0.trace).await?;
         let weak = Arc::downgrade(&self.0);
         let on_stop = self.0.on_stop.clone();
         client.on_event(Box::new(move |event| {
