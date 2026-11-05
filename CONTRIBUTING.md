@@ -113,11 +113,11 @@ verification needs eval results in the PR, in this order:
 The held-out suite this used to name is gone: Parallax moved its tasks into `dev`, so a dev task may be one the
 fix was designed against. Say so in the PR when that is true.
 
-Run these commands in the maintainer's Parallax checkout:
+Run these commands from `evals/`:
 
 ```sh
-uv run --extra browser parallax browser internal --arms fastbrowse --suite core --repeat 3
-uv run --extra browser parallax browser internal --arms fastbrowse --suite dev --repeat 3
+uv run fastbrowse-evals browser internal --arms fastbrowse --suite core --repeat 3
+uv run fastbrowse-evals browser internal --arms fastbrowse --suite dev --repeat 3
 ```
 
 Paste the pass counts, time and cost from the final `dev` run and both `core` runs. A handful of runs on one site shows the change can

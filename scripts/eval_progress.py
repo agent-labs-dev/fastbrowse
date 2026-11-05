@@ -7,13 +7,29 @@ step never holds the token. Read it back with `gh api repos/OWNER/REPO/commits/S
 """
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
+import signal
+import tempfile
 import time
 import urllib.request
 
 INTERVAL_SECONDS = 60
+
+
+def pid_file() -> pathlib.Path:
+    """Where the reporting loop leaves its process id: the job's own temporary directory, one loop per job."""
+    return pathlib.Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "eval-progress.pid"
+
+
+def stop_loop() -> None:
+    """Stop the job's reporting loop, so a pending report cannot land after the final one and leave it pending."""
+    path = pid_file()
+    with contextlib.suppress(OSError, ValueError):
+        os.kill(int(path.read_text()), signal.SIGTERM)
+    path.unlink(missing_ok=True)
 
 
 def rows(path: pathlib.Path) -> list[dict]:
@@ -61,8 +77,10 @@ def main() -> None:
     parser.add_argument("--final", action="store_true", help="publish once and mark the group finished")
     args = parser.parse_args()
     if args.final:
+        stop_loop()
         publish(args.label, "success", summary(args.target))
         return
+    pid_file().write_text(str(os.getpid()))
     while True:
         # A failed report must not stop later ones, and it never touches the suite.
         try:

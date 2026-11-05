@@ -109,13 +109,13 @@ Entire links each commit made in an agent session to that session, locally only;
 ## Evals
 
 Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated
-against `dev` only**, and `core` is run before and after a round. The held-out suite is gone: Parallax moved its
-tasks into `dev`, so any dev task may be one a fix was designed against. Read
+against `dev` only**, and `core` is run before and after a round. The held-out suite is gone: its
+tasks moved into `dev`, so any dev task may be one a fix was designed against. Read
 [docs/agents/evals.md](docs/agents/evals.md) before changing agent behaviour or a task, or spending on a paid
 run: it has the commands, keys, task versions, what to check before spending, the CI campaign gotchas and where
 evidence is kept.
 Read [docs/agents/publish-evals.md](docs/agents/publish-evals.md) before staging or publishing a result, or
-changing the candidate schema that Parallax and the site share.
+changing the candidate schema that `evals/` and the site share.
 
 The harness (`src/fastbrowse/evals`, `tests/evals`) reaches fastbrowse only as an embedder does: the `fastbrowse`
 package's exports, `fastbrowse.models`, `fastbrowse.config`, `fastbrowse.protocol`, `serve --stdio` and the trace.
