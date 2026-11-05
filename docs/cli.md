@@ -80,7 +80,9 @@ fastbrowse "Open the Extensions view and report how many extensions are installe
   --cdp-port 9222 --target-match my-project
 ```
 
-`--attach` takes over the first window, skipping DevTools, and `--target-match` picks one by title or URL.
+`--attach` takes over the first window, skipping browser-internal pages such as extension options and `chrome://`
+or `devtools://` tabs, and prefers web pages over Electron and app windows; if no usable window exists it opens
+one. `--target-match` picks one by title or URL, and can name an extension page.
 Without `--start` the run begins on whatever the window shows, and the window stays open afterwards. Popups the
 window opens join the run.
 
@@ -157,8 +159,9 @@ The JSON result says why a run stopped where a caller can act on it:
 - A `stuck` or `unverified` run that read evidence still returns a cited answer, starting `Answer (unverified)`.
 
 A cost a provider omits is looked up from its receipt, or bounded from OpenRouter's listed prices. A cost that
-cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A browser command
-unanswered for 120 seconds returns `unavailable`. Step and dollar limits do not bound elapsed time:
+cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A page that stops
+answering (15 seconds for an input event, 120 for any other command) is reopened once during an action; a second
+hang returns `unavailable`. Step and dollar limits do not bound elapsed time:
 `Limits(max_seconds=...)` does.
 
 ## Troubleshooting

@@ -25,13 +25,16 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use crate::error::BrowserError;
 
-/// How long a CDP command waits before the browser is asked whether it is still there. A cloud browser's proxy can
-/// keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit
-/// would otherwise wait on that reply forever. A slow reply is not a lost one: `Page.navigate` waits for a slow
+/// How long an ordinary CDP command waits before the browser is asked whether it is still there. A cloud browser's
+/// proxy can keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock
+/// limit would otherwise wait on that reply forever. A slow reply is not a lost one: `Page.navigate` waits for a slow
 /// server's headers, so a live browser can keep waiting until `CDP_COMMAND_SECONDS`.
 pub const CDP_REPLY_SECONDS: f64 = 60.0;
-/// A responsive browser can still leave one document command pending forever.
+/// The deadline for an ordinary CDP command. A responsive browser can still leave one document command pending forever.
 pub const CDP_COMMAND_SECONDS: f64 = 120.0;
+/// Chrome's hung-renderer delay for an input event. An input that reached a renderer blocked in script must return
+/// before the next input can be dispatched, so it gets Chrome's own shorter deadline.
+pub const CDP_INPUT_SECONDS: f64 = 15.0;
 /// `Browser.getVersion` is answered at once by any browser that is there.
 pub const CDP_ALIVE_SECONDS: f64 = 10.0;
 /// Command deadlines one session may meet before its commands fail at once, as `PageUnresponsive`. A read
@@ -56,6 +59,10 @@ pub const RETRYABLE_STATUS: [u16; 12] = [408, 429, 500, 502, 503, 504, 520, 521,
 
 pub fn secs(seconds: f64) -> Duration {
     Duration::from_secs_f64(seconds)
+}
+
+fn command_seconds(method: &str) -> f64 {
+    if method.starts_with("Input.") { CDP_INPUT_SECONDS } else { CDP_COMMAND_SECONDS }
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +125,7 @@ struct Inner {
     /// every command while its remote debugging approval prompt waits, which would otherwise read as a lost browser
     /// only after `CDP_REPLY_SECONDS`.
     answered: AtomicBool,
-    /// Commands that outlived `CDP_COMMAND_SECONDS`, by the session they addressed. A cloud browser's connection
+    /// Commands that outlived their method-specific deadline, by the session they addressed. A cloud browser's connection
     /// carries every target the run attached, third-party frames and workers included, and one of those hanging says
     /// nothing about the tab the run drives: on The Pi Hut a frame's `Page.addScriptToEvaluateOnNewDocument` met its
     /// deadline twice and every command to the answering main tab was refused.
@@ -313,7 +320,7 @@ impl Cdp {
         }
         let reply = self.call(method, params, session);
         tokio::pin!(reply);
-        let deadline = Instant::now() + secs(CDP_COMMAND_SECONDS);
+        let deadline = Instant::now() + secs(command_seconds(method));
         let outcome = loop {
             let wait = if self.answered() { CDP_REPLY_SECONDS } else { CDP_ALIVE_SECONDS };
             let until = (Instant::now() + secs(wait)).min(deadline);
@@ -383,6 +390,22 @@ impl Cdp {
 
     fn deadlines(&self) -> MutexGuard<'_, HashMap<String, u32>> {
         self.0.deadlines.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Whether this session's renderer is stuck, so a new target is needed. A met deadline alone does not say so: a
+    /// slow server's `Page.navigate` meets one on a live renderer. Past `CDP_DEADLINES_BEFORE_STOP` its commands are
+    /// refused anyway; below it the renderer is asked to evaluate once, outside the deadline count.
+    pub async fn wedged(&self, session: &str) -> bool {
+        let deadlines = self.deadlines().get(session).copied().unwrap_or(0);
+        if deadlines == 0 {
+            return false;
+        }
+        if deadlines >= CDP_DEADLINES_BEFORE_STOP {
+            return true;
+        }
+        let probe = self.call("Runtime.evaluate", json!({"expression": "1"}), Some(session));
+        // An error reply is an answer: mid-navigation the context is gone, but the renderer is live.
+        !matches!(timeout(secs(CDP_ALIVE_SECONDS), probe).await, Ok(Ok(_) | Err(CdpError::Protocol { .. })))
     }
 
     fn answered(&self) -> bool {

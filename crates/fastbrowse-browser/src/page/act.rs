@@ -242,7 +242,8 @@ impl CdpPage {
         let downloads_before = self.session.downloads_settled();
         let (outcome, mut detail) = match self.dispatch(action, target.as_ref(), point, drawn).await {
             Ok(dispatched) => dispatched,
-            Err(error) if !action.form_fill => return Err(error),
+            // A hung renderer goes up whole, so the agent reopens the page instead of retrying into it.
+            Err(error) if !action.form_fill || matches!(error, BrowserError::PageUnresponsive(_)) => return Err(error),
             // An input handler can navigate before retention is checked. Its next field needs a fresh decision.
             Err(_) => return Ok(result(StepOutcome::Failed, true, "form changed during fill")),
         };
@@ -431,6 +432,7 @@ impl CdpPage {
                 match self.navigate(url, None).await {
                     Err(error @ BrowserError::OriginNotAllowed) => Err(error),
                     Err(error) if error.is_unavailable() => Err(error),
+                    Err(error @ BrowserError::PageUnresponsive(_)) => Err(error),
                     Err(error) => Ok((StepOutcome::Failed, Some(error.to_string()))),
                     Ok(()) => Ok((StepOutcome::Executed, None)),
                 }

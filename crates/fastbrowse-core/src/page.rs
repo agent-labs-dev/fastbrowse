@@ -452,6 +452,9 @@ pub enum BrowserError {
     /// The browser session no longer has a page available for this run.
     #[error("{0}")]
     Unavailable(String),
+    /// The browser answered, but the renderer for this page stopped answering commands.
+    #[error("{0}")]
+    PageUnresponsive(String),
     /// A page cannot safely attribute pixels to its permitted documents.
     #[error("{0}")]
     ScreenshotsUnavailable(String),
