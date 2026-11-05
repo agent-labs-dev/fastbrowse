@@ -162,7 +162,11 @@ impl Agent {
         }
         let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
         state.ledger.record([reading.cost.clone()])?;
-        if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
+        // A look is never in the text layer, so only a reading of text can merely repeat it.
+        let reading_text = reading.data.text.filter(|text| {
+            !text.trim().is_empty() && (state.appearance || !state.notes.repeats_page_text(text, &observation.url))
+        });
+        if let Some(text) = reading_text {
             state.notes.add_image_read(&self.mask(&text), &observation.url, observation.captured_at, &png);
             state.compose = true;
         } else {

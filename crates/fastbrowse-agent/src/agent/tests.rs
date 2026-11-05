@@ -1692,6 +1692,60 @@ async fn test_a_screenshot_read_checks_coverage_before_complete() {
     assert_eq!(result.error.as_deref(), Some("The answer does not establish every requested fact or value."));
 }
 
+/// A screenshot reader that answers the task from one viewport of a listing, as a model reading pixels does.
+struct ListingImageLLM(&'static str);
+
+impl LLMClient for ListingImageLLM {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
+            let data = schema.validate_json(&json!({"text": self.0}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_a_screenshot_read_that_only_repeats_the_page_text_adds_no_note() {
+    // A listing's covers make the page count as drawn, but every title and price is in its text. A reading of one
+    // viewport answered the whole task with a book from that viewport, and the composer took it over the cheaper book
+    // the text notes held (#799).
+    let listing = capture(&[
+        (BlockKind::Paragraph, "Tastes Like Fear (DI ...\n\n\u{a3}10.69\n\nIn stock"),
+        (BlockKind::Paragraph, "The Girl You Lost\n\n\u{a3}12.29\n\nIn stock"),
+    ]);
+    let page = Observation { visual_content: true, ..at("https://example.test", &[]) };
+    let read = |reading: &'static str| {
+        let listing = listing.clone();
+        let page = page.clone();
+        async move {
+            let agent = Agent::new(
+                Arc::new(Screenshots::default()),
+                Arc::new(ScriptedJev::new(Vec::new())),
+                Arc::new(ListingImageLLM(reading)),
+            );
+            let mut state = run_state();
+            state.task = "Which is the cheapest book in the Mystery category, and what does it cost?".into();
+            state.output_intent = super::state::OutputIntent::Text;
+            for id in ["s0", "s1"] {
+                let evidence = block_evidence(&listing, id);
+                state.notes.add(Fact::read(&evidence.quote.clone(), evidence, FactReader::JevChoice));
+            }
+            agent.read_drawn_page(&mut state, &page).await.expect("drawn read");
+            state.notes.facts().iter().filter(|fact| fact.reader == FactReader::LlmImage).count()
+        }
+    };
+    assert_eq!(read("The Girl You Lost \u{2014} \u{a3}12.29").await, 0);
+    // What the text layer does not carry is still read off the pixels.
+    assert_eq!(read("The Girl You Lost \u{2014} signed copy \u{a3}9.99").await, 1);
+}
+
 #[tokio::test]
 async fn test_a_null_image_read_is_not_repeated_for_identical_pixels_in_one_run() {
     let llm = Arc::new(EmptyImageLLM::default());

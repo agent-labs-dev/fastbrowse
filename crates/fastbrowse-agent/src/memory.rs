@@ -126,6 +126,16 @@ pub(crate) fn split_scheme(url: &str) -> (String, String) {
 ///
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of
 /// the address rather than WHATWG's: a recorded prompt holds the id Python computed.
+/// The words and numbers of `text`, lowercased, with currency signs and punctuation dropped: "\u{a3}12.29" is "12.29".
+fn words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '.'))
+        .map(|word| word.trim_matches('.'))
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub(crate) fn address(url: &str) -> String {
     let (scheme, cleaned) = split_scheme(url);
     let mut rest = cleaned.as_str();
@@ -383,6 +393,24 @@ impl Notes {
             basis: Vec::new(),
             reader: FactReader::LlmImage,
         })
+    }
+
+    /// Whether every word and number of `text` is already in a current text note read from `url`.
+    ///
+    /// A screenshot reading that only repeats what the page's text layer said adds nothing the notes lack, yet it
+    /// reads one viewport as the whole answer: on a listing whose covers made the page count as drawn, such a reading
+    /// named the dearer book in view, and the composer took it over the cheaper one the text notes held (#799).
+    pub fn repeats_page_text(&self, text: &str, url: &str) -> bool {
+        let page = address(url);
+        let read: HashSet<String> = self
+            .facts
+            .iter()
+            .filter(|(key, fact)| self.current(key) && fact.reader != FactReader::LlmImage)
+            .filter(|(_, fact)| fact.evidence.as_ref().is_some_and(|evidence| address(&evidence.url) == page))
+            .flat_map(|(_, fact)| words(&fact.text))
+            .collect();
+        let said = words(text);
+        !said.is_empty() && said.iter().all(|word| read.contains(word))
     }
 
     /// Whether the notes hold a fact standing as the task's answer.
