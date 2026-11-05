@@ -2292,3 +2292,24 @@ async fn test_a_headless_run_tab_has_a_window_of_its_own_and_paints() {
     session.close().await.expect("close");
     process.close().await;
 }
+
+/// A list's next page is marked by the page's own pager markup: `rel="next"`, or a `next` class on the link or on its
+/// list item, which most sites use instead. The word "next" in prose, or a class that only starts with it, is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_next_page_is_marked_by_rel_or_a_next_class_and_not_by_the_word() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/pager.html").await;
+    let obs = h.observe().await;
+    let marked = |label: &str| {
+        let exact = obs.controls.iter().find(|c| c.label == label);
+        exact.unwrap_or_else(|| find(&obs, label)).next_page == Some(true)
+    };
+    assert!(marked("Older"), "rel=next");
+    assert!(marked("Next"), "a link inside li.next");
+    assert!(marked("More"), "a link with the next class");
+    assert!(!marked("Previous"));
+    assert!(!marked("Next article"), "a class that only starts with next");
+    assert!(!marked("Next steps"), "the word alone");
+    h.close().await;
+}

@@ -149,6 +149,7 @@ impl Agent {
                 }
             };
             self.record_page(state, &observation);
+            state.note_pager_pages(&observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
             if let Some(probability) = decision.login_required {
@@ -630,7 +631,7 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: decision.operation,
-            decided_by: if decision.replayed { Decider::Recipe } else { Decider::Jev },
+            decided_by: decision.decider(),
             outcome: act.outcome,
             url: observation.url.clone(),
             target: label,
@@ -714,7 +715,7 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: decision.operation,
-            decided_by: if decision.replayed { Decider::Recipe } else { Decider::Jev },
+            decided_by: decision.decider(),
             outcome: StepOutcome::Failed,
             page_changed: Some(url != observation.url),
             url: url.clone(),

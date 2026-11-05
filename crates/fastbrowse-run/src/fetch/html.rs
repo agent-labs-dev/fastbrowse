@@ -189,6 +189,8 @@ struct Reader<'a> {
     controls: Vec<Control>,
     /// The control whose element is open, which its text labels.
     labelling: Option<(usize, String, String)>,
+    /// An open `<li class="next">`, the pager markup most sites use instead of `rel="next"`; its link is the next page.
+    pager_item: bool,
 }
 
 impl<'a> Reader<'a> {
@@ -215,6 +217,7 @@ impl<'a> Reader<'a> {
             hidden: Vec::new(),
             controls: Vec::new(),
             labelling: None,
+            pager_item: false,
         }
     }
 
@@ -244,7 +247,9 @@ impl<'a> Reader<'a> {
         control.href = get("href").filter(|_| tag == "a").map(|href| join(self.url, &href));
         control.input_type = (tag == "input").then_some(kind.clone()).filter(|kind| !kind.is_empty());
         control.input_name = get("name");
-        control.next_page = get("rel").filter(|rel| rel.split_whitespace().any(|rel| rel == "next")).map(|_| true);
+        let names_next = |value: Option<String>| value.is_some_and(|v| v.split_whitespace().any(|v| v == "next"));
+        let pager = tag == "a" && (names_next(get("class")) || std::mem::take(&mut self.pager_item));
+        control.next_page = (names_next(get("rel")) || pager).then_some(true);
         control.download = get("download").map(|_| true);
         if matches!(tag, "a" | "button") {
             self.labelling = Some((self.controls.len(), tag.to_string(), String::new()));
@@ -272,6 +277,9 @@ impl<'a> Reader<'a> {
             return;
         }
         self.control(tag, attrs);
+        if tag == "li" {
+            self.pager_item = get("class").is_some_and(|class| class.split_whitespace().any(|class| class == "next"));
+        }
         if tag == "br" {
             self.add("\n");
             return;
@@ -335,6 +343,9 @@ impl<'a> Reader<'a> {
     }
 
     fn end(&mut self, tag: &str) {
+        if tag == "li" {
+            self.pager_item = false;
+        }
         if let Some((index, _, text)) = self.labelling.take_if(|(_, open, _)| open == tag) {
             // What the element says for itself names it before any attribute does.
             let text = clean(&text);
@@ -608,6 +619,7 @@ mod tests {
     fn the_markup_names_its_links_and_fields() {
         let (_, _, controls) = read(
             "<h2>Pages</h2><a href='/b' rel='next'>More <b>items</b></a><a href='/c'><img src=x></a>\
+             <ul><li class='next'><a href='/e'>Next</a></li><li><a href='/f'>Other</a></li></ul>\
              <div hidden><a href='/secret'>x</a></div><table><tr><td><a href=/d>In a row</a></table>\
              <form><input type=hidden name=t><input name=q placeholder='Search'><button>Go</button></form>",
             "https://a.example/list",
@@ -619,12 +631,15 @@ mod tests {
             [
                 ("link", "More items", Some("https://a.example/b")),
                 ("link", "", Some("https://a.example/c")),
+                ("link", "Next", Some("https://a.example/e")),
+                ("link", "Other", Some("https://a.example/f")),
                 ("link", "In a row", Some("https://a.example/d")),
                 ("textbox", "Search", None),
                 ("button", "Go", None),
             ]
         );
-        assert_eq!(controls[0].next_page, Some(true));
+        let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
+        assert_eq!(next, [Some(true), None, Some(true), None, None, None, None]);
         assert_eq!(controls[0].context.as_deref(), Some("Pages"));
     }
 

@@ -194,6 +194,7 @@ fn button(label: &str) -> Control {
 pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         replayed: false,
+        by_code: false,
         operation,
         url: None,
         target_confidence: target.as_ref().map(|_| 1.0),
@@ -4694,4 +4695,100 @@ fn review_http_403_with_a_password_form_does_not_claim_a_bot_check() {
         Some(WallKind::BotCheck),
         "HTTP 403 alone does not prove an automated-traffic check; the page offers a password form"
     );
+}
+
+// -- A whole-list task and the pages its list names ----------------------------------------------------------------
+
+/// A list page whose pager names `next` as the list's next page.
+fn paged(url: &str, next: &str) -> Observation {
+    let pager = Control {
+        href: Some(next.into()),
+        next_page: Some(true),
+        ..Control::new("next", "link", "Next →", [Operation::Click])
+    };
+    let record =
+        Control { href: Some("/author/a/".into()), ..Control::new("about", "link", "(about)", [Operation::Click]) };
+    at(url, &[record, pager])
+}
+
+/// A run that read `page` and holds one note from it, with the task's output already judged as text.
+fn read_one(state: &mut RunState, page: &Observation, every_page: bool) {
+    state.task = "How many quotes on the whole site are by the author?".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.every_page = every_page;
+    let captured = capture(&[(BlockKind::Paragraph, "A quote by the author.")]);
+    state.notes.add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice));
+    state.mark_read(page);
+}
+
+fn pager_agent(page: Arc<HungPage>) -> Agent {
+    let jev = Arc::new(Gatekeeper { irreversible: 0.0, requested: 0.0, lasting: 0.0, calls: Default::default() });
+    Agent::new(page, jev, Arc::new(ScriptedLLM))
+}
+
+#[tokio::test]
+async fn test_done_on_page_one_of_a_whole_list_task_opens_the_next_page_instead() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a whole-list task finished with page 2 unread");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    assert_eq!(step.decided_by, Decider::Code);
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
+}
+
+#[tokio::test]
+async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread_next_page() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    let record = at("https://list.test/author/a/", &[]);
+    state.mark_read(&record);
+
+    let finished = agent.finish(&mut state, &record, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a whole-list task finished on one record's page");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    // The same next page is opened once at most: a run that cannot read it does not loop on it.
+    assert_eq!(state.unread_pager_page(), None);
+}
+
+#[tokio::test]
+async fn test_done_on_a_task_about_what_one_page_shows_concludes_with_a_next_page_unread() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, false);
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("finished");
+    assert!(finished.is_some(), "a task about one page went on to the next");
+    assert!(state.steps.iter().all(|step| step.operation != Operation::Navigate));
+}
+
+#[tokio::test]
+async fn test_a_whole_list_answer_with_a_next_page_still_unread_is_not_complete() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    // The run opened page 2 already and could not read it, so it concludes.
+    state.pager_followed.insert("https://list.test/page/2/".into());
+
+    let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
+    assert_eq!(result.status, Status::Unverified);
+    let error = result.error.expect("the unread page is named");
+    assert!(error.contains("https://list.test/page/2/"), "{error}");
 }

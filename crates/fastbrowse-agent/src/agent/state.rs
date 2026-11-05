@@ -295,6 +295,12 @@ pub(crate) struct RunState {
     pub output_intent: OutputIntent,
     /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
     pub appearance: bool,
+    /// Jev's reading that the task covers a whole list across its pages, such as a count over a site.
+    pub every_page: bool,
+    /// Each next page a list named, by absolute address, in the order the run saw them.
+    pub pager_pages: Vec<String>,
+    /// Next pages the run opened itself because a whole-list task tried to finish before reading them.
+    pub pager_followed: HashSet<String>,
     /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
@@ -399,6 +405,25 @@ impl RunState {
         self.read_urls.insert(observation.url.clone());
     }
 
+    /// Remember each next page the observed list names, by its absolute address.
+    pub fn note_pager_pages(&mut self, observation: &Observation) {
+        let Ok(here) = url::Url::parse(&observation.url) else { return };
+        for control in observation.controls.iter().filter(|control| fastbrowse_core::page::pager_link(control)) {
+            let Some(page) = control.href.as_deref().and_then(|href| here.join(href).ok()) else { continue };
+            let page = page.to_string();
+            if !self.pager_pages.contains(&page) {
+                self.pager_pages.push(page);
+            }
+        }
+    }
+
+    /// The first next page a list named that this run has neither read nor opened for that reason before.
+    pub fn unread_pager_page(&self) -> Option<&String> {
+        self.pager_pages
+            .iter()
+            .find(|page| !self.read_urls.contains(page.as_str()) && !self.pager_followed.contains(page.as_str()))
+    }
+
     /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
     /// label, as every quote's "(about)" does, where a list of labels could not.
     pub fn mark_read_links(&self, observation: &mut Observation) {
@@ -484,6 +509,9 @@ impl RunState {
             to_carry_out: false,
             output_intent: OutputIntent::Unknown,
             appearance: false,
+            every_page: false,
+            pager_pages: Vec::new(),
+            pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
             read_pages: HashSet::new(),
