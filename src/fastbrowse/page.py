@@ -123,6 +123,9 @@ class Observation(Frozen):
     history_entry: str | None = None
     """The tab's browser history entry this page is: Back, Forward and a reload return to the same one, and a
     navigation, a new tab or `pushState` makes another. None when the browser would not say."""
+    accessibility: str = ""
+    """The browser's accessibility tree as an indented outline, one node to a line with its role, name and states.
+    Empty where the browser has no tree to give, such as a fetched page."""
 
     @property
     def today(self) -> str:

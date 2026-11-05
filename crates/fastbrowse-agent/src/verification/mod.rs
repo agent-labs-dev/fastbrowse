@@ -57,6 +57,9 @@ pub fn page_state(
         "page".into(),
         json!({"url": observation.url, "title": observation.title, "text": observation.viewport_text}),
     );
+    if !observation.accessibility.is_empty() {
+        state["page"]["accessibility"] = observation.accessibility.clone().into();
+    }
     if !observation.media.is_empty() {
         state["page"]["media"] = json!(observation.media);
     }

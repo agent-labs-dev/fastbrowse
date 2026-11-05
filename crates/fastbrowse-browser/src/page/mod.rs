@@ -4,6 +4,7 @@
 //! offscreen targets and password masking are ported from jev-ultrafast (MIT):
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
+mod accessibility;
 pub(crate) mod act;
 mod pointer;
 pub mod scripts;
@@ -655,6 +656,7 @@ impl CdpPage {
                 inaccessible_frames: int(inaccessible),
                 can_go_back,
                 history_entry,
+                accessibility: self.accessibility().await,
             })
         })
     }
@@ -724,6 +726,7 @@ impl CdpPage {
             inaccessible_frames: 0,
             can_go_back: false,
             history_entry: None,
+            accessibility: String::new(),
         }
     }
 

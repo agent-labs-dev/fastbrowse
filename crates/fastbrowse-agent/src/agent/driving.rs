@@ -913,6 +913,7 @@ impl Agent {
             title: mask(&observation.title),
             viewport_text: mask(&observation.viewport_text),
             offscreen_text: mask(&observation.offscreen_text),
+            accessibility: mask(&observation.accessibility),
             controls,
             tabs: observation
                 .tabs

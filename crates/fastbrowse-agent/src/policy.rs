@@ -1166,6 +1166,9 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
             "response_status": observation.response_status,
         }),
     );
+    if !observation.accessibility.is_empty() {
+        state["page"]["accessibility"] = observation.accessibility.clone().into();
+    }
     // A player's state is in the element, not the text: without it a run could not tell playing from paused.
     if !observation.media.is_empty() {
         state["page"]["media"] = json!(observation.media);

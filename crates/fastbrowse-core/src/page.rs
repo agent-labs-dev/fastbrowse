@@ -264,6 +264,12 @@ pub struct Observation {
     /// The tab's browser history entry this page is. None when the browser would not say.
     #[serde(default)]
     pub history_entry: Option<String>,
+    /// The browser's accessibility tree as an indented outline, one node to a line with its role, name and states.
+    /// The flat text loses which line belongs to which list, row or control: shown only the text, Jev stopped mid-list
+    /// on whole-site counts it could finish once it saw the list and its pager as nodes. Empty where the browser has
+    /// no tree to give, such as a fetched page.
+    #[serde(default)]
+    pub accessibility: String,
 }
 
 impl Observation {
@@ -642,6 +648,7 @@ mod tests {
             inaccessible_frames: 0,
             can_go_back: false,
             history_entry: None,
+            accessibility: String::new(),
         };
         assert_eq!(
             observation.today(),

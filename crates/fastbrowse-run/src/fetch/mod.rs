@@ -351,6 +351,7 @@ impl Page for FetchedPage {
                 inaccessible_frames: 0,
                 can_go_back: false,
                 history_entry: Some(capture.url),
+                accessibility: String::new(),
             })
         })
     }
