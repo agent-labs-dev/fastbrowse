@@ -5,7 +5,7 @@
   "owner": "parallax",
   "task_sources": {
     "live_tasks.py": "9cb99d627c4904ee7f04de261f9059f922a54ea23294a4ca79db60b657187095",
-    "more_tasks.py": "f43e02efe748c01c4016759977aaf5a0a53c747ca6a59f84f4c4091f4adf3eec",
+    "more_tasks.py": "4edec47b05163aea404dc440609cb8d886a2393d74f80e3a9ed7638770f51098",
     "versions.json": "1ada9145c1351dc5e524be2f72bbbd0d92a493b7a463c95f1ff3e89666f95dd4"
   },
   "suites": {
