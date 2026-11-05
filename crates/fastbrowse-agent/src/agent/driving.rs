@@ -888,7 +888,7 @@ impl Agent {
         let note = self.redact(&note.join("\n"));
         let facts: Vec<_> = state.notes.facts()[facts_before.min(state.notes.facts().len())..]
             .iter()
-            .map(|fact| self.public_fact(fact))
+            .map(|fact| self.public_fact(fact, &state.notes))
             .collect();
         let step = StepResult {
             index: state.steps.len() as i64,

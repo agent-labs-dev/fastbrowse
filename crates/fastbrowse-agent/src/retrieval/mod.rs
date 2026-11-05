@@ -21,6 +21,7 @@ use fastbrowse_core::llm::Message;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::schema::{Ty, json_schema};
 
+pub(crate) use answers::cited_quote;
 pub use answers::{
     AnswerCorrection, Claim, ComposeOptions, ComposedAnswer, assemble_answer, compose, draft_answer, partial_answer,
     retain_fields,
