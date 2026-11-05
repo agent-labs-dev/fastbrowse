@@ -392,6 +392,12 @@ impl Cdp {
         self.0.deadlines.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Count a deadline the caller met on `session` itself, as when it cancelled an evaluation the renderer did not
+    /// answer in time, so `wedged` probes that renderer before the next navigation.
+    pub fn missed_deadline(&self, session: &str) {
+        *self.deadlines().entry(session.to_string()).or_default() += 1;
+    }
+
     /// Whether this session's renderer is stuck, so a new target is needed. A met deadline alone does not say so: a
     /// slow server's `Page.navigate` meets one on a live renderer. Past `CDP_DEADLINES_BEFORE_STOP` its commands are
     /// refused anyway; below it the renderer is asked to evaluate once, outside the deadline count.

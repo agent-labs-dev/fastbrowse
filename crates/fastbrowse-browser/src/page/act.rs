@@ -192,6 +192,7 @@ impl CdpPage {
                     Ok(measured) => measured,
                     // The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
                     Err(_) => {
+                        self.session.client()?.missed_deadline(&active);
                         return Err(BrowserError::PageUnresponsive(
                             "page did not draw the measured layout before the deadline".into(),
                         ));

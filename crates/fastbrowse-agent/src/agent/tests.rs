@@ -1683,3 +1683,29 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         ]
     );
 }
+
+#[tokio::test]
+async fn review_authorized_navigation_that_hangs_is_not_reopened() {
+    let page = Arc::new(HungPage::new(1));
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state().await;
+    state.authorization = Authorization { irreversible_actions: true };
+    let page_state = at("https://example.test/unsubscribe", &[]);
+    let mut decision = code_decision(Operation::Navigate, None);
+    decision.url = Some(page_state.url.clone());
+    let options = StepOptions {
+        gate: false,
+        prepared_action: Some(Action { url: Some(page_state.url.clone()), ..Action::new(Operation::Navigate) }),
+        ..StepOptions::default()
+    };
+    let result = agent.step(&mut state, &page_state, &decision, Decider::Jev, options).await;
+    assert!(
+        matches!(result, Err(Flow::Browser(BrowserError::PageUnresponsive(_)))),
+        "an authorized navigation can commit without a control and must propagate the hang"
+    );
+    assert_eq!(
+        page.navigations.load(Ordering::SeqCst),
+        0,
+        "reloading a committing GET address can repeat its side effects"
+    );
+}

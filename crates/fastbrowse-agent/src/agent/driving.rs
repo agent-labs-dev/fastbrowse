@@ -1015,7 +1015,10 @@ impl Agent {
             return true;
         }
         let accepts_dialog = decision.operation == Operation::Dialog && action.accept_dialog == Some(true);
+        // Visiting an address can commit with no control behind it.
+        let navigates = decision.operation == Operation::Navigate;
         !accepts_dialog
+            && !navigates
             && !decision.target.as_ref().is_some_and(|target| may_be_irreversible(decision.operation, Some(target)))
     }
 
