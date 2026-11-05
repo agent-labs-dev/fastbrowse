@@ -23,12 +23,16 @@ use tokio::time::{Instant, timeout};
 
 use crate::cdp::{Cdp, Event, secs};
 use crate::error::BrowserError;
+use crate::urlsplit::urlsplit;
 use crate::warn;
 
 const SCREENCAST_COMMAND_SECONDS: f64 = 0.5;
 /// How long closing waits for a cancelled frame callback. The callback is the caller's code, and one that swallows
 /// its cancellation held the run open with no result while its cloud browser went on billing.
 const FRAME_RELEASE_SECONDS: f64 = 2.0;
+/// Pages a browser lists that the run may not drive on its own: an extension's options or background page, a
+/// settings or new tab page, and a DevTools window. A caller that names one with `target_match` still gets it.
+const BROWSER_INTERNAL_SCHEMES: [&str; 5] = ["chrome-extension", "chrome", "chrome-untrusted", "devtools", "edge"];
 
 pub const SNAPSHOT_JS: &str = include_str!("../js/snapshot.js");
 pub const CAPTURE_JS: &str = include_str!("../js/capture.js");
@@ -566,6 +570,11 @@ impl BrowserSession {
         self.0.state.lock().unwrap().active_target_id.clone()
     }
 
+    /// Whether the run opened this target, so closing it takes nothing from the user.
+    pub(crate) fn owns(&self, target_id: &str) -> bool {
+        self.0.state.lock().unwrap().owned.contains(target_id)
+    }
+
     pub fn active_session_id(&self) -> Result<String, BrowserError> {
         self.0.state.lock().unwrap().active_session_id()
     }
@@ -830,19 +839,24 @@ impl BrowserSession {
             // A window outside the grant is never matched, named or touched: it is not the run's to see.
             listed.retain(|t| grant.allows(t["url"].as_str().unwrap_or_default()));
         }
-        let mut pages: Vec<&Value> = listed
-            .iter()
-            .copied()
-            .filter(|t| !t["url"].as_str().unwrap_or_default().starts_with("devtools://"))
-            .collect();
-        if let Some(needle) = target_match {
-            pages.retain(|t| {
+        let scheme = |t: &Value| urlsplit(t["url"].as_str().unwrap_or_default()).0;
+        let mut pages: Vec<&Value> = listed.to_vec();
+        match target_match {
+            // Browser-internal pages, devtools included, are not a window the run may drive unless a caller names one.
+            // A web page is what the run is for, so it outranks an Electron or app window; the sort is stable, so the
+            // browser's order holds within each kind.
+            None => {
+                pages.retain(|t| !BROWSER_INTERNAL_SCHEMES.contains(&scheme(t).as_str()));
+                pages.sort_by_key(|t| !matches!(scheme(t).as_str(), "http" | "https"));
+            }
+            Some(needle) => pages.retain(|t| {
                 t["url"].as_str().unwrap_or_default().contains(needle)
                     || t["title"].as_str().unwrap_or_default().contains(needle)
-            });
+            }),
         }
-        if pages.is_empty() && self.0.grant.is_some() && target_match.is_none() {
-            // Every open window is outside the grant, as a fresh cloud browser showing only about:blank is. An empty
+        if pages.is_empty() && target_match.is_none() {
+            // Nothing listed is a page the run may take over: either every open window is outside the grant, as a
+            // fresh cloud browser showing only about:blank is, or only browser-internal pages are open. An empty
             // window shows nothing to keep from the run, so it is taken over rather than left beside a second one.
             for candidate in targets.iter().filter(|t| empty_window(t)) {
                 if self.still_blank(&str_of(&candidate["targetId"])).await? {
