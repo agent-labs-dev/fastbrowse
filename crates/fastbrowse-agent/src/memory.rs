@@ -593,7 +593,21 @@ impl Notes {
         let mut ordered = ranked.clone();
         ordered.sort_by_key(|(key, _)| !required.contains(*key));
         let keys: Vec<&str> = ordered.iter().map(|(key, _)| key.as_str()).collect();
-        for count in (0..ordered.len()).rev() {
+        let cut = |count: usize| -> String {
+            let body = render(&ordered[..count]);
+            let marker = format!("[{} facts omitted]", ordered.len() - count);
+            if body.is_empty() { marker } else { format!("{body}\n{marker}") }
+        };
+        // Each fact kept adds a line and shortens the marker by at most a digit, so the size only grows with the
+        // count: no count past the largest that fits can fit, and the scan below starts there. Scanning down from
+        // every fact re-rendered all of them per fact dropped, and a checkout run's 1,800 notes took over three
+        // minutes a step.
+        let (mut fits, mut over) = (0, ordered.len());
+        while over - fits > 1 {
+            let middle = (fits + over) / 2;
+            if size(&cut(middle)) <= budget { fits = middle } else { over = middle }
+        }
+        for count in (0..=fits).rev() {
             let kept: HashSet<String> = keys[..count].iter().map(|key| key.to_string()).collect();
             if preserve_answer && required.iter().any(|key| !kept.contains(key)) {
                 return Err(AgentError::NotesTooLarge(format!(
@@ -603,9 +617,7 @@ impl Notes {
             if ordered[..count].iter().any(|(_, fact)| fact.basis.iter().any(|key| !kept.contains(key))) {
                 continue;
             }
-            let body = render(&ordered[..count]);
-            let marker = format!("[{} facts omitted]", ordered.len() - count);
-            let result = if body.is_empty() { marker } else { format!("{body}\n{marker}") };
+            let result = cut(count);
             if size(&result) <= budget {
                 return Ok(result);
             }
@@ -651,6 +663,23 @@ mod tests {
         let evidence =
             Evidence { quote: quote.into(), url: url.into(), end: text::len(quote) as i64, ..span(sha, 0, 4) };
         Fact::read(quote, evidence, FactReader::JevChoice).answering()
+    }
+
+    /// A checkout run's 1,800 notes, over the budget, took over three minutes to cut each step: every count from
+    /// the top was rendered whole. The cut is the same; it took 17s here before, and well under 1s now.
+    #[test]
+    fn notes_far_over_budget_are_cut_quickly() {
+        let mut notes = Notes::default();
+        for i in 0..1800 {
+            let quote =
+                format!("Product {i} line with a price of £{i}.50 incl. VAT and its reviews {}", "x".repeat(120));
+            notes.add(context(quoted(&quote, &format!("{i:064}"), &format!("https://shop.test/page/{}", i / 90))));
+        }
+        let budget = (dumped_len(&notes.render(i64::MAX / 2, true, true).unwrap()) * 2 / 3) as i64;
+        let started = std::time::Instant::now();
+        let cut = notes.render(budget, true, true).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert!(dumped_len(&cut) as i64 <= budget && cut.ends_with("facts omitted]"));
     }
 
     fn context(fact: Fact) -> Fact {
