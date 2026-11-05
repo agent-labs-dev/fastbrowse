@@ -26,7 +26,7 @@ jobs:
   # (`glibc`, and the wheel's `manylinux` tag): they run on RHEL 9, Amazon Linux 2023, Ubuntu 22.04 and Debian 12 as
   # well. A matrix cannot drop an `include` entry, so the list is picked here and both build jobs read it.
   targets:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       include: ${{ steps.pick.outputs.include }}
     steps:
