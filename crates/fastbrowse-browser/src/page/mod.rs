@@ -1242,7 +1242,9 @@ impl CdpPage {
             if remaining.is_zero() {
                 return Ok(false);
             }
-            let state = self
+            // Page.navigate can answer before the new document has its own context, so this can run in the document
+            // being replaced, and Chrome drops the promise with it ("Promise was collected"). Ask the new one.
+            let state = match self
                 .evaluate(
                     session_id,
                     &format!(
@@ -1256,7 +1258,14 @@ impl CdpPage {
                         py_float(remaining.as_secs_f64() * 1000.0)
                     ),
                 )
-                .await?;
+                .await
+            {
+                Err(BrowserError::ContextLost(_)) => {
+                    sleep(secs(0.05)).await;
+                    continue;
+                }
+                other => other?,
+            };
             if state == "interactive" || state == "complete" {
                 return Ok(true);
             }
