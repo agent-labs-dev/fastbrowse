@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "fastbrowse spike",
+  "version": "0.0.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtqtqd3KlFJrX+aHYBbFVIhKBdFzRYduG/2ZRlu0nVVF7R9PBOTUR5yV/MJYxbyLNxDAxN7KuHGi1a3+a0jth65Q/EAG+ztdg0waw1ziBOX1uZcFGCvp/dtdQ1uHb8ceiJDkYuu/Lmqdd8MqZNtL36+Yk3qEvWIdh31UruqZ2u9Xjrns4tSH9xTfixkSAXjF9lHUVcNa688vpEFZN6yQWn4Fjx3q/CnYiPuRyiLq8PXJ7pQVqCX9AIQF9ib4jXbN77pTi+g232ndj5cH2oqsXfmF4WM2uqofjBZGTRtflTsI4H70bFK2pCs1jY0DnjVREEXH+lKCbMe/uYOV+/se2TQIDAQAB",
+  "permissions": ["debugger", "tabs", "tabGroups", "nativeMessaging"],
+  "host_permissions": ["<all_urls>"],
+  "background": {"service_worker": "background.js"}
+}

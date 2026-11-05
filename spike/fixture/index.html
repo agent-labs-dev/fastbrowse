@@ -1,0 +1,7 @@
+<!doctype html><title>spike fixture</title>
+<h1>Relay fixture</h1><label>Name <input id="name"></label>
+<button id="go" style="margin:40px">Press me</button><p id="out">not pressed</p>
+<script>
+window.clicks=[];
+document.getElementById('go').addEventListener('click',e=>{window.clicks.push(e.isTrusted);document.getElementById('out').textContent='pressed '+e.isTrusted;});
+</script>
