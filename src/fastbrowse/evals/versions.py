@@ -47,7 +47,8 @@ LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
 RESULTS = ROOT / "docs" / "results"
 _ADDRESS = re.compile(r" at 0x[0-9a-f]+")
-_OWN = ("fastbrowse.evals", "parallax.browser_use")
+# The eval helpers a task reaches, hashed by their source: this package's, and the internal tasks' in evals/.
+_OWN = ("fastbrowse.evals", "fastbrowse_evals")
 _CONSTANT = (str, bytes, int, float, bool, tuple, frozenset, dict, re.Pattern, enum.Enum)
 _SKIP = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
 ARM_LABELS = {
