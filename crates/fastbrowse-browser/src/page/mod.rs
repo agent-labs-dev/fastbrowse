@@ -1175,7 +1175,19 @@ impl CdpPage {
         {
             return Err(BrowserError::OriginNotAllowed);
         }
-        let session_id = self.session.active_session_id()?;
+        let mut session_id = self.session.active_session_id()?;
+        if self.session.client()?.wedged(&session_id).await {
+            // Page.navigate to a hung renderer waits behind its script, so the page is opened in a fresh tab whose
+            // session starts with no deadlines. The hung tab is closed only when the run opened it: an attached
+            // user's tab is left alone.
+            let hung = self.session.active_target_id();
+            let owned = self.session.owns(&hung);
+            self.session.open_owned_tab("about:blank").await?;
+            if owned {
+                self.session.send("Target.closeTarget", json!({"targetId": hung}), None).await?;
+            }
+            session_id = self.session.active_session_id()?;
+        }
         {
             let mut state = self.state.lock().unwrap();
             // A dialog the new document opens is not the last action's.
@@ -1520,6 +1532,12 @@ impl Page for CdpPage {
 
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {
         Box::pin(async move { seam(CdpPage::address(self).await) })
+    }
+
+    fn active_url(&self) -> BoxFuture<'_, PageResult<Option<String>>> {
+        Box::pin(
+            async move { seam(self.session.active_url().await.map(|url| Some(url).filter(|url| !url.is_empty()))) },
+        )
     }
 
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {

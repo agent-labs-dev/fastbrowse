@@ -88,11 +88,10 @@ impl From<BrowserError> for PageError {
         let message = error.to_string();
         match error {
             BrowserError::ContextLost(_) => PageError::ContextLost(message),
-            // A page that stopped answering while its browser still does cannot be driven again in this tab: its
-            // commands now fail at once, so the run ends `unavailable` rather than retrying a dead page (#737).
-            BrowserError::Unavailable(_) | BrowserError::BrowserUnresponsive(_) | BrowserError::PageUnresponsive(_) => {
-                PageError::Unavailable(message)
-            }
+            BrowserError::Unavailable(_) | BrowserError::BrowserUnresponsive(_) => PageError::Unavailable(message),
+            // Kept apart so the agent can reopen a page that hung during an action once; any other, and a second,
+            // ends the run `unavailable` rather than retrying a dead page (#737).
+            BrowserError::PageUnresponsive(_) => PageError::PageUnresponsive(message),
             BrowserError::ScreenshotsUnavailable(_) => PageError::ScreenshotsUnavailable(message),
             BrowserError::NavigationTimeout(_) => PageError::NavigationTimeout(message),
             BrowserError::SiteUnreachable(_) => PageError::SiteUnreachable(message),
@@ -113,7 +112,7 @@ mod tests {
             (BrowserError::Failed("f".into()), PageError::Failed("f".into())),
             (BrowserError::ContextLost("c".into()), PageError::ContextLost("c".into())),
             (BrowserError::BrowserUnresponsive("b".into()), PageError::Unavailable("b".into())),
-            (BrowserError::PageUnresponsive("p".into()), PageError::Unavailable("p".into())),
+            (BrowserError::PageUnresponsive("p".into()), PageError::PageUnresponsive("p".into())),
             (BrowserError::OriginNotAllowed, PageError::Failed("the page is outside allowed_origins".into())),
             (BrowserError::SiteUnreachable("s".into()), PageError::SiteUnreachable("s".into())),
         ];

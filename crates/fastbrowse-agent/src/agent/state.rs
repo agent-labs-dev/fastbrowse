@@ -174,6 +174,14 @@ impl SiteFailure {
 
     pub fn message(&self) -> String {
         match &self.cause {
+            // A 403 is a refusal of access, and "the cause is unknown" says less than the status does. The status alone
+            // does not say whether it is a bot check or a sign-in that credentials pass, so it names no wall: the page's
+            // own classification names a bot check. Every other status keeps the recorded wording, so replaying
+            // recorded Python traffic still matches byte for byte.
+            FailureCause::Http(403) => format!(
+                "HTTP 403 at {}: the site refused this browser session, which may be an access or bot check or a sign-in it requires.",
+                self.url
+            ),
             FailureCause::Http(status) => {
                 format!("HTTP {status} at {} in this browser session; the cause is unknown.", self.url)
             }
@@ -242,6 +250,8 @@ pub(crate) struct RunState {
     pub blank_opening_checked: bool,
     /// Blank states waited out during this loading episode, cleared once a readable page appears.
     pub blank_waited: HashSet<(String, String)>,
+    /// The one renderer hang this run may recover without risking a replay of the action.
+    pub hung_page_reopened: bool,
     pub last_page: Option<(String, String)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
@@ -452,6 +462,7 @@ impl RunState {
             recoveries: 0,
             blank_opening_checked: false,
             blank_waited: HashSet::new(),
+            hung_page_reopened: false,
             last_page: None,
             navigation_from: None,
             login_readings: HashMap::new(),

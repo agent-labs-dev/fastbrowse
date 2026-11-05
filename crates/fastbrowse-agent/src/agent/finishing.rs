@@ -289,11 +289,14 @@ impl Agent {
         }
         let mut data = Value::Null;
         let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
+        let mut error = answer_problem;
         if let Some(extraction) = extraction {
             data = extraction.data.unwrap_or(Value::Null);
             evidence.extend(extraction.evidence);
-            if extraction.problem.is_some() {
+            if let Some(problem) = &extraction.problem {
                 status = Status::Unverified;
+                // An unverified result says what could not be verified, never `error: null`.
+                error.get_or_insert_with(|| self.redact(problem));
             }
         }
         // The answer's notes and each schema field cite independently; the same words on the same page are one
@@ -303,7 +306,7 @@ impl Agent {
             cited.entry((item.url.clone(), item.quote.clone())).or_insert(item);
         }
         let outcome = Outcome {
-            error: answer_problem,
+            error,
             answer: answer_text,
             data,
             evidence: cited.into_values().collect(),

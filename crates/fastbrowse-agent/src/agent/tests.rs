@@ -4438,3 +4438,206 @@ fn a_link_to_a_page_already_read_is_marked_on_the_link_so_links_sharing_its_labe
     assert!(crate::policy::element(&page.controls[1]).get("already_read").is_none());
     assert!(Agent::page_facts(&state, &page).iter().all(|fact| !fact.contains("already read")));
 }
+
+// -- A page that stops answering during an action ------------------------------------------------------------------
+
+/// A page whose first `hangs` acts find the renderer stopped, counting the navigations that reopen it.
+struct HungPage {
+    hangs: std::sync::atomic::AtomicUsize,
+    navigations: std::sync::atomic::AtomicUsize,
+}
+
+impl HungPage {
+    fn new(hangs: usize) -> HungPage {
+        HungPage { hangs: hangs.into(), navigations: 0.into() }
+    }
+
+    fn navigations(&self) -> usize {
+        self.navigations.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Page for HungPage {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        Box::pin(async { Ok(observation(&[])) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        self.navigations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Ok(capture(&[])) })
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let hang = self.hangs.try_update(SeqCst, SeqCst, |left| left.checked_sub(1)).is_ok();
+        Box::pin(async move {
+            if hang {
+                Err(BrowserError::PageUnresponsive("the renderer stopped answering".into()))
+            } else {
+                Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+            }
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("no frame".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        Box::pin(async { Ok("https://example.test/".into()) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+/// An authorized run's Jev, which calls the step a requested commit so it is carried out.
+fn authorized_jev() -> Arc<Gatekeeper> {
+    Arc::new(Gatekeeper { irreversible: 0.95, requested: 0.97, lasting: 0.0, calls: Default::default() })
+}
+
+#[tokio::test]
+async fn test_a_hung_page_is_reopened_once_and_the_next_step_continues() {
+    let page = Arc::new(HungPage::new(1));
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let page_state = at("https://example.test/", &[button("Go")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+
+    agent.step(&mut state, &page_state, &decision).await.expect("the hang is recovered");
+    assert_eq!(page.navigations(), 1);
+    assert!(state.hung_page_reopened);
+    assert_eq!(state.steps[0].outcome, StepOutcome::Failed);
+    assert_eq!(state.steps[0].note.as_deref(), Some("The page stopped answering and was reopened."));
+
+    agent.step(&mut state, &page_state, &decision).await.expect("the reopened page answers");
+    assert_eq!(page.navigations(), 1);
+    assert_eq!(state.steps[1].outcome, StepOutcome::Executed);
+}
+
+#[tokio::test]
+async fn test_a_second_hung_page_ends_unavailable() {
+    let page = Arc::new(HungPage::new(2));
+    let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let page_state = at("https://example.test/", &[button("Go")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+
+    agent.step(&mut state, &page_state, &decision).await.expect("the first hang is recovered");
+    let Err(error @ Flow::Browser(BrowserError::PageUnresponsive(_))) =
+        agent.step(&mut state, &page_state, &decision).await
+    else {
+        panic!("the second hang was recovered or converted to another flow");
+    };
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(error, Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::Unavailable);
+}
+
+#[tokio::test]
+async fn test_an_authorized_submission_that_hangs_is_not_reopened() {
+    let page = Arc::new(HungPage::new(1));
+    let agent = Agent::new(page.clone(), authorized_jev(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.authorization = Authorization { irreversible_actions: true };
+    let page_state = at("https://example.test/", &[button("Submit")]);
+    let decision = code_decision(Operation::Click, Some(page_state.controls[0].clone()));
+    let Err(Flow::Browser(BrowserError::PageUnresponsive(_))) = agent.step(&mut state, &page_state, &decision).await
+    else {
+        panic!("the authorized submission was replayed or recovered");
+    };
+    assert_eq!(page.navigations(), 0);
+    assert!(!state.hung_page_reopened);
+}
+
+#[tokio::test]
+async fn review_authorized_navigation_that_hangs_is_not_reopened() {
+    let page = Arc::new(HungPage::new(1));
+    let agent = Agent::new(page.clone(), authorized_jev(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.authorization = Authorization { irreversible_actions: true };
+    let page_state = at("https://example.test/unsubscribe", &[]);
+    state.task = format!("Unsubscribe me at {}", page_state.url);
+    let decision = Decision { url: Some(page_state.url.clone()), ..code_decision(Operation::Navigate, None) };
+    let result = agent.step(&mut state, &page_state, &decision).await;
+    assert!(
+        matches!(result, Err(Flow::Browser(BrowserError::PageUnresponsive(_)))),
+        "an authorized navigation can commit without a control and must propagate the hang, got {result:?}"
+    );
+    assert_eq!(page.navigations(), 0, "reloading a committing GET address can repeat its side effects");
+}
+
+// -- What a refused request says -----------------------------------------------------------------------------------
+
+/// A server refusal is not an unknown cause: a 403 is the shape an access or bot check takes, and a run told only
+/// "the cause is unknown" with no wall sends its caller looking for a sign-in that cannot pass it.
+#[test]
+fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
+    let stop = SiteFailure::http("https://www.curseforge.com/wow/addons/tweaks-forever/files", 403, 0).stop();
+    assert_eq!(stop.status, Status::Blocked);
+    // The status alone does not prove a bot check: the page's own classification names one.
+    assert_eq!(stop.wall, None);
+    let error = stop.error.expect("an error names the refusal");
+    assert!(error.contains("HTTP 403"), "{error}");
+    assert!(error.contains("access or bot check"), "{error}");
+    assert!(!error.contains("cause is unknown"), "{error}");
+    // Every other status keeps the recorded Python wording, so replayed golden traffic stays byte for byte. A 401 is
+    // still a needs-login stop with no wall of its own, and a 5xx is the site being unavailable, not the run failing.
+    let recorded = "in this browser session; the cause is unknown.";
+    let unauthorized = SiteFailure::http("https://shop.test/cart", 401, 0).stop();
+    assert_eq!(unauthorized.status, Status::NeedsLogin);
+    assert_eq!(unauthorized.wall, None);
+    assert!(unauthorized.error.unwrap().contains(recorded));
+    let unavailable = SiteFailure::http("https://shop.test/cart", 503, 0).stop();
+    assert_eq!(unavailable.status, Status::Unavailable);
+    assert_eq!(unavailable.wall, None);
+    assert!(unavailable.error.unwrap().contains(recorded));
+}
+
+#[test]
+fn review_http_403_with_a_password_form_does_not_claim_a_bot_check() {
+    use fastbrowse_core::models::WallKind;
+
+    let agent = agent();
+    let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    let mut observation = at("https://shop.test/login", &[password, button("Sign in")]);
+    observation.response_status = Some(403);
+    agent.seen().raw = Some(observation.clone());
+    agent.seen().observed = Some(observation);
+
+    let stop = SiteFailure::http("https://shop.test/login", 403, 0).stop();
+    let wall = agent.wall(&stop);
+    assert_ne!(
+        wall.as_ref().map(|wall| wall.kind),
+        Some(WallKind::BotCheck),
+        "HTTP 403 alone does not prove an automated-traffic check; the page offers a password form"
+    );
+}

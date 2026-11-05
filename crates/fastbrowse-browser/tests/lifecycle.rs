@@ -611,6 +611,77 @@ async fn test_attach_existing_tab_and_non_destructive_teardown() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_attach_skips_browser_internal_pages_and_prefers_web_pages() {
+    // An extension's options page is open beside a web page, or alone. Without a name it is never the window the run
+    // drives: a web page comes first, and when none is open the run opens its own window rather than taking one over.
+    // Electron and app windows are not browser-internal, and a caller may still name an extension page.
+    let cases: [(&str, Value, Option<&str>, &str, bool); 4] = [
+        (
+            "extension before a web page",
+            json!({"targetInfos": [
+                {"targetId": "options", "type": "page", "url": "chrome-extension://abc/options.html", "title": "Options"},
+                {"targetId": "web", "type": "page", "url": "https://example.com/app", "title": "My App"},
+            ]}),
+            None,
+            "web",
+            false,
+        ),
+        (
+            "extension alone",
+            json!({"targetInfos": [
+                {"targetId": "options", "type": "page", "url": "chrome-extension://abc/options.html", "title": "Options"},
+            ]}),
+            None,
+            "owned",
+            true,
+        ),
+        (
+            "an Electron window still attaches",
+            json!({"targetInfos": [
+                {"targetId": "app", "type": "page", "url": "file:///home/me/app/index.html", "title": "App"},
+            ]}),
+            None,
+            "app",
+            false,
+        ),
+        (
+            "a named extension page still attaches",
+            json!({"targetInfos": [
+                {"targetId": "options", "type": "page", "url": "chrome-extension://abc/options.html", "title": "Options"},
+            ]}),
+            Some("Options"),
+            "options",
+            false,
+        ),
+    ];
+    for (name, targets, target_match, expected, opens) in cases {
+        let fake = FakeChrome::start().await;
+        fake.queue("Target.getTargets", [targets]);
+        let connection = BrowserConnection {
+            attach: true,
+            target_match: target_match.map(str::to_owned),
+            ..BrowserConnection::new(fake.url.clone(), false)
+        };
+        let session = fake.session(connection).await;
+        assert_eq!(session.active_target_id(), expected, "{name}");
+        {
+            let script = fake.script();
+            assert_eq!(script.count("Target.createTarget"), usize::from(opens), "{name}");
+            if opens {
+                assert_eq!(
+                    script.params_of("Target.createTarget"),
+                    [json!({"url": "about:blank", "background": true})],
+                    "{name}"
+                );
+            }
+        }
+        session.close().await.unwrap();
+        // Whatever the page, an attached window is left open, including the extension tab that was not taken.
+        assert!(!fake.calls().iter().any(|m| m == "Target.closeTarget"), "{name}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_attach_adopts_its_popups_and_windows_without_opener_only_when_matched() {
     // A window with no opener is an Electron app's, or a tab its user opened by hand in a browser.
     let cases: [(Option<&str>, &[&str]); 2] = [(None, &["popup"]), (Some("App"), &["popup", "window"])];

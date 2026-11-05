@@ -148,7 +148,7 @@ limit.
   sign-in and no credential passes it. Retry using an attached local browser or choose another source for
   this research.`
 - The site answered HTTP 403 and Jev found no way on. The error is
-  `Could not complete the task after HTTP 403 at <url> in this browser session; the cause is unknown.`
+  `Could not complete the task after HTTP 403 at <url>: the site refused this browser session, which may be an access or bot check or a sign-in it requires.`
 
 A bot check can block a cloud browser before any task step runs. Credentials do not pass a CAPTCHA, so
 `--secret` and `--bitwarden` do not help here.
@@ -211,9 +211,11 @@ be fine, and the same run later may pass.
 - Jev judged that the page reports the site failed, such as an error shown in place of search results, a
   maintenance notice or a load that never finished, and reloading found no way past it:
   `Could not complete the task after the page at <url> reported that the site failed to deliver what was asked.`
-- A browser command went unanswered. One that stays unanswered for 120 seconds ends the run, even if the
-  browser still answers health checks, and the error says the page did not answer or the browser stopped
-  answering.
+- A browser command went unanswered while the browser still answered health checks. A command to a page that
+  goes unanswered for 10 seconds has the page asked whether it still answers, and one that does not answer in 10
+  more is hung; an input event gets 15 seconds and any other command 120 seconds. The first page that stops
+  answering an action is reopened once at the address the tab shows; a second hang, or one outside an action, ends
+  the run, and the error says the page did not answer or the browser stopped answering.
 - The run's tab closed and no tab it owns remains.
 
 **Next step.**

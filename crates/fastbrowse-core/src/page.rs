@@ -445,6 +445,9 @@ pub enum BrowserError {
     /// The browser session no longer has a page available for this run.
     #[error("{0}")]
     Unavailable(String),
+    /// The browser answered, but the renderer for this page stopped answering commands.
+    #[error("{0}")]
+    PageUnresponsive(String),
     /// A page cannot safely attribute pixels to its permitted documents.
     #[error("{0}")]
     ScreenshotsUnavailable(String),
@@ -558,6 +561,12 @@ pub trait Page: Send + Sync {
 
     /// The address the current document was served from, after any redirect.
     fn address(&self) -> BoxFuture<'_, PageResult<String>>;
+
+    /// The active tab's URL as the browser reports it, which answers while the renderer is hung. None when the page
+    /// cannot tell apart from its document.
+    fn active_url(&self) -> BoxFuture<'_, PageResult<Option<String>>> {
+        Box::pin(async { Ok(None) })
+    }
 
     /// The HTTP status the current document was served with, or None when the browser does not say.
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>>;

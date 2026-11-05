@@ -359,12 +359,14 @@ dispatched to the front tab of an inactive window activates that window, as an a
 ### Attached windows
 
 A session normally opens its own tab and closes only the tabs it owns. With `BrowserConnection.attach` it opens
-none: it takes the first page target whose title or URL contains `target_match` (or the first page, skipping
-`devtools://` windows), and owns nothing, so `closeTarget` is never sent. A scoped session with no `target_match`
-that finds no page inside its grant, as in a fresh browser showing only `about:blank`, takes over an empty window
-(`about:blank` that no page opened, still holding the empty document) when there is one, and otherwise opens one blank tab, keeping either open on exit
-like the window it stands in for; it closes an opened tab only if setup fails. A new tab page is never taken over: it
-can list the person's most visited sites. That page loaded before the session's
+none: it takes the first page target whose title or URL contains `target_match`, or without one the first web
+page, skipping browser-internal pages such as extension options, `chrome://`, `chrome-untrusted://` and
+`devtools://` windows unless `target_match` names one, and putting `http`/`https` pages before Electron and app
+windows. It owns nothing, so `closeTarget` is never sent. An attach with no usable window, scoped or not, as in a
+fresh browser showing only `about:blank`, takes over an empty window (`about:blank` that no page opened, still
+holding the empty document) when there is one, and otherwise opens one blank tab, keeping either open on exit
+like the window it stands in for; it closes an opened tab only if setup fails. A new tab page is never taken
+over: it can list the person's most visited sites. That page loaded before the session's
 new-document scripts were registered, so they are also evaluated once in it; otherwise freshness tracking would
 start only at its next navigation. Turning target discovery on replays `targetCreated` for every window already
 open, so an attached session turns it on only after recording those, and none of them joins the run. Popups of a

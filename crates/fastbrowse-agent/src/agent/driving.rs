@@ -12,7 +12,7 @@ use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, D
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::py::text;
-use fastbrowse_core::safety::origin_of;
+use fastbrowse_core::safety::{may_be_irreversible, origin_of};
 use serde_json::{Map, Value, json};
 
 use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
@@ -475,7 +475,13 @@ impl Agent {
                 self.page.withhold_frames(true);
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            let mut result = self.trace.phase("act", self.page.act(&action, &raw)).await?;
+            let mut result = match self.trace.phase("act", self.page.act(&action, &raw)).await {
+                Ok(result) => result,
+                Err(BrowserError::PageUnresponsive(_)) if Self::may_reopen(state, decision, &action) => {
+                    return self.reopen_hung_page(state, observation, decision, started, frame).await;
+                }
+                Err(error) => return Err(error.into()),
+            };
             if result.outcome == StepOutcome::Stale
                 && let Some(target) = &decision.target
                 && let Some(retried) = self.act_on_twin(&action, observation, target).await?
@@ -578,7 +584,15 @@ impl Agent {
             {
                 // A menu that closed without the value changing still changes the page, so what the choice set is
                 // stated: Google Flights' "One way" was clicked to the step limit while the history said only "changed".
-                let landed = self.observe().await?;
+                let landed = match self.observe().await {
+                    Ok(landed) => landed,
+                    Err(Flow::Browser(BrowserError::PageUnresponsive(_)))
+                        if Self::may_reopen(state, decision, &action) =>
+                    {
+                        return self.reopen_hung_page(state, observation, decision, started, frame).await;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let done = effect(observation, &landed, Some(target));
                 if done.changed {
                     uncover(&mut state.idle);
@@ -664,6 +678,71 @@ impl Agent {
             Box::pin(self.recover(state, observation, &reason, gives_up_as, stalled)).await?;
         }
         Ok(())
+    }
+
+    /// Record the step whose page stopped answering as failed, and open that page again once. Its frame was taken
+    /// before the action, so the step still shows what was acted on.
+    async fn reopen_hung_page(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        started: Instant,
+        frame: Option<Vec<u8>>,
+    ) -> Step {
+        state.hung_page_reopened = true;
+        if decision.replayed
+            && let Some(replay) = state.replay.as_mut()
+        {
+            replay.settled(false);
+        }
+        let label = decision_label(decision);
+        // A click or navigation may have reached a new page before its renderer hung: reopen that page, not the one
+        // the step started on. The target metadata answers without the renderer.
+        let url = match self.page.active_url().await {
+            Ok(Some(url)) => url,
+            Ok(None) | Err(_) => observation.url.clone(),
+        };
+        state.acted_from = None;
+        state.followed = None;
+        self.event("hung_page_reload", || Map::from_iter([("url".into(), url.clone().into())]));
+        let effect = "The page stopped answering and was reopened.".to_string();
+        state.history.push(HistoryEntry {
+            effect: Some(effect.clone()),
+            ..HistoryEntry::new(Some(decision.operation), label.as_deref(), StepOutcome::Failed, false)
+        });
+        let step = StepResult {
+            index: state.steps.len() as i64,
+            operation: decision.operation,
+            decided_by: if decision.replayed { Decider::Recipe } else { Decider::Jev },
+            outcome: StepOutcome::Failed,
+            page_changed: Some(url != observation.url),
+            url: url.clone(),
+            target: label,
+            confidence: Some(decision.confidence()),
+            note: Some(effect),
+            facts: Vec::new(),
+            duration_ms: started.elapsed().as_millis() as i64,
+            choices: Vec::new(),
+        };
+        self.record_step(state, step, false, frame).await?;
+        self.page.navigate(&url, None).await?;
+        Ok(())
+    }
+
+    /// A run reopens one hung page, and never after an authorized commit the renderer may have received: reopening
+    /// would let the run replay it.
+    fn may_reopen(state: &RunState, decision: &Decision, action: &Action) -> bool {
+        if state.hung_page_reopened {
+            return false;
+        }
+        if !state.authorization.irreversible_actions {
+            return true;
+        }
+        let accepts_dialog = decision.operation == Operation::Dialog && action.accept_dialog == Some(true);
+        // Visiting an address can commit with no control behind it.
+        let navigates = decision.operation == Operation::Navigate;
+        !accepts_dialog && !navigates && !may_be_irreversible(decision.operation)
     }
 
     /// Act on the one control now standing where `target` stood, if the page redrew it since it was observed.

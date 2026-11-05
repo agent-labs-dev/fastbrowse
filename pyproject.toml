@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 classifiers = ["Development Status :: 4 - Beta"]
 dependencies = [
     "httpx[http2]>=0.28.1,<1",
+    "packaging>=24,<27",  # the bench walks distribution metadata: fastbrowse/evals/bench.py (#764)
     "pydantic>=2.14.2,<3",
 ]
 

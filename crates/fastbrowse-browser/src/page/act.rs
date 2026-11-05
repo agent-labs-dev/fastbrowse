@@ -86,7 +86,8 @@ enum Cover {
 }
 
 /// Bounds an input event Chrome never answers: a tab can leave it pending, delivered or not, for the whole command
-/// deadline. The page is read next, so what the event did is seen there, and a page that has really hung fails that read.
+/// deadline. The page is then read: one that answers carries on and shows what the event did, and one that does not
+/// is hung and fails the action as `PageUnresponsive`.
 const INPUT_REPLY_SECONDS: f64 = 10.0;
 
 type Outcome = (StepOutcome, Option<String>);
@@ -185,7 +186,7 @@ impl CdpPage {
         if self.session.pending_dialog().is_none() {
             let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
             // The frame wait runs on the page's own timers, which a page can replace with ones that never fire; past
-            // this bound the action is recorded as failed and the next loop turn observes the page again.
+            // this bound the page counts as hung, and the agent reopens it once rather than end the run on one slow frame.
             let measured = if drawn {
                 match timeout(
                     secs(MEASURE_DRAWN_SECONDS),
@@ -196,10 +197,9 @@ impl CdpPage {
                     Ok(measured) => measured,
                     // The renderer may be synchronously blocked. Do not queue a second evaluation behind it.
                     Err(_) => {
-                        return Ok(result(
-                            StepOutcome::Failed,
-                            false,
-                            "page did not draw the measured layout before the deadline",
+                        self.session.client()?.missed_deadline(&active);
+                        return Err(BrowserError::PageUnresponsive(
+                            "page did not draw the measured layout before the deadline".into(),
                         ));
                     }
                 }
@@ -436,6 +436,7 @@ impl CdpPage {
                 match self.navigate(url, None).await {
                     Err(error @ BrowserError::OriginNotAllowed) => Err(error),
                     Err(error) if error.is_unavailable() => Err(error),
+                    Err(error @ BrowserError::PageUnresponsive(_)) => Err(error),
                     Err(error) => Ok((StepOutcome::Failed, Some(error.to_string()))),
                     Ok(()) => Ok((StepOutcome::Executed, None)),
                 }
@@ -1344,30 +1345,44 @@ impl CdpPage {
         tokio::select! {
             sent = timeout(secs(INPUT_REPLY_SECONDS), send) => match sent {
                 Ok(sent) => sent.map(drop),
-                Err(_) => {
-                    self.report_unanswered().await;
-                    Ok(())
-                }
+                // A page that answers the read carries on, and the next observation shows what the event did. One
+                // that answers neither is hung: the agent reopens it once rather than drive a dead renderer, and
+                // the met deadline has the next navigation open it in a fresh tab.
+                Err(_) => match self.report_unanswered().await {
+                    Some(hung) => {
+                        self.session.client()?.missed_deadline(&hung);
+                        Err(BrowserError::PageUnresponsive(
+                            "an input event went unanswered, and the page did not answer a read either".into(),
+                        ))
+                    }
+                    None => Ok(()),
+                },
             },
             () = self.session.wait_for_dialog() => Ok(()),
         }
     }
 
-    /// What state the page was in, as booleans alone: a public log must not carry anything a page can write.
-    async fn report_unanswered(&self) {
+    /// What state the page was in, as booleans alone: a public log must not carry anything a page can write. Returns
+    /// the page's session when it did not answer the read either, so it is hung.
+    async fn report_unanswered(&self) -> Option<String> {
         let script =
             "[document.visibilityState === 'visible', document.hasFocus(), document.readyState === 'complete']";
         let started = Instant::now();
-        let seen = match self.session.active_session_id() {
-            Ok(id) => timeout(secs(INPUT_REPLY_SECONDS), self.evaluate(&id, script)).await,
-            Err(_) => return warn("an input event went unanswered with no active page"),
+        let Ok(id) = self.session.active_session_id() else {
+            warn("an input event went unanswered with no active page");
+            return None;
         };
-        let page = match seen {
-            Ok(Ok(state)) => format!("visible, focused, loaded {state} after {:.1}s", started.elapsed().as_secs_f64()),
-            Ok(Err(error)) => format!("read failed ({})", error.kind()),
-            Err(_) => "did not answer a read either".to_owned(),
+        let (page, hung) = match timeout(secs(INPUT_REPLY_SECONDS), self.evaluate(&id, script)).await {
+            Ok(Ok(state)) => {
+                (format!("visible, focused, loaded {state} after {:.1}s", started.elapsed().as_secs_f64()), false)
+            }
+            Ok(Err(error)) => {
+                (format!("read failed ({})", error.kind()), matches!(error, BrowserError::PageUnresponsive(_)))
+            }
+            Err(_) => ("did not answer a read either".to_owned(), true),
         };
         warn(&format!("an input event went unanswered; page: {page}"));
+        hung.then_some(id)
     }
 
     async fn focus(
