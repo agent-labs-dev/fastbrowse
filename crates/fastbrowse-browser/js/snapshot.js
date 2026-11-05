@@ -1071,11 +1071,13 @@
   // run asked to confirm audio plays and then stops pressed Play and Pause until its step limit, unable to see either.
   // Every player counts, shown or not, since a hidden one can still be playing.
   const media = [];
+  // Section headings only, as capture.js names players: a table's column header ("Comment") or a player's own
+  // settings legend ("Font Family") named the players after them on Wikimedia Commons.
   const headingBefore = e => {
     let found = '';
-    for (const h of e.ownerDocument.querySelectorAll(HEADINGS)) {
+    for (const h of e.ownerDocument.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
       if (!(h.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
-      found = firstLine(innerTextOf(h));
+      found = firstLine(innerTextOf(h)) || found;
     }
     return found;
   };

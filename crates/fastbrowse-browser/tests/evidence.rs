@@ -144,7 +144,8 @@ async fn test_a_players_state_is_observed_and_read() {
         tag(36, 'data'); wav.setUint32(40, n, true); new Uint8Array(wav.buffer, 44).fill(128);
         const src = URL.createObjectURL(new Blob([wav.buffer], { type: 'audio/wav' }));
         document.body.innerHTML = '<h2>Lesson one</h2><audio controls aria-label="Lesson one audio">Not supported</audio>' +
-          '<h2>Lesson two</h2><audio controls>Not supported</audio>';
+          '<h2>Lesson two</h2><table><tr><th>Comment</th></tr></table><fieldset hidden><legend>Font Family</legend></fieldset>' +
+          '<audio controls>Not supported</audio>';
         for (const player of document.querySelectorAll('audio')) player.src = src;
         const first = document.querySelector('audio');
         first.muted = true;
