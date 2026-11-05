@@ -1341,6 +1341,7 @@
   ]
  },
  "inaccessible_frames": 0,
+ "media": [],
  "offscreen_text": "Product 4\n$28.99\nAdd to cart\nDetails\nOptions\nProduct 5\n$35.99\nAdd to cart\nDetails\nOptions\nProduct 6\n$42.99\nAdd to cart\nDetails\nOptions\nProduct 7\n$49.99\nAdd to cart\nDetails\nOptions",
  "title": "Cards",
  "url": "http://fixture/cards.html?n=8",

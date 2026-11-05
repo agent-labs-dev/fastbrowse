@@ -1166,6 +1166,10 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
             "response_status": observation.response_status,
         }),
     );
+    // A player's state is in the element, not the text: without it a run could not tell playing from paused.
+    if !observation.media.is_empty() {
+        state["page"]["media"] = json!(observation.media);
+    }
     state.insert("answered_in_notes".into(), context.answered_in_notes.into());
     state.insert("notes".into(), context.notes.clone().into());
     state.insert("recent_actions".into(), Value::Array(context.history.iter().map(Dump::dump_exclude_none).collect()));
@@ -1737,6 +1741,25 @@ mod tests {
         let states = jev.states.lock().unwrap();
         assert_eq!(states[0]["page"]["offscreen_text"], "Mongolia");
         assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
+    }
+
+    /// A media QA run pressed Play and Pause to its step limit, shown no player's state; a page without one adds nothing.
+    #[test]
+    fn test_jev_is_shown_each_players_state() {
+        let jev = fake(&[("operation", "read")], "");
+        let mut page = observation(vec![button(1)]);
+        let context = StepContext::new("Confirm the lesson audio plays");
+        block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        page.media = vec![
+            serde_json::from_value(json!({"kind": "audio", "label": "Lesson one", "paused": false,
+            "ended": false, "muted": false, "elapsed_seconds": 12.0, "duration_seconds": 30.0}))
+            .unwrap(),
+        ];
+        block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let states = jev.states.lock().unwrap();
+        assert!(states[0]["page"].get("media").is_none());
+        assert_eq!(states[1]["page"]["media"][0]["paused"], false);
+        assert_eq!(states[1]["page"]["media"][0]["elapsed_seconds"], 12.0);
     }
 
     #[test]

@@ -76,6 +76,23 @@ class Dialog(Frozen):
     default_prompt: str | None = None
 
 
+class Media(Frozen):
+    """One audio or video player's state, read from the element when the page was observed."""
+
+    kind: str
+    """`audio` or `video`."""
+    label: str | None = None
+    """The player's own accessible name, when it has one."""
+    heading: str | None = None
+    """The nearest heading before the player, which tells unnamed players apart."""
+    paused: bool
+    ended: bool
+    muted: bool
+    elapsed_seconds: float
+    duration_seconds: float | None = None
+    """None while the length is unknown or the stream has no end."""
+
+
 class Observation(Frozen):
     url: str
     title: str
@@ -94,6 +111,8 @@ class Observation(Frozen):
     visual_content: bool = False
     """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier
     needs the screenshot even on a text-rich page whose state is the picture itself."""
+    media: tuple[Media, ...] = ()
+    """Every audio and video player on the page, shown or not: their state lives in the element, not the page text."""
     tabs: tuple[Tab, ...]
     dialog: Dialog | None = None
     inaccessible_frames: int = Field(default=0, ge=0)

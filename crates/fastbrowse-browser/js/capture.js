@@ -405,6 +405,29 @@
         src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`);
     }
+    // A player's clock and whether it plays are element state, drawn by native controls the text never holds. Each
+    // read records them, so two reads of a playing player are two citable times. Hidden players count: they can play.
+    const seconds = value => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null);
+    for (const player of root.querySelectorAll('audio,video')) {
+      let heading = null;
+      for (const h of root.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
+        if (!(h.compareDocumentPosition(player) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
+        heading = textOf(h) || heading;
+      }
+      // Its children are fallback text for browsers without players, not its name.
+      const named = player.hasAttribute('aria-label') || player.hasAttribute('aria-labelledby');
+      const state = {
+        label: (named ? nameOf(player) : clean(player.title || '')) || null,
+        heading,
+        paused: player.paused,
+        ended: player.ended,
+        muted: player.muted,
+        elapsed_seconds: seconds(player.currentTime) ?? 0,
+        duration_seconds: seconds(player.duration),
+      };
+      const kind = player.tagName === 'AUDIO' ? 'Audio' : 'Video';
+      push('observation', `${kind} element state: ${JSON.stringify(state)}`);
+    }
     // A link drawn only as an icon has no text, so its destination, the one thing it says, was nowhere a reader
     // could quote: asked for a release's download URL beside an icon-only download link, a run read every other
     // field of the row and then clicked the link again and again looking for the address. The row's text names

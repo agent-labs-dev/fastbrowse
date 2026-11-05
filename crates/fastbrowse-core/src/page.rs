@@ -204,6 +204,27 @@ fn http_status<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error>
     }
 }
 
+/// One audio or video player's state, read from the element when the page was observed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Media {
+    /// `audio` or `video`.
+    pub kind: String,
+    /// The player's own accessible name, when it has one.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The nearest heading before the player, which tells unnamed players apart.
+    #[serde(default)]
+    pub heading: Option<String>,
+    pub paused: bool,
+    pub ended: bool,
+    pub muted: bool,
+    pub elapsed_seconds: f64,
+    /// None while the length is unknown or the stream has no end.
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
@@ -228,6 +249,9 @@ pub struct Observation {
     /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub visual_content: bool,
+    /// Every audio and video player on the page, shown or not: their state lives in the element, not the page text.
+    #[serde(default)]
+    pub media: Vec<Media>,
     pub tabs: Vec<Tab>,
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -603,6 +627,7 @@ mod tests {
             viewport_text: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
+            media: Vec::new(),
             tabs: vec![],
             dialog: None,
             inaccessible_frames: 0,

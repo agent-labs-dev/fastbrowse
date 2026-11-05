@@ -57,6 +57,9 @@ pub fn page_state(
         "page".into(),
         json!({"url": observation.url, "title": observation.title, "text": observation.viewport_text}),
     );
+    if !observation.media.is_empty() {
+        state["page"]["media"] = json!(observation.media);
+    }
     // Inputs and ARIA selection states are absent from innerText; without them a preview can pass completion even
     // though the requested filters were never applied.
     state.insert("controls".into(), Value::Array(controls(&observation.controls)));
@@ -206,6 +209,18 @@ mod tests {
             "viewport_text": "encode/httpx", "tabs": [],
         }))
         .expect("observation")
+    }
+
+    #[test]
+    fn the_verifier_sees_each_players_state() {
+        let mut page = page();
+        page.media = vec![
+            serde_json::from_value(json!({"kind": "video", "paused": true, "ended": true,
+            "muted": false, "elapsed_seconds": 30.0, "duration_seconds": 30.0}))
+            .unwrap(),
+        ];
+        let state = page_state(&page, &Notes::default(), &TokenBudget::default(), &[], None).unwrap();
+        assert_eq!(state["page"]["media"][0]["ended"], true);
     }
 
     #[test]

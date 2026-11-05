@@ -233,6 +233,7 @@ mod tests {
             viewport_text: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
+            media: Vec::new(),
             tabs: vec![],
             dialog: None,
             inaccessible_frames: 0,

@@ -338,6 +338,7 @@ impl Page for FetchedPage {
                 viewport_text: capture.text.clone(),
                 offscreen_text: String::new(),
                 visual_content: false,
+                media: Vec::new(),
                 // Nothing here can be scrolled, clicked or looked at, so no step may be chosen to do it.
                 tabs: vec![Tab {
                     id: "fetched".into(),

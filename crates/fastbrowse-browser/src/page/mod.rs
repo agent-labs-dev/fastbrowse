@@ -20,7 +20,7 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, ArtifactKind, Operation, SourceControl};
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Observation, Page, PageResult,
+    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Media, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -169,6 +169,8 @@ struct Snapshot {
     /// 1 when the viewport shows a picture, chart, drawing or video that no control carries; snapshot.js sends 0/1.
     #[serde(default)]
     visual_content: i64,
+    #[serde(default)]
+    media: Vec<Media>,
     controls: Vec<SnapshotControl>,
     page_key: String,
     /// Digest of each control's freshness guard, keyed by its local id as a string (a JSON object key).
@@ -647,6 +649,7 @@ impl CdpPage {
                 offscreen_text: main.map(|m| m.raw.offscreen_text.clone()).unwrap_or_default(),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
+                media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
                 inaccessible_frames: int(inaccessible),
@@ -715,6 +718,7 @@ impl CdpPage {
             viewport_text: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
+            media: Vec::new(),
             tabs: self.session.tabs(),
             dialog: Some(dialog),
             inaccessible_frames: 0,

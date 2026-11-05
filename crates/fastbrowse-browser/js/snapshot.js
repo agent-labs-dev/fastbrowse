@@ -1036,6 +1036,37 @@
   };
   readVisual(document, 0, 0);
 
+  // A player's state lives in the element, not the page's text: native controls draw their clock in shadow DOM, so a
+  // run asked to confirm audio plays and then stops pressed Play and Pause until its step limit, unable to see either.
+  // Every player counts, shown or not, since a hidden one can still be playing.
+  const media = [];
+  const headingBefore = e => {
+    let found = '';
+    for (const h of e.ownerDocument.querySelectorAll(HEADINGS)) {
+      if (!(h.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
+      found = firstLine(innerTextOf(h));
+    }
+    return found;
+  };
+  const seconds = value => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null);
+  const readMedia = doc => {
+    for (const e of doc.querySelectorAll('audio,video')) {
+      media.push({
+        kind: e.tagName.toLowerCase(),
+        // Its children are fallback text for browsers without players, not its name.
+        label: (e.hasAttribute('aria-label') || e.hasAttribute('aria-labelledby') ? labelOf(e) : e.title) || null,
+        heading: headingBefore(e) || null,
+        paused: e.paused,
+        ended: e.ended,
+        muted: e.muted,
+        elapsed_seconds: seconds(e.currentTime) ?? 0,
+        duration_seconds: seconds(e.duration),
+      });
+    }
+    readFrames(doc, 0, 0, readMedia);
+  };
+  readMedia(document);
+
   const guards = {},
     retarget_keys = {};
   for (const c of controls) {
@@ -1062,6 +1093,8 @@
     viewport_text,
     semantics,
     field_state,
+    // Playing or not changes the page; the clock advancing does not, or no key would hold until an action.
+    media.map(({ elapsed_seconds, ...m }) => m),
   ]));
 
   const result = {
@@ -1070,6 +1103,7 @@
     viewport_text,
     offscreen_text,
     visual_content,
+    media,
     document_key: String(performance.timeOrigin),
     controls: semantics,
     page_key,

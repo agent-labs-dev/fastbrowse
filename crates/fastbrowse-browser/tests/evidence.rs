@@ -4,7 +4,8 @@ mod misc_support;
 use std::collections::HashSet;
 
 use common::{eval_active, harness, sites};
-use fastbrowse_core::page::BlockKind;
+use fastbrowse_core::models::Operation;
+use fastbrowse_core::page::{Action, BlockKind};
 use misc_support::text_of;
 
 // -- test_comment_context.py: reply controls belong to their comment record, including when only one form is open --
@@ -123,6 +124,69 @@ async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
     // Scrolled into view, the same drawing is page state the screenshot does carry.
     eval_active(&h.session, "scrollTo(0, document.body.scrollHeight)").await;
     assert!(h.observe().await.visual_content);
+    h.close().await;
+}
+
+// A media QA run pressed Play and Pause until its step limit: native players draw their clock in shadow DOM, so
+// neither the page text nor a read said whether anything played.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_players_state_is_observed_and_read() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        const rate = 8000, n = rate * 30, wav = new DataView(new ArrayBuffer(44 + n));
+        const tag = (at, s) => [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+        tag(0, 'RIFF'); wav.setUint32(4, 36 + n, true); tag(8, 'WAVEfmt '); wav.setUint32(16, 16, true);
+        wav.setUint16(20, 1, true); wav.setUint16(22, 1, true); wav.setUint32(24, rate, true);
+        wav.setUint32(28, rate, true); wav.setUint16(32, 1, true); wav.setUint16(34, 8, true);
+        tag(36, 'data'); wav.setUint32(40, n, true); new Uint8Array(wav.buffer, 44).fill(128);
+        const src = URL.createObjectURL(new Blob([wav.buffer], { type: 'audio/wav' }));
+        document.body.innerHTML = '<h2>Lesson one</h2><audio controls aria-label="Lesson one audio">Not supported</audio>' +
+          '<h2>Lesson two</h2><audio controls>Not supported</audio>';
+        for (const player of document.querySelectorAll('audio')) player.src = src;
+        const first = document.querySelector('audio');
+        first.muted = true;
+        const play = document.createElement('button');
+        play.textContent = 'Play lesson one';
+        play.onclick = () => first.play();
+        document.body.prepend(play);
+        "#,
+    )
+    .await;
+    // Chrome plays only after a user gesture, so the player starts from a click the way a run would start it.
+    let page = h.observe().await;
+    let play = page.controls.iter().find(|c| c.label == "Play lesson one").expect("play button");
+    let click = Action { target_id: Some(play.id.clone()), ..Action::new(Operation::Click) };
+    h.page.act(&click, &page).await.expect("act");
+    let mut media = Vec::new();
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        media = h.observe().await.media;
+        if media.len() == 2 && media[0].elapsed_seconds > 0.5 && media[1].duration_seconds.is_some() {
+            break;
+        }
+    }
+    assert_eq!(media.len(), 2, "{media:?}");
+    let (playing, idle) = (&media[0], &media[1]);
+    assert_eq!(playing.kind, "audio");
+    assert_eq!(playing.label.as_deref(), Some("Lesson one audio"));
+    assert!(!playing.paused && playing.muted && playing.elapsed_seconds > 0.5, "{playing:?}");
+    assert_eq!(playing.duration_seconds, Some(30.0));
+    assert_eq!((idle.label.as_deref(), idle.heading.as_deref()), (None, Some("Lesson two")));
+    assert!(idle.paused && idle.elapsed_seconds == 0.0, "{idle:?}");
+    let capture = h.page.capture().await.expect("capture");
+    let read: Vec<String> = capture
+        .blocks
+        .iter()
+        .filter(|b| b.kind == BlockKind::Observation)
+        .map(|b| text_of(&capture, b))
+        .filter(|t| t.starts_with("Audio element state"))
+        .collect();
+    assert_eq!(read.len(), 2, "{read:?}");
+    assert!(read[0].contains(r#""label":"Lesson one audio""#) && read[0].contains(r#""paused":false"#), "{read:?}");
+    assert!(read[1].contains(r#""heading":"Lesson two""#) && read[1].contains(r#""paused":true"#), "{read:?}");
     h.close().await;
 }
 
