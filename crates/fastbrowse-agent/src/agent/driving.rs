@@ -747,9 +747,7 @@ impl Agent {
                     Err(Flow::Browser(BrowserError::PageUnresponsive(_)))
                         if Self::may_reopen(state, decision, &action) =>
                     {
-                        return self
-                            .reopen_hung_page(state, observation, decision, label.as_deref(), started, frame)
-                            .await;
+                        return self.reopen_hung_page(state, observation, decision, decided_by, started, frame).await;
                     }
                     Err(error) => return Err(error),
                 }
@@ -757,9 +755,7 @@ impl Agent {
                 match self.page.act(&action, &raw).await {
                     Ok(result) => result,
                     Err(BrowserError::PageUnresponsive(_)) if Self::may_reopen(state, decision, &action) => {
-                        return self
-                            .reopen_hung_page(state, observation, decision, label.as_deref(), started, frame)
-                            .await;
+                        return self.reopen_hung_page(state, observation, decision, decided_by, started, frame).await;
                     }
                     Err(error) => return Err(error.into()),
                 }
@@ -903,9 +899,7 @@ impl Agent {
                     Err(Flow::Browser(BrowserError::PageUnresponsive(_)))
                         if Self::may_reopen(state, decision, &action) =>
                     {
-                        return self
-                            .reopen_hung_page(state, observation, decision, label.as_deref(), started, frame)
-                            .await;
+                        return self.reopen_hung_page(state, observation, decision, decided_by, started, frame).await;
                     }
                     Err(error) => return Err(error),
                 };
@@ -972,15 +966,23 @@ impl Agent {
         state: &mut RunState,
         observation: &Observation,
         decision: &Decision,
-        label: Option<&str>,
+        decided_by: Decider,
         started: Instant,
         frame: Option<Vec<u8>>,
     ) -> Step<bool> {
         state.hung_page_reopened = true;
+        let label = decision_label(decision);
+        let label = label.as_deref();
+        // A click or navigation may have reached a new page before its renderer hung: reopen that page, not the one
+        // the step started on. The target metadata answers without the renderer.
+        let url = match self.page.active_url().await {
+            Ok(Some(url)) => url,
+            Ok(None) | Err(_) => observation.url.clone(),
+        };
         state.moved_by_action = false;
         state.acted_from = None;
         state.pending_link = None;
-        self.event("hung_page_reload", || Map::from_iter([("url".into(), observation.url.clone().into())]));
+        self.event("hung_page_reload", || Map::from_iter([("url".into(), url.clone().into())]));
         let effect = "The page stopped answering and was reopened.".to_string();
         state.history.push(HistoryEntry {
             effect: Some(effect.clone()),
@@ -989,19 +991,19 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: decision.operation,
-            decided_by: if decision.directed { Decider::Llm } else { Decider::Jev },
+            decided_by,
             outcome: StepOutcome::Failed,
-            url: observation.url.clone(),
+            page_changed: Some(url != observation.url),
+            url: url.clone(),
             target: label.map(str::to_owned),
-            confidence: (!decision.directed).then(|| decision.confidence()),
+            confidence: (decided_by == Decider::Jev).then(|| decision.confidence()),
             note: Some(effect),
             facts: Vec::new(),
-            page_changed: Some(false),
             duration_ms: started.elapsed().as_millis() as i64,
             choices: Vec::new(),
         };
         self.record_step(state, step, false, frame).await?;
-        self.reload(state, &observation.url).await?;
+        self.reload(state, &url).await?;
         Ok(false)
     }
 

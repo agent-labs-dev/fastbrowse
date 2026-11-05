@@ -553,6 +553,12 @@ impl BrowserSession {
         Ok(())
     }
 
+    /// The active tab's URL from browser-level target metadata, which answers while its renderer is hung.
+    pub async fn active_url(&self) -> Result<String, BrowserError> {
+        let info = self.send("Target.getTargetInfo", json!({"targetId": self.active_target_id()}), None).await?;
+        Ok(info["targetInfo"]["url"].as_str().unwrap_or_default().to_owned())
+    }
+
     fn client_opt(&self) -> Option<Cdp> {
         self.0.client.lock().unwrap().clone()
     }

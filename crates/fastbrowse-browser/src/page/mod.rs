@@ -1516,6 +1516,12 @@ impl Page for CdpPage {
         Box::pin(async move { seam(CdpPage::address(self).await) })
     }
 
+    fn active_url(&self) -> BoxFuture<'_, PageResult<Option<String>>> {
+        Box::pin(
+            async move { seam(self.session.active_url().await.map(|url| Some(url).filter(|url| !url.is_empty()))) },
+        )
+    }
+
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
         Box::pin(async move { seam(CdpPage::response_status(self).await) })
     }
