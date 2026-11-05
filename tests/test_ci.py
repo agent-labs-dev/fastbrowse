@@ -45,9 +45,10 @@ def _jobs() -> dict[str, Any]:
 
 def test_the_rust_job_runs_on_every_pull_request() -> None:
     """The Rust crates read fixtures from outside crates/, so a change elsewhere can break them.
-    A path filter on the job would let that change merge without the Rust checks seeing it."""
+    A path filter on the job would let that change merge without the Rust checks seeing it. Only a
+    real-site dispatch, which checks no change, skips it."""
     rust = _jobs()["rust"]
-    assert "if" not in rust
+    assert rust["if"] == "${{ !inputs.task }}"
     assert "needs" not in rust
 
 

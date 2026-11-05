@@ -4,10 +4,19 @@ on:
   push:
     branches: [main]
   # Manual dispatch lets a head without an automatic pull-request run receive the required checks.
+  # A dispatch with `task` set runs only the real-site job: the candidate drives one task in a Browser Use Cloud
+  # browser from this runner, so a real-site check never runs on a developer's machine.
   workflow_dispatch:
+    inputs:
+      task: {description: "Real-site task; empty runs the normal checks", required: false, default: ""}
+      start: {description: "URL to open first", required: false, default: ""}
+      args: {description: "Extra fastbrowse arguments, space separated", required: false, default: ""}
+      max_dollars: {description: "Spend ceiling for the run", required: false, default: "2"}
+      max_steps: {description: "Step ceiling for the run", required: false, default: "60"}
 permissions: {}
 jobs:
   secrets:
+    if: ${{ !inputs.task }}
     permissions: {contents: read}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
@@ -23,6 +32,7 @@ jobs:
         # Checkout fetches other branches too; scan this build's complete ancestry, not unrelated branch content.
         run: gitleaks detect --source . --no-banner --redact --log-opts=HEAD
   gate:
+    if: ${{ !inputs.task }}
     permissions: {contents: read, actions: read}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
@@ -70,6 +80,7 @@ jobs:
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
   project-rules:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
@@ -92,6 +103,7 @@ jobs:
         run: uvx zizmor==1.32.0 --offline .github/workflows
 
   sdk:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
@@ -117,6 +129,7 @@ jobs:
   # The Rust core (docs/adr/0001): its own checks, then the Node addon against cases taken from its suites. The
   # Python suites, which reach the core through the package, run in `gate`.
   rust:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions: {contents: read}
     env:
@@ -198,6 +211,7 @@ jobs:
   # Every push to `main` builds, so a change the filter misjudged is still caught before a release. CI builds the
   # Linux and Windows targets; the two macOS ones, the costliest runners and the slowest to start, run in the release.
   changes:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
@@ -248,7 +262,7 @@ jobs:
   check:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [gate, project-rules, sdk, rust, secrets, changes, binaries, aur]
-    if: always()
+    if: ${{ always() && !inputs.task }}
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
@@ -268,3 +282,37 @@ jobs:
           test "$CHANGES_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
           test "$AUR_RESULT" = success || test "$AUR_RESULT" = skipped
+
+  realsite:
+    if: ${{ inputs.task }}
+    permissions: {contents: read}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - run: uv sync --locked
+      - name: Run the task
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          TASK: ${{ inputs.task }}
+          START: ${{ inputs.start }}
+          ARGS: ${{ inputs.args }}
+          MAX_DOLLARS: ${{ inputs.max_dollars }}
+          MAX_STEPS: ${{ inputs.max_steps }}
+        run: |
+          read -r -a extra <<< "$ARGS"
+          start=()
+          if [ -n "$START" ]; then start=(--start "$START"); fi
+          uv run --no-sync fastbrowse "$TASK" "${start[@]}" --cloud --json --trace realsite.trace.jsonl \
+            --record realsite.recipe.json --max-dollars "$MAX_DOLLARS" --max-steps "$MAX_STEPS" "${extra[@]}" \
+            > realsite.json 2> >(tee realsite.stderr.txt >&2)
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: realsite-${{ github.run_id }}
+          path: realsite.*
+          if-no-files-found: warn
