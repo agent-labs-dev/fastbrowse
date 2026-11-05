@@ -207,6 +207,7 @@ impl Agent {
                 let Some(url) = decision.url.clone().filter(|url| {
                     task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
                         || state.reload_target(&observation.url).as_ref() == Some(url)
+                        || state.pager_followed.contains(url)
                 }) else {
                     return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
                 };
@@ -948,6 +949,22 @@ impl Agent {
                 ),
             ),
         ]);
+        // Also asked of the task alone: a count over a whole site read only the pages it reached and called that the
+        // whole list, from page 1 or from one record's own page (#750, #798).
+        let extent = IndexMap::from([
+            (
+                "shown".to_string(),
+                JsonValue::from(
+                    "What the task asks about can be answered from the records one page shows, or concerns a single item.",
+                ),
+            ),
+            (
+                "every_page".to_string(),
+                JsonValue::from(
+                    "The task covers everything a list holds across all of its pages, such as a count or total over a whole site or list.",
+                ),
+            ),
+        ]);
         let picks = self
             .ask_choices(
                 state,
@@ -955,10 +972,12 @@ impl Agent {
                 vec![
                     ("pick", "What output does the task want at its end?".into(), criteria),
                     ("evidence", "Where can what the task asks about be seen?".into(), evidence),
+                    ("extent", "How much of a list does the task cover?".into(), extent),
                 ],
             )
             .await?;
         state.appearance = picks["evidence"] == "appearance";
+        state.every_page = picks["extent"] == "every_page";
         let intent = match picks["pick"].as_str() {
             "text" => OutputIntent::Text,
             "image" => OutputIntent::Image,

@@ -189,6 +189,12 @@ struct Reader<'a> {
     controls: Vec<Control>,
     /// The control whose element is open, which its text labels.
     labelling: Option<(usize, String, String)>,
+    /// An open `<li class="next">`, the pager markup most sites use instead of `rel="next"`; its link is the next page.
+    pager_item: bool,
+    /// Open pagination containers, by tag: a `nav`, or an element whose class or label names paging. A `next` class
+    /// outside one marks a carousel, a wizard or a next article as often as a list's next page. Each counts the
+    /// elements of its own tag open inside it, so an inner `</div>` closes the inner div, not the container.
+    paging: Vec<(String, usize)>,
 }
 
 impl<'a> Reader<'a> {
@@ -215,6 +221,8 @@ impl<'a> Reader<'a> {
             hidden: Vec::new(),
             controls: Vec::new(),
             labelling: None,
+            pager_item: false,
+            paging: Vec::new(),
         }
     }
 
@@ -244,7 +252,13 @@ impl<'a> Reader<'a> {
         control.href = get("href").filter(|_| tag == "a").map(|href| join(self.url, &href));
         control.input_type = (tag == "input").then_some(kind.clone()).filter(|kind| !kind.is_empty());
         control.input_name = get("name");
-        control.next_page = get("rel").filter(|rel| rel.split_whitespace().any(|rel| rel == "next")).map(|_| true);
+        let names_next = |value: Option<String>| value.is_some_and(|v| v.split_whitespace().any(|v| v == "next"));
+        let pager =
+            tag == "a" && (names_next(get("class")) || std::mem::take(&mut self.pager_item)) && !self.paging.is_empty();
+        // Only a same-origin link is a pager: a next page on another site is not more of this list.
+        let origin = |url: &str| url::Url::parse(url).ok().map(|url| url.origin());
+        let same_origin = control.href.as_deref().is_some_and(|href| origin(href) == origin(self.url));
+        control.next_page = (same_origin && (names_next(get("rel")) || pager)).then_some(true);
         control.download = get("download").map(|_| true);
         if matches!(tag, "a" | "button") {
             self.labelling = Some((self.controls.len(), tag.to_string(), String::new()));
@@ -254,6 +268,12 @@ impl<'a> Reader<'a> {
 
     fn start(&mut self, tag: &str, attrs: &[Attribute]) {
         let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| &*a.value);
+        // Counted before any early return, as `end` sees the closing tag of every element, hidden or not.
+        if let Some((open, nested)) = self.paging.last_mut()
+            && open == tag
+        {
+            *nested += 1;
+        }
         if SKIPPED.contains(&tag) {
             self.skip += 1;
             return;
@@ -272,6 +292,22 @@ impl<'a> Reader<'a> {
             return;
         }
         self.control(tag, attrs);
+        // Pagination's own words, not "pag" alone: a `<body class="page">` layout class held every carousel open.
+        let pages = |value: Option<&str>| {
+            value.map(|value| value.to_ascii_lowercase()).is_some_and(|v| v.contains("pagin") || v.contains("pager"))
+        };
+        if tag == "nav" || pages(get("class")) || pages(get("aria-label")) {
+            if let Some((open, nested)) = self.paging.last_mut()
+                && open == tag
+            {
+                // Counted above as nested, it is a container of its own.
+                *nested -= 1;
+            }
+            self.paging.push((tag.to_string(), 0));
+        }
+        if tag == "li" {
+            self.pager_item = get("class").is_some_and(|class| class.split_whitespace().any(|class| class == "next"));
+        }
         if tag == "br" {
             self.add("\n");
             return;
@@ -335,6 +371,18 @@ impl<'a> Reader<'a> {
     }
 
     fn end(&mut self, tag: &str) {
+        if tag == "li" {
+            self.pager_item = false;
+        }
+        if let Some((open, nested)) = self.paging.last_mut()
+            && open == tag
+        {
+            if *nested == 0 {
+                self.paging.pop();
+            } else {
+                *nested -= 1;
+            }
+        }
         if let Some((index, _, text)) = self.labelling.take_if(|(_, open, _)| open == tag) {
             // What the element says for itself names it before any attribute does.
             let text = clean(&text);
@@ -608,6 +656,7 @@ mod tests {
     fn the_markup_names_its_links_and_fields() {
         let (_, _, controls) = read(
             "<h2>Pages</h2><a href='/b' rel='next'>More <b>items</b></a><a href='/c'><img src=x></a>\
+             <nav><ul class='pager'><li class='next'><a href='/e'>Next</a></li><li><a href='/f'>Other</a></li></ul></nav>\
              <div hidden><a href='/secret'>x</a></div><table><tr><td><a href=/d>In a row</a></table>\
              <form><input type=hidden name=t><input name=q placeholder='Search'><button>Go</button></form>",
             "https://a.example/list",
@@ -619,13 +668,51 @@ mod tests {
             [
                 ("link", "More items", Some("https://a.example/b")),
                 ("link", "", Some("https://a.example/c")),
+                ("link", "Next", Some("https://a.example/e")),
+                ("link", "Other", Some("https://a.example/f")),
                 ("link", "In a row", Some("https://a.example/d")),
                 ("textbox", "Search", None),
                 ("button", "Go", None),
             ]
         );
-        assert_eq!(controls[0].next_page, Some(true));
+        let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
+        assert_eq!(next, [Some(true), None, Some(true), None, None, None, None]);
         assert_eq!(controls[0].context.as_deref(), Some("Pages"));
+    }
+
+    #[test]
+    fn a_nested_element_of_the_containers_tag_does_not_close_the_pagination() {
+        let (_, _, controls) = read(
+            "<div class='pagination'><div>Page 1 of 3</div><a class='next' href='/page/2'>Next</a></div>",
+            "https://a.example/list",
+        );
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].next_page, Some(true));
+    }
+
+    #[test]
+    fn a_next_class_marks_a_pager_only_inside_pagination_on_this_site() {
+        let (_, _, controls) = read(
+            "<div class='carousel'><a class='next' href='/slide/2'>Next</a></div>\
+             <article><li class='next'><a href='/post/9'>Next article</a></li></article>\
+             <nav aria-label='Pagination'><a class='next' href='https://other.example/page/2'>Next</a>\
+             <a rel='next' href='https://other.example/page/3'>More</a><a class='next' href='/page/2'>Next</a></nav>\
+             <div class='Paginator'><li class='next'><a href='/page/3'>Older</a></li></div>",
+            "https://a.example/list",
+        );
+        let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
+        assert_eq!(next, [None, None, None, None, Some(true), Some(true)]);
+    }
+
+    #[test]
+    fn review_a_page_layout_class_does_not_turn_a_carousel_into_pagination() {
+        let (_, _, controls) = read(
+            "<body class='page'><main><div class='carousel'>\
+             <a class='next' href='/slide/2'>Next slide</a></div></main></body>",
+            "https://a.example/list",
+        );
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].next_page, None, "a page layout class is not a pagination container");
     }
 
     #[test]
