@@ -93,7 +93,9 @@ def _devtools(active: Path, process: subprocess.Popen[bytes], log: IO[bytes], ti
     deadline = time.monotonic() + timeout
     while True:
         if process.poll() is not None:
-            raise RuntimeError(f"Chrome exited with status {process.returncode} before DevTools started{_tail(log)}")
+            raise RuntimeError(
+                f"Chrome exited with status {process.returncode} before DevTools started{_diagnostic(log)}"
+            )
         try:
             port = int(active.read_text(encoding="utf-8").split("\n")[0])
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
@@ -101,13 +103,13 @@ def _devtools(active: Path, process: subprocess.Popen[bytes], log: IO[bytes], ti
         except (OSError, ValueError):
             # Not written yet, written only partly, or written and not yet listening.
             if time.monotonic() > deadline:
-                raise RuntimeError(f"Chrome did not start DevTools within {timeout:.0f}s{_tail(log)}") from None
+                raise RuntimeError(f"Chrome did not start DevTools within {timeout:.0f}s{_diagnostic(log)}") from None
             time.sleep(0.1)
 
 
-def _tail(log: IO[bytes]) -> str:
+def _diagnostic(log: IO[bytes]) -> str:
     log.seek(0)
-    text = log.read()[-2000:].decode(errors="replace").strip()
+    text = log.read().decode(errors="replace").strip()
     return f":\n{text}" if text else ""
 
 

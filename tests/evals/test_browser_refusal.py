@@ -2,12 +2,7 @@
 
 import pytest
 
-from fastbrowse.evals.live_tasks import (
-    PublicSiteRefused,
-    admit_public_run,
-    arm_browser_refusal,
-    browser_refusal,
-)
+from fastbrowse.evals.live_tasks import arm_browser_refusal, browser_refusal
 
 
 @pytest.mark.parametrize(
@@ -91,9 +86,3 @@ def test_an_arm_is_never_judged_by_another_arms_browser() -> None:
 def test_an_older_campaigns_single_browser_is_judged_as_before() -> None:
     assert arm_browser_refusal({"browser": CLOUD}, "browser-use") is None
     assert arm_browser_refusal({"browser": POOL}, "fastbrowse-pool") is not None
-
-
-def test_a_public_run_is_refused_at_start_not_after_it_spent_its_budget() -> None:
-    with pytest.raises(PublicSiteRefused):
-        admit_public_run({"mode": "local-chrome"})
-    admit_public_run({"mode": "local-chrome", "headed": True})

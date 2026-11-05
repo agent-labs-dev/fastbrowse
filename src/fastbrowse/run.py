@@ -30,33 +30,6 @@ from fastbrowse.models import (
     SecretResolver,
     UntilCheck,
 )
-from fastbrowse.page import BrowserError
-
-
-async def resolve_cdp_port(port: int, host: str = "127.0.0.1", *, http: httpx.AsyncClient | None = None) -> str:
-    """The websocket URL of the browser serving DevTools on `port`, read from its `/json/version` endpoint."""
-    endpoint = f"http://{host}:{port}/json/version"
-    try:
-        async with httpx.AsyncClient(timeout=5) if http is None else _borrowed(http) as client:
-            response = await client.get(endpoint)
-            response.raise_for_status()
-            version = response.json()
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        if status != 404:
-            raise BrowserError(f"{endpoint} answered {status}, so it names no DevTools websocket") from None
-        # Chrome's remote debugging switch at chrome://inspect serves the websocket but not this discovery route.
-        raise BrowserError(
-            f"{endpoint} answered 404, so it names no DevTools websocket. A Chrome whose remote debugging was "
-            "turned on at chrome://inspect serves none here: its DevToolsActivePort file holds the port on the "
-            "first line and the browser path on the second, so pass ws://127.0.0.1:<port><path> as cdp_url instead."
-        ) from None
-    except (httpx.HTTPError, ValueError) as exc:
-        raise BrowserError(f"no DevTools endpoint at {endpoint} ({type(exc).__name__})") from None
-    ws_url = version.get("webSocketDebuggerUrl") if isinstance(version, dict) else None
-    if not isinstance(ws_url, str) or not ws_url:
-        raise BrowserError(f"{endpoint} named no webSocketDebuggerUrl")
-    return ws_url
 
 
 @asynccontextmanager
@@ -97,7 +70,6 @@ async def open_cloud_browser(
     timeout_minutes: int = 15,
     proxy_country: str | None = "us",
     viewport: tuple[int, int] | None = None,
-    allow_resizing: bool = False,
 ) -> CloudBrowser:
     """Start a Browser Use Cloud browser that outlives any run, for a caller that keeps one across runs or hands
     its live view to a person.
@@ -135,11 +107,10 @@ async def run_task(
     foreground: bool = False,
     allowed_origins: Sequence[str] | None = None,
     check_access: Callable[[], Awaitable[None]] | None = None,
-    proxy_country: str | None = "us",
+    proxy_country: str | None = None,
     viewport: tuple[int, int] | None = None,
-    cloud_allow_resizing: bool = False,
     cloud_extensions: Sequence[str] = (),
-    cloud_timeout_minutes: int = 15,
+    cloud_timeout_minutes: int | None = None,
     jev: JevClient | None = None,
     llm: LLMClient | None = None,
     output_schema: type[BaseModel] | None = None,
@@ -156,8 +127,12 @@ async def run_task(
     http: httpx.AsyncClient | None = None,
     record: Path | None = None,
     cursor: bool | None = None,
+    recipe: Path | None = None,
+    save_recipe: Path | None = None,
     fetch: bool = False,
-    fetch_first: bool = False,
+    browser: bool = False,
+    open_browser: Callable[[], Awaitable[str]] | None = None,
+    page_ready: Callable[[], Awaitable[None]] | None = None,
     settings: Mapping[str, str] | None = None,
 ) -> RunResult:
     """Open `start`, pursue `task`, and return what the run could prove.
@@ -179,15 +154,17 @@ async def run_task(
     A run in a visible window (a handed-over browser, or local Chrome with `LocalChrome.headed`) works in the
     background: its tab opens behind the window's current one and the window is neither raised nor focused.
     `foreground` brings the tab and its window to the front instead, to watch the run.
-    Otherwise `browser_api_key` runs on a Browser Use Cloud browser, and with neither,
-    local Chrome as `chrome` describes (default: from the environment and `.env`, headless with a throwaway profile).
+    Otherwise the run starts a Browser Use Cloud browser with `browser_api_key`, or `BROWSER_USE_API_KEY` from the
+    environment or `.env`. A `chrome` argument runs local Chrome as it describes instead, as do `FASTBROWSE_HEADED` and
+    `FASTBROWSE_PROFILE`; `LocalChrome()` is headless with a throwaway profile.
     `cloud_profile` names a profile on that cloud account, so a site someone signed into once in that
     profile is still signed in here; it is the remote counterpart of `LocalChrome.profile`. `proxy_country`
-    and `viewport` shape a cloud browser this run starts. `cloud_allow_resizing` opts that browser into
-    CDP viewport changes, which the cloud service otherwise ignores. `cloud_extensions` lists up to three
-    distinct extension IDs (UUIDs of ready extensions on that account) to load into the cloud browser; it is
-    an error with a local or attached browser rather than ignored. `cloud_timeout_minutes` is how long that
-    browser may live (15 by default; the service allows up to 240), so a run that needs longer asks for it
+    selects the cloud browser's egress country. `viewport` sets the CSS viewport on an owned local
+    browser before its first observation, or shapes a cloud browser this run starts; it does not emulate mobile,
+    touch, device scale or user agent. `cloud_extensions`
+    lists up to three distinct extension IDs (UUIDs of ready extensions on that account) to load into the cloud
+    browser; it is an error with a local or attached browser rather than ignored. `cloud_timeout_minutes` is how
+    long that browser may live (15 by default; the service allows up to 240), so a run that needs longer asks for it
     rather than losing its browser. The other cloud options mean nothing for the other two browsers. `jev` and
     `llm` default to clients the Rust core builds from the environment, then `.env`, so an embedder that
     resolves its own credentials, or serves Jev from somewhere else, passes them instead.
@@ -200,12 +177,21 @@ async def run_task(
     needs that origin listed too. Service workers are bypassed so every navigation meets the gate. A scoped run
     delivers no live frames or screenshots and cannot `record`, since pixels cannot be attributed to a document.
 
+    Cancelling the task that awaits `run_task` stops the run, and it raises once the run's browser has closed:
+    with `fastbrowse.models.RunCancelled`, a `CancelledError` whose `receipt` holds the steps the run reported,
+    every known charge (an unpriced one as an `unknown` line) and its finished videos, when the core had
+    started the run.
+
     `check_access` is awaited before browser startup and every observation, capture, screenshot, address, navigation
     and action, scoped or not. If it raises, `run_task` returns a `RunResult` with status `error` and `connect_cdp`
     raises a `BrowserError`; either error names only the exception's type, and its text is not kept.
 
     Files the run downloads are discarded unless `downloads` names a directory to keep them in. `record` saves
     an MP4 of the tab, ending on the answer; it needs ffmpeg, and shows whatever the pages showed.
+    `recipe` reuses saved values when Jev selects a matching action on the same page, through the same
+    authorization and secret gates. The task must match the recorded task. `save_recipe`
+    writes the run's steps as a recipe when it ends `complete`; it may name the `recipe` file, to repair it.
+    A recipe write failure is logged without changing the task status; check that the file exists before replay.
     `on_frame` receives JPEG bytes from the active tab. Frames are acknowledged after delivery, with no fixed
     frame rate; only the latest pending frame is kept. Handler failures are logged without interrupting the run.
     A handler still running when the run ends is cancelled, and the run waits at most two seconds for it to stop.
@@ -225,18 +211,22 @@ async def run_task(
     document becomes the same `Capture` blocks a browser capture produces, so reads, quotes and citations
     are unchanged. A step that would click, fill, download or look at pixels has nothing to act on, so the
     run ends `blocked` with the reason instead of failing a step or answering from a page it never saw. What
-    a page builds with scripts is not there either: a document whose readable text is a sliver of its markup
-    is refused as needing a browser. Browser, recording, download and `cursor=True` options mean nothing
-    here and are an error rather than ignored.
+    a page builds with scripts is not there either: a document with no readable text in its markup is refused
+    as needing a browser. Browser, recording, download and `cursor=True` options mean nothing here and are an error
+    rather than ignored.
 
-    `fetch_first` reads the same way, and when the fetched run ends `blocked` because the page refused
-    something only a browser can do, runs the task again on the browser the other options describe. That run
-    spends what the attempt left of `limits`, and its cost lists the attempt's calls first. A recording or an
-    attached window has to exist from the first step, so `record`, `attach` and `target_match` are an error.
+    Without `fetch`, a run reads the same way until the page refuses something only a browser can do, then runs the
+    task again on the browser the other options describe, spending what the attempt left of `limits`, with the
+    attempt's calls listed first in its cost. `browser` starts the browser from the first step, as do `record`,
+    `attach`, `target_match`, `cdp_url`, `cdp_port`, `proxy_country`, `cloud_extensions`, a signed-in profile,
+    a headed window and `foreground`. A profile or headed window from settings also starts the browser first.
+
+    `open_browser` is the caller's own browser, opened only if the run needs one: it returns the address of a tab in
+    front to drive, and the caller closes it after the run. `page_ready` is awaited once the browser's first page
+    is open, before the first decision, so a caller timing the agent can keep browser setup off its clock.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
-    caller already knows. The planner, recovery and the answer see it in its own section headed as not
-    requirements, and Jev sees it as `background`; requirements come from `task` alone.
+    caller already knows. Jev sees it as `background`.
 
     `settings` configures the run by the environment variables' own names (`OPENROUTER_API_KEY`,
     `AI_GATEWAY_API_KEY`, `TYPESAFE_API_KEY`, `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_LLM_PROVIDER`,
@@ -248,9 +238,3 @@ async def run_task(
     The run goes to the Rust core in this process, every argument with it (`fastbrowse.native`).
     """
     return await native.run(task, locals())
-
-
-@asynccontextmanager
-async def _borrowed(http: httpx.AsyncClient) -> AsyncGenerator[httpx.AsyncClient]:
-    """A caller's client outlives the run, so hand it back rather than closing it."""
-    yield http

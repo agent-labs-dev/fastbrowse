@@ -1,4 +1,4 @@
-//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver (`browser/cursor.py`).
+//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver.
 //!
 //! Cua Driver's `move_cursor` moves a synthetic overlay and leaves the user's pointer, focus and the browser alone
 //! (only `scope=desktop` would move the real pointer, which is never sent here). It is purely visual: the click
@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant};
 
+use crate::page::truthy;
 use fastbrowse_core::BoxFuture;
 use futures_util::future::{FutureExt, Shared};
 use serde::{Deserialize, Serialize};
@@ -176,22 +177,6 @@ enum Failure {
     Random,
 }
 
-impl Failure {
-    fn kind(self) -> &'static str {
-        match self {
-            Self::Timeout => "Timeout",
-            Self::DriverExited => "DriverExited",
-            Self::DriverRejected => "DriverRejected",
-            Self::BadReply => "BadReply",
-            Self::ToolFailed => "ToolFailed",
-            Self::MissingTools => "MissingTools",
-            Self::NoWindowScope => "NoWindowScope",
-            Self::Io => "Io",
-            Self::Random => "Random",
-        }
-    }
-}
-
 fn log_warning(message: &str) {
     if std::env::var_os("FASTBROWSE_LOG").is_some() {
         let _ = writeln!(std::io::stderr(), "fastbrowse.browser.cursor: {message}");
@@ -202,18 +187,6 @@ fn log_warning(message: &str) {
 /// a consistent value.
 fn lock<T>(mutex: &StdMutex<T>) -> StdMutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Python truthiness for a JSON value, as `result.get("isError")` and `structuredContent or {}` test it.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
 }
 
 struct Io {
@@ -482,7 +455,8 @@ impl CursorFeedback {
 
 impl Inner {
     async fn follow(self: Arc<Self>, geometry: GeometryFn, point: (f64, f64), generation: u64) {
-        let moved = timeout(MOVE_SECONDS + CALL_SECONDS * 3, Arc::clone(&self).glide(&geometry, point)).await;
+        // A stale session, window lookup, visibility restore and pacing update may all precede the move.
+        let moved = timeout(MOVE_SECONDS + CALL_SECONDS * 4, Arc::clone(&self).glide(&geometry, point)).await;
         if let Err(failure) = moved.unwrap_or(Err(Failure::Timeout)) {
             return self.fail(failure).await;
         }
@@ -512,8 +486,7 @@ impl Inner {
         let window = self.browser_window(&reading).await?;
         self.show(window.is_some()).await?;
         if window.is_some() {
-            // Pace this move by how far the arrow has to travel, from where it was last drawn. A page change
-            // leaves the previous drawing behind the new page, so that move is paced as a fresh short one.
+            // The drawing stays at its screen position across page changes, so pace from where it was last drawn.
             let distance = lock(&self.drawn).map_or(0.0, |(x, y)| (target.0 - x).hypot(target.1 - y));
             self.pace(glide_ms(distance)).await?;
             let arguments = json!({"session": self.session, "x": target.0, "y": target.1, "scope": "window"});
@@ -606,7 +579,7 @@ impl Inner {
     }
 
     async fn fail(&self, failure: Failure) {
-        log_warning(&format!("cursor feedback turned off for this run ({})", failure.kind()));
+        log_warning(&format!("cursor feedback turned off for this run ({failure:?})"));
         self.disabled.store(true, Ordering::SeqCst);
         self.driver.close().await;
     }
@@ -674,10 +647,11 @@ fn executable(path: &Path) -> bool {
 }
 
 fn session_name() -> Result<String, Failure> {
+    use data_encoding::HEXLOWER;
     use ring::rand::{SecureRandom, SystemRandom};
     let mut bytes = [0u8; 4];
     SystemRandom::new().fill(&mut bytes).map_err(|_| Failure::Random)?;
-    Ok(format!("fastbrowse-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+    Ok(format!("fastbrowse-{}", HEXLOWER.encode(&bytes)))
 }
 
 /// Set a session up and report whether the driver takes a per-move glide.
@@ -717,7 +691,7 @@ async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
         match driver.tool("set_agent_cursor_motion", arguments).await {
             Ok(_) => motion = true,
             Err(failure) => {
-                log_warning(&format!("the cursor may fade while the run is idle ({})", failure.kind()));
+                log_warning(&format!("the cursor may fade while the run is idle ({failure:?})"));
             }
         }
     }
@@ -744,7 +718,7 @@ pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
     match opened {
         Ok((session, motion)) => Some(CursorFeedback::new(guard.take(), session, motion)),
         Err(failure) => {
-            log_warning(&format!("cursor feedback unavailable ({}); running without it", failure.kind()));
+            log_warning(&format!("cursor feedback unavailable ({failure:?}); running without it"));
             guard.take().close().await;
             None
         }
@@ -773,7 +747,10 @@ mod tests {
 import json, os, sys, time
 log = open(LOG, "a")
 windows = json.loads(WINDOWS)
+paced_ready = False
 tools = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"]
+if mode == "paced_deadline":
+    tools.append("set_agent_cursor_motion")
 if mode == "old":
     tools.remove("move_cursor")
 for line in sys.stdin:
@@ -795,6 +772,14 @@ for line in sys.stdin:
         name, arguments = message["params"]["name"], message["params"]["arguments"]
         log.write(json.dumps([name, arguments]) + "\n")
         log.flush()
+        if mode == "paced_deadline":
+            if paced_ready:
+                if name in ["start_session", "list_windows", "set_agent_cursor_enabled", "set_agent_cursor_motion"]:
+                    time.sleep(1.8)
+                elif name == "move_cursor":
+                    time.sleep(5.5)
+            if name == "set_agent_cursor_motion":
+                paced_ready = True
         if mode == "die" and name == "move_cursor":
             sys.exit(3)
         if mode == "garbage" and name == "move_cursor":
@@ -1166,6 +1151,24 @@ if mode == "linger":
         let calls = fake.calls();
         assert!(!calls.contains(&"move_cursor".to_owned()));
         assert!(!calls.contains(&"list_windows".to_owned()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_paced_move_keeps_the_deadlines_of_all_four_setup_calls() {
+        let fake = Fake::new("paced_deadline", None);
+        let feedback = fake.open().await.unwrap();
+        *lock(&feedback.inner.last_call) = Instant::now() - KEEPALIVE_SECONDS - Duration::from_secs(1);
+        *lock(&feedback.inner.shown) = Some(false);
+        *lock(&feedback.inner.drawn) = Some((800.0, 600.0));
+        feedback.follow(reading(), (10.0, 20.0));
+        feedback.settled().await;
+        let running = feedback.running();
+        feedback.close().await;
+        assert!(running, "the outer deadline cut off individually valid driver calls");
+        let calls = fake.calls();
+        assert_eq!(calls.iter().filter(|name| *name == "start_session").count(), 2);
+        assert_eq!(calls.iter().filter(|name| *name == "set_agent_cursor_motion").count(), 2);
+        assert!(calls.contains(&"move_cursor".to_owned()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

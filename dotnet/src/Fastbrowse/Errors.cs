@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Threading;
 using Fastbrowse.Protocol;
 
 namespace Fastbrowse;
@@ -19,9 +20,35 @@ public class FastbrowseException : Exception
 /// </summary>
 public sealed class RpcException : FastbrowseException
 {
-    public RpcException(int code, string message) : base(message) => Code = code;
+    public RpcException(int code, string message, CancellationReceipt? receipt = null) : base(message)
+    {
+        Code = code;
+        Receipt = receipt;
+    }
 
     public int Code { get; }
+
+    /// <summary>
+    /// What the run did and spent before it stopped, on <see cref="ProtocolConstants.ErrorCancelled"/> only; null on
+    /// every other code.
+    /// </summary>
+    public CancellationReceipt? Receipt { get; }
+}
+
+/// <summary>
+/// A run its cancellation token stopped. It is an <see cref="OperationCanceledException"/> for that token, so code
+/// that catches one goes on working, and it carries what the run did and spent before it stopped.
+/// </summary>
+public sealed class RunCancelledException : OperationCanceledException
+{
+    public RunCancelledException(CancellationReceipt? receipt, Exception? inner, CancellationToken token)
+        : base("the run was cancelled", inner, token) => Receipt = receipt;
+
+    /// <summary>
+    /// The steps the run reported, every known charge, an unpriced one as an <c>unknown</c> line, and its finished
+    /// videos. A cancelled run proved nothing, so it has no status and no answer. Null only when the server sent none.
+    /// </summary>
+    public CancellationReceipt? Receipt { get; }
 }
 
 /// <summary>The fastbrowse process is gone, so what was waiting on it, or is asked of it later, has no answer.</summary>

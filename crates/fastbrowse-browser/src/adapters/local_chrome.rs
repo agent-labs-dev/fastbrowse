@@ -1,4 +1,4 @@
-//! Chrome on this machine: headless with a throwaway profile by default (`adapters/local_chrome.py`).
+//! Chrome on this machine: headless with a throwaway profile by default.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -27,8 +27,8 @@ const CLOSE_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum LocalChromeError {
-    /// Python's `RuntimeError`: no Chrome, or a Chrome that exited or never answered. The message carries the tail
-    /// of Chrome's own stderr, which is what says why.
+    /// Python's `RuntimeError`: no Chrome, or a Chrome that exited or never answered. The message carries
+    /// Chrome's complete stderr, which is what says why.
     Runtime(String),
     Browser(BrowserError),
     Io(std::io::Error),
@@ -412,8 +412,7 @@ async fn terminate(child: &mut Child) {
 ///
 /// After a sign-in, its save and leaked-password bubbles take the browser's input: the page still renders and hit
 /// tests still pass, but no click reaches it, and the bubble is Chrome's own interface, outside the page the agent
-/// sees. saucedemo's shared password is a known leak, so every click after its sign-in did nothing. A kept profile
-/// keeps every other preference its owner set; these three are set on each launch.
+/// sees. A kept profile keeps every other preference its owner set; these three are set on each launch.
 fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
     let preferences = profile.join("Default").join("Preferences");
     let held: Option<Value> = match std::fs::read(&preferences) {
@@ -451,7 +450,7 @@ async fn wait_for_ws(
     loop {
         if let Some(status) = child.try_wait()? {
             let message =
-                format!("Chrome exited with status {} before DevTools started{}", returncode(status), tail(log));
+                format!("Chrome exited with status {} before DevTools started{}", returncode(status), diagnostic(log));
             return Err(LocalChromeError::Runtime(message));
         }
         // Not written yet, written only partly, or written and not yet listening: each is read again shortly.
@@ -459,7 +458,8 @@ async fn wait_for_ws(
             return Ok(url);
         }
         if Instant::now() > deadline {
-            let message = format!("Chrome did not start DevTools within {:.0}s{}", timeout.as_secs_f64(), tail(log));
+            let message =
+                format!("Chrome did not start DevTools within {:.0}s{}", timeout.as_secs_f64(), diagnostic(log));
             return Err(LocalChromeError::Runtime(message));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -497,14 +497,13 @@ fn returncode(status: ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
 }
 
-/// The last 2000 bytes of Chrome's stderr, introduced for an error message, or nothing when it printed nothing.
-fn tail(log: &mut File) -> String {
+/// A crash stack follows the startup failure, so keep the diagnostic before the stack too.
+fn diagnostic(log: &mut File) -> String {
     let mut bytes = Vec::new();
     if log.seek(SeekFrom::Start(0)).is_err() || log.read_to_end(&mut bytes).is_err() {
         return String::new();
     }
-    let start = bytes.len().saturating_sub(2000);
-    let text = String::from_utf8_lossy(&bytes[start..]);
+    let text = String::from_utf8_lossy(&bytes);
     let text = text.trim_matches(|c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c));
     if text.is_empty() { String::new() } else { format!(":\n{text}") }
 }
@@ -512,6 +511,19 @@ fn tail(log: &mut File) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_diagnostic_keeps_the_cause_before_a_long_crash_stack() {
+        use std::io::Write;
+        let (mut log, path) = temp_log().unwrap();
+        let output = format!("FATAL: Socket path too long\n{}", "stack frame\n".repeat(500));
+        log.write_all(output.as_bytes()).unwrap();
+        assert_eq!(diagnostic(&mut log), format!(":\n{}", output.trim()));
+        drop(log);
+        if let Some(path) = path {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
 
     /// The id of a process that has exited.
     #[cfg(unix)]

@@ -11,7 +11,7 @@ from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode, models_json
 from pydantic_core import core_schema
 
 from fastbrowse import protocol
-from fastbrowse.models import RunResult
+from fastbrowse.models import Artifact, ArtifactKind, Evidence, RunResult
 
 _SCHEMA = Path(__file__).parents[1] / "protocol" / "schema.json"
 
@@ -55,3 +55,33 @@ def _pydantic_document() -> dict[str, Any]:
 
 def test_the_rust_schema_is_the_one_pydantic_writes_for_the_python_models() -> None:
     assert json.loads(_SCHEMA.read_text()) == _pydantic_document()
+
+
+def test_evidence_names_the_capture_artifact_a_result_lists() -> None:
+    uri = "file:///kept/capture/9f86d081/capture-9f86d081.txt"
+    artifact = Artifact.model_validate(
+        {
+            "kind": "capture",
+            "name": "capture-9f86d081.txt",
+            "mime_type": "text/plain; charset=utf-8",
+            "size_bytes": 4,
+            "sha256": "9f86d081",
+            "uri": uri,
+        }
+    )
+    evidence = Evidence.model_validate(
+        {
+            "source_id": "s0",
+            "url": "https://status.test/",
+            "frame_id": None,
+            "captured_at": "2026-09-26T20:00:00Z",
+            "capture_sha256": "9f86d081",
+            "start": 0,
+            "end": 4,
+            "quote": "live",
+            "capture_artifact": uri,
+        }
+    )
+    assert artifact.kind is ArtifactKind.CAPTURE
+    assert evidence.capture_artifact == artifact.uri
+    assert Evidence.model_validate(evidence.model_dump(exclude={"capture_artifact"})).capture_artifact is None

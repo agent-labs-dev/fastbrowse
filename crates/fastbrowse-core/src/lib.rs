@@ -1,4 +1,4 @@
-//! The fastbrowse core, ported module by module from `src/fastbrowse`.
+//! fastbrowse's types: the models, the protocol, configuration, origins and citations.
 //!
 //! URLs follow the WHATWG URL Standard (the `url` crate, UTS #46 hosts), as Chrome parses them, rather than
 //! CPython's `urlsplit`.
@@ -23,6 +23,7 @@ pub mod output_schema;
 pub mod page;
 pub mod protocol;
 pub mod py;
+pub mod recipe;
 pub mod safety;
 pub mod schema;
 pub mod telemetry;

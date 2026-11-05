@@ -9,9 +9,9 @@ authors = [{ name = "Agent Labs" }]
 requires-python = ">=3.13"
 classifiers = ["Development Status :: 4 - Beta"]
 dependencies = [
-    "httpx[http2]>=0.28,<1",
+    "httpx[http2]>=0.28.1,<1",
     "packaging>=24,<27",  # the bench walks distribution metadata: fastbrowse/evals/bench.py (#764)
-    "pydantic>=2.11,<3",
+    "pydantic>=2.14.2,<3",
 ]
 
 [project.urls]
@@ -20,14 +20,14 @@ Repository = "https://github.com/agent-labs-dev/fastbrowse"
 Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 
 [project.optional-dependencies]
-eval-data = ["pyyaml>=6,<7"]
+eval-data = ["pyyaml>=6.0.3,<7"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.commands:fastbrowse"
 fastbrowse-mcp = "fastbrowse.commands:fastbrowse_mcp"
 
 [build-system]
-requires = ["maturin>=1.9,<2"]
+requires = ["maturin>=1.16,<2"]
 build-backend = "maturin"
 
 # One abi3 wheel per platform: the Python package with the Rust core beside it as `fastbrowse._native`
@@ -55,17 +55,17 @@ cache-keys = [
 
 [dependency-groups]
 dev = [
-    "pytest>=8.4,<10",
-    "pytest-asyncio>=1,<2",
-    "ruff>=0.14,<1",
-    "vale==3.25.1.0",
-    "pytest-timeout>=2.3,<3",
-    "ty==0.0.92",          # preview: pinned, and moved with the pre-commit hook
-    "pre-commit>=4.6.2",
+    "pytest>=9.2,<10",
+    "pytest-asyncio>=1.4.1,<2",
+    "ruff>=0.17.3,<1",
+    "vale==3.26.0.1",
+    "pytest-timeout>=2.4,<3",
+    "ty==0.0.96",          # preview: pinned, and moved with the pre-commit hook
+    "pre-commit>=4.7.0",
     "actionlint-py==1.7.12.25",
 ]
 # snapshot.js benchmarks (`benchmarks/`), which CodSpeed runs when the script changes.
-bench = ["pytest-codspeed>=5,<6"]
+bench = ["pytest-codspeed>=5.0.4,<6"]
 
 [tool.ruff]
 line-length = 120
@@ -85,8 +85,6 @@ asyncio_mode = "auto"
 timeout = 120
 
 [tool.ty.src]
-# The package and its tests, which is the scope the checker has always had. `scripts/` runs jev-ultrafast in its own environment
-# and imports modules that are not installed here, which is the point of it.
 include = ["src", "tests", "benchmarks"]
 
 [tool.ty.environment]

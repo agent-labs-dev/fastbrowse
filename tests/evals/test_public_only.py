@@ -8,8 +8,9 @@ import fastbrowse
 ROOT = Path(__file__).parents[2]
 SOURCES = sorted([*(ROOT / "src" / "fastbrowse" / "evals").rglob("*.py"), *(ROOT / "tests" / "evals").rglob("*.py")])
 
-PUBLIC_MODULES = {"fastbrowse.models", "fastbrowse.config", "fastbrowse.protocol"}
-"""The pydantic models and `Config` a `run_task` call is made of, and the `serve` protocol's messages."""
+PUBLIC_MODULES = {"fastbrowse.models", "fastbrowse.config", "fastbrowse.protocol", "fastbrowse.build"}
+"""The pydantic models and `Config` a `run_task` call is made of, the `serve` protocol's messages, and the build
+identity the CLI's `--json` reports, which the harness records in every row from the same source."""
 
 CORE_LIBRARIES = ("tests",)
 """The test suite's own helpers."""

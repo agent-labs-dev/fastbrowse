@@ -2,29 +2,34 @@
  "controls": [
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 1,
    "input_name": "name",
    "input_type": "text",
+   "invalid": true,
    "label": "Name",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
+   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -32,6 +37,7 @@
    "input_name": "email",
    "input_type": "email",
    "label": "Email",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -46,6 +52,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -53,6 +60,7 @@
    "input_name": "when",
    "input_type": "date",
    "label": "Start Date",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -67,6 +75,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -74,6 +83,7 @@
    "input_name": "room",
    "input_type": "select-one",
    "label": "Room",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "select"
@@ -91,6 +101,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -98,6 +109,7 @@
    "input_name": "news",
    "input_type": "checkbox",
    "label": "Newsletter",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -110,6 +122,7 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
+   "focused": false,
    "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -117,6 +130,7 @@
    "input_name": "secret",
    "input_type": "password",
    "label": "Password",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -131,13 +145,15 @@
   {
    "autocomplete": null,
    "context": "Booking 0",
-   "form_id": null,
+   "focused": false,
+   "form_id": "2",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 8,
    "input_name": null,
    "input_type": "submit",
    "label": "Book",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -150,6 +166,7 @@
   {
    "autocomplete": null,
    "context": "Filter 0",
+   "focused": false,
    "form_id": "10",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -157,6 +174,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Minimum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -171,6 +189,7 @@
   {
    "autocomplete": null,
    "context": "Filter 0",
+   "focused": false,
    "form_id": "10",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -178,6 +197,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Maximum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -192,6 +212,7 @@
   {
    "autocomplete": null,
    "context": "Filter 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -199,6 +220,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Apply",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -210,29 +232,34 @@
   },
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 13,
    "input_name": "name",
    "input_type": "text",
+   "invalid": true,
    "label": "Name",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
+   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -240,6 +267,7 @@
    "input_name": "email",
    "input_type": "email",
    "label": "Email",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -254,6 +282,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -261,6 +290,7 @@
    "input_name": "when",
    "input_type": "date",
    "label": "Start Date",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -275,6 +305,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -282,6 +313,7 @@
    "input_name": "room",
    "input_type": "select-one",
    "label": "Room",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "select"
@@ -299,6 +331,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -306,6 +339,7 @@
    "input_name": "news",
    "input_type": "checkbox",
    "label": "Newsletter",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -318,6 +352,7 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
+   "focused": false,
    "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -325,6 +360,7 @@
    "input_name": "secret",
    "input_type": "password",
    "label": "Password",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -339,13 +375,15 @@
   {
    "autocomplete": null,
    "context": "Booking 1",
-   "form_id": null,
+   "focused": false,
+   "form_id": "14",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 20,
    "input_name": null,
    "input_type": "submit",
    "label": "Book",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -358,6 +396,7 @@
   {
    "autocomplete": null,
    "context": "Filter 1",
+   "focused": false,
    "form_id": "22",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -365,6 +404,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Minimum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -379,6 +419,7 @@
   {
    "autocomplete": null,
    "context": "Filter 1",
+   "focused": false,
    "form_id": "22",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -386,6 +427,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Maximum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -400,6 +442,7 @@
   {
    "autocomplete": null,
    "context": "Filter 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -407,6 +450,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Apply",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -418,29 +462,34 @@
   },
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 25,
    "input_name": "name",
    "input_type": "text",
+   "invalid": true,
    "label": "Name",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
+   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -448,6 +497,7 @@
    "input_name": "email",
    "input_type": "email",
    "label": "Email",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -462,6 +512,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -469,6 +520,7 @@
    "input_name": "when",
    "input_type": "date",
    "label": "Start Date",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -483,6 +535,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -490,6 +543,7 @@
    "input_name": "room",
    "input_type": "select-one",
    "label": "Room",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "select"
@@ -507,6 +561,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -514,6 +569,7 @@
    "input_name": "news",
    "input_type": "checkbox",
    "label": "Newsletter",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -526,6 +582,7 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
+   "focused": false,
    "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -533,6 +590,7 @@
    "input_name": "secret",
    "input_type": "password",
    "label": "Password",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -547,13 +605,15 @@
   {
    "autocomplete": null,
    "context": "Booking 2",
-   "form_id": null,
+   "focused": false,
+   "form_id": "26",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 32,
    "input_name": null,
    "input_type": "submit",
    "label": "Book",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -566,6 +626,7 @@
   {
    "autocomplete": null,
    "context": "Filter 2",
+   "focused": false,
    "form_id": "34",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -573,6 +634,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Minimum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -587,6 +649,7 @@
   {
    "autocomplete": null,
    "context": "Filter 2",
+   "focused": false,
    "form_id": "34",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -594,6 +657,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Maximum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -608,6 +672,7 @@
   {
    "autocomplete": null,
    "context": "Filter 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -615,6 +680,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Apply",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -626,29 +692,34 @@
   },
   {
    "autocomplete": "name",
-   "blocking": true,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 37,
    "input_name": "name",
    "input_type": "text",
+   "invalid": true,
    "label": "Name",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
     "click",
     "enter"
    ],
+   "required": true,
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
+   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -656,6 +727,7 @@
    "input_name": "email",
    "input_type": "email",
    "label": "Email",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -670,6 +742,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -677,6 +750,7 @@
    "input_name": "when",
    "input_type": "date",
    "label": "Start Date",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -691,6 +765,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -698,6 +773,7 @@
    "input_name": "room",
    "input_type": "select-one",
    "label": "Room",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "select"
@@ -715,6 +791,7 @@
    "autocomplete": null,
    "checked": false,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -722,6 +799,7 @@
    "input_name": "news",
    "input_type": "checkbox",
    "label": "Newsletter",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -734,6 +812,7 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
+   "focused": false,
    "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -741,6 +820,7 @@
    "input_name": "secret",
    "input_type": "password",
    "label": "Password",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -755,13 +835,15 @@
   {
    "autocomplete": null,
    "context": "Booking 3",
-   "form_id": null,
+   "focused": false,
+   "form_id": "38",
    "frame_origin": "http://fixture",
    "frame_path": null,
    "id": 44,
    "input_name": null,
    "input_type": "submit",
    "label": "Book",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -774,6 +856,7 @@
   {
    "autocomplete": null,
    "context": "Filter 3",
+   "focused": false,
    "form_id": "46",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -781,6 +864,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Minimum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -795,6 +879,7 @@
   {
    "autocomplete": null,
    "context": "Filter 3",
+   "focused": false,
    "form_id": "46",
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -802,6 +887,7 @@
    "input_name": null,
    "input_type": "number",
    "label": "Maximum price",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "fill",
@@ -816,6 +902,7 @@
   {
    "autocomplete": null,
    "context": "Filter 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -823,6 +910,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Apply",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -1717,6 +1805,8 @@
   ]
  },
  "inaccessible_frames": 0,
+ "media": [],
+ "offscreen_text": "",
  "title": "Forms",
  "url": "http://fixture/forms.html?n=4",
  "viewport_text": "Booking 0\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 0\nApply\nBooking 1\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 1\nApply\nBooking 2\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 2\nApply\nBooking 3\nName\nEmail\nStart Date\nNewsletter\nBook\nFilter 3\nApply",

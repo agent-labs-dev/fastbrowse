@@ -15,4 +15,4 @@ fastbrowse-core = { workspace = true }
 fastbrowse-run = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }

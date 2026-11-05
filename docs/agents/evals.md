@@ -11,10 +11,11 @@ and check the result against the core suite and the local and mock fixtures rath
 Fix the general cause (the no eval tuning rule in [AGENTS.md](../../AGENTS.md)) before the before-and-after run.
 
 The internal live suite, external corpora, comparator adapters and recording tools live in Parallax under
-`parallax.browser_use`. Run its `parallax browser internal --help`, `official --help`, `data --help` and
-`track --help` in the maintainer checkout. The internal comparison uses Browser Use hosted default and Jev
-Ultrafast; label the Python SDK agent separately when used. Unsupported Ultrafast tasks use hosted default
-and retain their coverage limitation. Never pool the best score from separate agents.
+`parallax.browser_use`, in the private [agent-labs-dev/fastbrowse-evals](https://github.com/agent-labs-dev/fastbrowse-evals)
+repository. The campaign workflows check it out with the `EVALS_DEPLOY_KEY` deploy key. Run its `parallax browser internal --help`, `official --help`, `data --help` and
+`track --help` in the maintainer checkout. The internal comparison runs fastbrowse and Jev Ultrafast live and
+reads Browser Use hosted default and Browser Harness from the competitor reference; label the Python SDK agent
+separately when used. An agent shows tasks it cannot attempt as not run. Never pool the best score from separate agents.
 
 Parallax imports source benchmark grades as source reports. Its own semantic judgments use Jev with an LLM
 fallback. Imported predicates, weighted rubrics and full-task judgments retain their original meanings and
@@ -56,10 +57,9 @@ Before the first paid call of a campaign:
 - Check every secret and variable the workflow names in its header. The campaign workflows check theirs
   before any paid call; a new workflow does the same.
 
-The scheduled fixture job checks configured providers before running. Direct TypeSafe is the recommended
-Jev route; OpenRouter also serves Jev text when it is the only Jev key, but is not recommended and never
-receives Jev image input. A gateway key alone covers the LLM and also serves Jev as a last resort; beside
-another Jev key it is a backup for an outage, not the recommended Jev route. Keys stay in ignored configuration.
+The scheduled fixture job checks configured providers before running. OpenRouter is the recommended
+route, one key for Jev and the LLM. A gateway key alone covers the LLM and also serves Jev as a last resort; beside
+another Jev key it is a backup for an outage. Keys stay in ignored configuration.
 Run local checks directly, with owned browsers and containers stopped on exit.
 
 ## Campaigns in CI
@@ -82,8 +82,8 @@ approved baselines and source identity receipts, not logs, recordings, decrypted
 Parallax exports the internal catalog into fastbrowse and checks it byte-for-byte. The fastbrowse publication
 gate requires the matching catalog digest, clean committed runner and agent builds, current task versions,
 complete task coverage, three measured repeats and every physical run in the ledger. Regressions in matched
-task success, completion, LLM and Jev calls, model throughput or cost block publication; wall time is recorded
-but moves with cloud load, so it never blocks. No result is published until complete runs are reviewed and
+task success, completion, LLM calls, model throughput or cost block publication; wall time is recorded
+but moves with cloud load, so it never blocks, and Jev calls are recorded but never block, since Jev decides every step. No result is published until complete runs are reviewed and
 the maintainer explicitly approves it.
 
 The fixture workflow runs nightly and on demand; it does not gate a release. CI validates changed result rows

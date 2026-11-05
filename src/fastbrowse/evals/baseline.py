@@ -17,10 +17,17 @@ FIELDS = {
     "suite_version",
     "repeat",
     "passed",
+    # Rows no longer carry it; the committed compact baselines do, and they are immutable.
     "correct",
     "normalized_status",
     "seconds",
+    "timing_basis",
+    "session_open_seconds",
+    "session_close_seconds",
     "dollars",
+    "llm_calls",
+    "llm_calls_basis",
+    "tokens_per_second",
     "model",
     "text_model",
     "step_cap",
@@ -39,6 +46,8 @@ RUN_FIELDS = {
     "git_sha",
     "git_dirty",
     "agent_limits",
+    "timing_basis",
+    "session_open_limit_seconds",
     "budget_policy",
 }
 

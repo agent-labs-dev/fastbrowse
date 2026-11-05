@@ -16,7 +16,6 @@
         "description": {
           "anyOf": [
             {
-              "maxLength": 500,
               "type": "string"
             },
             {
@@ -37,7 +36,6 @@
   "properties": {
     "task": {
       "description": "What to do, with every value it needs.",
-      "maxLength": 4000,
       "minLength": 1,
       "title": "Task",
       "type": "string"

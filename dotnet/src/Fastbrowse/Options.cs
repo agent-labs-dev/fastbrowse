@@ -71,8 +71,11 @@ public sealed record BrowserOptions
     /// <summary>The page's width and height in CSS pixels.</summary>
     public (int Width, int Height)? Viewport { get; init; }
 
-    /// <summary>Let a cloud browser's window be resized.</summary>
-    public bool CloudAllowResizing { get; init; }
+    /// <summary>Up to three IDs of ready extensions on the Browser Use Cloud account, loaded into a cloud browser.</summary>
+    public IReadOnlyList<string>? CloudExtensions { get; init; }
+
+    /// <summary>How long a cloud browser may live, in minutes: 15 when null, and the service allows up to 240.</summary>
+    public int? CloudTimeoutMinutes { get; init; }
 }
 
 /// <summary>A file a run may upload.</summary>
@@ -112,8 +115,30 @@ public sealed record RunOptions
     /// <summary>Where to write a video of the run. The server needs ffmpeg for it.</summary>
     public string? Record { get; init; }
 
+    /// <summary>Replay a recipe file and heal unmatched steps.</summary>
+    public string? Recipe { get; init; }
+
+    /// <summary>Save completed steps to a recipe file.</summary>
+    public string? SaveRecipe { get; init; }
+
     /// <summary>The agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off.</summary>
     public bool? Cursor { get; init; }
+
+    /// <summary>
+    /// The only <c>http(s)://host[:port]</c> origins whose documents the run may open, read and control, each exact. A
+    /// navigation, redirect, frame or popup elsewhere is refused before it is sent. It scopes documents, not the
+    /// network, and a scoped run sends no frames and cannot <see cref="Record"/>. Null is unscoped.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedOrigins { get; init; }
+
+    /// <summary>Read every page over HTTP and start no browser, for a task that only reads.</summary>
+    public bool Fetch { get; init; }
+
+    /// <summary>
+    /// Start a browser from the first step, rather than reading over HTTP until the task needs one. It is the request's
+    /// <c>browser</c> field; <see cref="Browser"/> says which browser that is.
+    /// </summary>
+    public bool BrowserFirst { get; init; }
 
     /// <summary>The secrets the run may type, by name and origin. The values stay with <see cref="ResolveSecret"/>.</summary>
     public IReadOnlyList<SecretRef>? Secrets { get; init; }

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Writable } from 'node:stream';
 
 import { abortable } from './abort.ts';
-import { InProcess, loadAddon } from './addon.ts';
+import { InProcess, loadAddon, readPdfsWith } from './addon.ts';
 import { Callbacks } from './callbacks.ts';
 import { resolveBinary } from './binary.ts';
 import { FastbrowseError, ProcessExitedError } from './errors.ts';
@@ -40,7 +40,7 @@ export interface StartOptions extends BrowserOptions {
   /**
    * Run the agent inside this process, on the fastbrowse addon, instead of starting a fastbrowse process. Runs
    * and their results are the same; `env` then adds to the environment the settings are read from, and
-   * `binaryPath` and `stderr` mean nothing.
+   * `binaryPath` selects its PDF helper process; `stderr` has no effect.
    */
   inProcess?: boolean;
   /**
@@ -86,14 +86,15 @@ export class Fastbrowse {
    * addon instead and run in this process.
    */
   static async start(options: StartOptions = {}): Promise<Fastbrowse> {
+    const env = { ...process.env, ...options.env };
     if (options.inProcess) {
-      const addon = loadAddon(options.addonPath, { ...process.env, ...options.env });
+      const addon = loadAddon(options.addonPath, env);
       if (addon.protocolVersion() !== PROTOCOL_VERSION) {
         throw mismatch(addon.version(), 'the addon', addon.protocolVersion());
       }
+      readPdfsWith(addon, env, options.binaryPath);
       return new Fastbrowse(new InProcess(addon, options.env ?? {}), addon.version(), browserParams(options));
     }
-    const env = { ...process.env, ...options.env };
     const binary = resolveBinary(options.binaryPath, env);
     const server = new Server(binary, env, options.stderr ?? 'inherit');
     try {

@@ -10,7 +10,7 @@ use fastbrowse_core::page::BrowserError as PageError;
 ///
 /// The first six are core's variants. The rest are `session.py`'s `BrowserUnresponsive`, `PageUnresponsive` and
 /// `OriginNotAllowed` and `page.py`'s `_ScriptError`, which this crate matches on; above the `Page` seam they become
-/// the core variant their Python base class is.
+/// the core variant their Python base class is, except `PageUnresponsive`, which ends the run `unavailable`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserError {
     Failed(String),
@@ -89,6 +89,8 @@ impl From<BrowserError> for PageError {
         match error {
             BrowserError::ContextLost(_) => PageError::ContextLost(message),
             BrowserError::Unavailable(_) | BrowserError::BrowserUnresponsive(_) => PageError::Unavailable(message),
+            // Kept apart so the agent can reopen a page that hung during an action once; any other, and a second,
+            // ends the run `unavailable` rather than retrying a dead page (#737).
             BrowserError::PageUnresponsive(_) => PageError::PageUnresponsive(message),
             BrowserError::ScreenshotsUnavailable(_) => PageError::ScreenshotsUnavailable(message),
             BrowserError::NavigationTimeout(_) => PageError::NavigationTimeout(message),
@@ -105,7 +107,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_error_crosses_the_seam_as_its_python_base_class() {
+    fn each_error_crosses_the_seam_as_the_core_variant_it_ends_the_run_as() {
         let cases = [
             (BrowserError::Failed("f".into()), PageError::Failed("f".into())),
             (BrowserError::ContextLost("c".into()), PageError::ContextLost("c".into())),

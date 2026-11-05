@@ -5,6 +5,16 @@ on:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
+  # Manual dispatch lets a head without an automatic pull-request run receive the required checks.
+  # A dispatch with `task` set runs only the real-site job: the candidate drives one task in a Browser Use Cloud
+  # browser from this runner, so a real-site check never runs on a developer's machine.
+  workflow_dispatch:
+    inputs:
+      task: {description: "Real-site task; empty runs the normal checks", required: false, default: ""}
+      start: {description: "URL to open first", required: false, default: ""}
+      args: {description: "Extra fastbrowse arguments, space separated", required: false, default: ""}
+      max_dollars: {description: "Spend ceiling for the run", required: false, default: "2"}
+      max_steps: {description: "Step ceiling for the run", required: false, default: "60"}
 permissions: {}
 # A push to a pull request makes the run on its previous commit moot. Runs on `main` each finish.
 concurrency:
@@ -12,6 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   secrets:
+    if: ${{ !inputs.task }}
     permissions: {contents: read}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
@@ -27,6 +38,7 @@ jobs:
         # Checkout fetches other branches too; scan this build's complete ancestry, not unrelated branch content.
         run: gitleaks detect --source . --no-banner --redact --log-opts=HEAD
   gate:
+    if: ${{ !inputs.task }}
     permissions: {contents: read, actions: read}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     strategy:
@@ -46,7 +58,7 @@ jobs:
       # `uv sync` compiles the Rust core (dev profile) into `target/`; restore the dependency build the other jobs share.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with: {shared-key: python-core}
-      # The eval data loaders import yaml; without the extra, ty sees a different tree than we do.
+      # tests/test_ci.py imports yaml; without the extra, ty sees a different tree than we do.
       - run: uv sync --locked --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -78,6 +90,7 @@ jobs:
         run: uv run python -m fastbrowse.evals.publication --check-diff "origin/$BASE"
 
   project-rules:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
@@ -98,9 +111,10 @@ jobs:
       # The Jev review's base-only pull_request_target use needs human review of zizmor's warning.
       - name: Zizmor (advisory)
         continue-on-error: true
-        run: uvx zizmor==1.30.1 --offline .github/workflows
+        run: uvx zizmor==1.32.0 --offline .github/workflows
 
   sdk:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {contents: read}
     steps:
@@ -130,6 +144,7 @@ jobs:
   # The Rust core (docs/adr/0001): its own checks, then the Node addon against cases taken from its suites. The
   # Python suites, which reach the core through the package, run in `gate`.
   rust:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions: {contents: read}
     env:
@@ -162,22 +177,23 @@ jobs:
       # The suites are where this job's time goes: measured on four cores over the same 985 tests, `cargo test
       # --workspace` spent 382 s running them and `cargo nextest run --workspace` 161 s, because nextest
       # schedules every test binary at once instead of one after another. It runs the same binaries.
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with: {tool: nextest@0.9.150}
       - run: cargo nextest run --workspace --locked --no-fail-fast
-      # nextest does not run doctests. No crate has one today; this keeps it that way rather than silently
-      # dropping the check.
+      # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc
       # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.
-      # The packaged crates are verified as registry crates at the workspace's unchanged version, and cargo never
-      # rebuilds or re-extracts a registry crate it already has, so the restored cache verified a change that adds a
-      # function to fastbrowse-core against main's fastbrowse-core and failed. Their builds and sources go first.
-      - run: rm -rf target/debug/.fingerprint/fastbrowse-* "${CARGO_HOME:-$HOME/.cargo}"/registry/src/-*/fastbrowse*
-      - run: cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
+      # cargo treats a crate it verifies against as an immutable registry crate: it reuses an unpacked copy in
+      # ~/.cargo/registry/src and a build in the target directory keyed on name and version alone. The cache above
+      # restores both from other sources, so the check gets a target directory of its own and no unpacked copies.
+      - run: rm -rf ~/.cargo/registry/src/*/fastbrowse*
+      - run: >-
+          cargo package --workspace --exclude fastbrowse-py --exclude fastbrowse-node --exclude fastbrowse-probe --locked
+          --target-dir "$RUNNER_TEMP/package"
       # The Go client against the binary just built, its scripted runs standing in for the agent. Its types are
       # written from protocol/schema.json and committed; a schema changed without them fails here.
-      - run: cargo build -p fastbrowse-cli --locked
+      - run: cargo build -p fastbrowse-cli --features scripted --locked
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version-file: go/go.mod, cache: false}
       - run: go -C go generate ./... && git diff --exit-code -- go
@@ -189,7 +205,7 @@ jobs:
       - run: python3 scripts/java_types.py && git diff --exit-code -- java && test -z "$(git status --porcelain -- java)"
       - run: FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify
       # The .NET client against the same binary, its types written from protocol/schema.json and committed too.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with: {dotnet-version: "10.0.x"}
       - run: python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
       # From dotnet/, whose global.json picks the test runner xunit.v3 needs.
@@ -213,6 +229,7 @@ jobs:
   # alone is built on the push to `main`, which always builds, so a break still shows before a release. CI builds the
   # Linux and Windows targets; the two macOS ones, the costliest runners and the slowest to start, run in the release.
   changes:
+    if: ${{ !inputs.task }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
@@ -265,7 +282,7 @@ jobs:
   check:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     needs: [gate, project-rules, sdk, rust, secrets, changes, binaries, aur]
-    if: always()
+    if: ${{ always() && !inputs.task }}
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
@@ -285,3 +302,38 @@ jobs:
           test "$CHANGES_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
           test "$AUR_RESULT" = success || test "$AUR_RESULT" = skipped
+
+  realsite:
+    if: ${{ inputs.task }}
+    permissions: {contents: read}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - run: uv sync --locked
+      - run: sudo apt-get update -q && sudo apt-get install -yq ffmpeg
+      - name: Run the task
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          TASK: ${{ inputs.task }}
+          START: ${{ inputs.start }}
+          ARGS: ${{ inputs.args }}
+          MAX_DOLLARS: ${{ inputs.max_dollars }}
+          MAX_STEPS: ${{ inputs.max_steps }}
+        run: |
+          read -r -a extra <<< "$ARGS"
+          start=()
+          if [ -n "$START" ]; then start=(--start "$START"); fi
+          uv run --no-sync fastbrowse "$TASK" "${start[@]}" --cloud --json --trace realsite.trace.jsonl \
+            --record realsite.mp4 --max-dollars "$MAX_DOLLARS" --max-steps "$MAX_STEPS" "${extra[@]}" \
+            > realsite.json 2> >(tee realsite.stderr.txt >&2)
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: realsite-${{ github.run_id }}
+          path: realsite.*
+          if-no-files-found: warn

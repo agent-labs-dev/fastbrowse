@@ -1,8 +1,9 @@
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 
-from fastbrowse.evals.harness import TaskSecrets, environment, origin_of, providers, transient_seconds
+from fastbrowse.evals.harness import TaskSecrets, _diagnostic, environment, origin_of, providers, transient_seconds
 
 
 def test_the_environment_reads_the_dotenv_beside_it_under_real_settings(
@@ -62,3 +63,10 @@ async def test_task_secrets_are_given_only_on_the_fixture_origin() -> None:
     assert await secrets.resolve("password", "http://127.0.0.1:8123") == "hunter2"
     assert await secrets.resolve("password", "http://127.0.0.1:8124") is None
     assert await secrets.resolve("other", "http://127.0.0.1:8123") is None
+
+
+def test_chrome_startup_diagnostic_keeps_the_cause_before_a_long_crash_stack() -> None:
+    output = "FATAL: Socket path too long\n" + "stack frame\n" * 500
+    log = BytesIO(output.encode())
+    log.seek(0, 2)
+    assert _diagnostic(log) == f":\n{output.strip()}"

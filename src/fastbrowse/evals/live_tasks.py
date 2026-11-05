@@ -88,23 +88,6 @@ def browser_refusal(browser: object) -> str | None:
     )
 
 
-class PublicSiteRefused(RuntimeError):
-    """A public-site run the campaign must not start: its rows could never be admitted, so its spend is waste."""
-
-
-def admit_public_run(browser: object) -> None:
-    """Refuse to start a public-site run in a browser that the publication rule would refuse later.
-
-    `browser_refusal` is the rule; this is the same rule at the only point where refusing it saves anything,
-    before the first step. A campaign calls this once per run, with the same browser record it will publish,
-    so a headless throwaway-profile run against a public site fails immediately instead of minting rows that
-    can never be admitted (issue #389: `pypi-newer` was `blocked` on three repeats of three, each row costing
-    its whole budget to produce).
-    """
-    if (refusal := browser_refusal(browser)) is not None:
-        raise PublicSiteRefused(refusal)
-
-
 @dataclass(frozen=True, slots=True)
 class Outcome:
     answer: str | None

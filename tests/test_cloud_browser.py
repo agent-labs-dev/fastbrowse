@@ -87,7 +87,6 @@ def arguments(**changes: Any) -> dict[str, Any]:
         "timeout_minutes": 15,
         "proxy_country": "us",
         "viewport": None,
-        "allow_resizing": False,
     }
     return defaults | changes
 
@@ -98,33 +97,40 @@ def test_the_kept_browser_api_is_public() -> None:
 
 
 async def test_a_kept_browser_is_started_as_a_run_starts_one_and_left_running(cloud: Cloud) -> None:
-    options = arguments(profile="profile-1", timeout_minutes=120, viewport=(1280, 800), allow_resizing=True)
+    options = arguments(profile="profile-1", timeout_minutes=120, viewport=(1280, 800))
     browser = await native.open_cloud_browser(options, origin=cloud.origin)
     assert browser == CloudBrowser(
-        id="kept", cdp_url="ws://cdp.test/devtools/browser/kept", live_url="https://live.test/kept", api="v3"
+        id="kept", cdp_url="ws://cdp.test/devtools/browser/kept", live_url="https://live.test/kept"
     )
     await asyncio.sleep(0.2)
-    assert cloud.calls() == ["POST /api/v3/browsers", "GET /json/version"]
+    assert cloud.calls() == ["POST /api/v4/browsers", "GET /json/version"]
     _, _, body, key = cloud.requests[0]
     assert key == "key"
     assert body == {
         "timeout": 120,
-        "allowResizing": True,
         "proxyCountryCode": "us",
+        "solveCaptchas": True,
         "profileId": "profile-1",
         "browserScreenWidth": 1280,
         "browserScreenHeight": 800,
     }
     await native.stop_cloud_browser(browser, "key", origin=cloud.origin)
-    assert cloud.calls()[-1] == "PATCH /api/v3/browsers/kept"
+    assert cloud.calls()[-1] == "PATCH /api/v4/browsers/kept"
     assert cloud.requests[-1][2] == {"action": "stop"}
 
 
-async def test_a_browser_with_extensions_is_created_and_stopped_on_v4(cloud: Cloud) -> None:
+async def test_a_browser_with_extensions_is_created_and_stopped_by_its_stored_fields(cloud: Cloud) -> None:
     cloud.answer = lambda method, path: (200, created(cloud, "wss://cdp.test/browser/kept"))
     browser = await native.open_cloud_browser(arguments(extensions=[EXTENSION]), origin=cloud.origin)
-    assert (browser.api, browser.cdp_url) == ("v4", "wss://cdp.test/browser/kept")
-    assert cloud.requests[0][2] == {"timeout": 15, "extensionIds": [EXTENSION], "proxyCountryCode": "us"}
+    assert browser.cdp_url == "wss://cdp.test/browser/kept"
+    assert cloud.requests[0][2] == {
+        "timeout": 15,
+        "extensionIds": [EXTENSION],
+        "proxyCountryCode": "us",
+        "solveCaptchas": True,
+        "browserScreenWidth": 1120,
+        "browserScreenHeight": 780,
+    }
     stored = CloudBrowser.model_validate(json.loads(browser.model_dump_json()))
     await native.stop_cloud_browser(stored, "key", origin=cloud.origin)
     assert cloud.calls() == ["POST /api/v4/browsers", "PATCH /api/v4/browsers/kept"]
@@ -135,7 +141,7 @@ async def test_a_failed_start_stops_the_browser_it_created(cloud: Cloud) -> None
     with pytest.raises(CloudBrowserError, match="answered HTTP 404") as raised:
         await native.open_cloud_browser(arguments(), origin=cloud.origin)
     assert not isinstance(raised.value, CloudBrowserUnavailable)
-    assert cloud.calls() == ["POST /api/v3/browsers", "GET /json/version", "PATCH /api/v3/browsers/kept"]
+    assert cloud.calls() == ["POST /api/v4/browsers", "GET /json/version", "PATCH /api/v4/browsers/kept"]
 
 
 async def test_a_cancelled_start_stops_the_browser_it_created(cloud: Cloud) -> None:
@@ -150,7 +156,7 @@ async def test_a_cancelled_start_stops_the_browser_it_created(cloud: Cloud) -> N
     opening.cancel()
     with pytest.raises(asyncio.CancelledError):
         await opening
-    await asyncio.to_thread(cloud.wait_for, "PATCH /api/v3/browsers/kept")
+    await asyncio.to_thread(cloud.wait_for, "PATCH /api/v4/browsers/kept")
 
 
 async def test_an_unreachable_service_is_unavailable(cloud: Cloud) -> None:
@@ -169,6 +175,6 @@ async def test_bad_options_are_refused_before_any_request(cloud: Cloud) -> None:
 
 async def test_a_stop_the_service_refuses_raises(cloud: Cloud) -> None:
     cloud.answer = lambda method, path: (404, None)
-    browser = CloudBrowser(id="gone", cdp_url="ws://x", api="v3")
+    browser = CloudBrowser(id="gone", cdp_url="ws://x")
     with pytest.raises(CloudBrowserError, match="HTTP 404"):
         await native.stop_cloud_browser(browser, "key", origin=cloud.origin)

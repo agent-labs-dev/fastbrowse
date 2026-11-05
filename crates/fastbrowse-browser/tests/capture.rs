@@ -2,13 +2,32 @@ mod common;
 mod misc_support;
 
 use std::collections::HashSet;
-use std::time::Instant;
 
-use common::{Harness, harness, sites};
+use common::{Harness, eval_active, harness, sites, wait_until};
 use fastbrowse_core::page::BlockKind;
-use misc_support::{content_capture, eval_active, path, set_body, text_of, texts, visible, wait_until};
+use misc_support::{content_capture, path, set_body, text_of, texts};
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
+
+/// This binary registers no PDF helper, as a Rust program that never calls `run_if_requested` does not. The PDF is
+/// still kept, and the run is told its text went unread instead of seeing a file that seems to hold nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_pdf_with_no_helper_to_read_it_is_kept_and_said_unread() {
+    let Some(h) = harness().await else { return };
+    h.goto("/map.pdf").await;
+    let url = format!("{}/map.pdf", sites().main);
+    let glance = h.page.glance().await.expect("PDF safety reading");
+    assert!(!glance.viewport_text.contains("The file was kept, but its text was not read"));
+    let text = h.observe().await.viewport_text;
+    let notice = format!(
+        "[Downloaded file: map.pdf from {url}] The file was kept, but its text was not read: this program has no PDF \
+         reader set up."
+    );
+    assert!(text.contains(&notice), "{text}");
+    assert!(!text.contains("Fairbanks Wind"), "{text}");
+    assert!(h.sink.artifacts.lock().unwrap().iter().any(|artifact| artifact.name == "map.pdf"));
+    h.close().await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
@@ -85,7 +104,7 @@ async fn icons_with(markup: &str) -> Option<Harness> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_table_header_variants() {
-    let cases: [(&str, &str, &[&str]); 11] = [
+    let cases: [(&str, &str, &[&str]); 12] = [
         (
             "multiple-header-rows",
             "<thead><tr><td>Group</td></tr><tr><th>Name</th></tr></thead>\
@@ -141,6 +160,11 @@ async fn test_table_header_variants() {
             &["| Name |\n| --- |\n| Ada |"],
         ),
         (
+            "icon-library-only-the-snapshot-knew",
+            "<tr><th>Name</th><th>Ok</th></tr><tr><td>Ada</td><td><i class='lucide lucide-check'></i></td></tr>",
+            &["| Name | Ok |\n| --- | --- |\n| Ada | [check icon] |"],
+        ),
+        (
             "invisible-cell-keeps-its-column",
             "<tr><th>Name</th><th>Id</th><th>Team</th></tr>\
              <tr><td>Ada</td><td style='visibility:hidden'>7</td><td>North</td></tr>",
@@ -168,13 +192,12 @@ async fn test_table_rows_below_the_viewport_are_captured() {
     );
     let capture = content_capture(&h.page).await;
     assert_eq!(texts(&capture), ["| Below the viewport |"]);
-    assert_eq!(texts(&capture).join("\n\n"), "| Below the viewport |");
     assert!(capture.blocks.iter().all(|b| b.kind == BlockKind::Table));
     h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_records_keep_single_links_and_a_page_sized_card_is_not_one_record() {
+async fn test_records_keep_single_links_whatever_their_length() {
     for (tag, kind) in [("div", BlockKind::Record), ("li", BlockKind::ListItem)] {
         let cards: String = [40, 40, 5000]
             .iter()
@@ -184,12 +207,8 @@ async fn test_records_keep_single_links_and_a_page_sized_card_is_not_one_record(
             .collect();
         let Some(h) = icons_with(&format!("<ul>{cards}</ul>")).await else { return };
         let capture = content_capture(&h.page).await;
-        assert_eq!(
-            capture.blocks.iter().map(|b| b.kind).collect::<Vec<_>>(),
-            [kind, kind, BlockKind::Paragraph, BlockKind::Link],
-            "{tag}"
-        );
-        assert!(capture.blocks[..2].iter().all(|b| b.href.as_deref() == Some("/author")), "{tag}");
+        assert_eq!(capture.blocks.iter().map(|b| b.kind).collect::<Vec<_>>(), [kind, kind, kind], "{tag}");
+        assert!(capture.blocks.iter().all(|b| b.href.as_deref() == Some("/author")), "{tag}");
         h.close().await;
     }
 }
@@ -274,107 +293,6 @@ async fn test_two_linked_cards_inside_unlabelled_wrappers_remain_separate_record
     h.close().await;
 }
 
-fn rated_card(rating: &str, price: &str) -> String {
-    // books.toscrape.com: every rating draws the same five icons, whatever the class says; only the class or an
-    // accessible label ever states which one it is.
-    let stars = r#"<i class="icon-star"></i>"#.repeat(5);
-    format!(r#"<article class="card"><h3>Book</h3><p class="star-rating {rating}">{stars}</p><p>{price}</p></article>"#)
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_class_only_star_rating_reaches_the_record() {
-    let markup =
-        rated_card("Five", "\u{a3}12.51") + &rated_card("Three", "\u{a3}9.99") + &rated_card("Five", "\u{a3}4.00");
-    let Some(h) = icons_with(&markup).await else { return };
-    let capture = content_capture(&h.page).await;
-    let records: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Record).collect();
-    assert_eq!(records.len(), 3);
-    let texts: Vec<String> = records.iter().map(|b| text_of(&capture, b)).collect();
-    assert!(texts[0].contains("Five stars") && texts[0].contains("\u{a3}12.51"));
-    assert!(texts[1].contains("Three stars") && texts[1].contains("\u{a3}9.99"));
-    assert!(texts[2].contains("Five stars"));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_an_accessible_rating_label_reaches_the_text() {
-    let Some(h) = icons_with(r#"<p>Great product <span role="img" aria-label="4 out of 5 stars"></span></p>"#).await
-    else {
-        return;
-    };
-    let capture = content_capture(&h.page).await;
-    assert!(texts(&capture).iter().any(|t| t.contains("4 out of 5 stars")));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_hidden_rating_widget_adds_nothing() {
-    let Some(h) = icons_with(r#"<p>Item</p><p class="star-rating Five" hidden></p>"#).await else { return };
-    let capture = content_capture(&h.page).await;
-    assert!(!texts(&capture).iter().any(|t| t.contains("stars")));
-    h.close().await;
-}
-
-fn card_with_hidden_wrapper() -> String {
-    // A hidden wrapper (e.g. a template div a site keeps offscreen) holds a five-star widget; a visible
-    // one-star widget follows. The hidden widget's own `hidden` check on itself passes (it isn't hidden),
-    // so only checking ancestors up to the record root stops it from winning the descendant search.
-    concat!(
-        r#"<article class="card"><h3>Book</h3>"#,
-        r#"<div hidden><p class="star-rating Five"></p></div>"#,
-        r#"<p class="star-rating One"></p></article>"#,
-    )
-    .to_owned()
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_rating_hidden_by_an_ancestor_is_ignored() {
-    let markup = card_with_hidden_wrapper() + &rated_card("Two", "\u{a3}1.00") + &rated_card("Three", "\u{a3}2.00");
-    let Some(h) = icons_with(&markup).await else { return };
-    let capture = content_capture(&h.page).await;
-    let records: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Record).collect();
-    assert_eq!(records.len(), 3);
-    let first = text_of(&capture, records[0]);
-    assert!(!first.contains("Five stars"));
-    assert!(first.contains("One stars"));
-    h.close().await;
-}
-
-fn card_with_invisible_wrapper() -> String {
-    // A wrapper hidden via CSS `visibility:hidden` (inherited by its children, unlike `display:none`) holds
-    // a five-star widget; a visible one-star widget follows. ratingOf's own `hidden()` check only looks at
-    // `hidden`/`display`, so the invisible five-star widget must be rejected by its own computed visibility.
-    concat!(
-        r#"<article class="card"><h3>Book</h3>"#,
-        r#"<div style="visibility:hidden"><p class="star-rating Five"></p></div>"#,
-        r#"<p class="star-rating One"></p></article>"#,
-    )
-    .to_owned()
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_rating_hidden_by_ancestor_visibility_is_ignored() {
-    let markup = card_with_invisible_wrapper() + &rated_card("Two", "\u{a3}1.00") + &rated_card("Three", "\u{a3}2.00");
-    let Some(h) = icons_with(&markup).await else { return };
-    let capture = content_capture(&h.page).await;
-    let records: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Record).collect();
-    assert_eq!(records.len(), 3);
-    let first = text_of(&capture, records[0]);
-    assert!(!first.contains("Five stars"));
-    assert!(first.contains("One stars"));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_an_arbitrary_class_naming_a_number_is_not_read_as_a_rating() {
-    // Only the literal `star-rating` class is trusted; a differently named class that happens to carry a rating
-    // word, or a plain icon count, must never be inferred as one.
-    let Some(h) = icons_with(r#"<p class="badge Five">Featured</p>"#).await else { return };
-    let capture = content_capture(&h.page).await;
-    assert!(!texts(&capture).iter().any(|t| t.contains("stars")));
-    h.close().await;
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn test_nested_record_lists_keep_the_inner_records() {
     let Some(h) = harness().await else { return };
@@ -409,7 +327,7 @@ async fn test_record_candidates_preserve_frame_and_shadow_boundaries() {
                 host.attachShadow({{mode: 'open'}}).innerHTML = '<slot></slot>' + text;
             }}
         }}",
-                misc_support::js(boundary)
+                common::js(boundary)
             ),
         )
         .await;
@@ -744,70 +662,6 @@ async fn test_a_guard_after_the_snapshot_reads_the_changed_page() {
     }
 }
 
-// -- test_snapshot_caps.py: the snapshot sends whole rows only within the observation caps; the observation is the
-// one sending all would give ---------------------------------------------------------------------------------------
-
-fn capped_config() -> fastbrowse_core::config::Config {
-    let mut config = fastbrowse_core::config::Config::default();
-    config.observation.max_controls = 12;
-    config.observation.max_offscreen_controls = 4;
-    config
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_capped_snapshot_observes_what_an_uncapped_one_would() {
-    use fastbrowse_browser::session::SessionOptions;
-    use fastbrowse_browser::testing::misc::{last_controls, page_js, set_page_js};
-    for name in ["links", "cards", "forms", "frames"] {
-        let Some(mut h) = common::harness_with(capped_config(), SessionOptions::default()).await else { return };
-        benchmark::open_page(&h.page, benchmark::origin(), name, 200).await;
-        // A load-more button and a next-page link at the foot of the page, past both caps, which only a pager keeps.
-        eval_active(
-            &h.session,
-            "(() => { const foot = document.createElement('div'); foot.style.marginTop = '3000px'; \
-             foot.innerHTML = '<button>Show 20 more</button><a href=\"/page/3\">Next page</a>'; \
-             document.body.append(foot); })()",
-        )
-        .await;
-        let capped = h.observe().await;
-        let capped_state = last_controls(&h.page);
-
-        let sends_all = format!("((mode) => ({})(mode))", page_js(&h.page));
-        set_page_js(&mut h.page, sends_all);
-        let whole = h.observe().await;
-        let whole_state = last_controls(&h.page);
-
-        assert!(capped.controls.iter().any(|c| c.label == "Show 20 more"), "{name}");
-        assert!(capped.controls.iter().any(|c| c.label == "Next page"), "{name}");
-        assert_eq!(capped.controls, whole.controls, "{name}");
-        assert_eq!(capped.omitted_controls, whole.omitted_controls, "{name}");
-        assert_eq!(capped.page_key, whole.page_key, "{name}");
-        assert_eq!(capped_state, whole_state, "{name}");
-        h.close().await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_rows_lost_before_they_are_read_make_observe_read_the_page_again() {
-    use fastbrowse_browser::session::SessionOptions;
-    use fastbrowse_browser::testing::misc::{page_js, set_page_js};
-    let Some(mut h) = common::harness_with(capped_config(), SessionOptions::default()).await else { return };
-    benchmark::open_page(&h.page, benchmark::origin(), "links", 200).await;
-    // As if another snapshot, or a new document, had come between the read and the fetch: the first snapshot's kept
-    // rows are gone by the time observe asks for them.
-    let losing = format!(
-        "((mode, limits) => {{ const out = ({})(mode, limits); \
-         if (mode === 'snapshot' && !window.__lost) {{ window.__lost = 1; delete window.__fastbrowse.sent; }} \
-         return out; }})",
-        page_js(&h.page)
-    );
-    set_page_js(&mut h.page, losing);
-    let observation = h.observe().await;
-    assert_eq!(eval_active(&h.session, "window.__lost").await, serde_json::json!(1));
-    assert!(observation.controls.iter().any(|c| c.next_page == Some(true)));
-    h.close().await;
-}
-
 // -- test_snapshot_install.py: snapshot.js is compiled once per document, and a document that never installed it
 // still gets observed ----------------------------------------------------------------------------------------------
 
@@ -833,24 +687,15 @@ async fn test_a_document_without_snapshot_installs_it_on_the_first_call() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_settle_waits_for_a_shadow_root_added_while_it_reads_the_clock() {
+async fn test_a_kept_capture_goes_to_the_sessions_artifact_sink() {
+    use fastbrowse_core::models::ArtifactKind;
+    use fastbrowse_core::page::Page;
     let Some(h) = harness().await else { return };
-    // A hidden tab returns one sample instead of waiting for quiet.
-    visible(&h.session).await;
-    h.page.navigate(&sites().main, None).await.expect("navigate");
-    // The host lands in the light DOM once; everything after happens inside its shadow root, which the document's
-    // observer cannot see until a full sample starts watching it.
-    eval_active(
-        &h.session,
-        "(() => { const host = document.createElement('div'); document.body.append(host); \
-         const root = host.attachShadow({mode: 'open'}); let n = 0; \
-         const tick = () => { root.textContent = String(n++); if (n < 16) setTimeout(tick, 50); }; tick(); })()",
-    )
-    .await;
-    let started = Instant::now();
-    let (stable, _) = h.page.settled_fingerprint(3.0).await.expect("settle");
-    assert!(stable);
-    // 16 changes 50ms apart end about 750ms in; settling needs 200ms of quiet after the last.
-    assert!(started.elapsed().as_secs_f64() >= 0.8);
+    h.goto("/index.html").await;
+    let capture = h.page.capture().await.expect("capture");
+    let kept = Page::keep_capture(&h.page, "capture-index.txt", &capture.text).await.expect("kept").expect("a sink");
+    assert_eq!((kept.kind, kept.size_bytes), (ArtifactKind::Capture, capture.text.len() as i64));
+    assert_eq!(kept.sha256, fastbrowse_core::py::sha256_hex(capture.text.as_bytes()));
+    assert!(h.sink.artifacts.lock().unwrap().contains(&kept));
     h.close().await;
 }

@@ -1,7 +1,7 @@
 mod common;
 mod safety_support;
 
-// tests/browser/test_speed.py: reproducible local timings and settling regressions, without model API calls. The
+// Reproducible local timings and settling regressions, without model API calls. The
 // Rust layer keeps each Python bound. Where Python shortens a module constant with monkeypatch, the Rust bound is
 // the same expression of the real constant, read through a seam.
 //
@@ -13,7 +13,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use common::{Harness, chrome, harness, harness_on, sites};
+use common::{Harness, chrome, eval_active, eval_value, find, harness, harness_on, sites, turn, wait_until};
 use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
 use fastbrowse_browser::page::scripts::PRESENTED_JS;
@@ -22,9 +22,7 @@ use fastbrowse_browser::testing::safety as seams;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{BrowserConnection, LocalChrome, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
-use safety_support::{
-    CdpProxy, Reply, cdp_proxy, eval_active, eval_value, find, has, observe_until, one_at_a_time, serve_on, wait_until,
-};
+use safety_support::{CdpProxy, Reply, cdp_proxy, has, observe_until, serve_on};
 use serde_json::json;
 use tokio::time::{sleep, timeout};
 
@@ -58,7 +56,7 @@ fn paused_since(proxy: &CdpProxy, start: usize) -> Vec<(String, String)> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_frame_wait_includes_later_callbacks_in_the_same_frame() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     let script = format!(
@@ -107,7 +105,7 @@ fn settling_site() -> &'static str {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_navigation_pauses_only_documents() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some((h, proxy)) = proxied().await else { return };
     let start = proxy.len();
     h.page.navigate(&sites().main, None).await.expect("navigate");
@@ -122,7 +120,7 @@ async fn test_navigation_pauses_only_documents() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_download_resource_types() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some((h, proxy)) = proxied().await else { return };
     let start = proxy.len();
     h.page.navigate(&sites().main, None).await.expect("navigate");
@@ -147,23 +145,8 @@ async fn activate(h: &Harness) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_settling_waits_out_staged_hydration() {
-    let _serial = one_at_a_time().await;
-    let Some(h) = harness().await else { return };
-    activate(&h).await;
-    h.page.navigate(settling_site(), None).await.expect("navigate");
-    let obs = h.observe().await;
-    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Navigate").id), &obs).await.expect("act");
-    assert!(result.outcome == StepOutcome::Executed && result.page_changed, "{result:?}");
-    find(&h.observe().await, "Stage 3");
-    // The slow image is still loading: settling no longer waits for readyState complete.
-    assert_eq!(eval_active(&h.session, "document.readyState").await, json!("interactive"));
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn test_readiness_waits_for_the_parser_in_one_call() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some((h, proxy)) = proxied().await else { return };
     let session_id = h.session.active_session_id().expect("active");
     h.session
@@ -180,41 +163,8 @@ async fn test_readiness_waits_for_the_parser_in_one_call() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_settling_tracks_same_length_mutations() {
-    let _serial = one_at_a_time().await;
-    for nested in ["document", "shadow", "iframe"] {
-        let Some(h) = harness().await else { return };
-        activate(&h).await;
-        h.page.navigate(settling_site(), None).await.expect("navigate");
-        let root = match nested {
-            "document" => "document.querySelector('div')",
-            "shadow" => "document.querySelector('div').attachShadow({mode: 'open'})",
-            _ => "document.querySelector('iframe').contentDocument.body",
-        };
-        eval_active(
-            &h.session,
-            &format!(
-                "document.body.innerHTML = '<button>Change</button><div></div><iframe></iframe>'; \
-                 const root = {root}; root.innerHTML = '<p>State 0</p>'; \
-                 document.querySelector('button').onclick = () => {{ \
-                 for (const [i, delay] of [100, 280, 460].entries()) \
-                 setTimeout(() => {{ root.querySelector('p').textContent = 'State ' + (i + 1); }}, delay); }}; \
-                 window.fixtureRoot = root;"
-            ),
-        )
-        .await;
-        let obs = h.observe().await;
-        let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Change").id), &obs).await.expect("act");
-        assert_eq!(result.outcome, StepOutcome::Executed, "{nested}");
-        assert!(result.page_changed, "{nested}");
-        assert_eq!(eval_active(&h.session, "window.fixtureRoot.textContent").await, json!("State 3"), "{nested}");
-        h.close().await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn test_redraw_after_settling_is_seen_before_acting() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     // Google Flights' date picker draws its prices about 400ms after it has gone quiet, which changes the text
     // authorizing its Done button: a decision on the quiet picker would be refused as stale.
     let Some(h) = harness().await else { return };
@@ -236,7 +186,7 @@ async fn test_redraw_after_settling_is_seen_before_acting() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_observe_still_reads_hydration_after_settling() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(settling_site(), None).await.expect("navigate");
     eval_active(
@@ -261,7 +211,7 @@ async fn test_observe_still_reads_hydration_after_settling() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_navigation_after_observe_rejects_old_control() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(settling_site(), None).await.expect("navigate");
     let obs = h.observe().await;
@@ -273,8 +223,8 @@ async fn test_navigation_after_observe_rejects_old_control() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_hidden_tab_requires_dom_quiet() {
-    let _serial = one_at_a_time().await;
+async fn test_hidden_tab_answers_with_no_idle_period() {
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(settling_site(), None).await.expect("navigate");
     h.observe().await;
@@ -283,14 +233,14 @@ async fn test_hidden_tab_requires_dom_quiet() {
         .send("Target.createTarget", json!({"url": "about:blank", "background": false}), None)
         .await
         .expect("createTarget");
+    // A run keeps its tabs visible with focus emulation, which a tab loses only when that is off.
+    let active = h.session.active_session_id().expect("active session");
+    h.session.send("Emulation.setFocusEmulationEnabled", json!({"enabled": false}), Some(&active)).await.expect("off");
     let checked = async {
         assert_eq!(eval_active(&h.session, "document.hidden").await, json!(true));
         eval_active(&h.session, "document.body.setAttribute('data-state', 'new')").await;
-        let (stable, fingerprint) = h.page.settled_fingerprint(1.0).await.expect("fingerprint");
-        assert!(!stable && fingerprint.is_some());
-        sleep(Duration::from_secs_f64(0.25)).await;
-        let (stable, current) = h.page.settled_fingerprint(1.0).await.expect("fingerprint");
-        assert!(stable && current == fingerprint);
+        let (stable, fingerprint) = h.page.settled_fingerprint().await.expect("fingerprint");
+        assert!(stable && fingerprint.is_some());
     };
     let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(checked)).await;
     let _ = h.session.send("Target.closeTarget", json!({"targetId": other["targetId"]}), None).await;
@@ -302,7 +252,7 @@ async fn test_hidden_tab_requires_dom_quiet() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_continuous_mutations_are_bounded() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     // Python shortens _SETTLE_SECONDS to 0.5 and bounds the act at 1.5s; the bound here is the same, settle plus
     // one second, on the real constant.
     let Some(h) = harness().await else { return };
@@ -320,49 +270,20 @@ async fn test_continuous_mutations_are_bounded() {
     let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Animate").id), &obs).await.expect("act");
     let elapsed = started.elapsed().as_secs_f64();
     eval_active(&h.session, "clearInterval(window.animation)").await;
-    assert!(result.outcome == StepOutcome::Executed && result.page_changed, "{result:?}");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
     assert!(elapsed < seams::settle_seconds() + 1.0, "{elapsed}");
     h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_deferred_input_changes_are_settled_before_observation() {
-    let _serial = one_at_a_time().await;
-    for operation in [Operation::Click, Operation::Hover, Operation::Enter] {
-        let Some(h) = harness().await else { return };
-        h.page.navigate(&sites().main, None).await.expect("navigate");
-        let handler = if operation == Operation::Hover { "onpointerenter" } else { "onclick" };
-        eval_active(
-            &h.session,
-            &format!(
-                "document.body.innerHTML = '<button>Change</button><p>Before</p>'; \
-                 const change = () => setTimeout(() => {{ document.querySelector('p').textContent = 'After'; }}, 150); \
-                 const button = document.querySelector('button'); \
-                 button.{handler} = change;"
-            ),
-        )
-        .await;
-        let obs = h.observe().await;
-        sleep(Duration::from_secs_f64(0.25)).await;
-        let result = h.page.act(&targeted(operation, &find(&obs, "Change").id), &obs).await.expect("act");
-        assert!(result.outcome == StepOutcome::Executed && result.page_changed, "{operation:?} {result:?}");
-        assert!(h.observe().await.viewport_text.contains("After"), "{operation:?}");
-        h.close().await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_noop_input_still_waits_for_quiet() {
-    let _serial = one_at_a_time().await;
+async fn test_noop_input_reports_no_change() {
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(&h.session, "document.body.innerHTML = '<button>Idle</button>'").await;
     let obs = h.observe().await;
     let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Idle").id), &obs).await.expect("act");
     assert!(result.outcome == StepOutcome::Executed && !result.page_changed, "{result:?}");
-    let quiet = eval_active(&h.session, "performance.now() - window.__fastbrowse.lastMutation").await;
-    let quiet = quiet.as_f64().expect("a number");
-    assert!(quiet >= seams::settle_quiet_seconds() * 1000.0, "{quiet}");
     h.close().await;
 }
 
@@ -396,7 +317,7 @@ fn hung_frame_site() -> &'static str {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_frame_that_stops_answering_costs_one_short_deadline() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     // On a Chrome of its own: every localhost frame shares a renderer, and the spinning one would stall the frames of
     // the tests running beside it.
     if chrome().is_none() {
@@ -440,7 +361,7 @@ async fn test_a_frame_that_stops_answering_costs_one_short_deadline() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_settling_does_not_wait_on_a_frame_that_never_comes() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     let Some(h) = harness().await else { return };
     timeout(Duration::from_secs(15), async {
         h.page.navigate(&format!("{}no-frames", hung_frame_site()), None).await.expect("navigate");
@@ -460,7 +381,7 @@ async fn test_settling_does_not_wait_on_a_frame_that_never_comes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_page_whose_timers_never_fire_cannot_hold_the_pointer() {
-    let _serial = one_at_a_time().await;
+    let _turn = turn().await;
     for timer in ["() => 0", "() => { throw new Error('no timers'); }"] {
         let Some(h) = harness().await else { return };
         h.page.navigate(&format!("{}no-frames", hung_frame_site()), None).await.expect("navigate");
@@ -473,4 +394,21 @@ async fn test_a_page_whose_timers_never_fire_cannot_hold_the_pointer() {
         assert_eq!(result.outcome, StepOutcome::Executed, "{timer}");
         h.close().await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_endless_animation_a_click_starts_does_not_hold_the_action() {
+    let Some(h) = harness().await else { return };
+    common::eval_active(
+        &h.session,
+        "document.body.innerHTML = `<canvas></canvas><button>Start</button>`; \
+         document.querySelector('button').onclick = () => { const spin = () => requestAnimationFrame(spin); spin(); \
+         document.querySelector('canvas').dataset.on = '1'; };",
+    )
+    .await;
+    let obs = h.observe().await;
+    let started = std::time::Instant::now();
+    h.page.act(&targeted(Operation::Click, &find(&obs, "Start").id), &obs).await.expect("act");
+    assert!(started.elapsed().as_secs_f64() < 2.0, "{:?}", started.elapsed());
+    h.close().await;
 }

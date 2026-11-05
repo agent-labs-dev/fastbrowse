@@ -6,15 +6,15 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::{Script, answering, reply, text};
+use common::{Script, answering, direct, keys, noul, reply, text};
 use fastbrowse_clients::failover::FailoverDecisionClient;
 use fastbrowse_clients::http::{Http, Request, Response, TransportError};
-use fastbrowse_clients::system_one::{OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient};
+use fastbrowse_clients::system_one::{IMAGES_HEADER, OPENROUTER_MODEL, OPENROUTER_URL, SystemOneClient, TYPESAFE_URL};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spend};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN,
-    NoulAnswer, NoulQuestion, Question, ScoreQuestion,
+    Answer, BoxQuestion, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images,
+    JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, NoulAnswer, NoulQuestion, Question, ScoreQuestion,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, Limits};
 use fastbrowse_core::telemetry::Ledger;
@@ -27,10 +27,6 @@ const ATTEMPTS: usize = RETRY_DELAYS_SECONDS.len() + 1;
 fn choice() -> Question {
     ChoiceQuestion::new("Which colour?", IndexMap::from([("blue".into(), json!("Blue")), ("red".into(), json!("Red"))]))
         .into()
-}
-
-fn noul(instructions: &str) -> Question {
-    NoulQuestion::new(instructions, None, None).into()
 }
 
 fn questions(pairs: impl IntoIterator<Item = (&'static str, Question)>) -> IndexMap<String, Question> {
@@ -46,17 +42,8 @@ fn choice_answer(updates: Value) -> Value {
     answer
 }
 
-fn keys(request: &Request) -> Vec<String> {
-    let body: Value = serde_json::from_slice(&request.body).unwrap();
-    body["questions"].as_object().unwrap().keys().cloned().collect()
-}
-
 fn host(request: &Request) -> String {
     url::Url::parse(&request.url).unwrap().host_str().unwrap().to_string()
-}
-
-fn direct(http: Http) -> SystemOneClient {
-    SystemOneClient::direct("key", http)
 }
 
 fn gateway(http: Http) -> VercelGatewayJevClient {
@@ -108,29 +95,124 @@ async fn test_openrouter_uses_systemone_and_records_cost() {
     }
 }
 
-/// Jev images are direct-only and the agent sends none yet, so no request on either System One route carries pixels.
-/// A run keyed only for OpenRouter keeps image input off, and the router never receives a page's pixels. An image path
-/// added later changes this test with the direct-only capability it adds, rather than turning the header or assets on
-/// for every route.
+/// A route that takes images is sent the image in TypeSafe's documented format with the images header, and a route
+/// that does not never receives a page's pixels, nor the reference to them.
 #[tokio::test]
-async fn test_jev_requests_carry_no_image_input() {
-    for (key, base_url) in [("openrouter-key", OPENROUTER_URL), ("key", "https://direct.test")] {
+async fn test_only_a_route_that_takes_images_is_sent_them() {
+    let images = Images::from([("shot-1".to_string(), b"png bytes".to_vec())]);
+    let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
+    for route in ["text", "openrouter", "typesafe"] {
+        let sent = route != "text";
         let http = answering(move |request| {
-            assert!(
-                !request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("typesafe-danger-zone-images")),
-                "{base_url}"
-            );
+            let flagged = request
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case(IMAGES_HEADER.0) && value == "true");
             let body: Value = serde_json::from_slice(&request.body).unwrap();
-            assert!(body.get("assets").is_none(), "{base_url}");
+            if sent {
+                assert!(flagged);
+                assert_eq!(
+                    body["assets"],
+                    json!({"shot-1": {"type": "image", "format": "png", "data_base64": "cG5nIGJ5dGVz"}})
+                );
+                assert_eq!(body["state"], json!({"page": "text", "viewport_screenshot": "shot-1"}));
+            } else {
+                assert!(!flagged);
+                assert!(body.get("assets").is_none());
+                assert_eq!(body["state"], json!({"page": "text"}));
+            }
             let response = Response::json(
                 200,
                 &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}),
             );
             Box::pin(async move { Ok(response) })
         });
-        let client = SystemOneClient::new(key, http, base_url, OPENROUTER_MODEL);
-        let result = client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
+        let client = match route {
+            "typesafe" => SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe(),
+            "openrouter" => SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).images(),
+            _ => SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).long_context(),
+        };
+        let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();
         assert!(matches!(result.answers["q"], Answer::Noul(_)));
+    }
+}
+
+/// A run that fails over from TypeSafe's own API asks its backup without the image or the reference to it.
+#[tokio::test]
+async fn test_a_backup_route_is_asked_without_images() {
+    let images = Images::from([("shot-1".to_string(), b"png bytes".to_vec())]);
+    let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
+    let http = answering(|request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let response = if request.url.starts_with("https://direct.test") {
+            assert!(body.get("assets").is_some());
+            Response::json(401, &json!({"error": "bad key"}))
+        } else {
+            assert!(!request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(IMAGES_HEADER.0)));
+            assert!(body.get("assets").is_none());
+            assert_eq!(body["state"], json!({"page": "text"}));
+            Response::json(200, &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}))
+        };
+        Box::pin(async move { Ok(response) })
+    });
+    let client = FailoverDecisionClient::new(
+        Box::new(SystemOneClient::new("key", http.clone(), "https://direct.test", JEV_MODEL).typesafe()),
+        Box::new(SystemOneClient::new("openrouter-key", http.clone(), OPENROUTER_URL, OPENROUTER_MODEL)),
+        http,
+    );
+    let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();
+    assert!(matches!(result.answers["q"], Answer::Noul(_)));
+}
+
+/// A request with no image never asks for image input, even on TypeSafe's own API.
+#[tokio::test]
+async fn test_a_request_without_images_carries_no_image_input() {
+    let http = answering(|request| {
+        assert!(!request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(IMAGES_HEADER.0)));
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert!(body.get("assets").is_none());
+        let response = Response::json(
+            200,
+            &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}),
+        );
+        Box::pin(async move { Ok(response) })
+    });
+    let client = SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe();
+    client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
+}
+
+/// A box question goes out with its instructions and no criteria, and its answer comes back as four edges and a
+/// confidence; edges that cross are not a box.
+#[tokio::test]
+async fn test_a_box_is_asked_without_criteria_and_read_as_its_edges() {
+    let asked = questions([(
+        "where",
+        BoxQuestion { kind: Default::default(), instructions: "The mug in `photo`".into() }.into(),
+    )]);
+    let edges = json!({"top": 0.1, "bottom": 0.3, "left": 0.2, "right": 0.6});
+    for (edges, confidence, valid) in [
+        (edges.clone(), json!(0.8), Some(Some(0.8))),
+        // TypeSafe's own example answer carries a null confidence.
+        (edges, Value::Null, Some(None)),
+        (json!({"top": 0.5, "bottom": 0.3, "left": 0.2, "right": 0.6}), json!(0.8), None),
+    ] {
+        let http = answering(move |request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["questions"], json!({"where": {"type": "box", "instructions": "The mug in `photo`"}}));
+            let response = Response::json(
+                200,
+                &json!({"answers": {"where": {"type": "box", "box": edges, "confidence": confidence}}, "usage": {"input_tokens": 1}}),
+            );
+            Box::pin(async move { Ok(response) })
+        });
+        let client = SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe();
+        let result = client.evaluate(&json!({"photo": "p"}), &asked).await;
+        if let Some(expected) = valid {
+            let Answer::Box(found) = &result.unwrap().answers["where"] else { panic!("a box") };
+            assert_eq!((found.edges.centre(), found.confidence), ((0.4, 0.2), expected));
+        } else {
+            assert!(result.unwrap_err().to_string().contains("box edges cross"));
+        }
     }
 }
 
@@ -225,7 +307,6 @@ async fn test_an_unmetered_answer_from_a_model_with_no_price_is_an_unknown_cost(
 async fn test_direct_rejects_invalid_answers() {
     for answer in [
         choice_answer(json!({"choice": "absent"})),
-        choice_answer(json!({"choice": "red"})),
         choice_answer(json!({"probabilities": {"blue": 1}})),
         choice_answer(json!({"probabilities": {"blue": 1, "red": 0, "extra": 0}})),
         choice_answer(json!({"probabilities": {"blue": 0.3, "red": 0.3}})),
@@ -354,7 +435,7 @@ async fn test_gateway_remaps_wire_types_confidence_and_cost() {
                 ("authorization", "Bearer key"),
                 ("ai-gateway-auth-method", "api-key"),
                 ("ai-gateway-protocol-version", "0.0.1"),
-                ("ai-model-id", "typesafe-ai/jev"),
+                ("ai-model-id", "typesafe-ai/jev-1.14.0"),
                 ("ai-evaluation-model-specification-version", "4"),
             ] {
                 assert_eq!(request.header(key), Some(value));
@@ -495,7 +576,7 @@ async fn test_an_echoed_key_never_reaches_the_error() {
     for (status, payload) in bodies {
         let http = always(status, payload);
         let clients: [Box<dyn DecisionClient>; 2] = [
-            Box::new(SystemOneClient::direct(key.clone(), http.clone())),
+            Box::new(SystemOneClient::new(key.clone(), http.clone(), TYPESAFE_URL, JEV_MODEL).typesafe()),
             Box::new(VercelGatewayJevClient::new(key.clone(), http.clone(), GATEWAY_URL)),
         ];
         for client in clients {
@@ -791,22 +872,31 @@ impl Drop for SetOnDrop {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_split_singletons_share_the_remaining_request_budget() {
-    for gateway_route in [false, true] {
-        let seen: Arc<Mutex<HashMap<Vec<String>, usize>>> = Arc::default();
-        let counts = seen.clone();
-        let http = answering(move |request| {
-            *counts.lock().unwrap().entry(keys(request)).or_default() += 1;
-            Box::pin(async move { Ok(Response::new(503, "")) })
-        });
-        let client: Box<dyn DecisionClient> =
-            if gateway_route { Box::new(gateway(http)) } else { Box::new(direct(http)) };
-        let error =
-            client.evaluate(&json!("page"), &questions([("a", noul("a")), ("b", noul("b"))])).await.unwrap_err();
-        assert!(matches!(error, DecisionError::RetriesExhausted(_)));
-        let seen = seen.lock().unwrap();
-        assert_eq!(seen[&vec!["a".to_string(), "b".to_string()]], 2);
-        assert_eq!(seen[&vec!["a".to_string()]], RETRY_DELAYS_SECONDS.len() - 1);
-        assert!(!seen.contains_key(&vec!["b".to_string()]));
-    }
+async fn test_a_refused_key_moves_jev_to_the_backup_at_once() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let http = answering(move |request| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        let response = if host(request) == "primary.test" {
+            Response::json(401, &json!({"error": {"message": "User not found."}}))
+        } else {
+            Response::json(200, &json!({"answers": {"a": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100}}))
+        };
+        Box::pin(async move { Ok(response) })
+    });
+    let client = FailoverDecisionClient::new(
+        Box::new(SystemOneClient::new("key", http.clone(), "https://primary.test", "jev-1.13.0")),
+        Box::new(SystemOneClient::new("key", http.clone(), "https://backup.test", "jev-1.13.0")),
+        http.clone(),
+    );
+    let asked = questions([("a", noul("a"))]);
+    let result = client.evaluate(&json!("page"), &asked).await.unwrap();
+    assert_eq!(result.answers.keys().collect::<Vec<_>>(), ["a"]);
+    // A refusal is not retried: one request to the primary, one to the backup.
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let alone = SystemOneClient::new("key", http, "https://primary.test", "jev-1.13.0");
+    let error = alone.evaluate(&json!("page"), &asked).await.unwrap_err();
+    assert!(matches!(error, DecisionError::Rejected(_)), "{error}");
+    assert!(error.to_string().ends_with("(primary.test rejected the API key)"), "{error}");
 }

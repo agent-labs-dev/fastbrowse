@@ -6,15 +6,25 @@ types generated for the JavaScript SDK are read from one definition.
 
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from fastbrowse.models import Authorization, BrowserEvent, Image, Limits, LocalChrome, SecretRef, StepEvent
+from fastbrowse.models import (
+    Authorization,
+    BrowserEvent,
+    CostBreakdown,
+    Image,
+    Limits,
+    LocalChrome,
+    SecretRef,
+    StepEvent,
+    StepResult,
+)
 
 # Changes only when the wire format does, so it is not the package version: a release that leaves the
 # messages alone leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # Strict, because JSON-RPC echoes the id back and a `true` read as 1 would answer a request nobody sent.
 type RequestId = StrictInt | StrictStr
@@ -70,9 +80,26 @@ class Response(BaseModel):
     result: Any
 
 
+class CancellationReceipt(BaseModel):
+    """What a cancelled run did before it stopped: the `data` of its `cancelled` error.
+
+    A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+    whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+    `unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent
+    was never reported, so it is not among the steps.
+    """
+
+    # Redacted as the step events were.
+    steps: tuple[StepResult, ...]
+    cost: CostBreakdown
+    recordings: tuple[Path, ...]
+
+
 class Error(BaseModel):
     code: ErrorCode
     message: str
+    # What a cancelled run had done, on the `cancelled` error only; absent from every other.
+    data: CancellationReceipt | None = Field(default=None, exclude_if=lambda data: data is None)
 
 
 class ErrorResponse(BaseModel):
@@ -115,8 +142,12 @@ class RunAttachment(Params):
     content: Base64Bytes
 
 
+U32 = Annotated[int, Field(ge=0, le=2**32 - 1)]
+"""A Rust `u32`."""
+
+
 class RunParams(Params):
-    """One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+    """One run: the run's arguments, and what the server needs to talk to the client about it.
 
     The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
     environment the server inherited.
@@ -124,6 +155,12 @@ class RunParams(Params):
 
     run_id: str = Field(min_length=1)
     """Chosen by the client, and carried by every message the server sends about this run."""
+    secrets: tuple[SecretRef, ...] = ()
+    """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
+    frames: bool = False
+    """Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed."""
+    until: bool = False
+    """Whether the client holds a check of its own. The check stays there: the server asks it with `run/until`."""
     task: str
     start: str | None = None
     context: str | None = None
@@ -134,15 +171,10 @@ class RunParams(Params):
     authorization: Authorization | None = None
     output_schema: dict[str, Any] | None = None
     """The shape of `RunResult.data`, as JSON Schema draft 2020-12 with an object at its root."""
-    secrets: tuple[SecretRef, ...] = ()
-    """The secrets the client holds, by name and origin. A value is asked for with `secrets/resolve`."""
-    frames: bool = False
-    """Send the active tab as `run/frame` notifications while the run goes on. Off, the page is never filmed."""
-    until: bool = False
-    """Whether the client holds a check of its own. The check is a function and stays there: the server asks
-    it with `run/until`."""
     downloads: Path | None = None
     record: Path | None = None
+    recipe: Path | None = None
+    save_recipe: Path | None = None
     cursor: bool | None = None
     """Draw the agent's cursor over a visible local or attached Chrome with the Cua Driver. Unset draws it wherever
     it can be placed, true also brings the window to the front for it, false turns it off. It is skipped, with the
@@ -153,15 +185,23 @@ class RunParams(Params):
     """Which local Chrome, and how. A headed window or a kept profile implies `local`."""
     cloud_profile: str | None = None
     cdp_url: str | None = None
-    cdp_port: int | None = None
+    cdp_port: int | None = Field(default=None, ge=0, le=65535)
     attach: bool = False
     target_match: str | None = None
     foreground: bool = False
     """Bring the run's tab and its browser window to the front, to watch it. Otherwise a visible window stays in
     the background."""
     proxy_country: str | None = None
-    viewport: tuple[int, int] | None = None
-    cloud_allow_resizing: bool = False
+    viewport: tuple[U32, U32] | None = None
+    cloud_extensions: tuple[str, ...] = ()
+    cloud_timeout_minutes: U32 | None = None
+    """How long a cloud browser may live; 60 minutes when none is given."""
+    allowed_origins: tuple[str, ...] | None = None
+    """The only origins the run may open, each exact."""
+    fetch: bool = False
+    """Read every page over HTTP and start no browser."""
+    browser: bool = False
+    """Start a browser from the first step, rather than reading over HTTP until the task needs one."""
 
 
 class RunCancelParams(Params):

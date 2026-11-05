@@ -1,32 +1,30 @@
-//! What one run keeps between steps: `_RunState` and the small records it holds, and the stops a step can raise.
+//! What one run keeps between steps, and the stops a step can raise.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::future::Future;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use fastbrowse_core::decision::{DecisionError, NoulQuestion};
-use fastbrowse_core::llm::{Generation, LLMError};
-use fastbrowse_core::models::{
-    Attachment, Authorization, Evidence, Operation, Status, StepChoice, StepResult, WallKind,
-};
-use fastbrowse_core::page::{BrowserError, Control, Observation};
+use fastbrowse_core::decision::DecisionError;
+use fastbrowse_core::llm::LLMError;
+use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
+use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
-use serde::Serialize;
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
 
-use super::helpers::{EvidenceKey, LinkKey};
-use crate::comparison::NumericComparison;
+use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
-use crate::memory::{Fact, Notes};
-use crate::planner::{OutputTarget, Plan};
-use crate::policy::{HistoryEntry, RelevanceCache};
-use crate::retrieval::{AnswerCorrection, ComposedAnswer, TallyReader};
-use crate::verification::LLMVerdict;
+use crate::memory::{Fact, Notes, address, fact_id};
+use crate::policy::{Decision, HistoryEntry, RelevanceCache};
+use crate::retrieval::ComposedAnswer;
+use crate::retrieval::whole_page_facts;
 
-/// How many recovery records the next recovery is shown.
-pub(crate) const RECOVERY_RECORDS: usize = 4;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputIntent {
+    Unknown,
+    Text,
+    Image,
+    TextAndImage,
+    CarriedOut,
+}
 
 /// A run ends here, as what it is.
 #[derive(Debug, Clone)]
@@ -44,7 +42,44 @@ impl Stop {
     }
 }
 
-/// The next action is authorized but not confidently the right one: a case for recovery, not for the caller.
+/// What a fill or select has written into one document: the fields it has written to, and each field with the
+/// exact text or selection it received. A widget that redraws on every keystroke (a date picker's grid) changes the
+/// page while the text lands nowhere, so the pair is what tells a repeat write from a new one.
+///
+/// A field is known by what the page says it is, not by its element: a form that rejects a submit can draw its fields
+/// again, and the new element is still the field the run already wrote.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Written {
+    fields: HashSet<String>,
+    values: HashSet<String>,
+}
+
+impl Written {
+    fn field(control: &Control) -> String {
+        serde_json::json!([control.role, control.label, control.context, control.input_name]).to_string()
+    }
+
+    /// One field with one value, kept as a single key because a document holds many of both.
+    fn key(control: &Control, value: &str) -> String {
+        format!("{}\u{0}{value}", Self::field(control))
+    }
+
+    pub(crate) fn record(&mut self, control: &Control, value: &str) {
+        self.fields.insert(Self::field(control));
+        self.values.insert(Self::key(control, value));
+    }
+
+    /// Whether this field has received any value.
+    pub(crate) fn wrote(&self, control: &Control) -> bool {
+        self.fields.contains(&Self::field(control))
+    }
+
+    pub(crate) fn holds(&self, control: &Control, value: &str) -> bool {
+        self.values.contains(&Self::key(control, value))
+    }
+}
+
+/// The step cannot go on as Jev picked it: Jev is asked again, not the caller.
 #[derive(Debug, Clone)]
 pub(crate) struct Unsure {
     pub reason: String,
@@ -58,7 +93,7 @@ impl Unsure {
     }
 }
 
-/// What can cut a step short: Python's `_Stop`, `_Unsure` and the errors the run catches by class.
+/// A stop, recovery request or typed failure that interrupts the current step.
 #[derive(Debug, Clone)]
 pub(crate) enum Flow {
     Stop(Stop),
@@ -109,527 +144,364 @@ impl From<LLMError> for Flow {
     }
 }
 
-impl Flow {
-    /// Whether this is an `LLMError` a caller catches, as Python's `except LLMError` does: never a budget stop.
-    pub fn is_llm(&self) -> bool {
-        matches!(self, Flow::Agent(AgentError::Llm(_)))
-    }
-}
-
 pub(crate) type Step<T = ()> = Result<T, Flow>;
 
+/// What says the site failed on a page: its HTTP status, the browser's navigation error, or Jev reading the page.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct HttpFailure {
-    pub url: String,
-    pub status: i64,
+pub(crate) enum FailureCause {
+    Http(i64),
+    /// The browser could not open the address, after its own retries: the error it gave.
+    Navigation(String),
+    /// Jev judged that the page reports the site failed to deliver what was asked, such as an error shown in place
+    /// of search results, a maintenance notice or a load that never finished.
+    Reported,
 }
 
-impl HttpFailure {
+/// A site failure on one address, stated to Jev and the done check while the run is on it, and the status a run
+/// ends with when recovery runs out there.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SiteFailure {
+    pub url: String,
+    pub cause: FailureCause,
+    /// The run's step count when the failure was first seen, so how long it has stood is stated in steps.
+    pub since: usize,
+}
+
+impl SiteFailure {
+    pub fn http(url: &str, status: i64, since: usize) -> SiteFailure {
+        SiteFailure { url: url.to_string(), cause: FailureCause::Http(status), since }
+    }
+
     pub fn message(&self) -> String {
-        format!("HTTP {} at {} in this browser session; the cause is unknown.", self.status, self.url)
-    }
-
-    pub fn stop(&self) -> Stop {
-        let mut status = match self.status {
-            401 => Status::NeedsLogin,
-            403 => Status::Blocked,
-            _ => Status::Stuck,
-        };
-        if matches!(self.status, 408 | 419 | 429) || self.status >= 500 {
-            status = Status::Unavailable;
-        }
-        Stop::new(status, format!("Could not complete the task after {}", self.message()))
-    }
-}
-
-/// One action on one target, from one page state: how often it was taken.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Attempts {
-    pub count: i64,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TransactionCandidate {
-    pub question: NoulQuestion,
-    pub from_url: String,
-    pub landed_url: Option<String>,
-    pub landed_status: Option<i64>,
-    pub committing: Option<bool>,
-    pub outcome_read: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct ObservedLink {
-    pub source: String,
-    pub title: String,
-    pub label: String,
-    pub url: String,
-}
-
-/// Whether the page was on the guess, kept per browser history entry and per read, never per address.
-///
-/// A form or single-page app can keep its search outside the address, so a run that left a guessed search and set the
-/// same search up itself arrived back at the guessed address. The browser's own history says which page the run is
-/// on: Back, Forward and a reload return to an entry, and its lineage with it. A read is judged by what the run was
-/// doing when it read, so a quote read on the guess stays guessed.
-///
-/// A hold `Notes::discredit` keeps asks the lineage again each time it is checked, as Python's closure over the run's
-/// one `_Lineage` does, so the readings and addresses are shared by every clone rather than copied: a snapshot kept a
-/// reading held after the run read the same page again off the guess.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Lineage {
-    /// Each history entry, by whether the run was on the guess when the entry was made.
-    pub entries: HashMap<String, bool>,
-    /// Each history entry's address when last observed, so a site action that moved it there is told apart.
-    pub entry_addresses: HashMap<String, String>,
-    /// Each address by the lineage of the entry last observed there, for a quote with no recorded reading.
-    addresses: Arc<Mutex<HashMap<String, bool>>>,
-    /// Each reading, by source address and capture, by whether it was read on the guess.
-    captures: Arc<Mutex<HashMap<(String, String), bool>>>,
-}
-
-fn locked<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
-    shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-impl Lineage {
-    pub fn read(&mut self, capture: &str, sources: &[String], guessing: bool) {
-        // The same page read again off the guess is the page the run reached itself, so that reading stands. Text
-        // alone does not name a page: another address drawing identical text released the guessed one's hold.
-        let mut captures = locked(&self.captures);
-        for source in sources {
-            let key = (fastbrowse_core::addresses::search_address(source), capture.to_string());
-            if guessing {
-                captures.entry(key).or_insert(true);
-            } else {
-                captures.insert(key, false);
+        match &self.cause {
+            // A 403 is a refusal of access, and "the cause is unknown" says less than the status does. The status alone
+            // does not say whether it is a bot check or a sign-in that credentials pass, so it names no wall: the page's
+            // own classification names a bot check. Every other status keeps the recorded wording, so replaying
+            // recorded Python traffic still matches byte for byte.
+            FailureCause::Http(403) => format!(
+                "HTTP 403 at {}: the site refused this browser session, which may be an access or bot check or a sign-in it requires.",
+                self.url
+            ),
+            FailureCause::Http(status) => {
+                format!("HTTP {status} at {} in this browser session; the cause is unknown.", self.url)
+            }
+            FailureCause::Navigation(error) => {
+                format!("opening {} failed in this browser session: {error}.", self.url)
+            }
+            FailureCause::Reported => {
+                format!("the page at {} reported that the site failed to deliver what was asked.", self.url)
             }
         }
     }
 
-    /// Whether this reading, by search address and capture, was taken on the guess.
-    pub fn reading(&self, address: &str, capture: &str) -> Option<bool> {
-        locked(&self.captures).get(&(address.to_string(), capture.to_string())).copied()
+    /// Whether the failure can clear by itself, so trying the address again is worth offering.
+    pub fn transient(&self) -> bool {
+        self.stop().status == Status::Unavailable
     }
 
-    /// Whether the entry last observed at this search address was on the guess.
-    pub fn address(&self, address: &str) -> Option<bool> {
-        locked(&self.addresses).get(address).copied()
+    /// A status that can clear with time, a navigation the browser could not complete and a failure the page reports
+    /// all leave the site unavailable for now; the same run later may pass.
+    pub fn stop(&self) -> Stop {
+        let status = match self.cause {
+            FailureCause::Http(401) => Status::NeedsLogin,
+            FailureCause::Http(403) => Status::Blocked,
+            FailureCause::Http(status) if matches!(status, 408 | 419 | 429) || status >= 500 => Status::Unavailable,
+            FailureCause::Http(_) => Status::Stuck,
+            FailureCause::Navigation(_) | FailureCause::Reported => Status::Unavailable,
+        };
+        Stop::new(status, format!("Could not complete the task after {}", self.message()))
     }
-
-    pub fn set_address(&mut self, address: String, guessing: bool) {
-        locked(&self.addresses).insert(address, guessing);
-    }
-}
-
-/// Checked answers by task, plan, answer and transaction evidence: the answer held, its missing outputs and
-/// corrections.
-pub(crate) type AnswerChecks =
-    HashMap<(String, String, String, Vec<String>), (Option<ComposedAnswer>, Vec<String>, Vec<AnswerCorrection>)>;
-
-pub(crate) type ReadKey = (String, String, Vec<String>, Vec<String>);
-/// One action on its targets, from one page state: the key both the cycle count and the no-op memory are kept by.
-pub(crate) type Signature = (Operation, Option<String>, Option<String>, String);
-/// An operation, the id and description of the control it acts on, and the address of the page.
-pub(crate) type Commit = (Operation, Option<String>, String, String);
-
-/// A spawned task whose result any number of waiters can read, as an `asyncio.Task` can be awaited by many.
-///
-/// Waiting never cancels it, as `asyncio.shield` does not; only [`Spawned::cancel`] does, and a task cancelled
-/// before it finished reports no result.
-pub(crate) struct Spawned<T: Clone + Send + Sync + 'static> {
-    handle: Option<JoinHandle<()>>,
-    result: watch::Receiver<Option<Result<T, AgentError>>>,
-}
-
-impl<T: Clone + Send + Sync + 'static> Spawned<T> {
-    pub fn spawn<F>(future: F) -> Spawned<T>
-    where
-        F: Future<Output = Result<T, AgentError>> + Send + 'static,
-    {
-        let (sender, result) = watch::channel(None);
-        let handle = tokio::spawn(async move {
-            let outcome = future.await;
-            let _ = sender.send(Some(outcome));
-        });
-        Spawned { handle: Some(handle), result }
-    }
-
-    /// The result, once it finished; None while it runs or after it was cancelled first.
-    pub fn result(&self) -> Option<Result<T, AgentError>> {
-        self.result.borrow().clone()
-    }
-
-    pub fn done(&self) -> bool {
-        self.result.borrow().is_some() || self.handle.as_ref().is_none_or(JoinHandle::is_finished)
-    }
-
-    /// The value of a task that finished without an error.
-    pub fn succeeded(&self) -> Option<T> {
-        self.result().and_then(Result::ok)
-    }
-
-    /// Wait for the result; None when the task was cancelled before it finished.
-    pub async fn wait(&self) -> Option<Result<T, AgentError>> {
-        let mut result = self.result.clone();
-        match result.wait_for(Option::is_some).await {
-            Ok(outcome) => outcome.clone(),
-            Err(_) => self.result(),
-        }
-    }
-
-    pub fn cancel(&self) {
-        if let Some(handle) = &self.handle {
-            handle.abort();
-        }
-    }
-}
-
-/// The task a shield was cancelled out of: Python's `CancelledError` reaching the waiter.
-pub(crate) fn cancelled() -> AgentError {
-    AgentError::Invalid("the task was cancelled".into())
 }
 
 pub(crate) struct RunState {
     pub task: String,
+    /// The recipe this run replays, while it has steps left to offer.
+    pub replay: Option<super::replay::Replay>,
+    /// The steps this run carried out, kept as a recipe a later run can replay.
+    pub recipe_log: Vec<fastbrowse_core::recipe::RecipeStep>,
+    /// Where the text of the fill being built came from, when a caller input or a stored secret gave it.
+    pub text_source: Option<fastbrowse_core::recipe::RecipeText>,
     /// The caller's background: shown beside the task, never read as what it asks for.
     pub context: Option<String>,
     pub inputs: IndexMap<String, String>,
     pub attachments: Vec<Attachment>,
     pub authorization: Authorization,
     pub ledger: Arc<Ledger>,
-    pub planning: Arc<Spawned<Generation<Plan>>>,
-    /// The plan's receipt reached the ledger as the plan arrived, so taking the plan must not record it again.
-    pub plan_billed: bool,
     pub notes: Notes,
-    pub finish_partitions: Vec<Plan>,
-    pub output_targets: IndexMap<String, OutputTarget>,
-    pub oversized_answer: bool,
-    pub read_source_sizes: IndexMap<String, i64>,
-    pub pending_collections: IndexMap<String, (String, Vec<Fact>)>,
-    pub partition_answers: IndexMap<String, ComposedAnswer>,
-    pub partial_answers: IndexMap<String, ComposedAnswer>,
-    pub partition_failures: HashMap<String, (Vec<String>, Vec<AnswerCorrection>)>,
-    pub recovered_outputs: HashSet<String>,
-    pub recovered_sources: HashSet<String>,
-    pub recovered_collections: HashSet<(String, Option<String>)>,
-    pub verified_answer: Option<ComposedAnswer>,
-    pub missing_answer_outputs: Vec<String>,
-    pub answer_corrections: Vec<AnswerCorrection>,
-    /// Verifier verdicts by the digest of the exact request that produced them, within this run.
-    pub verify_cache: HashMap<String, Generation<LLMVerdict>>,
     /// Bot-check documents this run has already reloaded once, so a challenge that survives is reported.
     pub challenge_reloads: HashSet<String>,
-    pub open_answer_outputs: Vec<String>,
-    pub rejected_answer_evidence: Option<BTreeSet<EvidenceKey>>,
-    pub answer_check_evidence: Option<String>,
-    pub answer_check_cache: AnswerChecks,
     pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
     pub choices: Vec<StepChoice>,
     pub history: Vec<HistoryEntry>,
-    pub http_failure: Option<HttpFailure>,
-    pub failed_links: IndexMap<LinkKey, HttpFailure>,
-    /// Repeated stale links survive intervening reads, which otherwise reset progress while the same click fails.
-    pub stale_links: HashMap<LinkKey, i64>,
-    pub pending_link: Option<LinkKey>,
+    pub site_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
-    /// The operation and control id recovery named, taken when Jev is still unsure of the next step.
-    pub directed: Option<(Operation, Option<String>)>,
-    /// An observed output section must be opened and read before another model chooses an action.
-    pub section_read: bool,
-    pub recovery_sections: HashSet<String>,
-    /// Guessed opening pages the run already left for the caller's start page, so it leaves each once.
-    pub left_guesses: HashSet<String>,
-    /// The commit an authorized run was last refused as unsure it is the one the task means.
-    pub unsure_commit: Option<Commit>,
-    /// That refused commit once recovery, shown the page and the task, named it as the next step. It covers the next
-    /// action only, on that control and page: anything later is asked about afresh.
-    pub confirmed_commit: Option<Commit>,
+    /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
+    /// next decision there.
+    pub picked: Option<(String, Decision)>,
     pub unchanged: i64,
-    /// Controls a fill or select has written, by document, so only a field's first new value counts as progress by
-    /// itself. A new document restarts control ids, and its fields would otherwise inherit the last page's writes.
-    pub written: HashMap<String, HashSet<String>>,
+    /// What a fill or select has written, by page address, so only a field's first new value counts as progress by
+    /// itself. A submit that loads the same address again is still the same form: a new document there does not make
+    /// its fields new.
+    pub written: HashMap<String, Written>,
     pub recoveries: i64,
-    pub recovered_requirements: HashSet<String>,
-    pub terminal_verification_attempted: bool,
-    /// Steps, by `step_key`, whose reader a finish refused for an unread requirement asked once more.
-    pub unread_rereads: HashSet<String>,
-    /// The `step_key` of the capture the last read read.
-    pub read_step: Option<String>,
     pub blank_opening_checked: bool,
+    /// Blank states waited out during this loading episode, cleared once a readable page appears.
+    pub blank_waited: HashSet<(String, String)>,
     /// The one renderer hang this run may recover without risking a replay of the action.
     pub hung_page_reopened: bool,
-    pub recovery_log: VecDeque<String>,
-    /// `history.len()` when a tripwire last recovered the run. Evidence a recovery already acted on is spent:
-    /// `history` only grows, so a repetition count that reached the limit once would hold forever.
-    pub recovered_at: usize,
-    /// How often each action was taken from each page state, which is how a cycle is told from progress.
-    pub attempts: HashMap<Signature, Attempts>,
     pub last_page: Option<(String, String)>,
-    /// The address of a sign-in wall an access inspection read instead of stopping on.
-    pub passed_wall: Option<String>,
-    /// Each page state and the action count when it was first reached.
+    /// The source of the latest navigation, scoped to the destination that followed it.
+    pub navigation_from: Option<((String, String), Observation)>,
+    /// Jev's sign-in readings stay with the document they described, not with every later route.
+    pub login_readings: HashMap<(String, String), f64>,
+    /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
+    /// since is going round, not forward.
     pub reached: HashMap<String, usize>,
-    /// Source evidence already available at each action state; repeated quotes cannot renew recovery there.
-    pub reached_with_evidence: HashMap<String, BTreeSet<EvidenceKey>>,
+    /// Reads that added evidence, counted over the run.
+    pub evidence_reads: usize,
+    /// The action whose page change the next observation judges: a new page state, or one revisited after new
+    /// evidence, is progress.
+    pub landing: Option<Withheld>,
+    /// The actions that moved nothing since the last one that did. Done again they do the same, so asks leave them out;
+    /// one the browser refused as covered is left out only until a performed action changes the page.
+    pub idle: Vec<Idle>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
-    pub ready_plan: Option<Plan>,
-    /// Addresses this run built from the task rather than reached by clicking.
-    pub invented: HashSet<String>,
-    /// The page is an invented address, or one the page itself moved to from one.
-    pub guessing: bool,
-    pub lineage: Lineage,
-    /// The last action itself took the page elsewhere, as the page reports it; read by the next observation only.
-    pub moved_by_action: bool,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
-    /// An interaction changed the page after the notes last read it.
-    pub owes_read: bool,
-    /// This page has been read since it last changed.
-    pub read_here: bool,
-    /// Page states where an unsure pick has been acted on instead of recovering; the next one there recovers.
-    pub tried_unsure: HashSet<String>,
-    /// The fields, settings and submit controls each address has shown.
-    pub form_controls_at: HashMap<String, HashSet<String>>,
-    /// Attempted reads by document, exact content and outstanding requirements, independent of URL edits.
-    pub reads: HashSet<ReadKey>,
-    /// Documents whose pagination records were read outside the ordinary read cache.
-    pub record_read_documents: HashSet<String>,
-    /// Reads by document, page state and outstanding requirements that added no fact.
-    pub barren: HashMap<ReadKey, i64>,
-    /// Page states, by `seen`, the run acted on without reading them: Jev judged them not worth a read then.
-    pub passed: HashSet<String>,
-    /// Every action since the run was last on a passed state only typed into a field on it.
-    pub typed_on_passed: bool,
-    /// The page state, by `seen`, the last action was taken on.
-    pub acted_on: Option<String>,
-    /// By page state, each requirement a read of it evidenced and the capture it read.
-    pub evidenced_at: HashMap<String, IndexMap<String, String>>,
-    /// By page state, the capture its last read read, evidence or not.
-    pub read_at: HashMap<String, String>,
-    /// Open this page's next page, set when the reader says a list the run needs goes on past the page it read.
-    pub next_page: bool,
-    /// The page state a next-page click left, so the page it opens is read without a decision.
-    pub paged_from: Option<String>,
-    /// Next pages opened by code this run.
-    pub pages: i64,
-    /// Every unresolved requirement needs the entire list, so intermediate pages can be read concurrently.
-    pub through_end: bool,
-    pub tally_readers: Vec<TallyReader>,
-    pub comparisons: IndexMap<String, NumericComparison>,
-    pub paging_failed: bool,
+    /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
+    pub read_documents: HashMap<(String, String), bool>,
+    /// Screenshots that a successful image read found held no answer for this run's task.
+    pub unanswered_images: HashSet<String>,
+    /// The page the last action changed, until the next observation shows it is still the page in view.
+    pub changed_page: Option<(String, String)>,
+    /// Jev's latest word is that this page reports the site failed, so nothing on it is read as evidence.
+    pub page_failed: bool,
+    /// Jev said a read's answer must be composed, so the run ends on the LLM's writing of the notes.
+    pub compose: bool,
+    /// A caller's schema is filled after DONE, so its result is not a selected prose answer yet.
+    pub extraction_pending: bool,
+    /// A rejected draft is feedback, never a new page fact or evidence of progress.
+    pub composition_feedback: Option<String>,
+    pub composition_partial: Option<(ComposedAnswer, Vec<(Fact, bool)>)>,
+    /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
+    /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
+    pub read_whole: Vec<Capture>,
+    /// A DONE was refused because the task is something to carry out, not to be told.
+    pub to_carry_out: bool,
+    pub output_intent: OutputIntent,
+    /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
+    pub appearance: bool,
+    /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
+    pub fetched: HashSet<String>,
+    /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
+    pub committing: bool,
+    /// Pages read, by content: a document can show several steps of one flow.
+    pub read_pages: HashSet<String>,
+    /// The addresses of pages read, so Jev can be told which links lead back to one.
+    pub read_urls: HashSet<String>,
+    /// The address of the link the last click followed, until the next observation shows where it landed.
+    pub followed: Option<String>,
+    /// The page a followed link landed on, by `read_key`, with that link's address. A site can redirect a link to
+    /// another address, and the link still leads to that page once it is read.
+    pub arrived_by: Option<((String, String), String)>,
     /// The initial address, retained even when an HTTP failure removes it from completion evidence.
     pub started_url: Option<String>,
     pub caller_start: Option<String>,
     pub start_landing_url: Option<String>,
     /// The first page the run looked at, which is what a task's "this page" means once the run has moved on.
     pub first_url: Option<String>,
-    /// Addresses observed without an HTTP error, in order, including the starting address.
-    pub visited: IndexMap<String, ()>,
-    pub observed_links: IndexMap<String, ObservedLink>,
-    pub read_urls: HashSet<String>,
-    /// By document, the text of every capture a full read has already read there, whitespace-normalised. A page that
-    /// redraws within one document can carry nothing this does not already hold, which is what tells an owed read
-    /// that the notes still describe the page.
-    pub read_coverage: HashMap<String, String>,
-    /// By document, the captures whose text is in `read_coverage`: how a fact cut from one is known to be a reading of
-    /// this document, and so whether the page still shows it.
-    pub read_shas: HashMap<String, HashSet<String>>,
     /// A decision was dropped because the page redrew under it, so nothing is watched until an action is taken.
     pub redecided: bool,
-    /// Fields the task gives no value for, which recovery has been told about once, by label and context.
-    pub missing: HashSet<(String, Option<String>)>,
-    /// Requirements the reader said range over a list that goes on past the page it read.
-    pub continuing: HashSet<String>,
-    /// Comparisons a page of their list lost a record from.
-    pub incomplete: BTreeSet<String>,
-    /// Authorized clicks can just navigate, so only candidates with notes are classified when answering.
-    pub transaction_candidates: Vec<TransactionCandidate>,
-    pub form_continues: bool,
-    pub form_rejected: HashSet<(String, Option<String>, String)>,
-    pub form_values: HashMap<(String, String), (Control, FieldText)>,
-}
-
-/// `_FieldText`: what a field writer answers.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct FieldText {
-    #[serde(deserialize_with = "fastbrowse_core::py::lax::boolean")]
-    pub missing: bool,
-    pub text: String,
-    #[serde(default)]
-    pub values: Vec<String>,
+    /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
+    pub missing: HashSet<(String, String, Option<String>)>,
 }
 
 impl RunState {
-    #[allow(clippy::too_many_arguments)]
+    /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
+    pub fn reload_target(&self, url: &str) -> Option<String> {
+        self.site_failure.as_ref().filter(|failure| failure.url == url && failure.transient()).map(|f| f.url.clone())
+    }
+
+    pub fn read_note(&self) -> &'static str {
+        if self.notes.answered() {
+            "Read this content. The notes hold evidence that answers the task."
+        } else if self.compose && (!self.notes.evidence().is_empty() || !self.read_whole.is_empty()) {
+            "Read this content. The notes hold source material for an answer that still needs composing."
+        } else {
+            "Read this content. The notes hold nothing that answers the task."
+        }
+    }
+
+    pub fn composition_sources(notes: &Notes) -> Vec<(Fact, bool)> {
+        notes.facts().iter().map(|fact| ((*fact).clone(), notes.superseded(&fact_id(fact)))).collect()
+    }
+
+    pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
+        let (partial, sources) = self.composition_partial.as_ref()?;
+        (!partial.claims.is_empty() && *sources == Self::composition_sources(notes)).then_some(partial)
+    }
+
+    /// What one read leaves in the notes: its facts, the page kept whole when one fact was picked from it, and the
+    /// earlier reads of that address it supersedes.
+    pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) {
+        let added = facts.len();
+        self.notes.remember_capture(capture);
+        for fact in facts {
+            self.notes.add(fact);
+        }
+        // A fragment names a view of the same page: an earlier view kept whole would come back as current notes when
+        // composing, beside the read that superseded it.
+        let page = address(&capture.url);
+        self.read_whole.retain(|read| address(&read.url) != page);
+        if !compose && added > 0 {
+            self.read_whole.push(capture.clone());
+        }
+        // An absent read must not mistake a stored quote from a revisited capture for fresh evidence.
+        if added > 0 {
+            self.notes.supersede(&capture.url, &capture.sha256, &capture.text);
+        }
+    }
+
+    /// The notes with the pages read for one fact whole.
+    pub fn notes_to_compose(&self) -> Notes {
+        let mut notes = self.notes.clone();
+        for fact in self.read_whole.iter().flat_map(whole_page_facts) {
+            notes.add(fact);
+        }
+        notes
+    }
+
+    /// An action changed the page it was taken on. Leaving that page leaves what was read of it as it was: going back
+    /// shows it again, not a change to it.
+    pub fn settle_change(&mut self, landed: &Observation) {
+        if let Some(page) = self.changed_page.take()
+            && page == read_key(landed)
+            && let Some(read) = self.read_documents.get_mut(&page)
+        {
+            *read = true;
+        }
+    }
+
+    /// The page is read now, so the notes hold what it shows, and every link known to lead to it leads to a read page.
+    pub fn mark_read(&mut self, observation: &Observation) {
+        let page = read_key(observation);
+        if let Some((landed, href)) = &self.arrived_by
+            && *landed == page
+        {
+            self.read_urls.insert(href.clone());
+        }
+        self.read_documents.insert(page, false);
+        self.read_pages.insert(observation.page_key.clone());
+        self.read_urls.insert(observation.url.clone());
+    }
+
+    /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
+    /// label, as every quote's "(about)" does, where a list of labels could not.
+    pub fn mark_read_links(&self, observation: &mut Observation) {
+        let here = url::Url::parse(&observation.url).ok();
+        for control in &mut observation.controls {
+            let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
+            if leads_to.is_some_and(|url| self.read_urls.contains(url.as_str())) {
+                control.already_read = Some(true);
+            }
+        }
+    }
+
+    pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
+        RunState {
+            ledger,
+            fetched: self.read_urls.clone(),
+            picked: None,
+            landing: None,
+            idle: Vec::new(),
+            acted_from: None,
+            followed: None,
+            changed_page: None,
+            unchanged: 0,
+            committing: false,
+            redecided: false,
+            last_page: None,
+            navigation_from: None,
+            ..self
+        }
+    }
+
     pub fn new(
         task: String,
         inputs: IndexMap<String, String>,
         attachments: Vec<Attachment>,
         authorization: Authorization,
         ledger: Arc<Ledger>,
-        planning: Arc<Spawned<Generation<Plan>>>,
-        plan_billed: bool,
     ) -> RunState {
         RunState {
             task,
+            replay: None,
+            recipe_log: Vec::new(),
+            text_source: None,
             context: None,
             inputs,
             attachments,
             authorization,
             ledger,
-            planning,
-            plan_billed,
             notes: Notes::default(),
-            finish_partitions: Vec::new(),
-            output_targets: IndexMap::new(),
-            oversized_answer: false,
-            read_source_sizes: IndexMap::new(),
-            pending_collections: IndexMap::new(),
-            partition_answers: IndexMap::new(),
-            partial_answers: IndexMap::new(),
-            partition_failures: HashMap::new(),
-            recovered_outputs: HashSet::new(),
-            recovered_sources: HashSet::new(),
-            recovered_collections: HashSet::new(),
-            verified_answer: None,
-            missing_answer_outputs: Vec::new(),
-            answer_corrections: Vec::new(),
-            verify_cache: HashMap::new(),
             challenge_reloads: HashSet::new(),
-            open_answer_outputs: Vec::new(),
-            rejected_answer_evidence: None,
-            answer_check_evidence: None,
-            answer_check_cache: HashMap::new(),
             relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
             choices: Vec::new(),
             history: Vec::new(),
-            http_failure: None,
-            failed_links: IndexMap::new(),
-            stale_links: HashMap::new(),
-            pending_link: None,
+            site_failure: None,
             http_seen: HashSet::new(),
             hint: None,
-            directed: None,
-            section_read: false,
-            recovery_sections: HashSet::new(),
-            left_guesses: HashSet::new(),
-            unsure_commit: None,
-            confirmed_commit: None,
+            picked: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
-            recovered_requirements: HashSet::new(),
-            terminal_verification_attempted: false,
-            unread_rereads: HashSet::new(),
-            read_step: None,
             blank_opening_checked: false,
+            blank_waited: HashSet::new(),
             hung_page_reopened: false,
-            recovery_log: VecDeque::new(),
-            recovered_at: 0,
-            attempts: HashMap::new(),
             last_page: None,
-            passed_wall: None,
+            navigation_from: None,
+            login_readings: HashMap::new(),
             reached: HashMap::new(),
-            reached_with_evidence: HashMap::new(),
+            evidence_reads: 0,
+            landing: None,
+            idle: Vec::new(),
             acted_from: None,
-            ready_plan: None,
-            invented: HashSet::new(),
-            guessing: false,
-            lineage: Lineage::default(),
-            moved_by_action: false,
             downloads_forbidden: None,
-            owes_read: false,
-            read_here: false,
-            tried_unsure: HashSet::new(),
-            form_controls_at: HashMap::new(),
-            reads: HashSet::new(),
-            record_read_documents: HashSet::new(),
-            barren: HashMap::new(),
-            passed: HashSet::new(),
-            typed_on_passed: false,
-            acted_on: None,
-            evidenced_at: HashMap::new(),
-            read_at: HashMap::new(),
-            next_page: false,
-            paged_from: None,
-            pages: 0,
-            through_end: false,
-            tally_readers: Vec::new(),
-            comparisons: IndexMap::new(),
-            paging_failed: false,
+            read_documents: HashMap::new(),
+            unanswered_images: HashSet::new(),
+            changed_page: None,
+            page_failed: false,
+            compose: false,
+            extraction_pending: false,
+            composition_feedback: None,
+            composition_partial: None,
+            read_whole: Vec::new(),
+            to_carry_out: false,
+            output_intent: OutputIntent::Unknown,
+            appearance: false,
+            fetched: HashSet::new(),
+            committing: false,
+            read_pages: HashSet::new(),
+            read_urls: HashSet::new(),
+            followed: None,
+            arrived_by: None,
             started_url: None,
             caller_start: None,
             start_landing_url: None,
             first_url: None,
-            visited: IndexMap::new(),
-            observed_links: IndexMap::new(),
-            read_urls: HashSet::new(),
-            read_coverage: HashMap::new(),
-            read_shas: HashMap::new(),
             redecided: false,
             missing: HashSet::new(),
-            continuing: HashSet::new(),
-            incomplete: BTreeSet::new(),
-            transaction_candidates: Vec::new(),
-            form_continues: false,
-            form_rejected: HashSet::new(),
-            form_values: HashMap::new(),
         }
     }
+}
 
-    pub fn reset_answer_check(&mut self) {
-        self.missing_answer_outputs.clear();
-        self.answer_corrections.clear();
-    }
-
-    /// The plan, for code that only runs after `await_plan`: reading, judging DONE and answering.
-    pub fn plan(&self) -> &Plan {
-        self.ready_plan.as_ref().expect("the plan was used before it was awaited")
-    }
-
-    /// Record a recovery's record, keeping only the most recent few.
-    pub fn log_recovery(&mut self, record: String) {
-        if self.recovery_log.len() == RECOVERY_RECORDS {
-            self.recovery_log.pop_front();
-        }
-        self.recovery_log.push_back(record);
-    }
-
-    pub async fn await_plan(&mut self) -> Result<Plan, AgentError> {
-        self.take_plan().await
-    }
-
-    async fn take_plan(&mut self) -> Result<Plan, AgentError> {
-        if let Some(plan) = &self.ready_plan {
-            return Ok(plan.clone());
-        }
-        // Waiting never cancels the one plan every later step needs, though a step abandoned mid-wait may drop this
-        // future. Teardown still cancels the task itself.
-        let planned = self.planning.wait().await.unwrap_or_else(|| Err(cancelled()))?;
-        // The plan arrives with its answer checks written by the same call, so taking it takes them too.
-        let plan = planned.data;
-        self.ready_plan = Some(plan.clone());
-        if self.plan_billed {
-            // Billed on arrival; a receipt that broke a limit still stops the run here.
-            self.ledger.check(0.0)?;
-        } else {
-            self.ledger.record([planned.cost])?;
-        }
-        Ok(plan)
-    }
-
-    /// The plan with its answer checks, which only finishing and answering read.
-    ///
-    /// The plan call writes the checks, so this returns the same plan `await_plan` does; it stays a seam so the
-    /// finishing code that reads checks keeps one place to wait.
-    pub async fn await_checks(&mut self) -> Result<Plan, AgentError> {
-        self.take_plan().await
-    }
+/// What a read is filed under: the document, and its address within it. A single-page app routes between addresses
+/// in one document, and each address shows its own page.
+pub(crate) fn read_key(observation: &Observation) -> (String, String) {
+    (observation.document_key.clone(), observation.url.clone())
 }

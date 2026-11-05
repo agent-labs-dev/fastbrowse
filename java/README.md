@@ -2,7 +2,7 @@
 
 A browser agent that picks instead of generating. Every page is indexed into the controls it actually has, and a
 choice model picks one of them. An LLM plans, reads and writes prose. Code owns authorization gates, secret
-resolution, cost limits, and whether a run may call itself finished.
+resolution and cost limits, and reports an answer it cannot verify as unverified.
 
 Add the client and the binary for each platform you run on (`natives-darwin-arm64`, `natives-darwin-x64`,
 `natives-linux-arm64`, `natives-linux-x64`, `natives-win32-x64`). Java 17 or newer.
@@ -58,7 +58,19 @@ read from the result, not thrown. Cancelling the future stops the run, and the n
 browser has closed. One client runs one task at a time: a second `run` while one is active fails with an
 `RpcException` whose code is `Protocol.ERROR_BUSY`. Start one client per concurrent run.
 
+After cancelling the run future, await `Fastbrowse.cancellation(future)` for an optional receipt of reported
+steps, known cost lines and finished recordings. It completes after the server replies. A server-side
+cancellation carries the receipt on `RpcException.receipt()`. The receipt has no status or answer, and an
+unpriced charge remains `unknown`.
+
 `RunOptions` carries the rest: `outputSchema` for structured data, read back from `result.data()`; `secrets`, whose
 values stay in your process and are asked for as they are typed; `until`, a check on the address a run ends on; and
-`onEvent` and `onFrame` to follow a run as it goes. The
+`onEvent` and `onFrame` to follow a run as it goes. `outputSchema` and `result.data()` are Jackson 3 `JsonNode`s,
+from `tools.jackson.databind`. The
 [project README](https://github.com/agent-labs-dev/fastbrowse) covers the statuses, citations and costs.
+
+`BrowserOptions` also takes `cloudExtensions` and `cloudTimeoutMinutes` for a cloud browser. A run reads pages over
+HTTP until the task needs a browser: `RunOptions.builder().fetch(true)` never starts one, and `browserFirst(true)`
+starts one from the first step (the protocol's `browser` field; `browser(...)` says which browser). The server refuses
+the two together. `allowedOrigins` limits the documents a run may open, read and control to those exact origins; it
+scopes documents, not the network, and a scoped run sends no frames and cannot `record`.

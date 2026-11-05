@@ -3,8 +3,8 @@
 package dev.agentlabs.fastbrowse.protocol;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
+import tools.jackson.databind.JsonNode;
 
 /**
  * @param finalUrl Where the browser was last observed; what a caller checks when the task was to arrive somewhere.

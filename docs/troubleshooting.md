@@ -13,9 +13,9 @@ what to do next. The full table is in [Results](cli.md#results).
 | [blocked](#blocked-exit-6) | 6 | a bot check or a refusal |
 | [budget_exceeded](#budget_exceeded-exit-7) | 7 | a limit you set was reached |
 | [unavailable](#unavailable-exit-8) | 8 | a model or browser provider stayed down |
-| [stuck](#stuck-exit-9) | 9 | recovery found no way forward |
-| [unverified](#unverified-exit-10) | 10 | the answer could not be backed by quotes |
-| [observation_limit](#observation_limit-exit-11) | 11 | the page or evidence does not fit the prompt budget |
+| [stuck](#stuck-exit-9) | 9 | Jev found no way forward |
+| [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page |
+| [observation_limit](#observation_limit-exit-11) | 11 | the page does not fit the prompt budget |
 
 ## Reading a stopped run
 
@@ -23,8 +23,11 @@ The CLI prints the status, cost and step count, then the error and anything the 
 `--json` prints the whole result, including every step and the quotes behind the answer.
 
 A run that stops `stuck`, `unverified`, `budget_exceeded`, `observation_limit`, `unavailable` or `error` after
-reading something still returns those cited quotes, so check `evidence` before you browse again. A `stuck` or `unverified` run also writes an answer from them, marked `Answer (unverified)`, when
-the task asks for one.
+reading something still returns those cited quotes, so check `evidence` before you browse again. A `stuck` or
+`unverified` run can also write an answer from them when the task asks for one. Other stops can retain an already
+checked partial answer while its source evidence remains unchanged, including a sign-in wall or pending
+authorization. Preserve any returned answer as partial. Some partial answers start with `Partial evidence only.`;
+use the status to determine whether the task completed.
 
 The causes below name Jev, the model that picks each action from the controls on the page; the LLM
 plans, reads and writes. See [Models](cli.md#models).
@@ -36,8 +39,8 @@ Configuration refusals also exit 1.
 
 **Common causes.**
 
-- A model or browser call failed in a way retries do not cover. `error` holds the failure, cut to 500
-  characters with any secret redacted.
+- A model or browser call failed in a way retries do not cover. `error` holds the whole failure, with any
+  secret redacted.
 - The browser could not be reached as configured, for example `no DevTools endpoint at
   http://127.0.0.1:<port>/json/version (<cause>)` from `--cdp-port`, or a pair of browser options that
   cannot go together, such as `cdp_url and cdp_port both name a browser to attach to; pass one`.
@@ -57,11 +60,11 @@ Configuration refusals also exit 1.
 ## needs_confirmation (exit 3)
 
 **What it means.** The run stopped before an action Jev judged irreversible, such as submit, pay, delete or
-send, because the run was not authorized to take it. That action was not taken.
+send, because the run was not authorized to take it, or was authorized but Jev judged the task did not ask
+for it. That action was not taken.
 
 **Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
-`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step. An uncertain pick of
-such an action goes to recovery instead of stopping here.
+`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step.
 
 **Next step.** Read the step the run stopped on, since the irreversible check can be wrong. If the action is
 what you want, run again with authorization:
@@ -81,7 +84,7 @@ what you want, run again with authorization:
   `sign-in required at <origin>`.
 - The run reached a field that takes a secret, such as a password, and none is stored. The error is
   `'<field>' wants a secret and none is stored`.
-- The site answered HTTP 401 and recovery found no way on. The error is
+- The site answered HTTP 401 and Jev found no way on. The error is
   `Could not complete the task after HTTP 401 at <url> in this browser session; the cause is unknown.`
 - A secret is declared, but for a different origin. A field is offered only the secrets declared for the
   origin of the frame it sits in, so this reads the same as no secret.
@@ -113,7 +116,7 @@ limit.
 
 - The run opened no page: `the task names no page to start from, and none was given`.
 - A field needs a value the task never states. The run first tries to go on without it, then stops with
-  `'<field>' needs a value the task does not give`, or with recovery's diagnosis.
+  `'<field>' needs a value the task does not give`, followed by the reason it gave up.
 - The page asks for a file and the run has none: `the page asks for a file and none was provided`.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret
@@ -144,8 +147,8 @@ limit.
   its script runs, and stops only when the page stays put. The error is `bot check at <origin>; it is not a
   sign-in and no credential passes it. Retry using an attached local browser or choose another source for
   this research.`
-- The site answered HTTP 403 and recovery found no way on. The error is
-  `Could not complete the task after HTTP 403 at <url> in this browser session; the cause is unknown.`
+- The site answered HTTP 403 and Jev found no way on. The error is
+  `Could not complete the task after HTTP 403 at <url>: the site refused this browser session, which may be an access or bot check or a sign-in it requires.`
 
 A bot check can block a cloud browser before any task step runs. Credentials do not pass a CAPTCHA, so
 `--secret` and `--bitwarden` do not help here.
@@ -202,11 +205,17 @@ be fine, and the same run later may pass.
   retryable status.
 - Before the first step, the start page never loaded, or Chrome reported a dropped, refused or empty
   connection. A name that does not resolve is not counted here, since it can be a mistyped address.
-- The site answered HTTP 408, 419, 429 or a 5xx status, and recovery found no way on.
-- A browser command went unanswered while the browser still answered health checks. An input event gets 15
-  seconds and any other command 120 seconds. The first page that stops answering an action is reopened once at
-  the same address; a second hang, or one outside an action, ends the run, and the error says the page did not
-  answer or the browser stopped answering.
+- The site answered HTTP 408, 419, 429 or a 5xx status, and Jev found no way on.
+- Mid-run, the browser could not open an address the run chose, after its own retries:
+  `Could not complete the task after opening <url> failed in this browser session: <error>.`
+- Jev judged that the page reports the site failed, such as an error shown in place of search results, a
+  maintenance notice or a load that never finished, and reloading found no way past it:
+  `Could not complete the task after the page at <url> reported that the site failed to deliver what was asked.`
+- A browser command went unanswered while the browser still answered health checks. A command to a page that
+  goes unanswered for 10 seconds has the page asked whether it still answers, and one that does not answer in 10
+  more is hung; an input event gets 15 seconds and any other command 120 seconds. The first page that stops
+  answering an action is reopened once at the address the tab shows; a second hang, or one outside an action, ends
+  the run, and the error says the page did not answer or the browser stopped answering.
 - The run's tab closed and no tab it owns remains.
 
 **Next step.**
@@ -215,7 +224,7 @@ be fine, and the same run later may pass.
 - For a deadline, set `Limits(max_seconds=...)` in the embedding API, or `--max-seconds` on the MCP server.
   Step and dollar limits do not bound elapsed time.
 - For a stalled run, write its trace with `--trace FILE` or `FASTBROWSE_TRACE=FILE` and keep the last event
-  with the result.
+  with the result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
 
 ### An attached Chrome that waits for approval
 
@@ -242,38 +251,44 @@ A local Chrome that fastbrowse starts itself picks its own DevTools port and wri
 `DevToolsActivePort` in its profile directory, which the run reads. If Chrome exits first, or does not answer
 on the port it wrote within 90 seconds, the run fails before any status is reported, with
 `Chrome exited with status <code> before DevTools started` or `Chrome did not start DevTools within 90s`.
-Both messages end with Chrome's own last output, which names the cause; fix that and run again.
+Both messages end with Chrome's complete diagnostic output, which names the cause; fix that and run again.
 
 ## stuck (exit 9)
 
-**What it means.** Recovery ran out without reaching a page state the run had not seen.
+**What it means.** The stall budget ran out without reaching a page state the run had not seen.
 
 **Common causes.**
 
-- Recovery found no way forward and gave up. `error` holds its diagnosis.
+- Jev, told each time what failed, found no way forward before `max_recoveries` ran out.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
   `Could not complete the task after HTTP <status> at <url> in this browser session; the cause is unknown.`
+- The page draws what it shows on a canvas, a picture or a video, and the run could not read it. The error
+  then ends with `This page draws what it shows as a canvas, picture or video that its text and controls do
+  not carry, and its screenshot was not read as answering the task.`
 
 **Next step.**
 
 - Try a `--start` URL closer to the goal, or a narrower task.
 - Name any address the run needs in the task or in `--start`.
+- On a drawn page, fastbrowse reads the DOM first, so it has two limits: a control that exists only in the
+  pixels has no element to act on, and text that exists only in the pixels is not in the page text it quotes.
+  The screenshot is the fallback for reading. When Jev's route accepts images, each step on a drawn page sends
+  Jev the viewport, and before the run answers or gives up, the LLM reads the screenshot for text that answers
+  the task, cited as read from the image. A drawn control still cannot be clicked, so start from a page of the
+  site that offers the same action as an HTML control.
 - Open an issue with the task, the start page, the status and the `--json` step trace, as
   [CONTRIBUTING.md](../CONTRIBUTING.md) describes.
 
 ## unverified (exit 10)
 
-**What it means.** The run believes it finished, but could not back every requirement or claim with a quote
-from the page. Treat the answer as unconfirmed.
+**What it means.** Jev finished, but the data the run was asked for could not be filled from the page. Treat the
+result as unconfirmed.
 
 **Common causes.**
 
-- A claim in the answer, or a field of the requested data, was not backed by the page.
-- The checks rejected the finish, and recovery could not gather the missing answer outputs.
-- The task asked for a screenshot, and the run could not hand it over: a secret on screen, a dialog or a
-  timeout can withhold it.
+- A field of the requested data was not backed by the page.
 - The output schema has a field the run cannot fill. A run fills a flat object of required string, number,
   integer and boolean fields; with any other field it ends `unverified` with no data.
 
@@ -285,15 +300,12 @@ from the page. Treat the answer as unconfirmed.
 
 ## observation_limit (exit 11)
 
-**What it means.** The page, or the evidence the run must report, cannot fit the configured prompt budget.
+**What it means.** The page cannot fit the configured prompt budget.
 
 **Common causes.**
 
 - A page whose state exceeds Jev's input limits even with no controls offered:
   `the state on <url> exceeds Jev's input limits with no controls`.
-- Requirement evidence that cannot fit the notes budget without losing facts:
-  `Requirement evidence exceeds the <n> character notes budget`, or
-  `The final page cannot fit every earlier record in its collected evidence`.
 
 **Next step.**
 

@@ -1,5 +1,4 @@
-//! tests/browser/test_dispatch.py: pointer handlers can invalidate a target before its press or replace an editor
-//! before typing.
+//! Pointer handlers can invalidate a target before its press or replace an editor before typing.
 //!
 //! A parametrized Python test is one Rust test that runs each case on a fresh session, in pytest's order.
 
@@ -8,8 +7,9 @@ mod dispatch_support;
 
 use std::time::Duration;
 
-use common::{harness, harness_with, sites};
-use dispatch_support::{PROXY_ERROR, action, eval_active, eval_value, failing_proxy, fill, find, observe_until};
+use common::{eval_value, find, harness, harness_with, js, observe_until, sites};
+use dispatch_support::{PROXY_ERROR, action, eval_active, failing_proxy, fill, unanswering_proxy};
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::scripts::UNCOVER_JS;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing;
@@ -18,9 +18,39 @@ use fastbrowse_core::models::{Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use serde_json::{Value, json};
 
-/// A string as a JS literal, where Python's tests interpolate `repr()` or `json.dumps()`.
-fn js(text: &str) -> String {
-    serde_json::to_string(text).unwrap()
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_screenshot_glance_preserves_action_guards() {
+    for change_target in [false, true] {
+        let Some(h) = harness().await else { return };
+        h.goto("/dispatch.html").await;
+        let before = h.observe().await;
+        let target = find(&before, "One way").clone();
+        eval_active(
+            &h.page,
+            if change_target {
+                "document.querySelector('#target').textContent = 'Another choice'"
+            } else {
+                "document.title = 'A new clock reading'"
+            },
+        )
+        .await;
+        let fresh = h.page.glance().await.expect("glance");
+        assert_ne!(before.page_key, fresh.page_key);
+        assert_eq!(
+            h.page.redrawn(&before, 0.0, Some(&target.id)).await.expect("redraw check"),
+            change_target,
+            "a glance must preserve the redraw baseline"
+        );
+        let scroll = h.page.act(&Action::new(Operation::Scroll), &before).await.expect("scroll");
+        assert_ne!(scroll.outcome, StepOutcome::Stale, "{scroll:?}");
+        let result = h.page.act(&action(Operation::Click, &target), &before).await.expect("act");
+        assert_eq!(
+            result.outcome,
+            if change_target { StepOutcome::Stale } else { StepOutcome::Executed },
+            "{result:?}"
+        );
+        h.close().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -169,6 +199,67 @@ async fn test_transparent_input_hit_must_be_the_input_or_its_own_label() {
         assert_eq!(result.outcome, expected, "associated={associated}");
         assert_eq!(result.page_changed, associated, "associated={associated}");
         assert_eq!(eval_active(&h.page, "input.checked").await, json!(associated), "associated={associated}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_element_the_page_makes_pressable_is_offered_and_pressed() {
+    let Some(h) = harness().await else { return };
+    h.goto("/todos.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<a id=more style=cursor:pointer>More</a><div onclick=\"this.title=1\">Handler</div>\
+         <div style=cursor:pointer><span>Nested</span></div><a name=top>Named anchor</a>\
+         <div style=cursor:pointer>Wrapper <a href=#inner>Inner link</a></div>'; window.pressed = 0; \
+         document.getElementById('more').addEventListener('click', () => window.pressed++);",
+    )
+    .await;
+    let obs = h.observe().await;
+    let labels: Vec<(&str, &str)> = obs.controls.iter().map(|c| (c.label.as_str(), c.role.as_str())).collect();
+    assert_eq!(
+        labels,
+        [("More", "button"), ("Handler", "button"), ("Nested", "button"), ("Inner link", "link")],
+        "the cursor counts where it starts, and a control inside takes the click",
+    );
+    let more = obs.controls.iter().find(|c| c.label == "More").expect("More");
+    let result = h.page.act(&action(Operation::Click, more), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h.page, "window.pressed").await, json!(1));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_suggestion_list_is_left_behind_but_a_cover_that_stays_is_refused() {
+    let list = "<div id=list style=\\'display:none;position:absolute;left:0;top:40px;width:400px;height:200px;background:#eee\\'>Suggestions</div>";
+    for (stays, picks) in [(false, false), (true, false), (false, true)] {
+        let case = format!("stays={stays} picks={picks}");
+        let Some(h) = harness().await else { return };
+        h.goto("/todos.html").await;
+        eval_active(
+            &h.page,
+            &format!(
+                "document.body.innerHTML = '<form><input aria-label=From aria-autocomplete=list \
+                 style=\\'position:absolute;left:0;top:0\\'><input aria-label=To \
+                 style=\\'position:absolute;left:0;top:80px\\'></form>{list}'; \
+                 const [from, to] = document.querySelectorAll('input'), list = document.getElementById('list'); \
+                 from.onfocus = () => list.style.display = 'block'; \
+                 from.onblur = () => {{ if (!{stays}) list.style.display = 'none'; }}; \
+                 if ({picks}) {{ list.innerHTML = '<button style=\\'pointer-events:none\\'>Pick</button>'; }}"
+            ),
+        )
+        .await;
+        let obs = h.observe().await;
+        let from = find(&obs, "From").clone();
+        assert_eq!(h.page.act(&fill(&from, "10001"), &obs).await.expect("from").outcome, StepOutcome::Executed);
+        let obs = h.observe().await;
+        let name = if picks { "Pick" } else { "To" };
+        let next = find(&obs, name).clone();
+        let act = if picks { action(Operation::Click, &next) } else { fill(&next, "96162") };
+        let outcome = h.page.act(&act, &obs).await.expect("next").outcome;
+        let left = eval_active(&h.page, "document.activeElement.ariaLabel !== 'From'").await;
+        assert_eq!(outcome, if stays || picks { StepOutcome::Covered } else { StepOutcome::Executed }, "{case}");
+        assert_eq!(left, json!(!picks), "{case}");
         h.close().await;
     }
 }
@@ -404,6 +495,24 @@ async fn test_secret_fill_does_not_follow_a_replacement() {
 // `Agent._act_on_twin`, the agent loop's retargeting, which this crate does not have.
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_unanswered_click_carries_on_from_the_page() {
+    let Some(chrome) = common::chrome() else { return };
+    let proxy = unanswering_proxy(chrome.cdp_url.clone(), |command| {
+        command["method"] == "Input.dispatchMouseEvent" && command["params"]["type"] == "mouseReleased"
+    })
+    .await;
+    let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
+    let h = common::harness_on(connection, Config::default(), SessionOptions::default()).await.expect("harness");
+    h.goto("/dispatch.html").await;
+    let obs = h.observe().await;
+    let started = std::time::Instant::now();
+    h.page.act(&action(Operation::Click, find(&obs, "One way")), &obs).await.expect("the click carries on");
+    assert!(started.elapsed().as_secs() < 30);
+    assert_eq!(eval_active(&h.page, "presses").await, json!(["target"]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_uncertain_press_is_never_replayed() {
     // Python patches `page._input` to raise once the second input (the press) has been sent. The proxy does the same
     // from outside: Chrome receives the press, and its reply comes back as an error.
@@ -422,7 +531,8 @@ async fn test_uncertain_press_is_never_replayed() {
     let obs = h.observe().await;
     let error = h.page.act(&action(Operation::Click, find(&obs, "One way")), &obs).await.expect_err("press is lost");
     assert_eq!(error.to_string(), format!("Input.dispatchMouseEvent failed (CDP {PROXY_ERROR})"));
-    assert_eq!(eval_active(&h.page, "[presses, clicks]").await, json!([["target"], []]));
+    // Press and release travel together, so the release has already left: what must hold is one press, never two.
+    assert_eq!(eval_active(&h.page, "presses").await, json!(["target"]));
     h.close().await;
 }
 
@@ -458,6 +568,31 @@ async fn test_pointer_entry_dialog_does_not_block_a_fresh_hit_test() {
 
 fn drag(source: &fastbrowse_core::page::Control, destination: &fastbrowse_core::page::Control) -> Action {
     Action { destination_id: Some(destination.id.clone()), ..action(Operation::Drag, source) }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_drop_the_page_posts_does_not_hold_the_action() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = `<p id=status>Card A is in To Do.</p>
+          <div class=column aria-label='To Do' data-column='To Do' ondragover='event.preventDefault()' ondrop='dropped(event)'>
+          <h2>To Do</h2><div class=card aria-label='Card A' draggable=true ondragstart=\"event.dataTransfer.setData('text/plain', 'Card A')\">Card A</div></div>
+          <div class=column aria-label=Done data-column=Done ondragover='event.preventDefault()' ondrop='dropped(event)'><h2>Done</h2></div>`;
+        window.dropped = e => { e.preventDefault(); const column = e.currentTarget, card = document.querySelector('.card');
+          column.appendChild(card); card.setAttribute('aria-label', 'Card A (' + column.dataset.column + ')');
+          status.textContent = 'Card A is in ' + column.dataset.column + '.';
+          window.response = fetch(location.href, {method: 'POST', body: 'card'}).then(r => (window.kept = r)); };
+        true",
+    )
+    .await;
+    let obs = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.act(&drag(find(&obs, "Card A"), find(&obs, "Done")), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert!(started.elapsed().as_secs_f64() < 2.0, "took {:?}", started.elapsed());
+    h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -714,9 +849,7 @@ async fn test_covered_target_reports_visible_overlay_controls() {
                 let Some(chrome) = common::chrome() else { return };
                 let proxy = failing_proxy(chrome.cdp_url.clone(), |command| {
                     command["method"] == "Runtime.evaluate"
-                        && command["params"]["expression"]
-                            .as_str()
-                            .is_some_and(|e| e.contains("let cover = hit?.closest"))
+                        && command["params"]["expression"].as_str().is_some_and(|e| e.contains("let cover = null"))
                 })
                 .await;
                 let connection = fastbrowse_core::models::BrowserConnection { cdp_url: proxy, ..chrome.clone() };
@@ -1185,8 +1318,7 @@ async fn test_nothing_is_sent_through_an_obstruction_that_focusing_the_control_o
 async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_own_controls() {
     // A full-window ad frame (an interstitial) covered a login form. Its close button lives in its own,
     // cross-origin document, so the report named no controls, and recovery closed another ad while this one stayed.
-    // Nothing is pressed through a cover the size of the window; the frame's close control is named so it can be
-    // closed, and its links are not, so recovery is never offered the ad itself.
+    // Nothing is pressed through a cover the size of the window; the frame's controls are named so it can be closed.
     let Some(h) = harness().await else { return };
     h.goto("").await;
     eval_active(&h.page, &anchored_form(false, "div")).await;
@@ -1202,9 +1334,85 @@ async fn test_a_full_window_frame_over_the_control_is_reported_with_the_frames_o
     assert_eq!(result.outcome, StepOutcome::Covered);
     let detail = result.detail.unwrap_or_default();
     assert!(
-        detail.contains("Advertisement") && detail.contains("Close ad") && !detail.contains("spring offer"),
+        detail.contains("Advertisement") && detail.contains("Close ad") && detail.contains("spring offer"),
         "{detail}"
     );
     assert_eq!(eval_active(&h.page, "[window.pressed, window.submitted]").await, json!([null, null]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_lasts_until_the_page_changes_by_itself() {
+    // A status line that a timer rewrites: the wait returns once it has changed, and the page then shows the new value.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const line = document.createElement('p'); line.textContent = 'Updated 16:59:21'; \
+                  document.body.append(line); setTimeout(() => { line.textContent = 'Updated 16:59:27'; }, 700); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let result = h.page.act(&Action::new(Operation::Wait), &before).await.expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    let capture = h.page.capture().await.expect("capture");
+    assert!(capture.text.contains("Updated 16:59:27"), "{}", capture.text);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_input_event_to_a_hung_page_fails_soon_while_the_browser_answers() {
+    let Some(h) = harness().await else { return };
+    // The release starts a click handler that never returns, so it is never answered.
+    h.page
+        .navigate("data:text/html,<button style='width:100vw;height:100vh' onclick='while(true){}'>Go</button>", None)
+        .await
+        .unwrap();
+    let session_id = h.session.active_session_id().unwrap();
+    let mouse = |kind| json!({"type": kind, "x": 50, "y": 50, "button": "left", "clickCount": 1});
+    let started = std::time::Instant::now();
+    h.session
+        .send("Input.dispatchMouseEvent", mouse("mousePressed"), Some(&session_id))
+        .await
+        .expect("the press is answered");
+    let raised = tokio::time::timeout(
+        Duration::from_secs(40),
+        h.session.send("Input.dispatchMouseEvent", mouse("mouseReleased"), Some(&session_id)),
+    )
+    .await
+    .expect("a hung page is told apart from a slow one well before the command deadline")
+    .unwrap_err();
+    eprintln!("hung page reported after {:.1}s: {raised}", started.elapsed().as_secs_f64());
+    assert!(matches!(raised, BrowserError::PageUnresponsive(_)), "{raised:?}");
+    assert!(!raised.is_unavailable(), "the browser answered throughout");
+    h.session.send("Target.getTargets", json!({}), None).await.expect("the browser still answers");
+    h.close().await;
+}
+
+// A player's Pause sat in a control bar beside its remaining-time clock, and the clock ticked between every look and
+// every click: 52 clicks in a row were refused as stale. Text the page rewrites by itself does not say which item a
+// control acts on; text that changes after a run's own action still does.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clock_beside_a_control_does_not_make_it_stale() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div><button id=pause>Pause</button><span id=clock>3:19</span></div>'; \
+         window.paused = 0; document.getElementById('pause').onclick = () => window.paused++; \
+         let left = 199; setInterval(() => { left--; \
+         document.getElementById('clock').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`; \
+         }, 40); true",
+    )
+    .await;
+    let mut outcomes = vec![];
+    for _ in 0..3 {
+        let obs = h.observe().await;
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let result = h.page.act(&action(Operation::Click, find(&obs, "Pause")), &obs).await.expect("act");
+        outcomes.push(result.outcome);
+        if result.outcome == StepOutcome::Executed {
+            break;
+        }
+    }
+    assert_eq!(outcomes.last(), Some(&StepOutcome::Executed), "{outcomes:?}");
+    assert_eq!(eval_active(&h.page, "window.paused").await, json!(1));
     h.close().await;
 }

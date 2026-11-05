@@ -7,17 +7,17 @@
 <text x="36" y="177" font-size="14" font-weight="650" fill="#F1F5F9">Task</text>
 <text x="36" y="196" font-size="11.5" fill="#94A3B8">plain English,</text>
 <text x="36" y="211" font-size="11.5" fill="#94A3B8">plus a start URL</text>
-<text x="212" y="30" font-size="10.5" font-weight="600" letter-spacing="0.06em" fill="#94A3B8" text-anchor="start">AT T=0, IN PARALLEL</text>
+<text x="212" y="30" font-size="10.5" font-weight="600" letter-spacing="0.06em" fill="#94A3B8" text-anchor="start">AT T=0</text>
 <rect x="212" y="40" width="200" height="84" rx="12" fill="#161E2E" stroke="#2A3547"/>
 <rect x="212" y="54" width="3.5" height="56" rx="1.75" fill="#F59E0B"/>
-<text x="228" y="67" font-size="14" font-weight="650" fill="#F1F5F9">Plan</text>
-<text x="228" y="86" font-size="11.5" fill="#94A3B8">checkable requirements,</text>
-<text x="228" y="101" font-size="11.5" fill="#94A3B8">from the task alone</text>
+<text x="228" y="67" font-size="14" font-weight="650" fill="#F1F5F9">Start</text>
+<text x="228" y="86" font-size="11.5" fill="#94A3B8">a first address, from</text>
+<text x="228" y="101" font-size="11.5" fill="#94A3B8">the task, if none given</text>
 <rect x="212" y="150" width="200" height="84" rx="12" fill="#161E2E" stroke="#2A3547"/>
 <rect x="212" y="164" width="3.5" height="56" rx="1.75" fill="#F59E0B"/>
 <text x="228" y="177" font-size="14" font-weight="650" fill="#F1F5F9">Open</text>
-<text x="228" y="196" font-size="11.5" fill="#94A3B8">start page, or a direct</text>
-<text x="228" y="211" font-size="11.5" fill="#94A3B8">address for the task</text>
+<text x="228" y="196" font-size="11.5" fill="#94A3B8">over HTTP; a browser</text>
+<text x="228" y="211" font-size="11.5" fill="#94A3B8">when a step needs one</text>
 <path d="M170 180 C 190 180, 190 82, 208 82" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#a)"/>
 <path d="M170 192 L 208 192" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#a)"/>
 <rect x="440" y="18" width="580" height="200" rx="16" fill="#111827" stroke="#2A3547"/>
@@ -56,13 +56,13 @@
 <rect x="704" y="250" width="150" height="76" rx="12" fill="#161E2E" stroke="#2A3547"/>
 <rect x="704" y="264" width="3.5" height="48" rx="1.75" fill="#6366F1"/>
 <text x="720" y="277" font-size="14" font-weight="650" fill="#F1F5F9">Read</text>
-<text x="720" y="296" font-size="11.5" fill="#94A3B8">Jev picks a quote;</text>
-<text x="720" y="311" font-size="11.5" fill="#94A3B8">LLM reads if none fits</text>
+<text x="720" y="296" font-size="11.5" fill="#94A3B8">Jev picks a quote,</text>
+<text x="720" y="311" font-size="11.5" fill="#94A3B8">or asks to compose</text>
 <rect x="704" y="332" width="150" height="76" rx="12" fill="#161E2E" stroke="#2A3547"/>
 <rect x="704" y="346" width="3.5" height="48" rx="1.75" fill="#6366F1"/>
-<text x="720" y="359" font-size="14" font-weight="650" fill="#F1F5F9">Done?</text>
-<text x="720" y="378" font-size="11.5" fill="#94A3B8">Jev checks; LLM</text>
-<text x="720" y="393" font-size="11.5" fill="#94A3B8">verifies when unsure</text>
+<text x="720" y="359" font-size="14" font-weight="650" fill="#F1F5F9">Done</text>
+<text x="720" y="378" font-size="11.5" fill="#94A3B8">Jev decides, and</text>
+<text x="720" y="393" font-size="11.5" fill="#94A3B8">the run ends there</text>
 <rect x="876" y="250" width="144" height="76" rx="12" fill="#161E2E" stroke="#2A3547"/>
 <rect x="876" y="264" width="3.5" height="48" rx="1.75" fill="#10B981"/>
 <text x="892" y="277" font-size="14" font-weight="650" fill="#F1F5F9">Notes</text>
@@ -81,7 +81,7 @@
 <text x="92" y="300" font-size="12.5" fill="#94A3B8">picks from what is on the page</text>
 <rect x="24" y="320" width="12" height="12" rx="3" fill="#F59E0B"/>
 <text x="46" y="330" font-size="12.5" font-weight="650" fill="#F1F5F9">LLM</text>
-<text x="92" y="330" font-size="12.5" fill="#94A3B8">plans, reads and writes</text>
+<text x="92" y="330" font-size="12.5" fill="#94A3B8">start pages and composed answers</text>
 <rect x="24" y="350" width="12" height="12" rx="3" fill="#10B981"/>
 <text x="46" y="360" font-size="12.5" font-weight="650" fill="#F1F5F9">Code</text>
 <text x="92" y="360" font-size="12.5" fill="#94A3B8">owns every gate and every quote</text>

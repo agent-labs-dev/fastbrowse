@@ -1,5 +1,3 @@
-//! tests/browser/test_lifecycle.py: failure and cancellation paths that need deterministic transport responses.
-//!
 //! Each test drives a `BrowserSession` against `FakeChrome`, test_lifecycle.py's `CdpTransport` behind a socket.
 //!
 //! Ported as unit tests in adapters, src/adapters/browser_use_cloud.rs:
@@ -139,7 +137,9 @@ async fn test_a_run_nobody_sits_in_front_of_activates_its_target() {
     let script = fake.script();
     assert_eq!(script.count("Target.activateTarget"), 2);
     assert_eq!(script.requested("Target.createTarget", &json!({"url": "about:blank"}), None), 1);
-    assert!(!script.calls.iter().any(|m| m == "Emulation.setFocusEmulationEnabled" || m == "Page.startScreencast"));
+    assert!(!script.calls.iter().any(|m| m == "Page.startScreencast"));
+    // Anything can take the front from the tab, and a hidden tab leaves input unanswered without this.
+    assert_eq!(script.count("Emulation.setFocusEmulationEnabled"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -715,7 +715,12 @@ async fn test_attach_adopts_its_popups_and_windows_without_opener_only_when_matc
             if let Some(opener) = opener {
                 info["openerId"] = opener.into();
             }
-            testing::dispatch(&session, "Target.targetCreated", json!({"targetInfo": info}), None);
+            testing::dispatch(
+                &session,
+                "Target.attachedToTarget",
+                json!({"targetInfo": info, "sessionId": format!("session-{target_id}"), "waitingForDebugger": target_id != "other"}),
+                None,
+            );
         }
         assert_eq!(session.popups(), adopted, "{target_match:?}");
         assert!(testing::popups(&session).iter().all(|(_, opener, _)| opener == "app"));

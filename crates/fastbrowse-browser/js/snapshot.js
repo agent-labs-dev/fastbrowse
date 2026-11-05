@@ -1,9 +1,17 @@
 // Ported from jev-ultrafast (MIT): jev_ultrafast/snapshot.js.
 // Atomic single-evaluate observation of one frame's controls, viewport text, and a freshness fingerprint.
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
-// open shadow roots. Runs once per frame session (main frame or an OOPIF); the Python side merges frames.
-// biome-ignore format: Python appends mode arguments to this parenthesized expression.
-((mode, allowedOrigins = null, limits = null) => {
+// open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
+// biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
+((mode, allowedOrigins = null) => {
+  // Reading a cross-origin frame's document can throw.
+  const childDocument = frame => {
+    try {
+      return frame.contentDocument;
+    } catch {
+      return null;
+    }
+  };
   const granted = doc => {
     if (allowedOrigins === null) return true;
     const frame = doc.defaultView.frameElement;
@@ -15,22 +23,8 @@
     const url = new URL(doc.URL);
     return ['http:', 'https:'].includes(url.protocol) && allowedOrigins.includes(url.origin);
   };
-  // Form context is repeated for each submit-capable input in safety prompts.
-  const FORM_TEXT_CHARS = 2000;
   // Freshness guards bound comparison work on large cards; this text is never sent to a model.
   const GUARD_TEXT_CHARS = 6000;
-  // Twin controls repeat their card heading, so keep its excerpt shorter than the control itself.
-  const CONTROL_CONTEXT_CHARS = 120;
-  // A hover target can be a whole card whose text would crowd out the other controls.
-  const HOVER_LABEL_CHARS = 200;
-  // Each hover rule fans out to DOM queries, so bound stylesheet work per observation.
-  const MAX_HOVER_RULES = 200;
-  // Hover targets supplement the actionable controls rather than fill their observation budget.
-  const MAX_HOVER_TARGETS = 40;
-  // Each candidate checks hidden descendants, which can stall a dense page's observation.
-  const MAX_HOVER_CHECKS = 400;
-  const excerpt = (text, cap) =>
-    text.length <= cap ? text : `${text.slice(0, cap)} [${text.length - cap} characters omitted]`;
   // A transparent native checkbox is the one control TodoMVC shows, so only its own opacity is excused: a
   // transparent ancestor still hides it. Walked by style, not layout box, as a `display: contents` parent
   // generates no box yet hides nothing.
@@ -47,49 +41,43 @@
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
-  if (!registry.track) {
-    const roots = new WeakSet();
-    const changed = () => {
-      registry.lastMutation = performance.now();
-    };
-    const observer = new MutationObserver(changed);
-    registry.track = root => {
-      if (roots.has(root)) return;
-      roots.add(root);
-      observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
-      // Input handlers can defer a navigation or redraw without mutating yet. Start the quiet clock at the
-      // event, so the reply's travel time counts toward settling even when the action changes nothing.
-      for (const event of [
-        'input',
-        'change',
-        'scroll',
-        'wheel',
-        'pointermove',
-        'pointerdown',
-        'pointerup',
-        'keydown',
-        'keyup',
-      ])
-        root.addEventListener(event, changed, true);
-      changed();
-    };
-    registry.track(document);
+  // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
+  // acts on: a Pause beside a ticking remaining time was refused as stale on every one of 52 clicks. Text that changed
+  // between two looks with no input in between is the page's own; text that changes after a run's own click, scroll
+  // or typing still counts. The run's input arrives as trusted events, which is how the page tells the two apart.
+  if (!registry.selfUpdating) {
+    registry.selfUpdating = new Set();
+    registry.changed = new Set();
+    registry.quiet = false;
+    const input = () => (registry.quiet = false);
+    for (const type of ['pointerdown', 'mousedown', 'keydown', 'input', 'change', 'wheel', 'scroll']) {
+      addEventListener(type, input, true);
+    }
+    new MutationObserver(records => {
+      for (const r of records) {
+        const textOnly =
+          r.type === 'characterData' || [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === Node.TEXT_NODE);
+        const element = r.type === 'characterData' ? r.target.parentElement : r.target;
+        if (textOnly && element) registry.changed.add(element);
+      }
+    }).observe(document, { subtree: true, characterData: true, childList: true });
+  }
+  if (mode !== 'glance') {
+    if (registry.quiet) for (const e of registry.changed) registry.selfUpdating.add(e);
+    for (const e of registry.selfUpdating) if (!e.isConnected) registry.selfUpdating.delete(e);
+    registry.changed.clear();
+    registry.quiet = true;
   }
   const clock = () => ({
     ready: document.readyState === 'interactive' || document.readyState === 'complete',
-    quietFor: performance.now() - registry.lastMutation,
     hidden: document.hidden,
   });
-  // The settle loop reads the clock alone until the page has gone quiet: the walk below reads every element and
-  // all the page's text, which on a large page costs more than the poll interval leaves room for.
-  if (mode === 'quiet') return clock();
   if (mode === 'fingerprint') {
     let hash = 2166136261;
     const hashText = text => {
       for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
     };
     const include = root => {
-      registry.track(root);
       hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
@@ -112,12 +100,7 @@
           );
         if (e.shadowRoot) include(e.shadowRoot);
         if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-          let inner = null;
-          try {
-            inner = e.contentDocument;
-          } catch {
-            inner = null;
-          }
+          const inner = childDocument(e);
           if (inner?.body && granted(inner)) include(inner);
         }
       }
@@ -233,6 +216,10 @@
       .filter(Boolean)
       .join(' ');
   };
+  // A name taken from content reads only what is shown: a card's hidden "Report fraud item" button named the card.
+  // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
+  // An svg's <title> never renders, yet it is the graphic's name.
+  const shown = e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -258,7 +245,10 @@
             .map(n =>
               n.nodeType === 3
                 ? n.textContent
-                : n.nodeType === 1 && !CODE.has(n.tagName) && n.getAttribute('aria-hidden') !== 'true'
+                : n.nodeType === 1 &&
+                    !CODE.has(n.tagName) &&
+                    n.getAttribute('aria-hidden') !== 'true' &&
+                    (shown(n) || !shown(e))
                   ? labelFrom(n, seen)
                   : '',
             )
@@ -270,7 +260,11 @@
     );
   };
 
-  const labelOf = memo(e => labelFrom(e, new Set()));
+  const labelOf = memo(
+    e =>
+      (e && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && focusableText(e)) ||
+      labelFrom(e, new Set()),
+  );
 
   const ARIA_ROLES = [
     'button',
@@ -294,6 +288,27 @@
     'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
     'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
     ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
+  // A page says an element it styled or scripted is pressable without any role: a declared click handler, or the
+  // pointer cursor. The cursor inherits, so only the element it starts on counts, and an element inside a control or
+  // holding one leaves the click to that control.
+  const pressable = memo(e => {
+    const view = e.ownerDocument.defaultView;
+    const starts =
+      e.hasAttribute('onclick') ||
+      (view.getComputedStyle(e).cursor === 'pointer' &&
+        (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
+    return starts && !e.parentElement?.closest(SELECTOR) && !e.querySelector(SELECTOR);
+  });
+  // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
+  // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding
+  // a visible control leaves input to that control instead.
+  const focusableText = memo(e => {
+    if (e.getAttribute('tabindex') === null || Number(e.getAttribute('tabindex')) < 0) return null;
+    if (e.matches(SELECTOR) || e.parentElement?.closest(SELECTOR)) return null;
+    if ([...e.querySelectorAll(SELECTOR)].some(visible)) return null;
+    const text = (innerTextOf(e) || '').replace(/\s+/g, ' ').trim();
+    return text || null;
+  });
   // Types whose value is a calendar date, not free text: the field writer must produce the type's ISO shape
   // and the native value setter, not typed keystrokes, is what a picker widget actually commits.
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
@@ -320,7 +335,9 @@
     // element to act on. Name it generic rather than null so the control walk does not drop it before the
     // drag it offers can be seen.
     if (e.getAttribute('draggable') === 'true' || e.hasAttribute('ondrop')) return 'generic';
-    return null;
+    // A focusable label is pressed through the page's own listener, as a button is.
+    if (focusableText(e)) return 'button';
+    return pressable(e) ? 'button' : null;
   };
 
   const submitSemantics = memo(e => {
@@ -347,11 +364,15 @@
     if (submit?.matches(':disabled')) return null;
     if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(c.type)).length > 1)
       return null;
+    // A page can make any of these properties return something other than text. Coursera's React app left an
+    // HTMLInputElement where a method string belongs and `JSON.stringify` threw on React's circular fiber, which ended
+    // the run as a browser error; a value that is not text is no more use to a caller than none.
+    const shown = v => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
     return JSON.stringify({
-      label: submit ? labelOf(submit) : labelOf(form),
-      method: submit?.getAttribute('formmethod') || form.method,
-      action: submit?.getAttribute('formaction') || form.action,
-      text: excerpt(innerTextOf(form), FORM_TEXT_CHARS),
+      label: shown(submit ? labelOf(submit) : labelOf(form)),
+      method: shown(submit?.getAttribute('formmethod') || form.method),
+      action: shown(submit?.getAttribute('formaction') || form.action),
+      text: shown(innerTextOf(form)),
     });
   });
 
@@ -360,31 +381,24 @@
     const owner = doc.defaultView.frameElement;
     return `${framePath(owner.ownerDocument) || 'root'}/${identity(owner)}`;
   };
-  registry.framePath = framePath;
-  registry.submitSemantics = submitSemantics;
 
   // Traverse light DOM plus any open shadow roots, and same-origin same-process nested iframes.
   let inaccessible = 0;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
-    registry.track(root);
-    for (const e of root.querySelectorAll(SELECTOR)) yield e;
+    const listed = new Set(root.querySelectorAll(SELECTOR));
     for (const e of root.querySelectorAll('*')) {
+      if (listed.has(e) || pressable(e) || focusableText(e)) yield e;
       if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-        let inner = null;
-        try {
-          inner = e.contentDocument;
-        } catch {
-          inner = null;
-        }
+        const inner = childDocument(e);
         if (inner && inner.body && granted(inner)) yield* walk(inner);
         else inaccessible++;
       }
     }
   }
 
-  // Guards and the page key go to Python as digests: each comparison is equality, and the full guards cost more to
+  // Guards and the page key go to Rust as digests: each comparison is equality, and the full guards cost more to
   // send than the snapshot takes to compute. Not cryptographic, and it needs not be: a page that wants a guard to
   // hold can simply leave its DOM alone.
   const digest = text => {
@@ -400,7 +414,11 @@
     return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
   };
   // Sibling controls share their card, so its text is hashed once per card rather than once per control.
-  const scopeDigest = memo(scope => digest(innerTextOf(scope)?.slice(0, GUARD_TEXT_CHARS) || ''));
+  const scopeDigest = memo(scope => {
+    let text = innerTextOf(scope) || '';
+    for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
+    return digest(text.slice(0, GUARD_TEXT_CHARS));
+  });
   registry.guard = e => {
     if (!e?.isConnected || !visible(e)) return null;
     const source = sourceOf(e);
@@ -439,8 +457,9 @@
   const controls = [];
   // Controls with no accessible name of their own, whose label is an icon's or only their role.
   const unnamed = new Set();
+  // A button is scoped too, so a submission can be told apart by the fields of the form it sends.
   const fieldScope = e => {
-    if (!e.matches('input,textarea,select')) return null;
+    if (!e.matches('input,textarea,select,button')) return null;
     const form = e.form || e.closest('form,fieldset,[role="form"]');
     if (form) return String(identity(form));
     // Script-built forms can use a local group of labelled fields without an HTML form owner.
@@ -478,7 +497,7 @@
     }
 
     const id = identity(e);
-    registry.controls.add(e);
+    if (mode !== 'glance') registry.controls.add(e);
     const named = labelOf(e);
     if (!named) unnamed.add(id);
     const base = {
@@ -488,8 +507,12 @@
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
+      // The root's own active element, so a field inside a shadow root reads as focused where the document names
+      // only its host.
+      focused: e.getRootNode().activeElement === e,
       input_type: source.type || null,
       input_name: source.getAttribute('name') || null,
+      max_length: source.maxLength > 0 ? source.maxLength : null,
       autocomplete: source.getAttribute('autocomplete') || null,
       frame_origin: e.ownerDocument.location.origin,
       frame_path: framePath(e.ownerDocument),
@@ -509,19 +532,15 @@
       if (value !== null) base[key] = value === 'true';
     }
     if (['checkbox', 'radio'].includes(source.type)) base.checked = source.checked;
-    // A field a form will not submit without: required and still empty, or marked invalid by the page.
-    // A custom widget marks the element the user sees, not the input underneath it, so both are asked.
-    if (
-      e.getAttribute('aria-invalid') === 'true' ||
-      source.getAttribute('aria-invalid') === 'true' ||
-      (['INPUT', 'SELECT', 'TEXTAREA'].includes(source.tagName) &&
-        (source.required || source.getAttribute('aria-required') === 'true') &&
-        (source.type === 'radio' && source.required
-          ? source.validity.valueMissing
-          : !(base.checked ?? (source.value ?? '').trim())))
-    ) {
-      base.blocking = true;
-    }
+    // What the page says about the field. A custom widget marks the element the user sees, not the input
+    // underneath it, so both are asked.
+    if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
+    // Native validation can refuse a form without adding any ARIA attribute or page text.
+    const refused = source.willValidate === true && source.validity?.valid === false;
+    if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
+    // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
+    // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.
+    if (refused && source.validationMessage) base.validation_message = source.validationMessage;
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
       base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
@@ -563,10 +582,31 @@
       e =>
         (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
     ));
-  // A table's header cell names its own row, and a caption its own table, never what sits outside them: a jQuery UI
-  // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same.
-  const reaches = (title, element) =>
-    !['th', 'caption'].includes(title.localName) || title.parentElement.contains(element);
+  // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
+  // Each parent's children counted by tag and class once: asking every child about all its siblings is quadratic
+  // in a list of thousands, and every element of the page is asked whether it is a card.
+  const twinKey = e => `${e.localName} ${e.getAttribute('class')}`;
+  const twinCounts = memo(parent => {
+    const counts = new Map();
+    for (const child of parent?.children || []) counts.set(twinKey(child), (counts.get(twinKey(child)) || 0) + 1);
+    return counts;
+  });
+  const isCard = memo(e =>
+    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
+    (!!e.getAttribute('class') && twinCounts(e.parentElement).get(twinKey(e)) > 1));
+  // A landmark or section owns its headings. A weather panel beside a search form must not name the search
+  // field just because both sit in the same app shell.
+  const isolatesTitle = memo(e =>
+    isCard(e) || e.matches('aside,nav,main,section,form,fieldset,dialog,search,[role="group"],[role="search"],[role="alertdialog"],[role="complementary"],[role="navigation"],[role="main"],[role="region"],[role="form"],[role="dialog"]'));
+  // A table's header cell names its own row, a caption its own table and a legend its own fieldset, never what sits
+  // outside them: a form's "Customer name" was named after the "Pizza Size" fieldset below it, and a jQuery UI
+  // datepicker's Next button was named "Su", its weekday header, and every month's Next read the same. A title inside
+  // a card names that card alone: a list's "More" button was named after the last product shown above it.
+  const reaches = (title, element) => {
+    if (['th', 'caption', 'legend'].includes(title.localName) && !title.parentElement.contains(element)) return false;
+    for (let e = title.parentElement; e && !e.contains(element); e = e.parentElement) if (isolatesTitle(e)) return false;
+    return true;
+  };
   // The title nearest before the element names its section; the scope's first title is the fallback, and the
   // only answer when `nearest` is false.
   const sectionOf = (scope, element, label, nearest = true) => {
@@ -587,13 +627,23 @@
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
-    // A line that is itself a repeated control's label ("Prev") reads the same in every repeat, so it names none:
-    // past it, a datepicker's first line is the month it shows. The label is cut out as whole words, since a day
-    // labelled "2" cut out of "October 2026" left "October 0 6".
+    // A line that is another control of the same kind names that control, not the section: a calendar's day cells were
+    // named "31" and "7" after their neighbours in the same week row, so a picker showing November was offered with
+    // contexts that pointed at other days. A card's title keeps its line, since the control it names there is another
+    // kind (a link inside a checkbox's label names the item). Past a repeated control's label, a datepicker's first
+    // line is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
+    // "October 2026" left "October 0 6".
+    const mine = controls.find(c => registry.nodes.get(c.id) === element);
+    const peers = new Set(
+      controls.filter(c => c !== mine && c.role === mine?.role).map(c => c.label),
+    );
+    // A table row's cells are one line of text, so a week row reads "26 27 28 29 30 1 2": a line made only of this
+    // control's and its peers' labels names nothing but them.
+    const onlyPeers = line => line.split(' ').every(word => word === label || peers.has(word));
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line));
+      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
@@ -607,7 +657,7 @@
       if (e.matches('article,li,[role="listitem"]') ||
         (e.matches('tr,[role="row"]') && e.querySelector('input,textarea,select,[role="textbox"]'))) break;
     }
-    return scope ? excerpt(nameOf(scope, element, label, nearest), CONTROL_CONTEXT_CHARS) : '';
+    return scope ? nameOf(scope, element, label, nearest) : '';
   };
   // Content a stylesheet shows only under the pointer (`.card:hover .caption`) is out of reach of every other
   // operation. An element whose hover rule would reveal something now hidden is offered as a hover target.
@@ -657,14 +707,49 @@
       }
     };
     for (const rules of sheets) collect(rules);
-    const found = [...reveals.values()].slice(0, MAX_HOVER_RULES);
+    const found = [...reveals.values()];
     registry.hoverRules.set(doc, { version, reveals: found });
     return found;
   };
   const offered = new Set(controls.map(c => registry.nodes.get(c.id)));
-  // Bounded work: each candidate costs a query, and a stylesheet can name thousands of hoverable elements.
-  let hovers = 0,
-    checked = 0;
+  // What carries page state in pixels: a chart, a picture, a drawing or a video.
+  const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
+  // Where the pointer can rest: an element with a box inside the viewport's width and no taller than it.
+  const pointerBox = e => {
+    if (e === e.ownerDocument.body || e === e.ownerDocument.documentElement || !visible(e)) return null;
+    const r = e.getBoundingClientRect(),
+      x = r.x + r.width / 2,
+      y = r.y + r.height / 2;
+    return r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth || r.height > innerHeight ? null : y;
+  };
+  const offerHover = (e, y) => {
+    const image = e.querySelector('img[alt]');
+    const label =
+      e.getAttribute('aria-label') ||
+      image?.getAttribute('alt') ||
+      firstLine(e.innerText) ||
+      e.getAttribute('title') ||
+      e.tagName.toLowerCase();
+    const role =
+      e.getAttribute('role') ||
+      { FIGURE: 'figure', LI: 'listitem', IMG: 'img', TR: 'row', TD: 'cell' }[e.tagName] ||
+      'group';
+    controls.push({
+      id: identity(e),
+      role,
+      label,
+      offscreen: y < 0 || y >= innerHeight,
+      distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
+      sensitive: false,
+      input_type: null,
+      frame_origin: e.ownerDocument.location.origin,
+      frame_path: framePath(e.ownerDocument),
+      submit_semantics: null,
+      value: null,
+      operations: ['hover'],
+    });
+    offered.add(e);
+  };
   for (const doc of docs) {
     for (const [base, tail] of revealsIn(doc)) {
       let hosts = [];
@@ -674,15 +759,11 @@
         continue;
       }
       for (const e of hosts) {
-        if (hovers >= MAX_HOVER_TARGETS || checked >= MAX_HOVER_CHECKS) break;
         // A link or button's own hover rule restyles it or shows decoration; offering HOVER there as well as
         // CLICK only gives the choice another way to be wrong.
-        if (offered.has(e) || e === doc.body || e === doc.documentElement || !visible(e)) continue;
-        const r = e.getBoundingClientRect(),
-          x = r.x + r.width / 2,
-          y = r.y + r.height / 2;
-        if (r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth || r.height > innerHeight) continue;
-        checked++;
+        if (offered.has(e)) continue;
+        const y = pointerBox(e);
+        if (y === null) continue;
         let hidden = false;
         try {
           hidden = [...e.querySelectorAll(tail)].some(
@@ -694,35 +775,29 @@
         // Removing the active hover target renumbers its identical siblings and sends the next choice
         // to a different element. Keep it offered while the pointer still reveals its content.
         if (!hidden && !e.matches(':hover')) continue;
-        const image = e.querySelector('img[alt]');
-        const label =
-          e.getAttribute('aria-label') ||
-          image?.getAttribute('alt') ||
-          firstLine(e.innerText) ||
-          e.getAttribute('title') ||
-          e.tagName.toLowerCase();
-        const role =
-          e.getAttribute('role') ||
-          { FIGURE: 'figure', LI: 'listitem', IMG: 'img', TR: 'row', TD: 'cell' }[e.tagName] ||
-          'group';
-        const c = {
-          id: identity(e),
-          role,
-          label: excerpt(label, HOVER_LABEL_CHARS),
-          offscreen: y < 0 || y >= innerHeight,
-          distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
-          sensitive: false,
-          input_type: null,
-          frame_origin: e.ownerDocument.location.origin,
-          frame_path: framePath(e.ownerDocument),
-          submit_semantics: null,
-          value: null,
-          operations: ['hover'],
-        };
-        controls.push(c);
-        offered.add(e);
-        hovers++;
+        offerHover(e, y);
       }
+    }
+  }
+  // A script can render a card's controls only while a real pointer is over it, from hover state no stylesheet
+  // names: a media page's delete and reorder buttons were absent from the document until then, so nothing on
+  // the card could be acted on and the run reported an image it could see as one it could not find. A card of a
+  // list that shows a picture and holds nothing to act on is offered as a hover target, so the pointer can go
+  // there and the next observation shows what appeared. A card of text alone, a paragraph or a calendar's
+  // weekday row, is read rather than handled, and offering every one would bury the choice. Only the outermost
+  // such card is offered.
+  const holding = new Set();
+  for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
+  for (const doc of docs) {
+    let host = null;
+    for (const e of doc.body.querySelectorAll('*')) {
+      if (host?.contains(e)) continue;
+      if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
+      if (!e.querySelector(VISUAL)) continue;
+      const y = pointerBox(e);
+      if (y === null) continue;
+      offerHover(e, y);
+      host = e;
     }
   }
 
@@ -765,7 +840,7 @@
         if (!node.parentElement?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
         lines.push(` ${line} `.split(` ${label} `).join(' '));
       }
-      return excerpt(firstLine(lines.join('\n')), CONTROL_CONTEXT_CHARS);
+      return firstLine(lines.join('\n'));
     };
     const own = group.map(c => (c.context ? '' : ownOf(registry.nodes.get(c.id), c.label)));
     if (new Set(own.filter(Boolean)).size > 1 || (own.some(Boolean) && group.some(c => c.context))) {
@@ -786,13 +861,6 @@
   // card shows the same icon: one left alone, or drawn by another icon set, would name no card and leave the choice
   // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
   // that says anything besides it.
-  // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
-  const isCard = e =>
-    e.matches('article,li,[role="listitem"],tr,[role="row"]') ||
-    (!!e.getAttribute('class') &&
-      [...(e.parentElement?.children || [])].some(
-        s => s !== e && s.localName === e.localName && s.getAttribute('class') === e.getAttribute('class'),
-      ));
   const nearestName = (element, label) => {
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
@@ -805,9 +873,9 @@
         .filter(child => child !== path)
         .map(child => firstLine(innerTextOf(child)))
         .find(line => line && line !== label && !repeated.has(line));
-      return excerpt((aria !== label && aria) || outside || first, CONTROL_CONTEXT_CHARS);
+      return (aria !== label && aria) || outside || first;
     }
-    return excerpt(first, CONTROL_CONTEXT_CHARS);
+    return first;
   };
   for (const c of controls) {
     if (!c.context && unnamed.has(c.id)) {
@@ -817,38 +885,61 @@
   }
 
   // A revealed caption needs its actual container association, not merely the most recent action.
-  registry.hoverContexts = new WeakMap();
-  for (const c of controls) {
-    if (!c.operations.includes('hover')) continue;
-    const element = registry.nodes.get(c.id);
-    registry.hoverContexts.set(element, {
-      control: {
-        role: c.role, label: c.label,
-        context: /^\d+ of \d+$/.test(c.context || '') ? c.context : null,
-      },
-      labelAttributes: [element.getAttribute('role'), element.getAttribute('aria-label'),
-        element.getAttribute('title'), element.querySelector('img[alt]')?.getAttribute('alt') || null],
-      text: element.innerText,
-      parent: element.parentNode,
-      siblings: [...(element.parentNode?.children || [])],
-    });
+  if (mode !== 'glance') {
+    registry.hoverContexts = new WeakMap();
+    // Hover targets are often every card of one list, so the sibling list is taken once per parent.
+    const siblingsOf = memo(parent => [...(parent?.children || [])]);
+    for (const c of controls) {
+      if (!c.operations.includes('hover')) continue;
+      const element = registry.nodes.get(c.id);
+      registry.hoverContexts.set(element, {
+        control: {
+          role: c.role, label: c.label,
+          context: /^\d+ of \d+$/.test(c.context || '') ? c.context : null,
+        },
+        labelAttributes: [element.getAttribute('role'), element.getAttribute('aria-label'),
+          element.getAttribute('title'), element.querySelector('img[alt]')?.getAttribute('alt') || null],
+        text: innerTextOf(element),
+        parent: element.parentNode,
+        siblings: siblingsOf(element.parentNode),
+      });
+    }
   }
 
-  // A date field's own label ("Start Date") rarely says which picker it belongs to when a page offers several
-  // ("Date Picker 3"): unlike a colliding label, a uniquely named one never reaches the loop above, so the
-  // nearest ancestor that names a section is attached here on its own, without the twin-avoidance `contextOf`
-  // needs to keep a card from naming its neighbour.
+  // The titles a scope's own content can be named by: none sealed in a card below the scope, and a header cell,
+  // caption or legend only in the element it heads. For anything outside the scope's child that holds the control,
+  // this is what `reaches` decides, so it is worked out once per scope rather than once per control.
+  const openTitles = memo(scope =>
+    titles(scope).filter(title => {
+      if (['th', 'caption', 'legend'].includes(title.localName) && title.parentElement !== scope) return false;
+      for (let e = title.parentElement; e !== scope; e = e.parentElement) if (isolatesTitle(e)) return false;
+      return true;
+    }),
+  );
+  // A control's own label rarely says which section it belongs to when a page repeats a form or widget: unlike a
+  // colliding label, a uniquely named one never reaches the loop above, so the nearest ancestor that names a section
+  // is attached here on its own, without the twin-avoidance `contextOf` needs to keep a card from naming its neighbour.
+  // Each ancestor is asked only for titles outside the one below it, whose own were already turned down; a title
+  // inside the control is its own content, never the section it sits in.
   const nearestHeading = (element, label) => {
-    for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+    for (let inner = element, e = element.parentElement; e && e !== e.ownerDocument.body; inner = e, e = e.parentElement) {
       const aria = (e.getAttribute('aria-label') || '').trim();
-      if (aria && aria !== label) return excerpt(aria, CONTROL_CONTEXT_CHARS);
-      const section = sectionOf(e, element, label);
-      if (section) return excerpt(section, CONTROL_CONTEXT_CHARS);
+      if (aria && aria !== label) return aria;
+      let first = '',
+        before = '';
+      for (const title of openTitles(e)) {
+        if (inner.contains(title)) continue;
+        const text = firstLine(innerTextOf(title));
+        if (!text || text === label) continue;
+        first ||= text;
+        if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
+      }
+      if (before || first) return before || first;
     }
     return '';
   };
   for (const c of controls) {
-    if (!c.context && DATE_TYPES.includes(c.input_type)) {
+    if (!c.context) {
       const context = nearestHeading(registry.nodes.get(c.id), c.label);
       if (context) c.context = context;
     }
@@ -907,16 +998,26 @@
       columns.set(table, names);
     }
     const column = columns.get(table).get(cell);
-    if (column) c.context = [c.context, `column: ${excerpt(column, CONTROL_CONTEXT_CHARS)}`].filter(Boolean).join('; ');
+    if (column) c.context = [c.context, `column: ${column}`].filter(Boolean).join('; ');
   }
 
-  // Python applies the configured caps after merging frames; keep the nearest controls first.
   controls.sort((a, b) => a.distance - b.distance);
 
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
   // its own at all. Each child is read in its own coordinates, shifted by where its frame sits.
   const words = [];
-  // Geometry, the cheaper test, goes first.
+  // Visible text the viewport does not show. Jev judging only the screen took a list below the fold for a page with
+  // nothing on it, and went past it unread.
+  const offscreen = [];
+  const readFrames = (doc, dx, dy, read) => {
+    for (const frame of doc.querySelectorAll('iframe,frame')) {
+      const inner = childDocument(frame);
+      if (!inner || !granted(inner)) continue;
+      const f = frame.getBoundingClientRect();
+      read(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
+    }
+  };
+  // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
@@ -928,44 +1029,27 @@
       if (!value || !parent) continue;
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || parent.closest('script,style,noscript,template') || !visible(parent)) {
+        continue;
+      }
       const top = r.top + dy,
         left = r.left + dx;
-      if (
-        r.width > 0 &&
-        r.height > 0 &&
-        top + r.height > 0 &&
-        top < innerHeight &&
-        left + r.width > 0 &&
-        left < innerWidth &&
-        !parent.closest('script,style,noscript,template') &&
-        visible(parent)
-      ) {
+      if (top + r.height > 0 && top < innerHeight && left + r.width > 0 && left < innerWidth) {
         words.push(value);
+      } else {
+        offscreen.push(value);
       }
     }
-    for (const frame of doc.querySelectorAll('iframe,frame')) {
-      let inner = null;
-      try {
-        inner = frame.contentDocument;
-      } catch {
-        inner = null;
-      }
-      if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      readText(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
-    }
+    readFrames(doc, dx, dy, readText);
   };
   readText(document, 0, 0);
   const viewport_text = words.join('\n');
+  const offscreen_text = offscreen.join('\n');
 
   // Page state carried by pixels: a chart, a picture, a drawing or a video is evidence the page text and the
   // control list cannot hold, and the verifier needs the screenshot for it. Only what the viewport shows counts,
-  // because that is what a screenshot captures: an image below the fold cannot appear in it, and counting every
-  // image on a long page would ask for a screenshot on almost every page and undo the gate it exists to serve.
-  // Geometry is read in the parent's coordinates the way readText reads text, so a frame's image counts where the
-  // frame itself sits on screen. Elements small enough to be an icon or a rule are not page state.
-  const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
-  const VISUAL_MIN_PX = 48;
+  // because that is what a screenshot captures. Geometry is read in the parent's coordinates the way readText reads
+  // text, so a frame's image counts where the frame itself sits on screen.
   let visual_content = 0;
   const readVisual = (doc, dx, dy) => {
     if (visual_content) return;
@@ -974,24 +1058,47 @@
       const r = e.getBoundingClientRect();
       const top = r.top + dy,
         left = r.left + dx;
-      if (r.width < VISUAL_MIN_PX || r.height < VISUAL_MIN_PX) continue;
+      if (r.width <= 0 || r.height <= 0) continue;
       if (top + r.height <= 0 || top >= innerHeight || left + r.width <= 0 || left >= innerWidth) continue;
       visual_content = 1;
       return;
     }
-    for (const frame of doc.querySelectorAll('iframe,frame')) {
-      let inner = null;
-      try {
-        inner = frame.contentDocument;
-      } catch {
-        inner = null;
-      }
-      if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      readVisual(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
-    }
+    readFrames(doc, dx, dy, readVisual);
   };
   readVisual(document, 0, 0);
+
+  // A player's state lives in the element, not the page's text: native controls draw their clock in shadow DOM, so a
+  // run asked to confirm audio plays and then stops pressed Play and Pause until its step limit, unable to see either.
+  // Every player counts, shown or not, since a hidden one can still be playing.
+  const media = [];
+  // Section headings only, as capture.js names players: a table's column header ("Comment") or a player's own
+  // settings legend ("Font Family") named the players after them on Wikimedia Commons.
+  const headingBefore = e => {
+    let found = '';
+    for (const h of e.ownerDocument.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
+      if (!(h.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
+      found = firstLine(innerTextOf(h)) || found;
+    }
+    return found;
+  };
+  const seconds = value => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null);
+  const readMedia = doc => {
+    for (const e of doc.querySelectorAll('audio,video')) {
+      media.push({
+        kind: e.tagName.toLowerCase(),
+        // Its children are fallback text for browsers without players, not its name.
+        label: (e.hasAttribute('aria-label') || e.hasAttribute('aria-labelledby') ? labelOf(e) : e.title) || null,
+        heading: headingBefore(e) || null,
+        paused: e.paused,
+        ended: e.ended,
+        muted: e.muted,
+        elapsed_seconds: seconds(e.currentTime) ?? 0,
+        duration_seconds: seconds(e.duration),
+      });
+    }
+    readFrames(doc, 0, 0, readMedia);
+  };
+  readMedia(document);
 
   const guards = {},
     retarget_keys = {};
@@ -1002,28 +1109,8 @@
     // document's timeOrigin and form semantics, must survive before an action can follow it.
     retarget_keys[c.id] = guard && digest(JSON.stringify(guard.slice(1, -1)));
   }
-  // A dependent field can appear without changing page text. Compare all controls,
-  // excusing only the value and required marker of the field just filled.
-  const formState = controls.map(({ distance, offscreen, ...c }) => {
-    const form = registry.nodes.get(c.id)?.form;
-    return { ...c, form: form ? [form.action, form.method, form.target] : null };
-  });
-  const formPage = JSON.stringify([location.href, performance.timeOrigin, document.title, viewport_text]);
-  if (typeof mode === 'object') {
-    const previous = registry.formObserved;
-    if (!previous || previous.page !== formPage) return false;
-    const expected = previous.controls.map(c => {
-      if (c.id !== mode.id) return c;
-      const { blocking, ...filled } = c;
-      return mode.text ? { ...filled, value: mode.text } : c;
-    });
-    const same = JSON.stringify(expected) === JSON.stringify(formState);
-    if (same) registry.formObserved = { page: formPage, controls: formState };
-    return same;
-  }
-  registry.formObserved = { page: formPage, controls: formState };
   // Kept so a later check can ask whether any of these controls changed without sending the guards back.
-  registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
+  if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
     .map(e => [identity(e), reveal(e), e.checked, e.selectedIndex, e.disabled, e.readOnly]);
@@ -1039,13 +1126,17 @@
     viewport_text,
     semantics,
     field_state,
+    // Playing or not changes the page; the clock advancing does not, or no key would hold until an action.
+    media.map(({ elapsed_seconds, ...m }) => m),
   ]));
 
   const result = {
     url: location.href,
     title: document.title,
     viewport_text,
+    offscreen_text,
     visual_content,
+    media,
     document_key: String(performance.timeOrigin),
     controls: semantics,
     page_key,
@@ -1053,21 +1144,5 @@
     retarget_keys,
     inaccessible_frames: inaccessible,
   };
-  if (!limits) return result;
-  // Python keeps at most `limits.onscreen` of the controls on screen and `limits.offscreen` of those off it, each
-  // the first in this order, and any pager past either cap. A control past the caps is sent with only what decides
-  // whether it is a pager; Python asks for the rest of one it keeps, by this snapshot's token, from what is kept here.
-  const token = (registry.snapshots = (registry.snapshots || 0) + 1);
-  registry.sent = { token, rows: new Map(semantics.map(c => [c.id, [c, guards[c.id], retarget_keys[c.id]]])) };
-  let onscreen = 0,
-    offscreen = 0;
-  result.controls = semantics.map(c => {
-    if (c.offscreen ? offscreen++ < limits.offscreen : onscreen++ < limits.onscreen) return c;
-    delete result.guards[c.id];
-    delete result.retarget_keys[c.id];
-    const { id, role, label, operations, href, next_page } = c;
-    return { id, role, label, operations, href, next_page, offscreen: c.offscreen, partial: true };
-  });
-  result.token = token;
   return result;
 })

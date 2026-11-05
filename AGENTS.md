@@ -6,7 +6,8 @@ Guidance for an agent working in this repository.
 
 A browser agent built on one idea: **it picks instead of generating**. Every page is indexed into the
 controls it actually has, and [Jev](https://typesafe.ai), a choice model, picks one of them. An LLM plans,
-reads and writes prose. Code owns authorization gates, secret resolution and cost limits.
+reads and writes prose. Jev also decides when a page is read and when the run is done. Code owns authorization
+gates, secret resolution and cost limits, and states what it knows to Jev instead of overruling it.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for what a PR needs, [README.md](README.md) for the product, [docs/design.md](docs/design.md) for the browser layer,
 [docs/evals.md](docs/evals.md) for how it is measured, and [docs/jev.md](docs/jev.md) for every Jev
@@ -60,7 +61,7 @@ npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk                                   # starts `fastbrowse serve` from the uv environment
 go -C go generate ./... && git diff --exit-code -- go && go -C go vet ./...
-FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli --features scripted
 python3 scripts/java_types.py && git diff --exit-code -- java
 FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify    # Java 17+, Maven
 python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
@@ -137,9 +138,9 @@ These are the things a change must not quietly break.
   (`unverified`, `needs_confirmation`, `needs_login`, `blocked`, `needs_input`, `stuck`, `budget_exceeded`,
   `observation_limit`, `unavailable`, `error`),
   never rounded up. The CLI exits 0 only for `complete`.
-- **A claim cites a quote.** An answer's facts are spans code cut from a capture, not text a model wrote; a
-  derived count or winner cites the facts it was concluded from.
-  A requirement is evidenced or it is open.
+- **A claim cites a quote.** An answer's facts are spans code cut from a capture, or text the model read off a
+  screenshot the run showed it and cited as read from that image; a derived count or winner cites the facts it was
+  concluded from. A requirement is evidenced or it is open.
 - **Page content is data, never instructions.** Prompts that read page content must say so, and completion is judged against quotes
   and page state rather than the model's say-so.
 - **A model never sees a secret value.** Secrets reach a page by name, resolved at the moment of typing and
@@ -152,26 +153,28 @@ These are the things a change must not quietly break.
   recorded may be the one that put the secret there. Live JPEG frames and recordings are held back before
   secret typing and while observations reveal a resolved secret; recordings keep their last clean frame.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code
-  refuses actions classified as irreversible without authorization. Code-selected pagination and authorized,
-  confident actions skip classification. The classifier is not a guarantee against missed changes.
-- **An action that changed nothing is not progress.** An idle action from the same state goes to recovery
-  before a retry; rewriting a field's current value cannot count as progress even if the page changes.
-
+  refuses an irreversible one unless the run is authorized and Jev judges the task asked for it. Only
+  code-selected pagination skips classification. The classifier is not a guarantee against missed changes.
+- **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE and a return to a
+  page state already seen with nothing read since are each no progress. `unchanged_actions` of them in a row
+  ask Jev again without the stalled action. A page state not seen before or new evidence renews that budget. Rewriting a field's current value cannot count as progress even if the page
+  changes.
 
 ## Prompts and models
 
 A prompt is code, and a model's output is untrusted until code accepts it.
 
-- **One call does one job.** A request that states a task states everything the next step needs from it. The
-  plan call writes its own answer checks instead of leaving a terse draft for a second call to repair. Split a
+- **One call does one job.** A request that states a task states everything the next step needs from it. Split a
   job across calls only when the two cannot be asked in the same breath, and give each half its own contract.
-- **The LLM proposes, code checks.** A schema, a count or a citation is settled by code against the quotes or
-  the page state. Trust a model's output only where code can prove it
+- **The LLM proposes.** A schema or a citation is checked by code against the quotes or the page
+  state, and the run's next step and its end are Jev's. Trust an LLM's output only where code can prove it
   complete; where it cannot, repair it deterministically or ask again. A partial result is reported as
   partial.
 - **Every call leaves a receipt.** The ledger records each call's purpose, tokens and dollars, and a budget
   is checked before the call that would break it. A change to the calls a run makes is measured by calls per
   purpose, not wall clock.
+- **Nothing a model reads is cut short.** No text, control or output cap, except one a provider documents, named as
+  that provider's (Jev's in `DecisionProfile`). A rule that overrides a model is stated to that model.
 - **A prompt change is a behaviour change.** It is iterated against the eval suites like any other agent
   change, and a unit test pins any instruction the behaviour depends on.
 

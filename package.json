@@ -7,9 +7,9 @@
     "check:sdk": "biome ci packages/sdk && npm --prefix packages/sdk run typecheck && npm --prefix packages/sdk test"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.3",
+    "@biomejs/biome": "2.6.4",
     "@standard-schema/spec": "1.1.0",
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "arktype": "2.2.9",
     "json-schema-to-typescript": "16.0.0",
     "typescript": "7.0.2",

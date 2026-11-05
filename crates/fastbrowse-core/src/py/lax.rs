@@ -51,19 +51,32 @@ fn int_from_str(s: &str) -> Option<i64> {
     whole.replace('_', "").parse().ok()
 }
 
+/// `float(text)`, which takes surrounding whitespace, a sign and `_` between digits only.
+pub fn py_float(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let unsigned = lower.trim_start_matches(['+', '-']);
+    if matches!(unsigned, "inf" | "infinity" | "nan") {
+        return lower.replace("infinity", "inf").parse().ok();
+    }
+    let bad_underscore = trimmed.starts_with('_')
+        || trimmed.ends_with('_')
+        || trimmed.contains("__")
+        || trimmed.split('_').skip(1).any(|part| !part.starts_with(|c: char| c.is_ascii_digit()))
+        || trimmed.split('_').rev().skip(1).any(|part| !part.ends_with(|c: char| c.is_ascii_digit()));
+    if trimmed.is_empty() || bad_underscore || !trimmed.bytes().all(|b| b.is_ascii_digit() || b"+-.eE_".contains(&b)) {
+        return None;
+    }
+    trimmed.replace('_', "").parse().ok()
+}
+
 /// A float as pydantic reads one: a number, a bool, or a string Python's `float()` reads.
 pub fn float_of(value: &Value) -> Result<f64, String> {
     match value {
         Value::Bool(b) => Ok(f64::from(u8::from(*b))),
         Value::Number(n) => n.as_f64().ok_or_else(|| "Input should be a valid number".into()),
         Value::String(s) => {
-            let cleaned: String = s.trim().chars().filter(|c| *c != '_').collect();
-            match cleaned.to_ascii_lowercase().trim_start_matches(['+', '-']) {
-                "inf" | "infinity" | "nan" => cleaned.to_ascii_lowercase().replace("infinity", "inf").parse().ok(),
-                _ if cleaned.bytes().all(|b| b.is_ascii_digit() || b"+-.eE".contains(&b)) => cleaned.parse().ok(),
-                _ => None,
-            }
-            .ok_or_else(|| "Input should be a valid number, unable to parse string as a number".into())
+            py_float(s).ok_or_else(|| "Input should be a valid number, unable to parse string as a number".into())
         }
         _ => Err("Input should be a valid number".into()),
     }
@@ -205,6 +218,14 @@ pub fn strict_int<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_float_takes_underscores_only_between_digits() {
+        assert_eq!(float_of(&json!("1_0.5")), Ok(10.5));
+        for malformed in ["1__0", "_1", "1_", "1_.5"] {
+            assert!(float_of(&json!(malformed)).is_err(), "{malformed}");
+        }
+    }
 
     #[test]
     fn ints_are_read_as_pydantic_reads_them() {
