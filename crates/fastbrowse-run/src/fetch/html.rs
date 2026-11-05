@@ -292,7 +292,10 @@ impl<'a> Reader<'a> {
             return;
         }
         self.control(tag, attrs);
-        let pages = |value: Option<&str>| value.is_some_and(|value| value.to_ascii_lowercase().contains("pag"));
+        // Pagination's own words, not "pag" alone: a `<body class="page">` layout class held every carousel open.
+        let pages = |value: Option<&str>| {
+            value.map(|value| value.to_ascii_lowercase()).is_some_and(|v| v.contains("pagin") || v.contains("pager"))
+        };
         if tag == "nav" || pages(get("class")) || pages(get("aria-label")) {
             if let Some((open, nested)) = self.paging.last_mut()
                 && open == tag
@@ -699,6 +702,17 @@ mod tests {
         );
         let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
         assert_eq!(next, [None, None, None, None, Some(true), Some(true)]);
+    }
+
+    #[test]
+    fn review_a_page_layout_class_does_not_turn_a_carousel_into_pagination() {
+        let (_, _, controls) = read(
+            "<body class='page'><main><div class='carousel'>\
+             <a class='next' href='/slide/2'>Next slide</a></div></main></body>",
+            "https://a.example/list",
+        );
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].next_page, None, "a page layout class is not a pagination container");
     }
 
     #[test]

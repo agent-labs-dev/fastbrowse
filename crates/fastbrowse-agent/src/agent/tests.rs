@@ -4873,3 +4873,27 @@ fn test_returning_to_a_lists_first_page_keeps_its_later_pages() {
     state.note_pager_pages(&first);
     assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://list.test/page/3/"));
 }
+
+#[tokio::test]
+async fn review_a_screenshot_value_from_another_record_is_not_a_repeated_fact() {
+    // A text block can contain several records while a price drawn in an image belongs to only one of them.
+    let listing = capture(&[(BlockKind::Paragraph, "Basic plan $20.00; Premium plan $10.00")]);
+    let page = Observation { visual_content: true, ..at("https://example.test", &[]) };
+    let agent = Agent::new(
+        Arc::new(Screenshots::default()),
+        Arc::new(ScriptedJev::new(Vec::new())),
+        Arc::new(ListingImageLLM("Basic plan $10.00")),
+    );
+    let mut state = run_state();
+    state.task = "What price does the Basic plan show in the image?".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    let evidence = block_evidence(&listing, "s0");
+    state.notes.add(Fact::read(&evidence.quote.clone(), evidence, FactReader::JevChoice));
+
+    agent.read_drawn_page(&mut state, &page).await.expect("read screenshot");
+
+    assert!(
+        state.notes.facts().iter().any(|fact| fact.reader == FactReader::LlmImage && fact.text == "Basic plan $10.00"),
+        "the screenshot's price for Basic is not the text block's price for Basic and must reach verification"
+    );
+}

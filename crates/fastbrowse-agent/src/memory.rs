@@ -405,12 +405,10 @@ impl Notes {
     pub fn repeats_page_text(&self, text: &str, url: &str) -> bool {
         let page = address(url);
         let said = words(text);
-        // One note has to say it, in the same order: words scattered over several notes, or reordered, can state what
-        // none of them does, as "Alice beat Bob" from "Alice beat Carol" and "Bob beat Alice".
-        let in_order = |note: &[String]| {
-            let mut note = note.iter();
-            said.iter().all(|word| note.any(|read| read == word))
-        };
+        // One note has to say it, word for word in one run: words scattered over several notes, reordered, or picked
+        // out with others between, can state what none of them does, as "Alice beat Bob" from "Alice beat Carol" and
+        // "Bob beat Alice", or "Basic plan $10.00" from "Basic plan $20.00; Premium plan $10.00".
+        let in_order = |note: &[String]| note.windows(said.len()).any(|run| run == said.as_slice());
         !said.is_empty()
             && self
                 .facts
