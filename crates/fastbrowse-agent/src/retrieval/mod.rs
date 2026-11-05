@@ -11,6 +11,7 @@ mod fields;
 mod screenshot;
 pub(crate) mod text;
 
+pub(crate) use answers::cited_quote;
 pub use answers::{
     Claim, ComposedAnswer, assemble_answer, compose, draft_answer, marked_partial, partial_answer, verdict,
 };
