@@ -4825,3 +4825,20 @@ fn test_a_next_link_to_another_site_is_not_this_lists_next_page() {
     state.note_pager_pages(&absolute);
     assert_eq!(state.unread_pager_page(), None, "{:?}", state.pager_pages);
 }
+
+#[test]
+fn test_a_list_opened_from_another_lists_page_replaces_its_next_pages() {
+    // A shop's front page lists every book with its own next page; a category opened from it is another list, and the
+    // front page's next page is no more of it (#816 smoke, books-mystery-cheapest).
+    let mut state = run_state();
+    let home = paged("https://shop.test/", "catalogue/page-2.html");
+    state.note_pager_pages(&home);
+    let category = paged("https://shop.test/catalogue/category/mystery/index.html", "page-2.html");
+    state.note_pager_pages(&category);
+    assert_eq!(state.pager_pages, ["https://shop.test/catalogue/category/mystery/page-2.html"]);
+    // The category's own next pages carry on its list, and a record page with no pager leaves it as it was.
+    let second = paged("https://shop.test/catalogue/category/mystery/page-2.html", "page-3.html");
+    state.note_pager_pages(&second);
+    state.note_pager_pages(&at("https://shop.test/catalogue/a-book/index.html", &[]));
+    assert_eq!(state.pager_pages.len(), 2, "{:?}", state.pager_pages);
+}

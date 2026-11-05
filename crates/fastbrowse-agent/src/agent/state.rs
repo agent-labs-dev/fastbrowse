@@ -407,14 +407,24 @@ impl RunState {
 
     /// Remember each next page the observed list names, by its absolute address. Only this site's pages count: a link
     /// to another origin is no more of this list, and its href is not a path joined against this page.
+    ///
+    /// A page with a pager that is not itself one of the noted next pages starts another list, and the next pages of
+    /// the one before are dropped: a shop's category opened from its front page is read to its end, not the front
+    /// page's list of every book. A page with no pager, such as one record's, leaves the list it came from as it was.
     pub fn note_pager_pages(&mut self, observation: &Observation) {
         let Ok(here) = url::Url::parse(&observation.url) else { return };
-        for control in observation.controls.iter().filter(|control| fastbrowse_core::page::pager_link(control)) {
-            let Some(page) = control.href.as_deref().and_then(|href| here.join(href).ok()) else { continue };
-            if page.origin() != here.origin() {
-                continue;
-            }
-            let page = page.to_string();
+        let named: Vec<String> = observation
+            .controls
+            .iter()
+            .filter(|control| fastbrowse_core::page::pager_link(control))
+            .filter_map(|control| control.href.as_deref().and_then(|href| here.join(href).ok()))
+            .filter(|page| page.origin() == here.origin())
+            .map(String::from)
+            .collect();
+        if !named.is_empty() && !self.pager_pages.contains(&here.to_string()) {
+            self.pager_pages.clear();
+        }
+        for page in named {
             if !self.pager_pages.contains(&page) {
                 self.pager_pages.push(page);
             }

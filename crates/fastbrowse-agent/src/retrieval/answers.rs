@@ -582,7 +582,14 @@ async fn review_claims(
             Some(Answer::Choice(answer)) => answer.choice.parse::<u64>().ok(),
             _ => None,
         });
-        if let Some(stated) = stated.filter(|_| supports(index))
+        let stated = stated.filter(|_| supports(index));
+        if let Some(stated) = stated
+            && let Some(sum) = breakdown_sum(&claim.text)
+            && sum != stated
+        {
+            miscounts.push(json!({"claim": index, "states": stated, "breakdown_sums_to": sum}));
+            rejected_checks.push(format!("claim{index}/count"));
+        } else if let Some(stated) = stated
             && let Some((least, most)) = counted_records(jev, task, claim, stated, notes, &tokens, ledger).await?
             && !(least..=most).contains(&stated)
         {
@@ -700,6 +707,30 @@ fn count_question(claim: &Claim, quotes: &[serde_json::Value]) -> Option<Questio
     )))
 }
 
+/// The sum of the breakdown a claim gives after its headline, as in "8 quotes are by Albert Einstein: 3 on page 1, 1 on
+/// page 2, and 1 on page 9". The headline ends at the first `:` or `(` and holds the count; every part after it starts
+/// with its own number. A headline of 8 over parts making 10 stood as complete (#800), and the parts are text code can
+/// add. None unless the claim has that shape, with at least two parts, so prose and a partial "including" list are not
+/// summed.
+fn breakdown_sum(claim: &str) -> Option<u64> {
+    let (head, tail) = claim.split_once([':', '('])?;
+    let head = head.to_lowercase();
+    if !head.chars().any(|c| c.is_ascii_digit()) || head.contains("includ") || head.contains("such as") {
+        return None;
+    }
+    let tail = tail.trim_end().trim_end_matches(['.', ')']);
+    let parts = tail
+        .split([',', ';'])
+        .map(|part| part.trim())
+        .map(|part| part.strip_prefix("and ").unwrap_or(part).trim_start())
+        .map(|part| {
+            let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<u64>().ok().filter(|_| part[digits.len()..].starts_with(' '))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (parts.len() >= 2).then(|| parts.iter().sum())
+}
+
 const ONE_RECORD: &str = "1";
 const STATED_TOTAL: &str = "total";
 
@@ -707,12 +738,12 @@ const STATED_TOTAL: &str = "total";
 const SURE_OF_A_QUOTE: f64 = 0.8;
 
 /// The fewest and most records Jev says the claim's cited quotes hold toward the count it states, a record repeated
-/// by a later quote counted once: a quote counts toward the fewest when Jev picks one record for it, and toward the
-/// most unless Jev is sure it holds none. Asked of 14 product names, Jev was unsure of three, leant towards none, and
-/// the exact count missed the total they made, so the most stays generous. On quote pages Jev picked one record for
-/// each of 10 quotes at about 0.72, and counting only the quotes it was sure of let a headline of 8 stand (#800).
-/// None when a quote holds several records or states the claim's number as its own total, or Jev leaves a quote
-/// unanswered, so code cannot count and the claim's support check decides it.
+/// by a later quote counted once: a quote counts toward the fewest when Jev is sure it holds one, and toward the most
+/// unless Jev is sure it holds none. Asked of 14 product names, Jev was unsure of three and the exact count missed the
+/// total they made. On quote pages Jev leant at 0.43 to 0.72 towards a quote's `Tags:` line holding a record of its
+/// own, so a pick it is unsure of would raise the fewest past a correct count. None when a quote holds several records
+/// or states the claim's number as its own total, or Jev leaves a quote unanswered, so code cannot count and the
+/// claim's support check decides it.
 async fn counted_records(
     jev: &dyn DecisionClient,
     task: &str,
@@ -756,7 +787,7 @@ async fn counted_records(
             answer.probabilities.get(option).copied().unwrap_or(if answer.choice == option { 1.0 } else { 0.0 })
                 >= SURE_OF_A_QUOTE
         };
-        least += u64::from(answer.choice == ONE_RECORD);
+        least += u64::from(sure(ONE_RECORD));
         most += u64::from(!sure("0"));
     }
     Ok(Some((least, most)))
@@ -1491,7 +1522,40 @@ mod tests {
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         assert!(reviewed.answer.claims.is_empty());
         let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().unwrap()).unwrap();
-        assert_eq!(feedback["miscounted_claims"], json!([{"claim": 0, "states": 8, "records_in_cited_quotes": 10}]));
+        assert_eq!(feedback["miscounted_claims"], json!([{"claim": 0, "states": 8, "breakdown_sums_to": 10}]));
+    }
+
+    #[test]
+    fn only_a_headline_over_numbered_parts_is_summed() {
+        let summed = [
+            ("8 quotes are by Albert Einstein: 3 on page 1, 1 on page 2, and 6 on page 9.", Some(10)),
+            ("There are 10 quotes (3 on page 1; 7 on page 2).", Some(10)),
+            ("Einstein quotes appear as follows: 3 on page 1, 1 on page 2, and 0 on page 10.", None),
+            ("10 quotes, including: 3 on page 1, 1 on page 2.", None),
+            ("10 quotes: 3 on page 1, and others elsewhere.", None),
+            ("Page 2 lists 1 quote by Albert Einstein.", None),
+        ];
+        for (claim, sum) in summed {
+            assert_eq!(breakdown_sum(claim), sum, "{claim}");
+        }
+    }
+
+    /// A quote page's notes split each quote from its `Tags:` line, and Jev leans at 0.43 to 0.72 towards the tags of
+    /// an Einstein quote holding a record of its own. Counting every pick held "Page 2 lists 1 quote" to 2 and rejected
+    /// a correct per-page count (#816 smoke, quotes-einstein-count).
+    #[tokio::test]
+    async fn a_record_jev_only_leans_towards_does_not_raise_the_fewest() {
+        let notes = Notes::new([
+            fact(0, "\u{201c}If you can't explain it to a six year old, you don't understand it yourself.\u{201d}\nby Albert Einstein".into()),
+            fact(1, "Tags: simplicity understand".into()),
+        ]);
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("Page 2 lists 1 quote by Albert Einstein.", vec!["e0".into(), "e1".into()])]);
+        let jev = Counting { stated: "1", per_quote: "1", sureness: 0.43, asked: Mutex::new(Vec::new()) };
+        let task = "How many quotes by Albert Einstein are there across the whole site?";
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
+        assert_eq!(reviewed.rejection, None);
+        assert_eq!(reviewed.answer.claims.len(), 1);
     }
 
     /// A results page that states its own total, such as `27 results returned.`, supports a claim of that total even
