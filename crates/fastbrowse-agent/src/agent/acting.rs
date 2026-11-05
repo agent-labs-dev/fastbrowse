@@ -552,6 +552,7 @@ impl Agent {
                 &label,
                 &typed_into(state, target),
                 &observation.today(),
+                &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
                 Some(&state.ledger),
             )
             .await?;
