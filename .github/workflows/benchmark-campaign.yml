@@ -119,9 +119,11 @@ on:
 
 permissions: {}
 
-# One campaign at a time: the groups share the approved spend and the cloud browser quota.
+# One run per campaign at a time; different campaigns run side by side. Each dispatch checks the OpenRouter key holds
+# its own approved budget, so campaigns started together must fit in what the key has left between them, and the
+# cloud browser quota is shared by any that run head-to-head.
 concurrency:
-  group: benchmark-campaign
+  group: benchmark-campaign-${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
   cancel-in-progress: false
 
 env:
