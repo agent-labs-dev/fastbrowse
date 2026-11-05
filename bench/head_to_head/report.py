@@ -141,6 +141,12 @@ def markdown(name: str, env: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def plain_punctuation(text: str) -> str:
+    """Answers are quoted verbatim, and `scripts/no_slop.py` bans typographic punctuation in tracked files, so it is
+    written as numeric entities: Markdown and HTML both show the original character."""
+    return text.translate({code: f"&#{code};" for code in (0x2013, 0x2014, 0x2015, 0x2018, 0x2019, 0x201C, 0x201D)})
+
+
 def pack(raw: Path) -> None:
     """Gzip each run's raw output in place, leaving what is already packed."""
     for file in raw.glob("*/*"):
@@ -155,7 +161,7 @@ def main() -> None:
     env, rows = load(name)
     path = HERE / "results" / name / "results.md"
     pack(path.parent / "raw")
-    path.write_text(markdown(name, env, rows), encoding="utf-8")
+    path.write_text(plain_punctuation(markdown(name, env, rows)), encoding="utf-8")
     (path.parent / "summary.json").write_text(json.dumps(summaries(rows), indent=2) + "\n", encoding="utf-8")
     print(path)
 

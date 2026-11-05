@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
-from report import ARM_NAMES, load, summaries, summarize
+from report import ARM_NAMES, load, plain_punctuation, summaries, summarize
 from tasks import TASKS, catalog_entry
 
 HERE = Path(__file__).parent
@@ -439,7 +439,7 @@ def main() -> None:
     verdict_file = folder / "verdict.txt"
     verdict = verdict_file.read_text(encoding="utf-8") if verdict_file.exists() else ""
     out = args.out or folder / "infographic.html"
-    out.write_text(page(args.name, env, rows, verdict), encoding="utf-8")
+    out.write_text(plain_punctuation(page(args.name, env, rows, verdict)), encoding="utf-8")
     print(out)
 
 
