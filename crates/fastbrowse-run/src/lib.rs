@@ -718,7 +718,13 @@ async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
 }
 
 /// Open `start`, pursue `task`, and return what the run could prove.
-pub async fn run_task(mut task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
+pub async fn run_task(task: RunTask, host: Host) -> Result<RunResult, RunError> {
+    // Boxed so a caller holds a pointer rather than the whole run, which an unoptimized build copies into each
+    // caller's frame: inline, a run on a 2 MB thread stack overflowed it before the browser started.
+    Box::pin(run_unboxed(task, host)).await
+}
+
+async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, RunError> {
     let Checked { schema, origins } = checked(&task)?;
     if host.open_browser.is_some() && task.viewport.is_some() {
         return Err(RunError::Invalid("viewport cannot be applied to a browser handed through open_browser".into()));
@@ -903,7 +909,7 @@ pub async fn run_task(mut task: RunTask, mut host: Host) -> Result<RunResult, Ru
         }
         Ok(result)
     };
-    let outcome: Option<Result<RunResult, Refused>> = host.cancel.guard(work).await.ok();
+    let outcome: Option<Result<RunResult, Refused>> = host.cancel.guard(Box::pin(work)).await.ok();
     if let Some(remote) = starting.take() {
         browser_cost = unfinished_start(remote, outcome.is_none());
     }
