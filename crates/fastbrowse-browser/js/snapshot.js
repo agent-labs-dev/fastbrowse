@@ -41,6 +41,33 @@
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
+  // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
+  // acts on: a Pause beside a ticking remaining time was refused as stale on every one of 52 clicks. Text that changed
+  // between two looks with no input in between is the page's own; text that changes after a run's own click, scroll
+  // or typing still counts. The run's input arrives as trusted events, which is how the page tells the two apart.
+  if (!registry.selfUpdating) {
+    registry.selfUpdating = new Set();
+    registry.changed = new Set();
+    registry.quiet = false;
+    const input = () => (registry.quiet = false);
+    for (const type of ['pointerdown', 'mousedown', 'keydown', 'input', 'change', 'wheel', 'scroll']) {
+      addEventListener(type, input, true);
+    }
+    new MutationObserver(records => {
+      for (const r of records) {
+        const textOnly =
+          r.type === 'characterData' || [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === Node.TEXT_NODE);
+        const element = r.type === 'characterData' ? r.target.parentElement : r.target;
+        if (textOnly && element) registry.changed.add(element);
+      }
+    }).observe(document, { subtree: true, characterData: true, childList: true });
+  }
+  if (mode !== 'glance') {
+    if (registry.quiet) for (const e of registry.changed) registry.selfUpdating.add(e);
+    for (const e of registry.selfUpdating) if (!e.isConnected) registry.selfUpdating.delete(e);
+    registry.changed.clear();
+    registry.quiet = true;
+  }
   const clock = () => ({
     ready: document.readyState === 'interactive' || document.readyState === 'complete',
     hidden: document.hidden,
@@ -387,7 +414,11 @@
     return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
   };
   // Sibling controls share their card, so its text is hashed once per card rather than once per control.
-  const scopeDigest = memo(scope => digest(innerTextOf(scope)?.slice(0, GUARD_TEXT_CHARS) || ''));
+  const scopeDigest = memo(scope => {
+    let text = innerTextOf(scope) || '';
+    for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
+    return digest(text.slice(0, GUARD_TEXT_CHARS));
+  });
   registry.guard = e => {
     if (!e?.isConnected || !visible(e)) return null;
     const source = sourceOf(e);

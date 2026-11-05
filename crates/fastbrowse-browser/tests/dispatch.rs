@@ -1385,3 +1385,34 @@ async fn test_an_input_event_to_a_hung_page_fails_soon_while_the_browser_answers
     h.session.send("Target.getTargets", json!({}), None).await.expect("the browser still answers");
     h.close().await;
 }
+
+// A player's Pause sat in a control bar beside its remaining-time clock, and the clock ticked between every look and
+// every click: 52 clicks in a row were refused as stale. Text the page rewrites by itself does not say which item a
+// control acts on; text that changes after a run's own action still does.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clock_beside_a_control_does_not_make_it_stale() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div><button id=pause>Pause</button><span id=clock>3:19</span></div>'; \
+         window.paused = 0; document.getElementById('pause').onclick = () => window.paused++; \
+         let left = 199; setInterval(() => { left--; \
+         document.getElementById('clock').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`; \
+         }, 40); true",
+    )
+    .await;
+    let mut outcomes = vec![];
+    for _ in 0..3 {
+        let obs = h.observe().await;
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let result = h.page.act(&action(Operation::Click, find(&obs, "Pause")), &obs).await.expect("act");
+        outcomes.push(result.outcome);
+        if result.outcome == StepOutcome::Executed {
+            break;
+        }
+    }
+    assert_eq!(outcomes.last(), Some(&StepOutcome::Executed), "{outcomes:?}");
+    assert_eq!(eval_active(&h.page, "window.paused").await, json!(1));
+    h.close().await;
+}
