@@ -51,7 +51,7 @@ use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
+use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, cited_quote, compose, partial_answer};
 use crate::shortcut::{Shortcut, propose_shortcut};
 use crate::verification::RecordSchema;
 
@@ -779,23 +779,18 @@ impl Agent {
         Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
     }
 
-    fn public_fact(&self, fact: &Fact) -> StepFact {
+    fn public_fact(&self, fact: &Fact, notes: &Notes) -> StepFact {
         let text = self.redact(&fact.text);
         let requirement_id = fact.requirement_id.as_deref().map(|id| self.redact(id));
         let Some(evidence) = &fact.evidence else {
             return StepFact { text, requirement_id, quote: None, url: None, reader: fact.reader, deep_link: None };
         };
-        let (url, quote) = (self.redact(&evidence.url), self.redact(&evidence.quote));
-        let deep_link = if evidence.rendered_text {
-            text_fragment(&url, &quote).unwrap_or_else(|_| url.clone())
-        } else {
-            url.clone()
-        };
+        let (quote, deep_link) = cited_quote(evidence, notes, |value| self.redact(value));
         StepFact {
             text,
             requirement_id,
             quote: Some(quote),
-            url: Some(url),
+            url: Some(self.redact(&evidence.url)),
             reader: fact.reader,
             deep_link: Some(deep_link),
         }

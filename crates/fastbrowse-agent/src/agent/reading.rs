@@ -495,7 +495,7 @@ impl Agent {
             read_progress: state.notes.facts().len() > before,
             ..HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, false)
         });
-        let facts = state.notes.facts()[before..].iter().map(|fact| self.public_fact(fact)).collect();
+        let facts = state.notes.facts()[before..].iter().map(|fact| self.public_fact(fact, &state.notes)).collect();
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: Operation::Read,
