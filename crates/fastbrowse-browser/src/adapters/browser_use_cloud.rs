@@ -444,7 +444,10 @@ fn record_cost(state: &Shared, browser: &View) {
         CostLine::new(component, if dollars.is_some() { basis } else { CostBasis::Unknown }, dollars)
     };
     lock(state).cost = vec![
-        CostLine { seconds: browser.lifetime, ..line(CostComponent::Browser, CostBasis::Metered, browser.browser_cost) },
+        CostLine {
+            seconds: browser.lifetime,
+            ..line(CostComponent::Browser, CostBasis::Metered, browser.browser_cost)
+        },
         // Proxy cost is charged on the data sent through it (`proxyUsedMb`), not on time, so it has no seconds.
         line(CostComponent::Proxy, CostBasis::Unsettled, browser.proxy_cost),
     ];
