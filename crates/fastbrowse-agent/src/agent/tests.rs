@@ -4720,7 +4720,7 @@ fn read_one(state: &mut RunState, page: &Observation, every_page: bool) {
     state.task = "How many quotes on the whole site are by the author?".into();
     state.output_intent = super::state::OutputIntent::Text;
     state.every_page = every_page;
-    let captured = capture(&[(BlockKind::Paragraph, "A quote by the author.")]);
+    let captured = Capture { url: page.url.clone(), ..capture(&[(BlockKind::Paragraph, "A quote by the author.")]) };
     state.notes.add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice));
     state.mark_read(page);
 }
@@ -4841,4 +4841,21 @@ fn test_a_list_opened_from_another_lists_page_replaces_its_next_pages() {
     state.note_pager_pages(&second);
     state.note_pager_pages(&at("https://shop.test/catalogue/a-book/index.html", &[]));
     assert_eq!(state.pager_pages.len(), 2, "{:?}", state.pager_pages);
+}
+
+#[test]
+fn test_a_list_that_gave_the_task_no_note_is_not_the_one_it_reads() {
+    // A one-page category opened from a shop's front page has no pager, so the front page's list stays noted; its
+    // pages hold no note, and the run read the category, not every book (#816 dev run, books-travel-priciest).
+    let mut state = run_state();
+    let home = paged("https://shop.test/", "catalogue/page-2.html");
+    state.note_pager_pages(&home);
+    state.mark_read(&home);
+    let category = at("https://shop.test/catalogue/category/travel/index.html", &[]);
+    read_one(&mut state, &category, true);
+    state.note_pager_pages(&category);
+    assert_eq!(state.unread_pager_page(), None, "{:?}", state.pager_pages);
+    // Once the front page gave a note, its list is the one the task reads.
+    read_one(&mut state, &home, true);
+    assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://shop.test/catalogue/page-2.html"));
 }

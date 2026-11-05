@@ -344,7 +344,7 @@ impl Agent {
         let mut error = answer_problem;
         // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread.
         if state.every_page
-            && let Some(unread) = state.pager_pages.iter().find(|page| !state.read_urls.contains(page.as_str()))
+            && let Some(unread) = state.unread_list_pages().next()
         {
             status = Status::Unverified;
             error.get_or_insert_with(|| {

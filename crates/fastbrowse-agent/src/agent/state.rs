@@ -299,6 +299,8 @@ pub(crate) struct RunState {
     pub every_page: bool,
     /// Each next page a list named, by absolute address, in the order the run saw them.
     pub pager_pages: Vec<String>,
+    /// The page that began the list `pager_pages` continues.
+    pub pager_start: Option<String>,
     /// Next pages the run opened itself because a whole-list task tried to finish before reading them.
     pub pager_followed: HashSet<String>,
     /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
@@ -423,6 +425,7 @@ impl RunState {
             .collect();
         if !named.is_empty() && !self.pager_pages.contains(&here.to_string()) {
             self.pager_pages.clear();
+            self.pager_start = Some(here.to_string());
         }
         for page in named {
             if !self.pager_pages.contains(&page) {
@@ -431,11 +434,21 @@ impl RunState {
         }
     }
 
-    /// The first next page a list named that this run has neither read nor opened for that reason before.
+    /// The next pages of the list this run reads that it has not read. A list none of whose pages gave the task a note
+    /// is not the one it reads: a shop's front page lists every book, and a one-page category opened from it has no
+    /// pager of its own, so the front page's 49 next pages were opened one by one for a question about the category.
+    pub fn unread_list_pages(&self) -> impl Iterator<Item = &String> {
+        let list: Vec<String> =
+            self.pager_start.iter().chain(&self.pager_pages).map(|page| crate::memory::address(page)).collect();
+        let noted = self.notes.facts().iter().any(|fact| {
+            fact.evidence.as_ref().is_some_and(|evidence| list.contains(&crate::memory::address(&evidence.url)))
+        });
+        self.pager_pages.iter().filter(move |page| noted && !self.read_urls.contains(page.as_str()))
+    }
+
+    /// The first unread next page of the list this run reads that it has not opened for that reason before.
     pub fn unread_pager_page(&self) -> Option<&String> {
-        self.pager_pages
-            .iter()
-            .find(|page| !self.read_urls.contains(page.as_str()) && !self.pager_followed.contains(page.as_str()))
+        self.unread_list_pages().find(|page| !self.pager_followed.contains(page.as_str()))
     }
 
     /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
@@ -525,6 +538,7 @@ impl RunState {
             appearance: false,
             every_page: false,
             pager_pages: Vec::new(),
+            pager_start: None,
             pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
