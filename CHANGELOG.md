@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A slow browser reply no longer crashes the run.** A command whose reply arrived just as its deadline passed could crash the process with "`async fn` resumed after completion", losing the result. The late reply is now used as the command's answer.
 - **Refusing cookies never accepts them.** On sites without a known consent platform, the browser used to click a banner's only button even when that button accepted all cookies. Now it acts only on a banner it can refuse, and leaves an accept-only banner on the page for the task to deal with.
 - **"The page doesn't show it" counts as an answer.** When the value a task asks for isn't on the page, such as a heading on a page that has none, an answer saying so used to end the run unverified. It now completes, provided the page itself bears it out.
 - **A task that answers a cookie banner itself gets to answer it.** The browser refuses cookie banners before they appear, so a task such as "accept the cookie banner, then send a support request" could never do its first step. Each browser run now asks the decision model, while the browser starts, whether the task answers a consent banner itself, and leaves the banners on the page when it does. Every other run still has them refused. The question costs about US$0.00002 a run, and none when `refuse_cookie_banners` is off.

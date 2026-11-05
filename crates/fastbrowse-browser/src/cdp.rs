@@ -10,6 +10,8 @@
 //! closes, every pending call and every later one fails with `CdpError::Closed`.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -58,6 +60,19 @@ const PING_SECONDS: f64 = 20.0;
 const MAX_MESSAGE_BYTES: usize = 100 * 1024 * 1024;
 /// Transient response statuses permit retrying a failed handshake or cloud browser request.
 pub const RETRYABLE_STATUS: [u16; 12] = [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529];
+
+/// A command past its deadline: its reply if one has landed, however late, else whether the browser still answers.
+async fn after_deadline<R>(
+    mut reply: Pin<&mut impl Future<Output = R>>,
+    alive: impl Future<Output = bool>,
+) -> Result<R, bool> {
+    // A reply taken here is returned, never polled for again: a finished future must not be resumed.
+    if let Ok(reply) = timeout(Duration::ZERO, &mut reply).await {
+        return Ok(reply);
+    }
+    let alive = alive.await;
+    timeout(Duration::ZERO, &mut reply).await.map_err(|_| alive)
+}
 
 pub fn secs(seconds: f64) -> Duration {
     Duration::from_secs_f64(seconds)
@@ -346,24 +361,22 @@ impl Cdp {
             None => {
                 // The browser can go during the last wait, after the probe before it answered, so it is asked once
                 // more: only a browser that is still there makes this the page's failure rather than an outage.
-                let mut alive = true;
-                if timeout(Duration::ZERO, &mut reply).await.is_err() {
-                    alive = self.alive().await;
-                }
-                if let Ok(outcome) = timeout(Duration::ZERO, &mut reply).await {
+                match after_deadline(reply.as_mut(), self.alive()).await {
                     // The page answered while the browser was being asked: the command is done, however late.
-                    outcome
-                } else if !alive {
-                    return Err(BrowserError::BrowserUnresponsive(format!(
-                        "{method} got no reply, and the browser stopped answering"
-                    )));
-                } else {
-                    if let Some(id) = session {
-                        *self.deadlines().entry(id.to_string()).or_default() += 1;
+                    Ok(outcome) => outcome,
+                    Err(false) => {
+                        return Err(BrowserError::BrowserUnresponsive(format!(
+                            "{method} got no reply, and the browser stopped answering"
+                        )));
                     }
-                    return Err(BrowserError::PageUnresponsive(format!(
-                        "{method} exceeded its command deadline; the page did not answer while the browser did"
-                    )));
+                    Err(true) => {
+                        if let Some(id) = session {
+                            *self.deadlines().entry(id.to_string()).or_default() += 1;
+                        }
+                        return Err(BrowserError::PageUnresponsive(format!(
+                            "{method} exceeded its command deadline; the page did not answer while the browser did"
+                        )));
+                    }
                 }
             }
         };
@@ -483,5 +496,37 @@ struct PendingGuard<'a> {
 impl Drop for PendingGuard<'_> {
     fn drop(&mut self) {
         self.inner.state.lock().unwrap().pending.remove(&self.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_reply_already_landed_at_the_deadline_is_the_answer() {
+        let (tx, rx) = oneshot::channel::<u8>();
+        tx.send(7).unwrap();
+        tokio::pin!(rx);
+        // The browser is not asked: the reply settles it.
+        assert_eq!(after_deadline(rx.as_mut(), async { false }).await.map(Result::unwrap), Ok(7));
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_lands_while_the_browser_is_asked_is_the_answer() {
+        let (tx, rx) = oneshot::channel::<u8>();
+        tokio::pin!(rx);
+        let alive = async move {
+            tx.send(7).unwrap();
+            true
+        };
+        assert_eq!(after_deadline(rx.as_mut(), alive).await.map(Result::unwrap), Ok(7));
+    }
+
+    #[tokio::test]
+    async fn no_reply_reports_whether_the_browser_answered() {
+        let (_tx, rx) = oneshot::channel::<u8>();
+        tokio::pin!(rx);
+        assert!(matches!(after_deadline(rx.as_mut(), async { true }).await, Err(true)));
     }
 }
