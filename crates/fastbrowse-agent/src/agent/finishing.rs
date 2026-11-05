@@ -507,41 +507,37 @@ impl Agent {
                 return Ok(result);
             }
         }
-        if partition {
-            return Ok(Some(self.result(Some(state), &state.ledger.clone(), Status::Unverified, Outcome::default())));
-        }
         let requirements: IndexMap<String, String> =
             plan.requirements.iter().map(|r| (r.id.clone(), r.text.clone())).collect();
-        let mut unmet: Vec<String> = Vec::new();
-        let mut named: Vec<&String> = Vec::new();
-        for key in check.unmet.iter().chain(missing.iter()) {
-            if !named.contains(&key) {
-                named.push(key);
-            }
-        }
-        for key in named {
-            if !misread_ids.contains(key) {
-                unmet.push(format!("{key}: {}", requirements.get(key).unwrap_or(key)));
-            }
-        }
-        let mut misread_sorted: Vec<&String> = misread_ids.iter().collect();
-        misread_sorted.sort();
-        for key in misread_sorted {
+        let mut misread_sources = IndexMap::new();
+        for key in &misread_ids {
             let mut urls: Vec<String> = Vec::new();
             for item in state.notes.supporting_evidence(key) {
                 if !urls.contains(&item.url) {
                     urls.push(item.url);
                 }
             }
-            unmet.push(format!(
-                "{key}: {} (read off {}, an address built from the task, not the page it describes)",
-                requirements[key],
-                urls.join(", ")
-            ));
+            misread_sources.insert(key.clone(), urls);
+        }
+        let unmet = format_unverified_requirements(
+            &requirements,
+            &check.unmet,
+            &missing,
+            &misread_ids,
+            &misread_sources,
+            &state.missing_answer_outputs,
+        );
+        if partition {
+            let error = self.redact(&unverified_reason(unmet, None, false));
+            return Ok(Some(self.result(
+                Some(state),
+                &state.ledger.clone(),
+                Status::Unverified,
+                Outcome { error: Some(error), ..Outcome::default() },
+            )));
         }
         let judge = guessed_page(&state.invented, Some(&state.lineage), false);
         state.notes.discredit(misread_ids.iter().map(String::as_str), Arc::new(judge));
-        unmet.extend(state.missing_answer_outputs.iter().map(|output| format!("Answer output not verified: {output}")));
         let joined = if unmet.is_empty() { "completion not confirmed".to_string() } else { unmet.join("; ") };
         let reason = self.redact(&format!("DONE rejected: {joined}"));
         state.history.push(crate::policy::HistoryEntry {
@@ -1008,6 +1004,7 @@ impl Agent {
         };
         let extraction = extraction.transpose()?;
         let mut verified_ok = true;
+        let mut extraction_problem = None;
         let mut answer_text = None;
         let mut citations = Vec::new();
         if let Some((composed, held)) = answered {
@@ -1021,9 +1018,10 @@ impl Agent {
         }
         let mut data = Value::Null;
         if let Some(extraction) = extraction {
+            extraction_problem = extraction.problem.clone();
             data = extraction.data.unwrap_or(Value::Null);
             evidence.extend(extraction.evidence);
-            verified_ok = verified_ok && extraction.problem.is_none();
+            verified_ok = verified_ok && extraction_problem.is_none();
         }
         let status = if verified_ok { Status::Complete } else { Status::Unverified };
         // The answer's notes and each schema field cite independently; the same words on the same page are one
@@ -1037,6 +1035,13 @@ impl Agent {
             data,
             evidence: cited.into_values().collect(),
             citations,
+            error: (!verified_ok).then(|| {
+                self.redact(&unverified_reason(
+                    answer_output_lines(&state.missing_answer_outputs),
+                    extraction_problem.as_deref(),
+                    false,
+                ))
+            }),
             ..Outcome::default()
         };
         if !finalize || (!verified_ok && !state.missing_answer_outputs.is_empty()) {
@@ -1053,6 +1058,11 @@ impl Agent {
         if !captured && requested && result.status == Status::Complete {
             // The image is what the caller asked for, and a run that cannot hand it over has not done the task.
             result.status = Status::Unverified;
+            result.error = Some(self.redact(&unverified_reason(
+                answer_output_lines(&state.missing_answer_outputs),
+                extraction_problem.as_deref(),
+                true,
+            )));
         }
         let report = self.run_report(state, result.final_url.as_deref(), captured);
         if !report.is_empty() {
@@ -1071,6 +1081,55 @@ pub(super) struct VerifyRequest {
     messages: Vec<fastbrowse_core::llm::Message>,
     key: String,
     reused: Option<Generation<LLMVerdict>>,
+}
+
+fn format_unverified_requirements(
+    requirements: &IndexMap<String, String>,
+    check_unmet: &[String],
+    missing: &[String],
+    misread_ids: &HashSet<String>,
+    misread_sources: &IndexMap<String, Vec<String>>,
+    missing_answer_outputs: &[String],
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut named: Vec<&str> = Vec::new();
+    for key in check_unmet.iter().chain(missing.iter()) {
+        if !named.contains(&key.as_str()) {
+            named.push(key);
+        }
+    }
+    for key in named {
+        if !misread_ids.contains(key) {
+            lines.push(format!("{key}: {}", requirements.get(key).map(String::as_str).unwrap_or(key)));
+        }
+    }
+    let mut misread_sorted: Vec<&String> = misread_ids.iter().collect();
+    misread_sorted.sort();
+    for key in misread_sorted {
+        let urls = misread_sources.get(key).cloned().unwrap_or_default();
+        lines.push(format!(
+            "{key}: {} (read off {}, an address built from the task, not the page it describes)",
+            requirements.get(key).map(String::as_str).unwrap_or(key),
+            urls.join(", ")
+        ));
+    }
+    lines.extend(answer_output_lines(missing_answer_outputs));
+    lines
+}
+
+fn answer_output_lines(outputs: &[String]) -> Vec<String> {
+    outputs.iter().map(|output| format!("Answer output not verified: {output}")).collect()
+}
+
+/// Why a result is unverified, from what the finish could not prove; never claims the evidence contradicted it.
+fn unverified_reason(mut reasons: Vec<String>, extraction_problem: Option<&str>, screenshot_missing: bool) -> String {
+    if let Some(problem) = extraction_problem {
+        reasons.push(problem.to_string());
+    }
+    if screenshot_missing {
+        reasons.push("the requested screenshot could not be captured".to_string());
+    }
+    if reasons.is_empty() { "the answer was not verified".to_string() } else { reasons.join("; ") }
 }
 
 fn information_ids(plan: &Plan) -> Vec<String> {
@@ -1108,5 +1167,96 @@ impl Child {
         swap(&mut state.answer_check_evidence, &mut child.answer_check_evidence);
         swap(&mut state.answer_check_cache, &mut child.answer_check_cache);
         child
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unverified_reasons_name_the_available_failure() {
+        struct Case {
+            name: &'static str,
+            unmet: &'static [&'static str],
+            outputs: &'static [&'static str],
+            extraction: Option<&'static str>,
+            screenshot_missing: bool,
+            expected: &'static str,
+        }
+
+        let requirements = IndexMap::from([("r1".to_string(), "find the title".to_string())]);
+        let misread_ids = HashSet::new();
+        let misread_sources = IndexMap::new();
+        let cases = [
+            Case {
+                name: "unmet requirement and answer output",
+                unmet: &["r1"],
+                outputs: &["report the title"],
+                extraction: None,
+                screenshot_missing: false,
+                expected: "r1: find the title; Answer output not verified: report the title",
+            },
+            Case {
+                name: "missing screenshot",
+                unmet: &[],
+                outputs: &[],
+                extraction: None,
+                screenshot_missing: true,
+                expected: "the requested screenshot could not be captured",
+            },
+            Case {
+                name: "extraction problem",
+                unmet: &[],
+                outputs: &[],
+                extraction: Some("the schema could not be filled"),
+                screenshot_missing: false,
+                expected: "the schema could not be filled",
+            },
+            Case {
+                name: "no specific failure",
+                unmet: &[],
+                outputs: &[],
+                extraction: None,
+                screenshot_missing: false,
+                expected: "the answer was not verified",
+            },
+        ];
+
+        for case in cases {
+            let unmet = case.unmet.iter().map(|id| (*id).to_string()).collect::<Vec<_>>();
+            let outputs = case.outputs.iter().map(|output| (*output).to_string()).collect::<Vec<_>>();
+            assert_eq!(
+                unverified_reason(
+                    format_unverified_requirements(
+                        &requirements,
+                        &unmet,
+                        &[],
+                        &misread_ids,
+                        &misread_sources,
+                        &outputs
+                    ),
+                    case.extraction,
+                    case.screenshot_missing,
+                ),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn unverified_requirement_lines_keep_misread_sources() {
+        let requirements = IndexMap::from([("r1".to_string(), "find the title".to_string())]);
+        let misread_ids = HashSet::from(["r1".to_string()]);
+        let misread_sources = IndexMap::from([("r1".to_string(), vec!["https://example.test/page".to_string()])]);
+
+        assert_eq!(
+            format_unverified_requirements(&requirements, &[], &[], &misread_ids, &misread_sources, &[]),
+            vec![
+                "r1: find the title (read off https://example.test/page, an address built from the task, not the page it describes)"
+            ],
+        );
     }
 }
