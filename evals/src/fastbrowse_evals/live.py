@@ -96,7 +96,7 @@ from parallax.judging import Judgment
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
-from fastbrowse_evals import backend
+from fastbrowse_evals import backend, hosted_api
 from fastbrowse_evals.attempt_clock import (
     SESSION_OPEN_SECONDS,
     TIMING_BASIS,
@@ -2322,6 +2322,11 @@ async def _run_pool(
     return outcome, report.model_copy(update=extra)
 
 
+async def _run_product(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
+    run, wall = await hosted_api.submit_and_wait(http, task)
+    return hosted_api.outcome_of(run), ArmReport(**hosted_api.report_fields(run, wall))
+
+
 async def _run_ultra(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
     return await ultrafast_arm(task, http, record=kwargs["record"])
 
@@ -2353,6 +2358,13 @@ ARMS: dict[str, ArmSpec] = {
         pin="run.fastbrowse_version + run.git_sha; fastbrowse-hosted browser pool",
         env_allowlist=(),
         tier="A",
+        default=False,
+    ),
+    "fastbrowse-hosted": ArmSpec(
+        runner=_run_product,
+        pin="api.fastbrowse.ai at its deployed build; customer charge, not metered cost",
+        env_allowlist=(),
+        tier="hosted",
         default=False,
     ),
     "jev-ultrafast": ArmSpec(
@@ -2422,6 +2434,14 @@ def eligible(arm: str, task: LiveTask) -> bool:
     if arm == "fastbrowse-pool":
         # The matched backend A/B: every task fastbrowse runs, and only those.
         return "fastbrowse" in task.arms
+    if arm == "fastbrowse-hosted":
+        # The product takes stored secrets, not a task's own, and returns no copy of its final page.
+        return (
+            "fastbrowse" in task.arms
+            and not task.secrets
+            and task.bitwarden_item is None
+            and (task.category is not Category.NAVIGATE)
+        )
     if arm in {"cua-codex", "browser-harness", "jev-ultrafast"}:
         # Agents that take no credentials and no authorization setting: completion tasks without credentials.
         return task.expect == Status.COMPLETE and not task.secrets and task.bitwarden_item is None
@@ -2489,6 +2509,8 @@ def browser_identity(arm: str, local_browser: Path | None) -> dict[str, Any]:
         return {"mode": "browser-use-cloud", "timeout_minutes": CLOUD_BROWSER_MINUTES}
     if arm == "browser-use":
         return {"mode": "browser-use-hosted"}
+    if arm == "fastbrowse-hosted":
+        return {"mode": "fastbrowse-hosted", "host": hosted_api.host()}
     if arm == "cua-codex":
         return {"mode": "local-xvfb"}
     raise ValueError(f"unknown arm {arm}")
