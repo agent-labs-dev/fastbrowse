@@ -810,6 +810,7 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
 struct Gatekeeper {
     irreversible: f64,
     requested: f64,
+    lasting: f64,
     calls: std::sync::atomic::AtomicUsize,
 }
 
@@ -824,7 +825,11 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
         let answers = questions
             .keys()
             .map(|key| {
-                let probability = if key == "requested" { self.requested } else { self.irreversible };
+                let probability = match key.as_str() {
+                    "requested" => self.requested,
+                    "lasting" => self.lasting,
+                    _ => self.irreversible,
+                };
                 (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability }))
             })
             .collect();
@@ -860,7 +865,7 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         (true, true, 0.10, 0.97, true, 1),
         (true, true, 0.10, 0.40, false, 1),
     ] {
-        let jev = Arc::new(Gatekeeper { irreversible, requested, calls: Default::default() });
+        let jev = Arc::new(Gatekeeper { irreversible, requested, lasting: 0.0, calls: Default::default() });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
         state.task = "Check out and finish the order.".into();
@@ -870,13 +875,46 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(finish.clone())) };
         let question = (!credential).then(|| irreversible_question(Operation::Click, &finish, None, &[]));
         let asked = requested_question(&control_action(Operation::Click, &finish, None, &[]));
-        let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, asked).await;
+        let gated = agent.gate_question(&mut state, &observation, &decision, "Finish", question, asked, None).await;
         let case = format!("authorized {authorized}, credential {credential}, requested {requested}");
         assert_eq!(gated.is_ok(), acts, "{case}");
         assert_eq!(jev.calls.load(Ordering::SeqCst), calls, "{case}");
         // A refusal stops the run for confirmation rather than going round recovery.
         if let Err(flow) = gated {
             assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
+        }
+    }
+}
+
+/// An authorized run added the wrong product to its cart (#743): the click was reversible, so whether the task asked
+/// for it was never weighed. A reversible click that leaves something the site keeps now needs the task to ask for it,
+/// and a refusal is a step to pick again from, not a stop.
+#[tokio::test]
+async fn test_an_authorized_run_does_not_keep_a_change_the_task_did_not_ask_for() {
+    use std::sync::atomic::Ordering;
+    // (irreversible, requested, lasting, acts)
+    for (irreversible, requested, lasting, acts) in [
+        // The wrong product: reversible, kept, not asked for.
+        (0.13, 0.05, 0.95, false),
+        // The right product.
+        (0.09, 0.69, 0.95, true),
+        // Navigation the task never names.
+        (0.02, 0.13, 0.03, true),
+    ] {
+        let jev = Arc::new(Gatekeeper { irreversible, requested, lasting, calls: Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Add Men's Wool Runners in size 10 to the cart.".into();
+        state.authorization = Authorization { irreversible_actions: true };
+        let add = Control { context: Some("Men's Dasher NZ".into()), ..button("Add to Cart") };
+        let observation = observation(std::slice::from_ref(&add));
+        let decision = Decision { operation_confidence: 0.86, ..code_decision(Operation::Click, Some(add.clone())) };
+        let gated = agent.gate_irreversible(&mut state, &observation, &decision).await;
+        let case = format!("irreversible {irreversible}, requested {requested}, lasting {lasting}");
+        assert_eq!(gated.is_ok(), acts, "{case}");
+        assert_eq!(jev.calls.load(Ordering::SeqCst), 1, "{case}");
+        if let Err(flow) = gated {
+            assert!(matches!(flow, Flow::Unsure(_)), "{case}: refused for another step, not stopped");
         }
     }
 }
@@ -2332,7 +2370,7 @@ async fn test_page_text_cannot_argue_a_commit_through_its_gate() {
     };
     let question = Some(irreversible_question(Operation::Click, &delete, None, &[]));
     let asked = requested_question(&control_action(Operation::Click, &delete, None, &[]));
-    let refused = agent.gate_question(&mut state, &page, &decision, "Delete account", question, asked).await;
+    let refused = agent.gate_question(&mut state, &page, &decision, "Delete account", question, asked, None).await;
     assert!(refused.is_err(), "a commit passed on an answer that had read the page");
 }
 

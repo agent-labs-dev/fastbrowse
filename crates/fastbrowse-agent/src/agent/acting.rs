@@ -11,7 +11,7 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password,
+    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password, lasting_question,
     may_be_irreversible, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use indexmap::IndexMap;
@@ -149,7 +149,8 @@ fn gate_questions(
     target: &Control,
     destination: Option<&Control>,
     controls: &[Control],
-) -> (Option<NoulQuestion>, NoulQuestion) {
+) -> (Option<NoulQuestion>, NoulQuestion, NoulQuestion) {
+    let lasting = lasting_question(operation, target, destination, controls);
     let irreversible = (!changes_credentials(controls, target, operation))
         .then(|| irreversible_question(operation, target, destination, controls));
     let mut action = control_action(operation, target, destination, controls);
@@ -165,7 +166,7 @@ fn gate_questions(
         let times = if done == 1 { "once".to_string() } else { format!("{done} times") };
         action += &format!("This run has already done this {times}.\n");
     }
-    (irreversible, requested_question(&action))
+    (irreversible, requested_question(&action), lasting)
 }
 
 impl Agent {
@@ -214,7 +215,7 @@ impl Agent {
                 self.gate_download(state, observation, decision, &caller_link(&url)).await?;
                 let irreversible = navigation_question(&url);
                 let requested = requested_question(&format!("open the address {url}.\n"));
-                self.gate_question(state, observation, decision, &url, Some(irreversible), requested).await?;
+                self.gate_question(state, observation, decision, &url, Some(irreversible), requested, None).await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
@@ -283,8 +284,16 @@ impl Agent {
                 {
                     let action = format!("accept this {} dialog: {}.\n", dialog.kind, text::repr(&dialog.message));
                     let requested = requested_question(&action);
-                    self.gate_question(state, observation, decision, &dialog.message, Some(irreversible), requested)
-                        .await?;
+                    self.gate_question(
+                        state,
+                        observation,
+                        decision,
+                        &dialog.message,
+                        Some(irreversible),
+                        requested,
+                        None,
+                    )
+                    .await?;
                 }
                 Ok(Action { accept_dialog: Some(accept), ..Action::new(Operation::Dialog) })
             }
@@ -316,14 +325,14 @@ impl Agent {
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
         }
-        let (irreversible, requested) = gate_questions(
+        let (irreversible, requested, lasting) = gate_questions(
             &state.history,
             decision.operation,
             target,
             decision.destination.as_ref(),
             &observation.controls,
         );
-        self.gate_question(state, observation, decision, &label, irreversible, requested).await
+        self.gate_question(state, observation, decision, &label, irreversible, requested, Some(lasting)).await
     }
 
     /// Refuse a control the page says downloads a file when the task rules downloading out.
@@ -384,6 +393,8 @@ impl Agent {
     /// authorized and Jev judges the task asked for it. Otherwise the run stops for confirmation.
     ///
     /// `irreversible` is None for an action the page's structure shows commits, which only the task's request lifts.
+    /// `lasting` asks, in an authorized run, whether a reversible action still leaves something the site keeps: one the
+    /// task did not ask for is refused once, so the run can pick again rather than stop (#743).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn gate_question(
         &self,
@@ -393,6 +404,7 @@ impl Agent {
         label: &str,
         irreversible: Option<NoulQuestion>,
         requested: NoulQuestion,
+        lasting: Option<NoulQuestion>,
     ) -> Step {
         let thresholds = &self.config.thresholds;
         let authorized = state.authorization.irreversible_actions;
@@ -402,6 +414,9 @@ impl Agent {
         }
         if authorized {
             questions.insert("requested".to_string(), Question::Noul(requested));
+            if let Some(lasting) = lasting {
+                questions.insert("lasting".to_string(), Question::Noul(lasting));
+            }
         }
         if !questions.is_empty() {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
@@ -416,17 +431,41 @@ impl Agent {
                 Some(Answer::Noul(answer)) => Some(answer.probability),
                 _ => None,
             };
-            let (probability, requested) = (noul("irreversible"), noul("requested"));
+            let (probability, requested, lasting) = (noul("irreversible"), noul("requested"), noul("lasting"));
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
                     ("context".into(), json!(decision.target.as_ref().and_then(|t| t.context.clone()))),
                     ("probability".into(), json!(probability)),
                     ("requested".into(), json!(requested)),
+                    ("lasting".into(), json!(lasting)),
                 ])
             });
             let reversible = probability.is_some_and(|p| p <= thresholds.irreversible_above);
-            if reversible || requested.is_some_and(|p| p > thresholds.requested_above) {
+            let wanted = requested.is_some_and(|p| p > thresholds.requested_above);
+            // An unanswered question refuses once, as an unanswered irreversible one does.
+            let keeps = questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= thresholds.irreversible_above);
+            if reversible && keeps && !wanted {
+                let reason = format!(
+                    "{} {} would change what the site keeps, and the task does not ask for it",
+                    decision.operation,
+                    text::repr(label)
+                );
+                let redacted = self.redact(&reason);
+                self.record_failure(
+                    state,
+                    observation,
+                    decision.operation,
+                    &redacted,
+                    Some(self.redact(label)),
+                    Some(decision.confidence()),
+                    Some(false),
+                    if decision.replayed { Decider::Recipe } else { Decider::Jev },
+                )
+                .await?;
+                return Err(Unsure::new(redacted).into());
+            }
+            if reversible || wanted {
                 state.committing = !reversible;
                 if state.committing {
                     // What this commits can still be redirecting or awaiting a 3-D Secure check when the run ends,
