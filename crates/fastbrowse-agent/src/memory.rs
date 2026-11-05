@@ -122,6 +122,35 @@ pub(crate) fn split_scheme(url: &str) -> (String, String) {
     (String::new(), url)
 }
 
+/// A text's words in order, lowercased. A currency sign or unit stays on its amount, since "£12.29" and "$12.29"
+/// differ and so do "5%" and "5‰", and so does a minus sign that starts one, since "-$10.00" and "$10.00" differ.
+fn words(text: &str) -> Vec<String> {
+    const CURRENCY: &[char] = &['£', '$', '€', '¥', '₹', '₩', '₽', '¢', '₺', '₪'];
+    const UNITS: &[char] = &['%', '‰', '‱', '°'];
+    let chars: Vec<char> = text.to_lowercase().chars().collect();
+    let kept = |index: usize| {
+        let c = chars[index];
+        let signs_amount = matches!(c, '-' | '\u{2212}')
+            && index.checked_sub(1).is_none_or(|before| !chars[before].is_alphanumeric())
+            && chars.get(index + 1).is_some_and(|next| next.is_ascii_digit() || CURRENCY.contains(next));
+        c.is_alphanumeric() || c == '.' || CURRENCY.contains(&c) || UNITS.contains(&c) || signs_amount
+    };
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for index in 0..=chars.len() {
+        if index < chars.len() && kept(index) {
+            word.push(if chars[index] == '\u{2212}' { '-' } else { chars[index] });
+            continue;
+        }
+        let trimmed = word.trim_matches('.');
+        if !trimmed.is_empty() {
+            words.push(trimmed.to_string());
+        }
+        word.clear();
+    }
+    words
+}
+
 /// `urlsplit(url)._replace(fragment="").geturl()`, as CPython 3.13 splits and joins.
 ///
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of
@@ -383,6 +412,27 @@ impl Notes {
             basis: Vec::new(),
             reader: FactReader::LlmImage,
         })
+    }
+
+    /// Whether every word and number of `text` is already in a current text note read from `url`.
+    ///
+    /// A screenshot reading that only repeats what the page's text layer said adds nothing the notes lack, yet it
+    /// reads one viewport as the whole answer: on a listing whose covers made the page count as drawn, such a reading
+    /// named the dearer book in view, and the composer took it over the cheaper one the text notes held (#799).
+    pub fn repeats_page_text(&self, text: &str, url: &str) -> bool {
+        let page = address(url);
+        let said = words(text);
+        // One note has to say it, word for word in one run: words scattered over several notes, reordered, or picked
+        // out with others between, can state what none of them does, as "Alice beat Bob" from "Alice beat Carol" and
+        // "Bob beat Alice", or "Basic plan $10.00" from "Basic plan $20.00; Premium plan $10.00".
+        let in_order = |note: &[String]| note.windows(said.len()).any(|run| run == said.as_slice());
+        !said.is_empty()
+            && self
+                .facts
+                .iter()
+                .filter(|(key, fact)| self.current(key) && fact.reader != FactReader::LlmImage)
+                .filter(|(_, fact)| fact.evidence.as_ref().is_some_and(|evidence| address(&evidence.url) == page))
+                .any(|(_, fact)| in_order(&words(&fact.text)))
     }
 
     /// Whether the notes hold a fact standing as the task's answer.
@@ -677,6 +727,21 @@ mod tests {
 
     /// A checkout run's 1,800 notes, over the budget, took over three minutes to cut each step: every count from
     /// the top was rendered whole. The cut is the same; it took 17s here before, and well under 1s now.
+    #[test]
+    fn a_minus_sign_on_an_amount_is_part_of_it() {
+        let url = "https://example.test/balance";
+        let notes = Notes::new([quoted("Account balance $10.00", "capture", url)]);
+        assert!(notes.repeats_page_text("Account balance $10.00", url));
+        assert!(!notes.repeats_page_text("Account balance -$10.00", url));
+        assert!(!notes.repeats_page_text("Account balance \u{2212}10.00", url));
+        assert!(!notes.repeats_page_text("Account balance 10.00%", url));
+        let rate = Notes::new([quoted("Annual interest rate 5%", "capture", url)]);
+        assert!(rate.repeats_page_text("Annual interest rate 5%", url));
+        assert!(!rate.repeats_page_text("Annual interest rate 5\u{2030}", url));
+        // A hyphen between words is still a break, as before.
+        assert_eq!(words("well-known -5 a-1"), ["well", "known", "-5", "a", "1"]);
+    }
+
     #[test]
     fn notes_far_over_budget_are_cut_quickly() {
         let mut notes = Notes::default();

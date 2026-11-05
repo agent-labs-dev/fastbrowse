@@ -226,6 +226,11 @@ async fn test_a_click_on_a_link_opens_it_and_anything_else_needs_a_browser() {
     assert!(opened.expect("followed").page_changed);
     assert_eq!(page.address().await.expect("address"), "https://shop.example.com/next");
     assert!(page.observe().await.expect("observe").controls.is_empty());
+    // An address the run chose, such as a list's next page read from an earlier page, opens as a link does.
+    let observation = page.observe().await.expect("observe");
+    let back = Action { url: Some("https://shop.example.com/".into()), ..Action::new(Operation::Navigate) };
+    assert!(page.act(&back, &observation).await.expect("navigated").page_changed);
+    assert_eq!(page.address().await.expect("address"), "https://shop.example.com/");
 }
 
 #[tokio::test]

@@ -194,6 +194,7 @@ fn button(label: &str) -> Control {
 pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         replayed: false,
+        by_code: false,
         operation,
         url: None,
         target_confidence: target.as_ref().map(|_| 1.0),
@@ -1690,6 +1691,64 @@ async fn test_a_screenshot_read_checks_coverage_before_complete() {
     let result = agent.conclude(&mut state, &page, None).await.expect("conclusion");
     assert_eq!(result.status, Status::Unverified);
     assert_eq!(result.error.as_deref(), Some("The answer does not establish every requested fact or value."));
+}
+
+/// A screenshot reader that answers the task from one viewport of a listing, as a model reading pixels does.
+struct ListingImageLLM(&'static str);
+
+impl LLMClient for ListingImageLLM {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
+            let data = schema.validate_json(&json!({"text": self.0}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_a_screenshot_read_that_only_repeats_the_page_text_adds_no_note() {
+    // A listing's covers make the page count as drawn, but every title and price is in its text. A reading of one
+    // viewport answered the whole task with a book from that viewport, and the composer took it over the cheaper book
+    // the text notes held (#799).
+    let listing = capture(&[
+        (BlockKind::Paragraph, "Tastes Like Fear (DI ...\n\n\u{a3}10.69\n\nIn stock"),
+        (BlockKind::Paragraph, "The Girl You Lost\n\n\u{a3}12.29\n\nIn stock"),
+    ]);
+    let page = Observation { visual_content: true, ..at("https://example.test", &[]) };
+    let read = |reading: &'static str| {
+        let listing = listing.clone();
+        let page = page.clone();
+        async move {
+            let agent = Agent::new(
+                Arc::new(Screenshots::default()),
+                Arc::new(ScriptedJev::new(Vec::new())),
+                Arc::new(ListingImageLLM(reading)),
+            );
+            let mut state = run_state();
+            state.task = "Which is the cheapest book in the Mystery category, and what does it cost?".into();
+            state.output_intent = super::state::OutputIntent::Text;
+            for id in ["s0", "s1"] {
+                let evidence = block_evidence(&listing, id);
+                state.notes.add(Fact::read(&evidence.quote.clone(), evidence, FactReader::JevChoice));
+            }
+            agent.read_drawn_page(&mut state, &page).await.expect("drawn read");
+            state.notes.facts().iter().filter(|fact| fact.reader == FactReader::LlmImage).count()
+        }
+    };
+    assert_eq!(read("The Girl You Lost \u{2014} \u{a3}12.29").await, 0);
+    // What the text layer does not carry is still read off the pixels.
+    assert_eq!(read("The Girl You Lost \u{2014} signed copy \u{a3}9.99").await, 1);
+    // Another currency is another value.
+    assert_eq!(read("The Girl You Lost $12.29").await, 1);
+    // Words from two notes, together, say what neither does.
+    assert_eq!(read("Tastes Like Fear \u{a3}12.29").await, 1);
 }
 
 #[tokio::test]
@@ -4640,4 +4699,239 @@ fn review_http_403_with_a_password_form_does_not_claim_a_bot_check() {
         Some(WallKind::BotCheck),
         "HTTP 403 alone does not prove an automated-traffic check; the page offers a password form"
     );
+}
+
+// -- A whole-list task and the pages its list names ----------------------------------------------------------------
+
+/// A list page whose pager names `next` as the list's next page.
+fn paged(url: &str, next: &str) -> Observation {
+    let pager = Control {
+        href: Some(next.into()),
+        next_page: Some(true),
+        ..Control::new("next", "link", "Next →", [Operation::Click])
+    };
+    let record =
+        Control { href: Some("/author/a/".into()), ..Control::new("about", "link", "(about)", [Operation::Click]) };
+    at(url, &[record, pager])
+}
+
+/// A run that read `page` and holds one note from it, with the task's output already judged as text.
+fn read_one(state: &mut RunState, page: &Observation, every_page: bool) {
+    state.task = "How many quotes on the whole site are by the author?".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.every_page = every_page;
+    let captured = Capture { url: page.url.clone(), ..capture(&[(BlockKind::Paragraph, "A quote by the author.")]) };
+    state.notes.add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice));
+    state.mark_read(page);
+}
+
+fn pager_agent(page: Arc<HungPage>) -> Agent {
+    let jev = Arc::new(Gatekeeper { irreversible: 0.0, requested: 0.0, lasting: 0.0, calls: Default::default() });
+    Agent::new(page, jev, Arc::new(ScriptedLLM))
+}
+
+#[tokio::test]
+async fn test_done_on_page_one_of_a_whole_list_task_opens_the_next_page_instead() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a whole-list task finished with page 2 unread");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    assert_eq!(step.decided_by, Decider::Code);
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
+}
+
+#[tokio::test]
+async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread_next_page() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    let record = at("https://list.test/author/a/", &[]);
+    state.mark_read(&record);
+
+    let finished = agent.finish(&mut state, &record, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a whole-list task finished on one record's page");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    // The same next page is opened once at most: a run that cannot read it does not loop on it.
+    assert_eq!(state.unread_pager_page(), None);
+}
+
+#[tokio::test]
+async fn test_done_on_a_task_about_what_one_page_shows_concludes_with_a_next_page_unread() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, false);
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("finished");
+    assert!(finished.is_some(), "a task about one page went on to the next");
+    assert!(state.steps.iter().all(|step| step.operation != Operation::Navigate));
+}
+
+#[tokio::test]
+async fn test_a_whole_list_answer_with_a_next_page_still_unread_is_not_complete() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    // The run opened page 2 already and could not read it, so it concludes.
+    state.pager_followed.insert("https://list.test/page/2/".into());
+
+    let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
+    assert_eq!(result.status, Status::Unverified);
+    let error = result.error.expect("the unread page is named");
+    assert!(error.contains("https://list.test/page/2/"), "{error}");
+}
+
+#[tokio::test]
+async fn test_a_next_page_that_redirects_is_read_once_its_landing_page_is() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    assert!(agent.finish(&mut state, &first, None, None).await.expect("the run goes on").is_none());
+
+    // The site sends `/page/2/` on to `/page/2`; reading where it landed reads the page the list named.
+    let landed = at("https://list.test/page/2", &[]);
+    agent.note_effect(&mut state, &landed);
+    state.mark_read(&landed);
+    let result = agent.conclude(&mut state, &landed, None).await.expect("a conclusion");
+    let error = result.error.unwrap_or_default();
+    assert!(!error.contains("did not read"), "{error}");
+}
+
+#[test]
+fn test_a_next_link_to_another_site_is_not_this_lists_next_page() {
+    // The browser marks only same-origin pagers, since it writes another origin's href as host and path; a reader
+    // that hands over an absolute address to another site is refused here too.
+    let mut state = run_state();
+    let absolute = paged("https://list.test/", "https://other.test/page/2/");
+    state.note_pager_pages(&absolute);
+    assert_eq!(state.unread_pager_page(), None, "{:?}", state.pager_pages);
+}
+
+#[test]
+fn test_a_list_opened_from_another_lists_page_replaces_its_next_pages() {
+    // A shop's front page lists every book with its own next page; a category opened from it is another list, and the
+    // front page's next page is no more of it (#816 smoke, books-mystery-cheapest).
+    let mut state = run_state();
+    let home = paged("https://shop.test/", "catalogue/page-2.html");
+    state.note_pager_pages(&home);
+    let category = paged("https://shop.test/catalogue/category/mystery/index.html", "page-2.html");
+    state.note_pager_pages(&category);
+    assert_eq!(state.pager_pages, ["https://shop.test/catalogue/category/mystery/page-2.html"]);
+    // The category's own next pages carry on its list, and a record page with no pager leaves it as it was.
+    let second = paged("https://shop.test/catalogue/category/mystery/page-2.html", "page-3.html");
+    state.note_pager_pages(&second);
+    state.note_pager_pages(&at("https://shop.test/catalogue/a-book/index.html", &[]));
+    assert_eq!(state.pager_pages.len(), 2, "{:?}", state.pager_pages);
+}
+
+#[test]
+fn test_a_list_that_gave_the_task_no_note_is_not_the_one_it_reads() {
+    // A one-page category opened from a shop's front page has no pager, so the front page's list stays noted; its
+    // pages hold no note, and the run read the category, not every book (#816 dev run, books-travel-priciest).
+    let mut state = run_state();
+    let home = paged("https://shop.test/", "catalogue/page-2.html");
+    state.note_pager_pages(&home);
+    state.mark_read(&home);
+    let category = at("https://shop.test/catalogue/category/travel/index.html", &[]);
+    read_one(&mut state, &category, true);
+    state.note_pager_pages(&category);
+    assert_eq!(state.unread_pager_page(), None, "{:?}", state.pager_pages);
+    // Once the front page gave a note, its list is the one the task reads.
+    read_one(&mut state, &home, true);
+    assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://shop.test/catalogue/page-2.html"));
+}
+
+#[test]
+fn test_returning_to_a_lists_first_page_keeps_its_later_pages() {
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    let second = paged("https://list.test/page/2/", "/page/3/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    read_one(&mut state, &second, true);
+    state.note_pager_pages(&second);
+    // Back on page 1 from a record page, the list is the same one, and page 3 is still unread.
+    state.note_pager_pages(&first);
+    assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://list.test/page/3/"));
+}
+
+#[tokio::test]
+async fn review_a_screenshot_value_from_another_record_is_not_a_repeated_fact() {
+    // A text block can contain several records while a price drawn in an image belongs to only one of them.
+    let listing = capture(&[(BlockKind::Paragraph, "Basic plan $20.00; Premium plan $10.00")]);
+    let page = Observation { visual_content: true, ..at("https://example.test", &[]) };
+    let agent = Agent::new(
+        Arc::new(Screenshots::default()),
+        Arc::new(ScriptedJev::new(Vec::new())),
+        Arc::new(ListingImageLLM("Basic plan $10.00")),
+    );
+    let mut state = run_state();
+    state.task = "What price does the Basic plan show in the image?".into();
+    state.output_intent = super::state::OutputIntent::Text;
+    let evidence = block_evidence(&listing, "s0");
+    state.notes.add(Fact::read(&evidence.quote.clone(), evidence, FactReader::JevChoice));
+
+    agent.read_drawn_page(&mut state, &page).await.expect("read screenshot");
+
+    assert!(
+        state.notes.facts().iter().any(|fact| fact.reader == FactReader::LlmImage && fact.text == "Basic plan $10.00"),
+        "the screenshot's price for Basic is not the text block's price for Basic and must reach verification"
+    );
+}
+
+#[tokio::test]
+async fn review_a_redirected_next_page_preserves_the_list_without_matching_records() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    assert!(agent.finish(&mut state, &first, None, None).await.expect("follow next page").is_none());
+
+    // The server removes a trailing slash. This page has no quotes by the requested author, but page 3 may.
+    let second = paged("https://list.test/page/2", "/page/3/");
+    agent.note_effect(&mut state, &second);
+    state.note_pager_pages(&second);
+    state.mark_read(&second);
+
+    assert_eq!(
+        state.unread_pager_page().map(String::as_str),
+        Some("https://list.test/page/3/"),
+        "a redirect must not disconnect later pages from the list's existing evidence"
+    );
+}
+
+#[test]
+fn test_a_note_read_where_a_next_page_landed_keeps_the_list_open() {
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    state.note_pager_pages(&first);
+    // Page 1 holds nothing the task asks for, so its read adds no note.
+    state.mark_read(&first);
+    // `/page/2/` lands at `/page/2`, as note_effect records after following page 1's link.
+    let second = paged("https://list.test/page/2", "/page/3/");
+    state.arrived_by = Some((super::state::read_key(&second), "https://list.test/page/2/".into()));
+    state.note_pager_pages(&second);
+    read_one(&mut state, &second, true);
+    assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://list.test/page/3/"));
 }

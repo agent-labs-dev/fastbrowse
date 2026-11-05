@@ -385,9 +385,16 @@ impl Page for FetchedPage {
     fn act<'a>(&'a self, action: &'a Action, _observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
             self.gate().await?;
-            let link = (action.operation == Operation::Click)
-                .then(|| action.target_id.as_deref().and_then(|id| self.link_target(id)))
-                .flatten();
+            // An address the run chose opens as a link does: a whole-list task's next page is read from an earlier
+            // page, so it is no link on this one.
+            let link = match action.operation {
+                Operation::Click => action.target_id.as_deref().and_then(|id| self.link_target(id)),
+                Operation::Navigate => action
+                    .url
+                    .clone()
+                    .filter(|url| url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))),
+                _ => None,
+            };
             let Some(url) = link else {
                 return Err(self.needs_browser(
                     "this run reads pages over HTTP and can only follow links; run it again without fetch mode to \
