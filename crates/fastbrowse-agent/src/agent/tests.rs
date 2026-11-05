@@ -1738,7 +1738,6 @@ fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     assert!(unavailable.error.unwrap().contains(recorded));
 }
 
-
 #[test]
 fn review_http_403_with_a_password_form_does_not_claim_a_bot_check() {
     use super::state::HttpFailure;
