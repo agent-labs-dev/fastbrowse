@@ -158,7 +158,7 @@ public sealed record CostLine
     public required long OutputTokens { get; init; }
 
     /// <summary>
-    /// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+    /// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
     /// </summary>
     [JsonPropertyName("seconds")]
     public double? Seconds { get; init; }
