@@ -323,6 +323,20 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
             }),
             "proxy_country",
         ),
+        (
+            task(|o, _| {
+                o.local = true;
+                o.cloud_timeout_minutes = Some(30);
+            }),
+            "cloud_timeout_minutes needs the cloud browser",
+        ),
+        (
+            task(|o, _| {
+                o.cdp_url = Some("ws://localhost:1/x".into());
+                o.cloud_timeout_minutes = Some(30);
+            }),
+            "drop cloud_timeout_minutes",
+        ),
     ];
     for (options, expected) in cases {
         // Arguments that contradict each other are refused outright; a browser that cannot start ends the run.

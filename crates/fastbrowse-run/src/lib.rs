@@ -271,6 +271,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("cloud_profile", task.cloud_profile.is_some()),
             ("proxy_country", task.proxy_country.is_some()),
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
+            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
             ("viewport", task.viewport.is_some()),
         ]);
         if !shaping.is_empty() {
@@ -298,6 +299,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
                 ("cloud_profile", task.cloud_profile.is_some()),
                 ("proxy_country", task.proxy_country.is_some()),
                 ("cloud_extensions", !task.cloud_extensions.is_empty()),
+                ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
             ]);
             if !cloud.is_empty() {
                 return refuse(format!(
@@ -649,6 +651,7 @@ async fn browser(
             ("cloud_profile", task.cloud_profile.is_some()),
             ("proxy_country", task.proxy_country.is_some()),
             ("cloud_extensions", !task.cloud_extensions.is_empty()),
+            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
         ];
         if let Some((name, _)) = cloud.iter().find(|(_, on)| *on) {
             return Err(refused(&format!("{name} belongs to a Browser Use Cloud browser, which needs a key")));
@@ -662,7 +665,7 @@ async fn browser(
         proxy_country: Some(
             task.proxy_country.as_deref().and_then(|code| country_code(code).ok()).unwrap_or_else(|| "us".into()),
         ),
-        timeout_minutes: task.cloud_timeout_minutes.unwrap_or(15),
+        timeout_minutes: task.cloud_timeout_minutes.unwrap_or(BrowserUseCloudOptions::default().timeout_minutes),
         profile: task.cloud_profile.clone(),
         viewport: task.viewport,
         extensions: task.cloud_extensions.clone(),
