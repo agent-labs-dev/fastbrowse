@@ -169,11 +169,16 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         }
     }
     // A player's clock and paused state live outside its controls, and the policy sees only the current reading, so
-    // a step can confirm playback advanced or stopped only from what each earlier step is told it changed. Players
-    // pair up by position within one document; a new document's players are new.
+    // a step can confirm playback started, stopped or was moved only from what each earlier step is told it changed.
+    // A playing clock moves by itself, like a page's own clock: a site's voice assistant playing through a whole run
+    // told every step "elapsed: 15 s -> 20 s", so no step ever read as changing nothing. Players pair up by position
+    // within one document; a new document's players are new.
     if !replaced && before.media.len() == after.media.len() {
         for (was, now) in before.media.iter().zip(&after.media) {
-            let name = format!("{} {}", now.kind, now.label.as_ref().or(now.heading.as_ref()).unwrap_or(&now.kind));
+            let name = match now.label.as_ref().or(now.heading.as_ref()) {
+                Some(named) => format!("{} {named}", now.kind),
+                None => now.kind.clone(),
+            };
             for (attribute, a, b) in
                 [("paused", was.paused, now.paused), ("ended", was.ended, now.ended), ("muted", was.muted, now.muted)]
             {
@@ -181,7 +186,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
                     changes.push(format!("{name} {attribute}: {} -> {}", Shown::Flag(a).str(), Shown::Flag(b).str()));
                 }
             }
-            if was.elapsed_seconds != now.elapsed_seconds {
+            if was.paused && now.paused && was.elapsed_seconds != now.elapsed_seconds {
                 changes.push(format!("{name} elapsed: {} s -> {} s", was.elapsed_seconds, now.elapsed_seconds));
             }
         }
@@ -475,12 +480,16 @@ mod tests {
         let playing = Observation { media: vec![player(false, 12.0)], ..page.clone() };
         let later = Observation { media: vec![player(false, 15.5)], ..page.clone() };
         let paused = Observation { media: vec![player(true, 15.6)], ..page.clone() };
-        assert_eq!(effect(&playing, &later, None).summary, "changed audio Gymnopedie No. 1 elapsed: 12 s -> 15.5 s");
-        assert_eq!(
-            effect(&later, &paused, None).summary,
-            "changed audio Gymnopedie No. 1 paused: False -> True; audio Gymnopedie No. 1 elapsed: 15.5 s -> 15.6 s"
-        );
+        let sought = Observation { media: vec![player(true, 90.0)], ..page.clone() };
+        // A playing clock moves by itself: a step that left it playing changed nothing about it.
+        assert_eq!(effect(&playing, &later, None).summary, "nothing visible changed");
+        assert_eq!(effect(&later, &paused, None).summary, "changed audio Gymnopedie No. 1 paused: False -> True");
+        assert_eq!(effect(&paused, &sought, None).summary, "changed audio Gymnopedie No. 1 elapsed: 15.6 s -> 90 s");
         assert_eq!(effect(&paused, &paused, None).summary, "nothing visible changed");
-        assert!(!effect(&playing, &later, None).set_something);
+        let unnamed = |media: &Observation| Observation {
+            media: media.media.iter().map(|m| Media { heading: None, ..m.clone() }).collect(),
+            ..media.clone()
+        };
+        assert_eq!(effect(&unnamed(&later), &unnamed(&paused), None).summary, "changed audio paused: False -> True");
     }
 }
