@@ -779,6 +779,14 @@ impl Agent {
                 }
             }
         }
+        // A page that offers neither a credential field nor a sign-in is not a sign-in wall. A refusal that leaves no
+        // way in is a bot or access check, and naming it `sign_in` sends a caller to a password that cannot pass it.
+        let offers_sign_in = !credentials.is_empty() || raw.as_ref().is_some_and(sign_in::shows_sign_in);
+        let kind = match kind {
+            Some(kind) => Some(kind),
+            None if offers_sign_in => Some(wall_kind(&credentials)),
+            None => Some(WallKind::BotCheck),
+        };
         Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
     }
 
