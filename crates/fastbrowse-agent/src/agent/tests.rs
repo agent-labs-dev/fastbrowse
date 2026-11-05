@@ -1709,3 +1709,53 @@ async fn review_authorized_navigation_that_hangs_is_not_reopened() {
         "reloading a committing GET address can repeat its side effects"
     );
 }
+
+/// A server refusal is not an unknown cause: a 403 is the shape an access or bot check takes, and a run told only
+/// "the cause is unknown" with no wall sends its caller looking for a sign-in that cannot pass it.
+#[test]
+fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
+    use super::state::HttpFailure;
+    let forbidden =
+        HttpFailure { url: "https://www.curseforge.com/wow/addons/tweaks-forever/files".into(), status: 403 };
+    let stop = forbidden.stop();
+    assert_eq!(stop.status, Status::Blocked);
+    // The status alone does not prove a bot check: the page's own classification names one.
+    assert_eq!(stop.wall, None);
+    let error = stop.error.expect("an error names the refusal");
+    assert!(error.contains("HTTP 403"), "{error}");
+    assert!(error.contains("access or bot check"), "{error}");
+    assert!(!error.contains("cause is unknown"), "{error}");
+    // Every other status keeps the recorded Python wording, so replayed golden traffic stays byte for byte. A 401 is
+    // still a needs-login stop with no wall of its own, and a 5xx is the site being unavailable, not the run failing.
+    let recorded = "in this browser session; the cause is unknown.";
+    let unauthorized = HttpFailure { url: "https://shop.test/cart".into(), status: 401 }.stop();
+    assert_eq!(unauthorized.status, Status::NeedsLogin);
+    assert_eq!(unauthorized.wall, None);
+    assert!(unauthorized.error.unwrap().contains(recorded));
+    let unavailable = HttpFailure { url: "https://shop.test/cart".into(), status: 503 }.stop();
+    assert_eq!(unavailable.status, Status::Unavailable);
+    assert_eq!(unavailable.wall, None);
+    assert!(unavailable.error.unwrap().contains(recorded));
+}
+
+#[test]
+fn review_http_403_with_a_password_form_does_not_claim_a_bot_check() {
+    use super::state::HttpFailure;
+    use fastbrowse_core::models::WallKind;
+
+    let agent = agent();
+    let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    let mut observation = at("https://shop.test/login", &[password, button("Sign in")]);
+    observation.response_status = Some(403);
+    agent.seen().raw = Some(observation.clone());
+    agent.seen().observed = Some(observation);
+
+    let stop = HttpFailure { url: "https://shop.test/login".into(), status: 403 }.stop();
+    let wall = agent.wall(&stop);
+    assert_ne!(
+        wall.as_ref().map(|wall| wall.kind),
+        Some(WallKind::BotCheck),
+        "HTTP 403 alone does not prove an automated-traffic check; the page offers a password form"
+    );
+}
