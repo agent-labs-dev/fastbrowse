@@ -582,7 +582,7 @@ async fn review_claims(
             Some(Answer::Choice(answer)) => answer.choice.parse::<u64>().ok(),
             _ => None,
         });
-        let stated = stated.filter(|_| supports(index));
+        // An unsupported claim is counted too: a miscount is often why it failed, and the count is the repair.
         if let Some(stated) = stated
             && let Some(sum) = breakdown_sum(&claim.text)
             && sum != stated
@@ -1426,6 +1426,8 @@ mod tests {
         per_quote: &'static str,
         /// The probability Jev gives each pick of a quote's count.
         sureness: f64,
+        /// The probability Jev gives each claim's support and the answer's coverage.
+        support: f64,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
     }
 
@@ -1457,7 +1459,7 @@ mod tests {
                         confidence: sureness,
                     })
                 }
-                _ => Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.61 }),
+                _ => Answer::Noul(NoulAnswer { kind: NoulTag, probability: self.support }),
             };
             let answers = questions.iter().map(|(key, question)| (key.clone(), answer(question))).collect();
             Box::pin(async move {
@@ -1484,7 +1486,7 @@ mod tests {
         for (stated, rejected) in [("5", true), ("6", false)] {
             let mut llm = RecordingLlm::new(None);
             llm.claims = Some(vec![Claim::new(&format!("There are {stated} quotes by J.K. Rowling."), ids.clone())]);
-            let jev = Counting { stated, per_quote: "1", sureness: 0.9, asked: Mutex::new(Vec::new()) };
+            let jev = Counting { stated, per_quote: "1", sureness: 0.9, support: 0.61, asked: Mutex::new(Vec::new()) };
             let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
             assert_eq!(reviewed.answer.claims.is_empty(), rejected, "a count of {stated}");
             let Some(rejection) = reviewed.rejection else {
@@ -1517,12 +1519,28 @@ mod tests {
                      1 on page 5, 1 on page 6, and 1 on page 9.";
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new(claim, ids)]);
-        let jev = Counting { stated: "8", per_quote: "1", sureness: 0.72, asked: Mutex::new(Vec::new()) };
+        let jev =
+            Counting { stated: "8", per_quote: "1", sureness: 0.72, support: 0.61, asked: Mutex::new(Vec::new()) };
         let task = "How many quotes by Albert Einstein are on the site?";
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         assert!(reviewed.answer.claims.is_empty());
         let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().unwrap()).unwrap();
         assert_eq!(feedback["miscounted_claims"], json!([{"claim": 0, "states": 8, "breakdown_sums_to": 10}]));
+    }
+
+    /// A miscount is often why the support check rejects a claim, and the count is what the composer needs to repair
+    /// it: told only that its claim was rejected, it wrote 8 again for nine cited Rowling quotes (#816 smoke).
+    #[tokio::test]
+    async fn an_unsupported_claim_is_still_told_the_count_its_quotes_hold() {
+        let notes = Notes::new((0..9).map(|index| fact(index, format!("Quote {index} by J.K. Rowling"))));
+        let ids: Vec<String> = (0..9).map(|index| format!("e{index}")).collect();
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("There are 8 quotes by J.K. Rowling across the whole site.", ids)]);
+        let jev = Counting { stated: "8", per_quote: "1", sureness: 0.9, support: 0.16, asked: Mutex::new(Vec::new()) };
+        let task = "How many quotes by J.K. Rowling are there across the whole site?";
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
+        let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().unwrap()).unwrap();
+        assert_eq!(feedback["miscounted_claims"], json!([{"claim": 0, "states": 8, "records_in_cited_quotes": 9}]));
     }
 
     #[test]
@@ -1551,7 +1569,8 @@ mod tests {
         ]);
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("Page 2 lists 1 quote by Albert Einstein.", vec!["e0".into(), "e1".into()])]);
-        let jev = Counting { stated: "1", per_quote: "1", sureness: 0.43, asked: Mutex::new(Vec::new()) };
+        let jev =
+            Counting { stated: "1", per_quote: "1", sureness: 0.43, support: 0.61, asked: Mutex::new(Vec::new()) };
         let task = "How many quotes by Albert Einstein are there across the whole site?";
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         assert_eq!(reviewed.rejection, None);
@@ -1566,7 +1585,13 @@ mod tests {
         let task = "Apply the Nonstop filter and report how many results it shows and the cheapest fare.";
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("The filtered list shows 27 results from $766.", vec!["e0".into()])]);
-        let jev = Counting { stated: "27", per_quote: STATED_TOTAL, sureness: 0.9, asked: Mutex::new(Vec::new()) };
+        let jev = Counting {
+            stated: "27",
+            per_quote: STATED_TOTAL,
+            sureness: 0.9,
+            support: 0.61,
+            asked: Mutex::new(Vec::new()),
+        };
         let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true).await.unwrap();
         assert_eq!(reviewed.rejection, None);
         assert_eq!(reviewed.answer.claims.len(), 1);
@@ -1580,7 +1605,8 @@ mod tests {
         let ids: Vec<String> = (0..14).map(|index| format!("e{index}")).collect();
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![Claim::new("The shop lists 14 products.", ids)]);
-        let jev = Counting { stated: "14", per_quote: "0", sureness: 0.6, asked: Mutex::new(Vec::new()) };
+        let jev =
+            Counting { stated: "14", per_quote: "0", sureness: 0.6, support: 0.61, asked: Mutex::new(Vec::new()) };
         let reviewed =
             compose_reviewed(&jev, &llm, "How many products does the shop list?", &notes, None, None, true).await;
         assert_eq!(reviewed.unwrap().rejection, None);
