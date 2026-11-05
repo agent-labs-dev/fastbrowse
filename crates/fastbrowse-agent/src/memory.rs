@@ -127,9 +127,11 @@ pub(crate) fn split_scheme(url: &str) -> (String, String) {
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of
 /// the address rather than WHATWG's: a recorded prompt holds the id Python computed.
 /// The words and numbers of `text`, lowercased, with currency signs and punctuation dropped: "\u{a3}12.29" is "12.29".
+/// A text's words in order, lowercased. A currency sign stays on its amount, since "£12.29" and "$12.29" differ.
 fn words(text: &str) -> Vec<String> {
+    const CURRENCY: &[char] = &['£', '$', '€', '¥', '₹', '₩', '₽', '¢', '₺', '₪'];
     text.to_lowercase()
-        .split(|c: char| !(c.is_alphanumeric() || c == '.'))
+        .split(|c: char| !(c.is_alphanumeric() || c == '.' || CURRENCY.contains(&c)))
         .map(|word| word.trim_matches('.'))
         .filter(|word| !word.is_empty())
         .map(str::to_string)
@@ -402,15 +404,20 @@ impl Notes {
     /// named the dearer book in view, and the composer took it over the cheaper one the text notes held (#799).
     pub fn repeats_page_text(&self, text: &str, url: &str) -> bool {
         let page = address(url);
-        let read: HashSet<String> = self
-            .facts
-            .iter()
-            .filter(|(key, fact)| self.current(key) && fact.reader != FactReader::LlmImage)
-            .filter(|(_, fact)| fact.evidence.as_ref().is_some_and(|evidence| address(&evidence.url) == page))
-            .flat_map(|(_, fact)| words(&fact.text))
-            .collect();
         let said = words(text);
-        !said.is_empty() && said.iter().all(|word| read.contains(word))
+        // One note has to say it, in the same order: words scattered over several notes, or reordered, can state what
+        // none of them does, as "Alice beat Bob" from "Alice beat Carol" and "Bob beat Alice".
+        let in_order = |note: &[String]| {
+            let mut note = note.iter();
+            said.iter().all(|word| note.any(|read| read == word))
+        };
+        !said.is_empty()
+            && self
+                .facts
+                .iter()
+                .filter(|(key, fact)| self.current(key) && fact.reader != FactReader::LlmImage)
+                .filter(|(_, fact)| fact.evidence.as_ref().is_some_and(|evidence| address(&evidence.url) == page))
+                .any(|(_, fact)| in_order(&words(&fact.text)))
     }
 
     /// Whether the notes hold a fact standing as the task's answer.

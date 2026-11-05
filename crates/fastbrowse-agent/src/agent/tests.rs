@@ -1745,6 +1745,10 @@ async fn test_a_screenshot_read_that_only_repeats_the_page_text_adds_no_note() {
     assert_eq!(read("The Girl You Lost \u{2014} \u{a3}12.29").await, 0);
     // What the text layer does not carry is still read off the pixels.
     assert_eq!(read("The Girl You Lost \u{2014} signed copy \u{a3}9.99").await, 1);
+    // Another currency is another value.
+    assert_eq!(read("The Girl You Lost $12.29").await, 1);
+    // Words from two notes, together, say what neither does.
+    assert_eq!(read("Tastes Like Fear \u{a3}12.29").await, 1);
 }
 
 #[tokio::test]
@@ -4791,4 +4795,33 @@ async fn test_a_whole_list_answer_with_a_next_page_still_unread_is_not_complete(
     assert_eq!(result.status, Status::Unverified);
     let error = result.error.expect("the unread page is named");
     assert!(error.contains("https://list.test/page/2/"), "{error}");
+}
+
+#[tokio::test]
+async fn test_a_next_page_that_redirects_is_read_once_its_landing_page_is() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    assert!(agent.finish(&mut state, &first, None, None).await.expect("the run goes on").is_none());
+
+    // The site sends `/page/2/` on to `/page/2`; reading where it landed reads the page the list named.
+    let landed = at("https://list.test/page/2", &[]);
+    agent.note_effect(&mut state, &landed);
+    state.mark_read(&landed);
+    let result = agent.conclude(&mut state, &landed, None).await.expect("a conclusion");
+    let error = result.error.unwrap_or_default();
+    assert!(!error.contains("did not read"), "{error}");
+}
+
+#[test]
+fn test_a_next_link_to_another_site_is_not_this_lists_next_page() {
+    // The browser marks only same-origin pagers, since it writes another origin's href as host and path; a reader
+    // that hands over an absolute address to another site is refused here too.
+    let mut state = run_state();
+    let absolute = paged("https://list.test/", "https://other.test/page/2/");
+    state.note_pager_pages(&absolute);
+    assert_eq!(state.unread_pager_page(), None, "{:?}", state.pager_pages);
 }

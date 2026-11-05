@@ -523,12 +523,22 @@
       const u = new URL(e.href, location.href);
       base.href = u.origin === location.origin ? u.pathname + u.search : u.host + u.pathname;
       // The page's own word for "the next page of this list", which survives an icon label or another language:
-      // `rel="next"`, or the pager markup most sites use instead, a `next` class on the link or its list item (#750).
-      const pager = (el) => el && el.classList && el.classList.contains('next');
+      // `rel="next"`, or the pager markup most sites use instead, a `next` class on the link or its list item inside a
+      // pagination container (#750). A `next` class alone also marks carousels, wizards and next-article links. Only
+      // a same-origin link is a pager: its href is a path the run can open, where another origin's is host and path.
+      const pager = el => el && el.classList && el.classList.contains('next');
+      const paging = el =>
+        el.tagName === 'NAV' ||
+        /pag/i.test(typeof el.className === 'string' ? el.className : '') ||
+        /pag/i.test(el.getAttribute('aria-label') || '');
+      const container = () => {
+        for (let el = e.parentElement; el; el = el.parentElement) if (paging(el)) return true;
+        return false;
+      };
       if (
-        (e.rel && e.rel.split(/\s+/).includes('next')) ||
-        pager(e) ||
-        (pager(e.parentElement) && e.parentElement.tagName === 'LI')
+        u.origin === location.origin &&
+        ((e.rel && e.rel.split(/\s+/).includes('next')) ||
+          ((pager(e) || (pager(e.parentElement) && e.parentElement.tagName === 'LI')) && container()))
       )
         base.next_page = true;
       // The page's own word that this link saves a file, which a task ruling out downloads has to see before a click.

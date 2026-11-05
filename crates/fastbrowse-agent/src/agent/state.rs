@@ -405,11 +405,15 @@ impl RunState {
         self.read_urls.insert(observation.url.clone());
     }
 
-    /// Remember each next page the observed list names, by its absolute address.
+    /// Remember each next page the observed list names, by its absolute address. Only this site's pages count: a link
+    /// to another origin is no more of this list, and its href is not a path joined against this page.
     pub fn note_pager_pages(&mut self, observation: &Observation) {
         let Ok(here) = url::Url::parse(&observation.url) else { return };
         for control in observation.controls.iter().filter(|control| fastbrowse_core::page::pager_link(control)) {
             let Some(page) = control.href.as_deref().and_then(|href| here.join(href).ok()) else { continue };
+            if page.origin() != here.origin() {
+                continue;
+            }
             let page = page.to_string();
             if !self.pager_pages.contains(&page) {
                 self.pager_pages.push(page);

@@ -191,6 +191,9 @@ struct Reader<'a> {
     labelling: Option<(usize, String, String)>,
     /// An open `<li class="next">`, the pager markup most sites use instead of `rel="next"`; its link is the next page.
     pager_item: bool,
+    /// Open pagination containers, by tag: a `nav`, or an element whose class or label names paging. A `next` class
+    /// outside one marks a carousel, a wizard or a next article as often as a list's next page.
+    paging: Vec<String>,
 }
 
 impl<'a> Reader<'a> {
@@ -218,6 +221,7 @@ impl<'a> Reader<'a> {
             controls: Vec::new(),
             labelling: None,
             pager_item: false,
+            paging: Vec::new(),
         }
     }
 
@@ -248,8 +252,12 @@ impl<'a> Reader<'a> {
         control.input_type = (tag == "input").then_some(kind.clone()).filter(|kind| !kind.is_empty());
         control.input_name = get("name");
         let names_next = |value: Option<String>| value.is_some_and(|v| v.split_whitespace().any(|v| v == "next"));
-        let pager = tag == "a" && (names_next(get("class")) || std::mem::take(&mut self.pager_item));
-        control.next_page = (names_next(get("rel")) || pager).then_some(true);
+        let pager =
+            tag == "a" && (names_next(get("class")) || std::mem::take(&mut self.pager_item)) && !self.paging.is_empty();
+        // Only a same-origin link is a pager: a next page on another site is not more of this list.
+        let origin = |url: &str| url::Url::parse(url).ok().map(|url| url.origin());
+        let same_origin = control.href.as_deref().is_some_and(|href| origin(href) == origin(self.url));
+        control.next_page = (same_origin && (names_next(get("rel")) || pager)).then_some(true);
         control.download = get("download").map(|_| true);
         if matches!(tag, "a" | "button") {
             self.labelling = Some((self.controls.len(), tag.to_string(), String::new()));
@@ -277,6 +285,10 @@ impl<'a> Reader<'a> {
             return;
         }
         self.control(tag, attrs);
+        let pages = |value: Option<&str>| value.is_some_and(|value| value.to_ascii_lowercase().contains("pag"));
+        if tag == "nav" || pages(get("class")) || pages(get("aria-label")) {
+            self.paging.push(tag.to_string());
+        }
         if tag == "li" {
             self.pager_item = get("class").is_some_and(|class| class.split_whitespace().any(|class| class == "next"));
         }
@@ -345,6 +357,9 @@ impl<'a> Reader<'a> {
     fn end(&mut self, tag: &str) {
         if tag == "li" {
             self.pager_item = false;
+        }
+        if self.paging.last().is_some_and(|open| open == tag) {
+            self.paging.pop();
         }
         if let Some((index, _, text)) = self.labelling.take_if(|(_, open, _)| open == tag) {
             // What the element says for itself names it before any attribute does.
@@ -619,7 +634,7 @@ mod tests {
     fn the_markup_names_its_links_and_fields() {
         let (_, _, controls) = read(
             "<h2>Pages</h2><a href='/b' rel='next'>More <b>items</b></a><a href='/c'><img src=x></a>\
-             <ul><li class='next'><a href='/e'>Next</a></li><li><a href='/f'>Other</a></li></ul>\
+             <nav><ul class='pager'><li class='next'><a href='/e'>Next</a></li><li><a href='/f'>Other</a></li></ul></nav>\
              <div hidden><a href='/secret'>x</a></div><table><tr><td><a href=/d>In a row</a></table>\
              <form><input type=hidden name=t><input name=q placeholder='Search'><button>Go</button></form>",
             "https://a.example/list",
@@ -641,6 +656,20 @@ mod tests {
         let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
         assert_eq!(next, [Some(true), None, Some(true), None, None, None, None]);
         assert_eq!(controls[0].context.as_deref(), Some("Pages"));
+    }
+
+    #[test]
+    fn a_next_class_marks_a_pager_only_inside_pagination_on_this_site() {
+        let (_, _, controls) = read(
+            "<div class='carousel'><a class='next' href='/slide/2'>Next</a></div>\
+             <article><li class='next'><a href='/post/9'>Next article</a></li></article>\
+             <nav aria-label='Pagination'><a class='next' href='https://other.example/page/2'>Next</a>\
+             <a rel='next' href='https://other.example/page/3'>More</a><a class='next' href='/page/2'>Next</a></nav>\
+             <div class='Paginator'><li class='next'><a href='/page/3'>Older</a></li></div>",
+            "https://a.example/list",
+        );
+        let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
+        assert_eq!(next, [None, None, None, None, Some(true), Some(true)]);
     }
 
     #[test]

@@ -573,11 +573,16 @@ impl Agent {
                 state.hint = Some(self.redact(&hint));
             }
             state.acted_from = Some(observation.clone());
-            state.followed = decision
-                .target
-                .as_ref()
-                .filter(|_| executed && action.operation == Operation::Click)
-                .and_then(|target| url::Url::parse(&observation.url).ok()?.join(target.href.as_deref()?).ok())
+            // The address a click or navigation asked for, so reading where it landed also reads that address: a
+            // site that redirects `/page/2` to `/page/2/` left the asked one unread, and a whole-list answer unverified.
+            let asked = match action.operation {
+                Operation::Click => decision.target.as_ref().and_then(|target| target.href.as_deref()),
+                Operation::Navigate => decision.url.as_deref(),
+                _ => None,
+            };
+            state.followed = asked
+                .filter(|_| executed)
+                .and_then(|href| url::Url::parse(&observation.url).ok()?.join(href).ok())
                 .map(String::from);
             if executed
                 && let Some(target) = &decision.target
