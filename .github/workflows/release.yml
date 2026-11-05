@@ -107,7 +107,7 @@ jobs:
   # on this tag. A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is
   # a dispatch, so runs that take hours never hold this run open. The official workflow dispatches the campaign itself
   # once it has passed, naming its own rows, so every group lands in one candidate on one build, and the campaign opens
-  # the site pull request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
+  # the site pull request when it finishes.
   benchmarks:
     needs: [build, github-release]
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -141,13 +141,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
-          PARALLAX_SHA: ${{ vars.PARALLAX_SHA }}
         run: |
-          test -n "$PARALLAX_SHA" || { echo "::error::missing repository variable PARALLAX_SHA"; exit 1; }
           # A benchmark candidate binds to a dispatched fixture run on this tag.
           gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
           gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all \
+            -f fastbrowse_ref="$GITHUB_REF_NAME" -f suites=all \
             -f campaign_id="release-$VERSION"
 
   pypi:

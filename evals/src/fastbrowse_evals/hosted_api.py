@@ -10,6 +10,7 @@ report: the two are different quantities, so this arm is a diagnostic, in no pub
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -20,7 +21,7 @@ from urllib.parse import urlsplit
 import httpx
 from fastbrowse.models import Unavailable
 
-from fastbrowse_evals.attempt_clock import SESSION_INCLUDED
+from fastbrowse_evals.attempt_clock import SESSION_INCLUDED, session_answered, session_ready
 from fastbrowse_evals.backend import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse_evals.live_tasks import LiveTask, Outcome
 
@@ -73,19 +74,34 @@ async def _call(http: httpx.AsyncClient, method: str, url: str, what: str, **kwa
 
 
 async def submit_and_wait(http: httpx.AsyncClient, task: LiveTask) -> tuple[dict[str, Any], float]:
-    """The finished run and the wall seconds from submitting it to seeing it finish. A run still going when the
-    attempt is cancelled is cancelled too, so it is not left running and charging."""
+    """The finished run and the wall seconds from submitting it to seeing it finish. A run the API accepted is
+    cancelled when the attempt is, even when the cancellation lands before its reply, so it is not left charging.
+
+    The service opens its own browser where the harness cannot see it, so the session is ready once the run is
+    accepted: only the submission is bounded as opening, and the run itself has no deadline but the service's."""
     base, key = settings()
     headers = {"Authorization": f"Bearer {key}"}
     began = time.monotonic()
-    run = await _call(
-        http,
-        "POST",
-        f"{base}/v1/runs",
-        "submit",
-        headers=headers | {"Idempotency-Key": f"parallax-{task.id}-{uuid.uuid4().hex}"},
-        json={"task": task.task, "start": task.start, "webhook_events": False, "metadata": {"source": "parallax"}},
+    submit = asyncio.ensure_future(
+        _call(
+            http,
+            "POST",
+            f"{base}/v1/runs",
+            "submit",
+            headers=headers | {"Idempotency-Key": f"parallax-{task.id}-{uuid.uuid4().hex}"},
+            json={"task": task.task, "start": task.start, "webhook_events": False, "metadata": {"source": "parallax"}},
+        )
     )
+    try:
+        run = await asyncio.shield(submit)
+    except asyncio.CancelledError:
+        # The service may have accepted the run before its reply arrived: wait for the reply, and cancel that run.
+        with contextlib.suppress(Exception):
+            accepted = await submit
+            if accepted["state"] in RUNNING:
+                await _cancel(http, f"{base}/v1/runs/{accepted['id']}", headers)
+        raise
+    session_ready()
     run_url = f"{base}/v1/runs/{run['id']}"
     try:
         while run["state"] in RUNNING:
@@ -95,6 +111,7 @@ async def submit_and_wait(http: httpx.AsyncClient, task: LiveTask) -> tuple[dict
         if run["state"] in RUNNING:
             await asyncio.shield(_cancel(http, run_url, headers))
         raise
+    session_answered()
     return run, time.monotonic() - began
 
 
