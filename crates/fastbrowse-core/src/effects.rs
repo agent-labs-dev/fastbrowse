@@ -168,6 +168,24 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
             changes.push(format!("{name} focused: {} -> {}", Shown::Flag(a).str(), Shown::Flag(b).str()));
         }
     }
+    // A player's clock and paused state live outside its controls, and the policy sees only the current reading, so
+    // a step can confirm playback advanced or stopped only from what each earlier step is told it changed. Players
+    // pair up by position within one document; a new document's players are new.
+    if !replaced && before.media.len() == after.media.len() {
+        for (was, now) in before.media.iter().zip(&after.media) {
+            let name = format!("{} {}", now.kind, now.label.as_ref().or(now.heading.as_ref()).unwrap_or(&now.kind));
+            for (attribute, a, b) in
+                [("paused", was.paused, now.paused), ("ended", was.ended, now.ended), ("muted", was.muted, now.muted)]
+            {
+                if a != b {
+                    changes.push(format!("{name} {attribute}: {} -> {}", Shown::Flag(a).str(), Shown::Flag(b).str()));
+                }
+            }
+            if was.elapsed_seconds != now.elapsed_seconds {
+                changes.push(format!("{name} elapsed: {} s -> {} s", was.elapsed_seconds, now.elapsed_seconds));
+            }
+        }
+    }
     if !changes.is_empty() {
         parts.push(format!("changed {}", changes.join("; ")));
     }
@@ -208,6 +226,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
 mod tests {
     use super::*;
     use crate::models::Operation;
+    use crate::page::Media;
     use crate::py::datetime::DateTime;
 
     #[test]
@@ -435,5 +454,33 @@ mod tests {
         let many: Vec<Control> = (0..6).map(|i| control(&format!("c{i}"), &format!("Item {i}"), "link")).collect();
         let done = effect(&observation(vec![]), &observation(many), None);
         assert_eq!(done.summary, "showed 6 controls: Item 0, Item 1, Item 2, Item 3, Item 4, Item 5");
+    }
+
+    fn player(paused: bool, elapsed_seconds: f64) -> Media {
+        Media {
+            kind: "audio".into(),
+            label: None,
+            heading: Some("Gymnopedie No. 1".into()),
+            paused,
+            ended: false,
+            muted: false,
+            elapsed_seconds,
+            duration_seconds: Some(204.8),
+        }
+    }
+
+    #[test]
+    fn test_a_players_change_is_told_so_a_later_step_can_confirm_it() {
+        let page = observation(vec![Control::new("p", "button", "Pause", [Operation::Click])]);
+        let playing = Observation { media: vec![player(false, 12.0)], ..page.clone() };
+        let later = Observation { media: vec![player(false, 15.5)], ..page.clone() };
+        let paused = Observation { media: vec![player(true, 15.6)], ..page.clone() };
+        assert_eq!(effect(&playing, &later, None).summary, "changed audio Gymnopedie No. 1 elapsed: 12 s -> 15.5 s");
+        assert_eq!(
+            effect(&later, &paused, None).summary,
+            "changed audio Gymnopedie No. 1 paused: False -> True; audio Gymnopedie No. 1 elapsed: 15.5 s -> 15.6 s"
+        );
+        assert_eq!(effect(&paused, &paused, None).summary, "nothing visible changed");
+        assert!(!effect(&playing, &later, None).set_something);
     }
 }
