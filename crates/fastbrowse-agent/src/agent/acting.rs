@@ -11,8 +11,9 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password, lasting_question,
-    may_be_irreversible, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
+    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password,
+    lasting_question, may_be_irreversible, origin_of, requested_question, resolve_secret, sets_new_password,
+    starts_download,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -444,7 +445,8 @@ impl Agent {
             let reversible = probability.is_some_and(|p| p <= thresholds.irreversible_above);
             let wanted = requested.is_some_and(|p| p > thresholds.requested_above);
             // An unanswered question refuses once, as an unanswered irreversible one does.
-            let keeps = questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= thresholds.irreversible_above);
+            let keeps =
+                questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= thresholds.irreversible_above);
             if reversible && keeps && !wanted {
                 let reason = format!(
                     "{} {} would change what the site keeps, and the task does not ask for it",
