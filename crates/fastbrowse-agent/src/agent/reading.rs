@@ -23,8 +23,6 @@ impl Agent {
         if state.page_failed {
             return Ok(false);
         }
-        // This content is read now, so the notes hold what the page shows.
-        state.mark_read(observation);
         let mut capture = capture;
         if text::strip(&capture.text).is_empty() {
             // An empty page may still be rendering; only new content warrants a read.
@@ -43,6 +41,10 @@ impl Agent {
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
         if added > 0 {
+            // This content is read now, so the notes hold what the page shows. A read that returns early on an empty
+            // capture, or one Jev picks nothing from, took nothing: marking the page read would withhold Read on it
+            // while the notes hold none of it (#806).
+            state.mark_read(observation);
             // Two picks that differ are not one answer, and only writing them up can say which stands.
             let differs = facts
                 .iter()

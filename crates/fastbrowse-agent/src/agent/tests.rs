@@ -1396,6 +1396,21 @@ async fn test_a_span_end_choice_shows_each_value_that_would_be_typed() {
 }
 
 #[tokio::test]
+async fn a_read_that_takes_nothing_leaves_the_page_unread() {
+    // A read that Jev picks nothing from used to mark the page read before it read anything, so Read was withheld on
+    // a page the notes held nothing from (#806).
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Picks(&[("task", "absent")])), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let page = capture(&[(BlockKind::Paragraph, "Nothing for this task")]);
+    let seen = at("https://shop.test/empty", &[]);
+    assert!(!agent.read(&mut state, page, &seen, false).await.expect("a read"));
+    assert!(
+        !state.read_urls.contains(seen.url.as_str()),
+        "a read that took nothing must leave the page unread"
+    );
+}
+
+#[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";
     let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));
