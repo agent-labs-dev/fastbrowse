@@ -154,7 +154,6 @@ fn words(text: &str) -> Vec<String> {
 ///
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of
 /// the address rather than WHATWG's: a recorded prompt holds the id Python computed.
-
 pub(crate) fn address(url: &str) -> String {
     let (scheme, cleaned) = split_scheme(url);
     let mut rest = cleaned.as_str();
