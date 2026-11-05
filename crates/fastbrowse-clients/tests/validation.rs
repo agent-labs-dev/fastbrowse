@@ -201,6 +201,23 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
     assert!(error.to_string().len() < 500);
 }
 
+/// A request that timed out may still have been billed, so a call that then fails keeps its estimate, as a cancelled
+/// one does: a caller that carries on after the failure would otherwise report the run's cost without it.
+#[tokio::test(start_paused = true)]
+async fn test_a_failed_call_keeps_the_estimate_of_a_request_that_timed_out() {
+    let mut steps = vec![common::Step::Fail(TransportError::Timeout("ReadTimeout"))];
+    steps.extend((0..5).map(|_| text(503, "overloaded")));
+    let script = Script::new(steps);
+    let paid = Paid::default();
+    let client = direct(script.http());
+    let error = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&json!("page"), &one())).await.unwrap_err();
+    assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{error}");
+    let costs = paid.lines();
+    assert_eq!(costs.len(), 1, "{costs:?}");
+    assert_eq!((costs[0].component, costs[0].basis), (CostComponent::Jev, CostBasis::Estimated));
+    assert!(costs[0].input_tokens > 0);
+}
+
 #[tokio::test(start_paused = true)]
 async fn test_a_request_that_can_never_be_sent_is_not_an_outage() {
     // Retrying it would fail the same way every time, and an eval would re-run the task forever.

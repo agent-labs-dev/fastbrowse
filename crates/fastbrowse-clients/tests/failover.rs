@@ -13,8 +13,9 @@ use fastbrowse_clients::validation::{RETRY_DELAYS_SECONDS, RETRYABLE_STATUS};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulAnswer};
 use fastbrowse_core::models::{CostBasis, JevPurpose};
+use fastbrowse_core::py::json::dumps;
 use indexmap::IndexMap;
-use serde_json::json;
+use serde_json::{Value, json};
 
 const ATTEMPTS: usize = RETRY_DELAYS_SECONDS.len() + 1;
 
@@ -309,7 +310,12 @@ async fn test_failover_accounts_for_each_providers_unanswered_requests() {
     // counts the backoff, so those two assertions are left out and every token and dollar count kept.
     for primary in DecisionSource::JEV {
         let seen = Seen::default();
-        let http = recording(&seen, move |provider, count, _| {
+        let timed_out: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+        let kept = timed_out.clone();
+        let http = recording(&seen, move |provider, count, request| {
+            if count == 1 && provider == primary {
+                kept.lock().unwrap().push(request.body.clone());
+            }
             Box::pin(async move {
                 if count == 1 {
                     return Err(TransportError::Timeout("ReadTimeout"));
@@ -325,10 +331,13 @@ async fn test_failover_accounts_for_each_providers_unanswered_requests() {
         assert_eq!(second.cost.physical_requests, Some(1));
         assert_eq!(first.cost.basis, CostBasis::Estimated);
         assert_eq!(first.input_tokens, 100);
-        assert_eq!(first.cost.input_tokens, 300);
+        // The primary's lost request is estimated from its own body; the backup's from the answer that followed it.
+        let body: Value = serde_json::from_slice(&timed_out.lock().unwrap()[0]).unwrap();
+        let lost = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
+        assert_eq!(first.cost.input_tokens, 200 + lost);
         assert_eq!(second.cost.input_tokens, 100);
         assert_eq!((first.cost.output_tokens, second.cost.output_tokens), (7, 7));
-        let expected = second.cost.dollars.unwrap() * 2.0 + 100.0 * JEV_DOLLARS_PER_INPUT_TOKEN;
+        let expected = second.cost.dollars.unwrap() * 2.0 + lost as f64 * JEV_DOLLARS_PER_INPUT_TOKEN;
         assert!((first.cost.dollars.unwrap() - expected).abs() < 1e-12, "{primary}");
         assert_eq!(seen.lock().unwrap().iter().filter(|p| **p == primary).count(), ATTEMPTS);
     }

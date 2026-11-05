@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
 use crate::http::Http;
-use crate::validation::{JevSpend, Lines, Paid, PaidOnDrop, estimated_cost, exhausted, jev_spend, merged_cost};
+use crate::validation::{JevSpend, Lines, Paid, PaidOnDrop, exhausted, jev_spend, merged_cost};
 
 pub struct FailoverDecisionClient {
     primary: Box<dyn DecisionClient>,
@@ -111,14 +111,8 @@ impl FailoverDecisionClient {
             }
             Err(other) => return Err(other),
         };
+        // The primary's unanswered requests are already in this call's spend scope, priced as its own.
         let mut cost = result.cost.clone();
-        if error.unaccounted_requests > 0 {
-            // Only unanswered requests may be billed. Estimate their inputs from the answered request.
-            // They went to the primary, so they are priced as its.
-            let price = self.primary.profile().dollars_per_input_token;
-            let discarded = estimated_cost(price, result.input_tokens * error.unaccounted_requests, 0);
-            cost = fastbrowse_core::models::CostLine { seconds: cost.seconds, ..merged_cost(&[cost, discarded]) };
-        }
         let mut answers = held;
         answers.extend(result.answers);
         let requests = result.requests + error.requests;

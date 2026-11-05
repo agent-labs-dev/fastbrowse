@@ -4950,6 +4950,13 @@
     "wait": 8.0
    },
    {
+    "event": "cancelled_request_cost",
+    "call": "jev",
+    "requests": 6,
+    "estimated_input_tokens": 35,
+    "dollars_per_input_token": 4.2000000000000006e-08
+   },
+   {
     "event": "call",
     "call": "jev",
     "outcome": "error"
@@ -5020,6 +5027,13 @@
    []
   ],
   "trace": [
+   {
+    "event": "cancelled_request_cost",
+    "call": "jev",
+    "requests": 1,
+    "estimated_input_tokens": 35,
+    "dollars_per_input_token": 4.2000000000000006e-08
+   },
    {
     "event": "call",
     "call": "jev",
@@ -6427,6 +6441,13 @@
     "attempt": 5,
     "reason": "HTTP 503: Service temporarily unavailable",
     "wait": 8.0
+   },
+   {
+    "event": "cancelled_request_cost",
+    "call": "jev",
+    "requests": 1,
+    "estimated_input_tokens": 35,
+    "dollars_per_input_token": 4.2000000000000006e-08
    },
    {
     "event": "call",

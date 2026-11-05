@@ -552,7 +552,10 @@ pub(crate) async fn post(
         armed: true,
     };
     let sent = post_with_retry(http, url, body, &auth, &attempts, usage).await;
-    cancelled.armed = false;
+    // A call that ends without an answer keeps its unanswered requests, as a cancelled one does: they may have been
+    // billed, and a caller that carries on after the failure records nothing for them. An answer or a split carries
+    // them in its usage instead.
+    cancelled.armed = matches!(sent, Err(RetryStop::Budget(_) | RetryStop::Fatal(_)) | Ok(None));
     let response = match sent {
         Ok(response) => response,
         Err(RetryStop::Budget(error)) => return Err(DecisionError::Budget(error).into()),
@@ -581,6 +584,7 @@ pub(crate) async fn post(
         .into());
     };
     if retryable(&response) {
+        cancelled.armed = true;
         let last = describe(&response);
         return Err(DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message: exhausted(usage.requests, seconds, &last),

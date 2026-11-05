@@ -1,7 +1,9 @@
 //! What is settled from the task alone, before any page is open: the page to begin on, for a caller with a task and no
 //! page, and whether the browser must leave cookie banners for the agent to answer.
 
-use fastbrowse_clients::validation::jev_purpose;
+use std::sync::Arc;
+
+use fastbrowse_clients::validation::{Lines, jev_purpose, jev_spend};
 use fastbrowse_core::decision::{Answer, DecisionClient, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
 use fastbrowse_core::models::{CostComponent, JevPurpose, LLMPurpose};
@@ -50,10 +52,14 @@ pub fn accept_start(proposed: Option<&str>) -> Option<String> {
 
 /// Whether the task has the agent answer a cookie or consent banner itself, so the browser must leave such banners on
 /// the page rather than refuse them. With no answer the banners are refused, as they would be without asking.
-pub async fn answers_consent_itself(jev: &dyn DecisionClient, task: &str, ledger: &Ledger) -> Result<bool> {
+/// It runs before the agent's own spend scope, so it opens one on the run's ledger: a failed question's lost requests
+/// are kept there while the run carries on with banners refused.
+pub async fn answers_consent_itself(jev: &dyn DecisionClient, task: &str, ledger: &Arc<Ledger>) -> Result<bool> {
     ledger.reserve(CostComponent::Jev, 0.0, 1)?;
     let questions = IndexMap::from([("consent".to_string(), Question::Noul(consent_question(task)))]);
-    let evaluation = jev_purpose(JevPurpose::Authorization, jev.evaluate(&json!({"task": task}), &questions)).await?;
+    let state = json!({"task": task});
+    let asked = jev_purpose(JevPurpose::Authorization, jev.evaluate(&state, &questions));
+    let evaluation = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), asked).await?;
     ledger.record([evaluation.cost.clone()])?;
     Ok(matches!(evaluation.answers.get("consent"), Some(Answer::Noul(answer)) if answer.probability > 0.5))
 }
@@ -61,6 +67,41 @@ pub async fn answers_consent_itself(jev: &dyn DecisionClient, task: &str, ledger
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastbrowse_clients::validation::record_jev_spend;
+    use fastbrowse_core::BoxFuture;
+    use fastbrowse_core::decision::{DecisionError, DecisionProfile, Evaluation};
+    use fastbrowse_core::models::{CostBasis, CostLine};
+    use serde_json::Value;
+
+    /// Fails as a provider adapter does after a request lost its response: the estimate goes to the spend scope.
+    struct LostRequest;
+
+    impl DecisionClient for LostRequest {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            _: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            Box::pin(async {
+                record_jev_spend([CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.001))]);
+                Err(DecisionError::TransportFailed("timed out".into()))
+            })
+        }
+    }
+
+    /// The run carries on with banners refused, so a lost request is in its cost only if this call put it there.
+    #[tokio::test]
+    async fn a_failed_consent_question_keeps_what_it_may_have_spent() {
+        let ledger = Arc::new(Ledger::new(Default::default()));
+        assert!(answers_consent_itself(&LostRequest, "buy socks", &ledger).await.is_err());
+        let lines = ledger.state().lines.clone();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!((lines[0].basis, lines[0].dollars), (CostBasis::Estimated, Some(0.001)));
+    }
 
     #[test]
     fn a_start_page_needs_a_web_scheme() {
