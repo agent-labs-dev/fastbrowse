@@ -423,8 +423,16 @@ impl RunState {
             .filter(|page| page.origin() == here.origin())
             .map(String::from)
             .collect();
-        let continues =
-            self.pager_start.as_deref() == Some(here.as_str()) || self.pager_pages.contains(&here.to_string());
+        // A noted next page that redirected, as `/page/2/` to `/page/2`, continues the list by the address asked for.
+        let requested = self
+            .arrived_by
+            .as_ref()
+            .filter(|(landed, _)| *landed == read_key(observation))
+            .map(|(_, href)| href.as_str());
+        let continues = [Some(here.as_str()), requested]
+            .into_iter()
+            .flatten()
+            .any(|page| self.pager_start.as_deref() == Some(page) || self.pager_pages.iter().any(|next| next == page));
         if !named.is_empty() && !continues {
             self.pager_pages.clear();
             self.pager_start = Some(here.to_string());

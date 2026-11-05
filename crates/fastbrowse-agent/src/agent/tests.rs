@@ -4897,3 +4897,26 @@ async fn review_a_screenshot_value_from_another_record_is_not_a_repeated_fact() 
         "the screenshot's price for Basic is not the text block's price for Basic and must reach verification"
     );
 }
+
+#[tokio::test]
+async fn review_a_redirected_next_page_preserves_the_list_without_matching_records() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, true);
+    state.note_pager_pages(&first);
+    assert!(agent.finish(&mut state, &first, None, None).await.expect("follow next page").is_none());
+
+    // The server removes a trailing slash. This page has no quotes by the requested author, but page 3 may.
+    let second = paged("https://list.test/page/2", "/page/3/");
+    agent.note_effect(&mut state, &second);
+    state.note_pager_pages(&second);
+    state.mark_read(&second);
+
+    assert_eq!(
+        state.unread_pager_page().map(String::as_str),
+        Some("https://list.test/page/3/"),
+        "a redirect must not disconnect later pages from the list's existing evidence"
+    );
+}
