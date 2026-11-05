@@ -29,7 +29,15 @@ BENCHMARKS = {
         suite=Suite.INTERNAL,
         origin="fastbrowse-internal",
         metric="source-task-success",
-        arms=("fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "cua-codex", "browser-harness"),
+        arms=(
+            "fastbrowse",
+            "fastbrowse-pool",
+            "fastbrowse-hosted",
+            "browser-use",
+            "jev-ultrafast",
+            "cua-codex",
+            "browser-harness",
+        ),
         upstream=None,
     ),
     Suite.BU_BENCH: Benchmark(

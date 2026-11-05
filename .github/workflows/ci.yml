@@ -107,6 +107,25 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest -q
 
+  # The fastbrowse-hosted arm against the live public API with a test key: real submit, poll and run body, no
+  # browser and no charge. Forks get no secrets, so it runs only on this repository's own branches.
+  hosted-simulator:
+    if: ${{ !inputs.task && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    permissions: {contents: read}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    defaults: {run: {working-directory: evals}}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with: {shared-key: python-core}
+      - run: uv sync --locked
+      - env: {FASTBROWSE_HOSTED_API_KEY: "${{ secrets.FASTBROWSE_HOSTED_TEST_KEY }}"}
+        run: uv run pytest -q -m hosted_simulator tests/test_hosted_api.py
+
   project-rules:
     if: ${{ !inputs.task }}
     runs-on: blacksmith-2vcpu-ubuntu-2404

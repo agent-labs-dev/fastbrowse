@@ -44,12 +44,13 @@ packages = ["src/fastbrowse_evals"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not hosted_simulator'"
 pythonpath = ["tests"]
 norecursedirs = [".*", "__pycache__", "fixtures"]
 markers = [
     "real_judge_check: runs the browser campaign start check against the real judge settings",
     "real_interruption_check: runs official runs against the real interruption check function",
+    "hosted_simulator: calls the live fastbrowse-hosted API with a test key (the hosted-simulator CI job)",
 ]
 
 [tool.ruff]
