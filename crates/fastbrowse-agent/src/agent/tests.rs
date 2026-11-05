@@ -4920,3 +4920,18 @@ async fn review_a_redirected_next_page_preserves_the_list_without_matching_recor
         "a redirect must not disconnect later pages from the list's existing evidence"
     );
 }
+
+#[test]
+fn test_a_note_read_where_a_next_page_landed_keeps_the_list_open() {
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    state.note_pager_pages(&first);
+    // Page 1 holds nothing the task asks for, so its read adds no note.
+    state.mark_read(&first);
+    // `/page/2/` lands at `/page/2`, as note_effect records after following page 1's link.
+    let second = paged("https://list.test/page/2", "/page/3/");
+    state.arrived_by = Some((super::state::read_key(&second), "https://list.test/page/2/".into()));
+    state.note_pager_pages(&second);
+    read_one(&mut state, &second, true);
+    assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://list.test/page/3/"));
+}

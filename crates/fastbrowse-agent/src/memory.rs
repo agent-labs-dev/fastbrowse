@@ -122,21 +122,38 @@ pub(crate) fn split_scheme(url: &str) -> (String, String) {
     (String::new(), url)
 }
 
+/// A text's words in order, lowercased. A currency sign stays on its amount, since "£12.29" and "$12.29" differ, and
+/// so does a minus sign that starts one, since "-$10.00" and "$10.00" differ.
+fn words(text: &str) -> Vec<String> {
+    const CURRENCY: &[char] = &['£', '$', '€', '¥', '₹', '₩', '₽', '¢', '₺', '₪'];
+    let chars: Vec<char> = text.to_lowercase().chars().collect();
+    let kept = |index: usize| {
+        let c = chars[index];
+        let signs_amount = matches!(c, '-' | '\u{2212}')
+            && index.checked_sub(1).is_none_or(|before| !chars[before].is_alphanumeric())
+            && chars.get(index + 1).is_some_and(|next| next.is_ascii_digit() || CURRENCY.contains(next));
+        c.is_alphanumeric() || c == '.' || CURRENCY.contains(&c) || signs_amount
+    };
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for index in 0..=chars.len() {
+        if index < chars.len() && kept(index) {
+            word.push(if chars[index] == '\u{2212}' { '-' } else { chars[index] });
+            continue;
+        }
+        let trimmed = word.trim_matches('.');
+        if !trimmed.is_empty() {
+            words.push(trimmed.to_string());
+        }
+        word.clear();
+    }
+    words
+}
+
 /// `urlsplit(url)._replace(fragment="").geturl()`, as CPython 3.13 splits and joins.
 ///
 /// An evidence id hashes this address, and ids reach every prompt that shows notes, so it is CPython's reading of
 /// the address rather than WHATWG's: a recorded prompt holds the id Python computed.
-/// The words and numbers of `text`, lowercased, with currency signs and punctuation dropped: "\u{a3}12.29" is "12.29".
-/// A text's words in order, lowercased. A currency sign stays on its amount, since "£12.29" and "$12.29" differ.
-fn words(text: &str) -> Vec<String> {
-    const CURRENCY: &[char] = &['£', '$', '€', '¥', '₹', '₩', '₽', '¢', '₺', '₪'];
-    text.to_lowercase()
-        .split(|c: char| !(c.is_alphanumeric() || c == '.' || CURRENCY.contains(&c)))
-        .map(|word| word.trim_matches('.'))
-        .filter(|word| !word.is_empty())
-        .map(str::to_string)
-        .collect()
-}
 
 pub(crate) fn address(url: &str) -> String {
     let (scheme, cleaned) = split_scheme(url);
@@ -710,6 +727,17 @@ mod tests {
 
     /// A checkout run's 1,800 notes, over the budget, took over three minutes to cut each step: every count from
     /// the top was rendered whole. The cut is the same; it took 17s here before, and well under 1s now.
+    #[test]
+    fn a_minus_sign_on_an_amount_is_part_of_it() {
+        let url = "https://example.test/balance";
+        let notes = Notes::new([quoted("Account balance $10.00", "capture", url)]);
+        assert!(notes.repeats_page_text("Account balance $10.00", url));
+        assert!(!notes.repeats_page_text("Account balance -$10.00", url));
+        assert!(!notes.repeats_page_text("Account balance \u{2212}10.00", url));
+        // A hyphen between words is still a break, as before.
+        assert_eq!(words("well-known -5 a-1"), ["well", "known", "-5", "a", "1"]);
+    }
+
     #[test]
     fn notes_far_over_budget_are_cut_quickly() {
         let mut notes = Notes::default();

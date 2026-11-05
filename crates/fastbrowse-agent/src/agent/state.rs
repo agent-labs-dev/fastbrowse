@@ -436,6 +436,9 @@ impl RunState {
         if !named.is_empty() && !continues {
             self.pager_pages.clear();
             self.pager_start = Some(here.to_string());
+        } else if continues && requested.is_some() && !self.pager_pages.contains(&here.to_string()) {
+            // Where a next page landed is a page of the list too, so a note read there counts as the list's.
+            self.pager_pages.push(here.to_string());
         }
         for page in named {
             if !self.pager_pages.contains(&page) {
