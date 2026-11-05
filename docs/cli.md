@@ -37,7 +37,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
-| `--trace FILE` | append each model call with its full request and reply, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
+| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension, to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): reuse saved values when Jev selects a matching action on the same page |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |

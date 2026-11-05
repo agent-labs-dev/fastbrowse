@@ -220,6 +220,8 @@ be fine, and the same run later may pass.
   answering an action is reopened once at the address the tab shows; a second hang, or one outside an action, ends
   the run, and the error says the page did not answer or the browser stopped answering.
 - The run's tab closed and no tab it owns remains.
+- With `--extension`, Chrome took the run's tab away because the page loaded another extension's frame; see
+  [Another extension's frame takes the tab away](#another-extensions-frame-takes-the-tab-away).
 - With `--extension`, no browser has the fastbrowse extension connected. The error is `no browser has the
   fastbrowse extension connected`.
 
@@ -255,6 +257,18 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
   fastbrowse, since it records where fastbrowse is.
 - Check that the extension is on at `chrome://extensions`, and that Chrome is open.
 - After installing, restart Chrome or turn the extension off and on, so it connects.
+
+### Another extension's frame takes the tab away
+
+Chrome lets no extension debug a tab while the page holds a frame from another extension, and takes the tab
+away from fastbrowse as soon as one appears. Screen recorders, password managers and writing assistants add
+such frames to every page. The run ends `unavailable` with `Chrome detached fastbrowse from the run's tab when
+the page loaded a frame from another extension (chrome-extension://<id>)`.
+
+**Next step.** Open `chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run
+again. The extension then adds its frame only on pages where you click it. With `--trace FILE`, every message
+between the run and the extension is in the trace as an `extension` event, and an `extension_tab_lost` event
+names the frame that took the tab.
 
 ### DevToolsActivePort and finding the DevTools address
 

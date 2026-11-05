@@ -929,6 +929,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
                     let cancel = host.cancel.clone();
                     Some(Arc::new(move || cancel.trip()))
                 },
+                trace: http.trace.clone(),
             },
         );
         session = Some(opened.clone());

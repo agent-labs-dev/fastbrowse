@@ -207,9 +207,10 @@ fn handshake_detail(error: &WsError) -> &'static str {
 
 impl Cdp {
     /// `_BrowserClient.start`: open the DevTools socket.
-    pub async fn connect(url: &str) -> Result<Self, BrowserError> {
+    /// `trace` records the extension relay's traffic; a DevTools socket records nothing to it.
+    pub async fn connect(url: &str, trace: &fastbrowse_core::telemetry::Trace) -> Result<Self, BrowserError> {
         if let Some(record) = url.strip_prefix(crate::extension::SCHEME) {
-            return Self::connect_extension(record).await;
+            return Self::connect_extension(record, trace).await;
         }
         // The websocket's TLS provider for wss:// (cloud browsers); a second install is refused and harmless.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -307,14 +308,14 @@ impl Cdp {
 
     /// Reach a browser through the fastbrowse extension: `record` is the path of its host's record, optionally
     /// followed by `#` and the run's task, which names the run's tab group.
-    async fn connect_extension(record: &str) -> Result<Self, BrowserError> {
+    async fn connect_extension(record: &str, trace: &fastbrowse_core::telemetry::Trace) -> Result<Self, BrowserError> {
         let (path, task) = record.split_once('#').unwrap_or((record, ""));
         let text = std::fs::read_to_string(path).map_err(|_| {
             BrowserError::Unavailable("the fastbrowse extension is no longer connected: open the browser".into())
         })?;
         let host: crate::extension::protocol::HostRecord = serde_json::from_str(&text)
             .map_err(|_| BrowserError::Unavailable(format!("{path} is not a fastbrowse host record")))?;
-        let endpoint = crate::extension::shim::connect(&host, task).await?;
+        let endpoint = crate::extension::shim::connect(&host, task, trace.clone()).await?;
         let (out, mut outgoing) = mpsc::unbounded_channel::<Outgoing>();
         let inner = Arc::new(Inner {
             state: Mutex::default(),
