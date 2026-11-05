@@ -50,6 +50,10 @@ type BrowserOptions struct {
 	CloudExtensions []string
 	// CloudTimeoutMinutes is how long a cloud browser may live: 15 when it is zero, and the service allows up to 240.
 	CloudTimeoutMinutes int
+	// Extension drives the user's own Chrome through the fastbrowse extension, in a tab group of the run's own.
+	Extension bool
+	// ExtensionBrowser is the label of the connected browser to use when more than one has the extension.
+	ExtensionBrowser string
 }
 
 // Attachment is a file a run may upload.
@@ -132,28 +136,30 @@ func runParams(runID, task string, browser BrowserOptions, options RunOptions) (
 		browser = *options.Browser
 	}
 	params := RunParams{
-		RunID:         runID,
-		Task:          task,
-		Start:         optional(options.Start),
-		Context:       optional(options.Context),
-		Inputs:        options.Inputs,
-		Limits:        options.Limits,
-		Authorization: options.Authorization,
-		Downloads:     optional(options.Downloads),
-		Record:        optional(options.Record),
-		Recipe:        optional(options.Recipe),
-		SaveRecipe:    optional(options.SaveRecipe),
-		Cursor:        options.Cursor,
-		Fetch:         options.Fetch,
-		Browser:       options.BrowserFirst,
-		Local:         browser.Local,
-		Chrome:        browser.Chrome,
-		CloudProfile:  optional(browser.CloudProfile),
-		CDPURL:        optional(browser.CDPURL),
-		Attach:        browser.Attach,
-		TargetMatch:   optional(browser.TargetMatch),
-		Foreground:    browser.Foreground,
-		ProxyCountry:  optional(browser.ProxyCountry),
+		RunID:            runID,
+		Task:             task,
+		Start:            optional(options.Start),
+		Context:          optional(options.Context),
+		Inputs:           options.Inputs,
+		Limits:           options.Limits,
+		Authorization:    options.Authorization,
+		Downloads:        optional(options.Downloads),
+		Record:           optional(options.Record),
+		Recipe:           optional(options.Recipe),
+		SaveRecipe:       optional(options.SaveRecipe),
+		Cursor:           options.Cursor,
+		Fetch:            options.Fetch,
+		Browser:          options.BrowserFirst,
+		Local:            browser.Local,
+		Chrome:           browser.Chrome,
+		CloudProfile:     optional(browser.CloudProfile),
+		CDPURL:           optional(browser.CDPURL),
+		Attach:           browser.Attach,
+		TargetMatch:      optional(browser.TargetMatch),
+		Foreground:       browser.Foreground,
+		ProxyCountry:     optional(browser.ProxyCountry),
+		Extension:        browser.Extension,
+		ExtensionBrowser: optional(browser.ExtensionBrowser),
 		// The wire carries whether a callback is held, and the callback stays here.
 		Frames: options.OnFrame != nil,
 		Until:  options.Until != nil,

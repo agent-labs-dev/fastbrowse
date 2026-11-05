@@ -13,6 +13,7 @@ from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, StrictInt, Stric
 from fastbrowse.models import (
     Authorization,
     BrowserEvent,
+    BrowserUsed,
     CostBreakdown,
     Image,
     Limits,
@@ -93,6 +94,8 @@ class CancellationReceipt(BaseModel):
     steps: tuple[StepResult, ...]
     cost: CostBreakdown
     recordings: tuple[Path, ...]
+    # The browser the run drove when it stopped, and how it reached it; none when it had not reached one.
+    browser: BrowserUsed | None = None
 
 
 class Error(BaseModel):
@@ -202,6 +205,11 @@ class RunParams(Params):
     """Read every page over HTTP and start no browser."""
     browser: bool = False
     """Start a browser from the first step, rather than reading over HTTP until the task needs one."""
+    extension: bool = False
+    """Drive the user's own browser through the fastbrowse extension, in a tab group of the run's own."""
+    extension_browser: str | None = None
+    """Which browser the extension is connected in, by the label its popup shows, when there is more than one.
+    Implies `extension`."""
 
 
 class RunCancelParams(Params):

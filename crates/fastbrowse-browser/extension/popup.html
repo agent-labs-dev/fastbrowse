@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>fastbrowse</title>
+<style>
+  body { font: 13px/1.4 system-ui, sans-serif; margin: 12px; width: 280px; }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  ul { list-style: none; padding: 0; margin: 0 0 12px; }
+  li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #ddd; }
+  .task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: #666; }
+  label { display: block; margin-top: 8px; color: #444; }
+  input { width: 100%; box-sizing: border-box; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>fastbrowse runs</h1>
+<ul id="runs"></ul>
+<label>Name this browser, for <code>--extension-browser</code>
+  <input id="label" autocomplete="off">
+</label>
+<script src="popup.js" type="module"></script>
+</body>
+</html>

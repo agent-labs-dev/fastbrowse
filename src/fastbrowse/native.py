@@ -95,6 +95,8 @@ _PLAIN = (
     "cursor",
     "fetch",
     "browser",
+    "extension",
+    "extension_browser",
 )
 """`run_task` arguments that are JSON already and belong to the run itself."""
 

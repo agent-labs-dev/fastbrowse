@@ -106,6 +106,59 @@
       "title": "BrowserEvent",
       "type": "object"
     },
+    "BrowserUsed": {
+      "additionalProperties": false,
+      "description": "The browser a run drove.",
+      "properties": {
+        "via": {
+          "$ref": "#/$defs/BrowserVia"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a\nbrowser connected through the extension.",
+          "title": "Profile"
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The browser's product and version, when known, such as `Chrome 150.0.7400.2`.",
+          "title": "Browser"
+        }
+      },
+      "required": [
+        "via",
+        "profile",
+        "browser"
+      ],
+      "title": "BrowserUsed",
+      "type": "object"
+    },
+    "BrowserVia": {
+      "description": "How a run reached the browser it drove.",
+      "enum": [
+        "cloud",
+        "launched",
+        "attached",
+        "extension"
+      ],
+      "title": "BrowserVia",
+      "type": "string"
+    },
     "BudgetStop": {
       "additionalProperties": false,
       "properties": {
@@ -152,12 +205,24 @@
           },
           "title": "Recordings",
           "type": "array"
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserUsed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
         "steps",
         "cost",
-        "recordings"
+        "recordings",
+        "browser"
       ],
       "title": "CancellationReceipt",
       "type": "object"
@@ -1273,6 +1338,23 @@
           "default": false,
           "title": "Browser",
           "type": "boolean"
+        },
+        "extension": {
+          "default": false,
+          "title": "Extension",
+          "type": "boolean"
+        },
+        "extension_browser": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension Browser"
         }
       },
       "required": [
@@ -1398,6 +1480,18 @@
           ],
           "default": null,
           "description": "The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one."
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserUsed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The browser the run drove, and how it reached it; none when it read every page over HTTP."
         }
       },
       "required": [
@@ -1413,7 +1507,8 @@
         "error",
         "final_url",
         "recordings",
-        "wall"
+        "wall",
+        "browser"
       ],
       "title": "RunResult",
       "type": "object"
@@ -1568,6 +1663,7 @@
         "budget_exceeded",
         "observation_limit",
         "unavailable",
+        "cancelled",
         "error"
       ],
       "title": "Status",

@@ -216,6 +216,12 @@ jobs:
       # schedules every test binary at once instead of one after another. It runs the same binaries.
       - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with: {tool: nextest@0.9.150}
+      # Branded Chrome ignores --load-extension, so the extension backend's end-to-end test needs Chrome for Testing;
+      # without one it skips.
+      - name: Install Chrome for Testing
+        run: |
+          installed=$(npx -y @puppeteer/browsers@3.2.6 install chrome@stable --path "$RUNNER_TEMP/cft" --format '{{path}}')
+          echo "FASTBROWSE_TEST_EXTENSION_CHROME=$installed" >> "$GITHUB_ENV"
       - run: cargo nextest run --workspace --locked --no-fail-fast
       # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc
@@ -286,7 +292,7 @@ jobs:
             scripts/smoke_binary.py scripts/npm_platform_package.py scripts/smoke_npm_install.py \
             packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json \
             Cargo.toml Cargo.lock rust-toolchain.toml 'crates/*/Cargo.toml' 'crates/*/build.rs' \
-            crates/fastbrowse-browser/js crates/fastbrowse-cli/generated
+            crates/fastbrowse-browser/js crates/fastbrowse-browser/extension crates/fastbrowse-cli/generated
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
           fi

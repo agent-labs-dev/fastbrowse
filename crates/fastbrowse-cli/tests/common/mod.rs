@@ -207,6 +207,7 @@ pub fn settings() -> SettingsSource {
 
 pub fn result(status: Status) -> RunResult {
     RunResult {
+        browser: None,
         status,
         budget: None,
         answer: Some("42".into()),

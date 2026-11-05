@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::models::{
-    Authorization, CostBreakdown, Event, Image, Limits, LocalChrome, RunResult, SecretRef, StepResult,
+    Authorization, BrowserUsed, CostBreakdown, Event, Image, Limits, LocalChrome, RunResult, SecretRef, StepResult,
 };
 use crate::py::{base64, lax};
 use crate::schema::{Field, Mode, ModelTy, Schema, Ty, definitions};
@@ -180,6 +180,9 @@ pub struct CancellationReceipt {
     pub steps: Vec<StepResult>,
     pub cost: CostBreakdown,
     pub recordings: Vec<PathBuf>,
+    /// The browser the run drove when it stopped, and how it reached it; none when it had not reached one.
+    #[serde(default)]
+    pub browser: Option<Box<BrowserUsed>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -322,6 +325,20 @@ pub struct RunTask {
     /// Start a browser from the first step, rather than reading over HTTP until the task needs one.
     #[serde(default)]
     pub browser: bool,
+    /// Drive the user's own browser through the fastbrowse extension, in a tab group of the run's own.
+    #[serde(default)]
+    pub extension: bool,
+    /// Which browser the extension is connected in, by the label its popup shows, when there is more than one. Implies
+    /// `extension`.
+    #[serde(default)]
+    pub extension_browser: Option<String>,
+}
+
+impl RunTask {
+    /// Whether the run drives the user's browser through the fastbrowse extension.
+    pub fn wants_extension(&self) -> bool {
+        self.extension || self.extension_browser.is_some()
+    }
 }
 
 /// One run: the run's arguments, and what the server needs to talk to the client about it.
@@ -535,6 +552,7 @@ impl Schema for CancellationReceipt {
                 Field::required("steps", Ty::list(StepResult::ty())),
                 Field::required("cost", CostBreakdown::ty()),
                 Field::required("recordings", Ty::list(Ty::Path)),
+                Field::default("browser", Ty::optional(BrowserUsed::ty()), Value::Null),
             ],
         )
         .ty()
@@ -637,6 +655,8 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("allowed_origins", Ty::optional(Ty::list(Ty::Str)), none()),
         Field::default("fetch", Ty::Bool, false),
         Field::default("browser", Ty::Bool, false),
+        Field::default("extension", Ty::Bool, false),
+        Field::default("extension_browser", text(), none()),
     ]
 }
 

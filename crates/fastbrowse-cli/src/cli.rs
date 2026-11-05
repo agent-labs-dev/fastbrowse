@@ -40,6 +40,7 @@ pub fn exit_code(status: Status) -> i32 {
         Status::Stuck => 9,
         Status::Unverified => 10,
         Status::ObservationLimit => 11,
+        Status::Cancelled => 12,
     }
 }
 
@@ -137,6 +138,8 @@ pub fn parser(build: &Build) -> Parser {
             Opt::value("--save-recipe"),
             Opt::flag("--fetch"),
             Opt::flag("--browser"),
+            Opt::flag("--extension"),
+            Opt::value("--extension-browser"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -175,6 +178,10 @@ pub struct Args {
     pub save_recipe: Option<PathBuf>,
     pub fetch: bool,
     pub browser: bool,
+    /// Drive the user's own browser through the fastbrowse extension.
+    pub extension: bool,
+    /// Which browser the extension is connected in, by its label; implies `extension`.
+    pub extension_browser: Option<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
@@ -237,6 +244,8 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         save_recipe: path("--save-recipe"),
         fetch: parsed.flag("--fetch"),
         browser: parsed.flag("--browser"),
+        extension: parsed.flag("--extension"),
+        extension_browser: text("--extension-browser"),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
@@ -372,9 +381,10 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 /// The exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch) {
+    let extension = args.extension || args.extension_browser.is_some();
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || extension) {
         return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port or --fetch".into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
         ));
     }
     let cdp_port = args
@@ -424,6 +434,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         proxy_country: args.proxy_country.clone(),
         fetch: args.fetch,
         browser: args.browser,
+        extension: args.extension,
+        extension_browser: args.extension_browser.clone(),
         ..RunTask::default()
     };
     fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;
@@ -438,7 +450,11 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     };
     let mut result = match context.runner.run(task, host).await {
         Ok(result) => result,
-        Err(RunError::Cancelled(receipt)) => options::cancelled_result("the run was cancelled", receipt),
+        // Stopped from the browser: the extension's Stop, or the user closing the run's last tab.
+        Err(RunError::Cancelled(receipt)) => fastbrowse_core::models::RunResult {
+            status: Status::Cancelled,
+            ..options::cancelled_result("the run was cancelled", receipt)
+        },
         Err(RunError::AfterSpending { error, receipt }) => options::cancelled_result(error.to_string(), receipt),
         Err(error) => return Err(ConfigurationError(error.to_string())),
     };
@@ -453,8 +469,9 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     if result.status == Status::NeedsLogin {
         result.error = Some(format!(
             "{}. Pass --secret NAME=ENV_VAR@https://host with the password in that environment variable; credentials \
-             in task text are not used.",
-            result.error.as_deref().unwrap_or("Sign-in credentials required")
+             in task text are not used.{}",
+            result.error.as_deref().unwrap_or("Sign-in credentials required"),
+            if extension { "" } else { " Or pass --extension to run in your own Chrome, where you are signed in." }
         ));
     }
     let streams = &context.streams;

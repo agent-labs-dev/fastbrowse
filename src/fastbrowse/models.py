@@ -43,6 +43,8 @@ class Status(StrEnum):
     UNAVAILABLE = "unavailable"
     """A model or browser provider stayed unavailable through every retry. Nothing about the task failed; the same
     run later may pass."""
+    CANCELLED = "cancelled"
+    """Stopped before it finished, by its caller or by the user in the browser it drove."""
     ERROR = "error"
 
 
@@ -317,6 +319,30 @@ class Wall(Frozen):
     """When the run stopped at it, in UTC epoch milliseconds."""
 
 
+class BrowserVia(StrEnum):
+    """How a run reached the browser it drove."""
+
+    CLOUD = "cloud"
+    """A Browser Use Cloud browser started for the run."""
+    LAUNCHED = "launched"
+    """A local Chrome the run launched."""
+    ATTACHED = "attached"
+    """A browser the caller was already running, reached over its DevTools address."""
+    EXTENSION = "extension"
+    """The user's own browser, reached through the fastbrowse extension."""
+
+
+class BrowserUsed(Frozen):
+    """The browser a run drove."""
+
+    via: BrowserVia
+    profile: str | None = None
+    """The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+    browser connected through the extension."""
+    browser: str | None = None
+    """The browser's product and version, when known, such as `Chrome 150.0.7400.2`."""
+
+
 class RunResult(Frozen):
     status: Status
     budget: BudgetStop | None = None
@@ -336,6 +362,8 @@ class RunResult(Frozen):
     """The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed."""
     wall: Wall | None = None
     """The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one."""
+    browser: BrowserUsed | None = None
+    """The browser the run drove, and how it reached it; none when it read every page over HTTP."""
 
     @property
     def succeeded(self) -> bool:

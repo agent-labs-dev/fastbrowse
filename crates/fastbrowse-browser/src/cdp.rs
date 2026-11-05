@@ -115,6 +115,20 @@ struct Incoming {
     error: Option<RemoteError>,
 }
 
+impl Incoming {
+    /// An event with no session and no parameters.
+    fn event(method: &str) -> Incoming {
+        Incoming {
+            id: None,
+            method: Some(method.to_owned()),
+            session_id: None,
+            params: Value::Null,
+            result: Value::Null,
+            error: None,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct RemoteError {
     code: i64,
@@ -194,6 +208,9 @@ fn handshake_detail(error: &WsError) -> &'static str {
 impl Cdp {
     /// `_BrowserClient.start`: open the DevTools socket.
     pub async fn connect(url: &str) -> Result<Self, BrowserError> {
+        if let Some(record) = url.strip_prefix(crate::extension::SCHEME) {
+            return Self::connect_extension(record).await;
+        }
         // The websocket's TLS provider for wss:// (cloud browsers); a second install is refused and harmless.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut config = WebSocketConfig::default();
@@ -283,6 +300,65 @@ impl Cdp {
                     return;
                 }
                 let _ = inner.out.send(Outgoing::Ping);
+            }
+        });
+        Ok(Self(inner))
+    }
+
+    /// Reach a browser through the fastbrowse extension: `record` is the path of its host's record, optionally
+    /// followed by `#` and the run's task, which names the run's tab group.
+    async fn connect_extension(record: &str) -> Result<Self, BrowserError> {
+        let (path, task) = record.split_once('#').unwrap_or((record, ""));
+        let text = std::fs::read_to_string(path).map_err(|_| {
+            BrowserError::Unavailable("the fastbrowse extension is no longer connected: open the browser".into())
+        })?;
+        let host: crate::extension::protocol::HostRecord = serde_json::from_str(&text)
+            .map_err(|_| BrowserError::Unavailable(format!("{path} is not a fastbrowse host record")))?;
+        let endpoint = crate::extension::shim::connect(&host, task).await?;
+        let (out, mut outgoing) = mpsc::unbounded_channel::<Outgoing>();
+        let inner = Arc::new(Inner {
+            state: Mutex::default(),
+            handlers: Mutex::default(),
+            out,
+            answered: AtomicBool::new(false),
+            deadlines: Mutex::default(),
+            pong: AtomicBool::new(true),
+        });
+        let commands = endpoint.commands;
+        tokio::spawn(async move {
+            // Liveness is checked by `Browser.getVersion`, which the shim answers with a round trip to the extension.
+            while let Some(message) = outgoing.recv().await {
+                match message {
+                    Outgoing::Text(text) => {
+                        if commands.send(text).is_err() {
+                            return;
+                        }
+                    }
+                    Outgoing::Ping => {}
+                    Outgoing::Close => return,
+                }
+            }
+        });
+        let weak = Arc::downgrade(&inner);
+        let mut replies = endpoint.replies;
+        tokio::spawn(async move {
+            let why: Arc<str> = loop {
+                let Some(text) = replies.recv().await else { break "ConnectionClosed".into() };
+                let Some(inner) = weak.upgrade() else { return };
+                if let Ok(closed) = serde_json::from_str::<Value>(&text)
+                    && let Some(why) = closed["closed"].as_str()
+                {
+                    if why == crate::extension::shim::CANCELLED {
+                        inner.dispatch(Incoming::event(crate::extension::STOPPED_EVENT));
+                    }
+                    break why.into();
+                }
+                if let Ok(message) = serde_json::from_str::<Incoming>(&text) {
+                    inner.dispatch(message);
+                }
+            };
+            if let Some(inner) = weak.upgrade() {
+                inner.close(why);
             }
         });
         Ok(Self(inner))

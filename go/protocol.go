@@ -49,6 +49,26 @@ type BrowserEvent struct {
 	BrowserID *string `json:"browser_id"`
 }
 
+// The browser a run drove.
+type BrowserUsed struct {
+	Via BrowserVia `json:"via"`
+	// The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+	// browser connected through the extension.
+	Profile *string `json:"profile"`
+	// The browser's product and version, when known, such as `Chrome 150.0.7400.2`.
+	Browser *string `json:"browser"`
+}
+
+// How a run reached the browser it drove.
+type BrowserVia string
+
+const (
+	BrowserViaCloud     BrowserVia = "cloud"
+	BrowserViaLaunched  BrowserVia = "launched"
+	BrowserViaAttached  BrowserVia = "attached"
+	BrowserViaExtension BrowserVia = "extension"
+)
+
 type BudgetStop struct {
 	Resource string  `json:"resource"`
 	Limit    float64 `json:"limit"`
@@ -64,6 +84,7 @@ type CancellationReceipt struct {
 	Steps      []StepResult  `json:"steps"`
 	Cost       CostBreakdown `json:"cost"`
 	Recordings []string      `json:"recordings"`
+	Browser    *BrowserUsed  `json:"browser"`
 }
 
 type Citation struct {
@@ -347,6 +368,8 @@ type RunParams struct {
 	AllowedOrigins      []string          `json:"allowed_origins,omitempty"`
 	Fetch               bool              `json:"fetch,omitempty"`
 	Browser             bool              `json:"browser,omitempty"`
+	Extension           bool              `json:"extension,omitempty"`
+	ExtensionBrowser    *string           `json:"extension_browser,omitempty"`
 }
 
 type RunResult struct {
@@ -366,6 +389,8 @@ type RunResult struct {
 	Recordings []string `json:"recordings"`
 	// The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.
 	Wall *Wall `json:"wall"`
+	// The browser the run drove, and how it reached it; none when it read every page over HTTP.
+	Browser *BrowserUsed `json:"browser"`
 }
 
 // The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run
@@ -428,6 +453,7 @@ const (
 	StatusBudgetExceeded    Status = "budget_exceeded"
 	StatusObservationLimit  Status = "observation_limit"
 	StatusUnavailable       Status = "unavailable"
+	StatusCancelled         Status = "cancelled"
 	StatusError             Status = "error"
 )
 

@@ -98,6 +98,13 @@ export interface RunOptions extends PerRun<BrowserOptions> {
   fetch?: boolean;
   /** Start a browser from the first step, rather than reading over HTTP until the task needs one. */
   browser?: boolean;
+  /**
+   * Run in the user's own Chrome, signed in as they are, through the fastbrowse extension
+   * (`fastbrowse extension install`). With no browser connected the run ends `unavailable` before any spend.
+   */
+  extension?: boolean;
+  /** Which browser the extension is connected in, by the label its popup shows. Implies `extension`. */
+  extensionBrowser?: string;
   secrets?: Secrets;
   /** Called with the address the run ended on. Anything but true keeps the run from `complete`. */
   until?: (url: string) => MaybePromise<boolean>;
@@ -183,6 +190,8 @@ export function runParams(runId: string, task: string, defaults: Partial<RunPara
       allowed_origins: options.allowedOrigins,
       fetch: options.fetch,
       browser: options.browser,
+      extension: options.extension,
+      extension_browser: options.extensionBrowser,
       secrets: options.secrets?.refs,
       // The wire carries whether a callback is held, and the callback stays here.
       frames: options.onFrame && true,

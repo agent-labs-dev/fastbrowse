@@ -25,6 +25,8 @@ public enum Status {
     OBSERVATION_LIMIT,
     @JsonProperty("unavailable")
     UNAVAILABLE,
+    @JsonProperty("cancelled")
+    CANCELLED,
     @JsonProperty("error")
     ERROR
 }
