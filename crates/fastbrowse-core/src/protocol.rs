@@ -310,7 +310,7 @@ pub struct RunTask {
     pub viewport: Option<(u32, u32)>,
     #[serde(default)]
     pub cloud_extensions: Vec<String>,
-    /// How long a cloud browser may live; 15 minutes when none is given.
+    /// How long a cloud browser may live; 60 minutes when none is given.
     #[serde(default)]
     pub cloud_timeout_minutes: Option<u32>,
     /// The only origins the run may open, each exact.

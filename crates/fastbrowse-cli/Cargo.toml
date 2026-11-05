@@ -27,7 +27,7 @@ log = "0.4.35"
 serde = { version = "1.0.229", features = ["derive"] }
 # float_roundtrip: a cost read one unit off is written back as another number.
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
-tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "signal"] }
 url = "2.5.8"
 # The MCP server's streamable HTTP transport: a server, HTTP/1.1 only, as uvicorn serves it.
 hyper = { version = "1.12.0", features = ["server", "http1"] }

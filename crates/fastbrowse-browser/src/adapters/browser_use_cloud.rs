@@ -103,7 +103,9 @@ impl Default for BrowserUseCloudOptions {
     fn default() -> Self {
         Self {
             proxy_country: Some("us".into()),
-            timeout_minutes: 15,
+            // A browser that times out before its run ends the run mid-task (#776). A run stops its browser when it
+            // ends, interrupted too, so the longer limit bills only a process that was killed outright.
+            timeout_minutes: 60,
             profile: None,
             viewport: None,
             extensions: vec![],
@@ -1081,7 +1083,7 @@ mod tests {
             (
                 BrowserUseCloudOptions::default(),
                 concat!(
-                    r#"{"timeout":15,"proxyCountryCode":"us","solveCaptchas":true,"#,
+                    r#"{"timeout":60,"proxyCountryCode":"us","solveCaptchas":true,"#,
                     r#""browserScreenWidth":1120,"browserScreenHeight":780}"#,
                 ),
             ),
@@ -1104,7 +1106,7 @@ mod tests {
                     ..Default::default()
                 },
                 concat!(
-                    r#"{"timeout":15,"extensionIds":["6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"],"#,
+                    r#"{"timeout":60,"extensionIds":["6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"],"#,
                     r#""solveCaptchas":true,"browserScreenWidth":1280,"browserScreenHeight":900}"#,
                 ),
             ),

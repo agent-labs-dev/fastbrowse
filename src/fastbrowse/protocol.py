@@ -195,7 +195,7 @@ class RunParams(Params):
     viewport: tuple[U32, U32] | None = None
     cloud_extensions: tuple[str, ...] = ()
     cloud_timeout_minutes: U32 | None = None
-    """How long a cloud browser may live; 15 minutes when none is given."""
+    """How long a cloud browser may live; 60 minutes when none is given."""
     allowed_origins: tuple[str, ...] | None = None
     """The only origins the run may open, each exact."""
     fetch: bool = False
