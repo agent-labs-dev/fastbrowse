@@ -202,10 +202,6 @@ struct SnapshotBlock {
     #[serde(default)]
     source_path: String,
     href: Option<String>,
-    list_id: Option<String>,
-    list_count: Option<i64>,
-    #[serde(default)]
-    list_frameless: bool,
 }
 
 /// capture.js output for one frame.
@@ -923,9 +919,6 @@ impl CdpPage {
                     heading_path: block.heading_path.clone(),
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
-                    list_id: block.list_id.as_ref().map(|id| format!("{frame_key}/{}:{id}", block.source_path)),
-                    list_count: block.list_count,
-                    list_frameless: block.list_frameless,
                 });
             }
         }
@@ -964,9 +957,6 @@ impl CdpPage {
                     heading_path: vec![heading.clone()],
                     control_context: None,
                     href: None,
-                    list_id: None,
-                    list_count: None,
-                    list_frameless: false,
                 });
                 text.push_str("\n\n");
                 offset += 2;

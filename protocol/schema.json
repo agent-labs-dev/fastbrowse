@@ -649,7 +649,8 @@
         "start",
         "compose",
         "image_read",
-        "fill"
+        "fill",
+        "pages"
       ],
       "title": "LLMPurpose",
       "type": "string"

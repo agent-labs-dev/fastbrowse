@@ -227,6 +227,7 @@ const (
 	LLMPurposeCompose   LLMPurpose = "compose"
 	LLMPurposeImageRead LLMPurpose = "image_read"
 	LLMPurposeFill      LLMPurpose = "fill"
+	LLMPurposePages     LLMPurpose = "pages"
 )
 
 type Limits struct {

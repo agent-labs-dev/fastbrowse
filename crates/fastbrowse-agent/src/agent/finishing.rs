@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::acting::Carried;
 use super::helpers::unsent_fact;
 use super::recovery::{DONE, Idle};
-use super::state::{OutputIntent, RunState, Step, Stop};
+use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
 use crate::retrieval::{compose_reviewed, draft_answer, draft_reviewed, marked_partial, verdict};
@@ -93,11 +93,12 @@ impl Agent {
         if intent != OutputIntent::Image && output_schema.is_none() {
             self.read_drawn_page(state, observation).await?;
         }
-        // A task over a whole list is not done while a next page the list named is unread: Jev judged the extent from
-        // the task, and finishing from the pages reached called part of the list the whole (#750), or ended on one
-        // record's own page after leaving the list (#798). Each such page is opened once at most.
+        // A task over a whole list, or over pages of it the task names, is not done while a next page it covers is
+        // unread: Jev judged the extent from the task, and finishing from the pages reached called part of the list the
+        // whole (#750), or ended on one record's own page after leaving the list (#798). A page past the ones the task
+        // names is not opened (#824). Each such page is opened once at most.
         if output_schema.is_none()
-            && state.every_page
+            && state.extent.walks()
             && let Some(next) = state.unread_pager_page().cloned()
         {
             return self.open_unread_page(state, observation, next).await;
@@ -144,7 +145,8 @@ impl Agent {
         Ok(extract(&*self.jev, task, &capture, schema, &options).await?)
     }
 
-    /// Open a next page a whole-list task left unread, as a step the run's code chose.
+    /// Open a next page of the list that a task over the whole list, or over pages of it it names, left unread, as a
+    /// step the run's code chose.
     async fn open_unread_page(
         &self,
         state: &mut RunState,
@@ -346,16 +348,21 @@ impl Agent {
         let mut data = Value::Null;
         let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
         let mut error = answer_problem;
-        // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread.
-        if state.every_page
+        // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread. The same
+        // holds for the pages a task names.
+        if state.extent.walks()
             && let Some(unread) = state.unread_list_pages().next()
         {
             status = Status::Unverified;
-            error.get_or_insert_with(|| {
-                self.redact(&format!(
+            let message = match state.extent {
+                Extent::Pages(Some((first, last))) => format!(
+                    "The task covers pages {first} to {last} of the list; {unread} was not read, so the answer covers only part of them."
+                ),
+                _ => format!(
                     "The list continues at {unread}, which this run did not read, so the answer covers only part of it."
-                ))
-            });
+                ),
+            };
+            error.get_or_insert_with(|| self.redact(&message));
         }
         if state.refused {
             status = Status::Unverified;

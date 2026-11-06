@@ -1,8 +1,6 @@
 mod common;
 mod misc_support;
 
-use std::collections::HashSet;
-
 use common::{eval_active, harness, sites};
 use fastbrowse_core::models::Operation;
 use fastbrowse_core::page::{Action, BlockKind};
@@ -48,43 +46,22 @@ async fn test_one_open_reply_form_does_not_inherit_the_first_commenter() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_a_list_records_whether_its_element_holds_a_frame() {
-    for inside in [false, true] {
-        let Some(h) = harness().await else { return };
-        let frame = "<iframe sandbox srcdoc='<p>Advertisement</p>'></iframe>";
-        let url = format!(
-            "data:text/html,<h1>Birch</h1>{}<h2>Comments (2)</h2><ul><li><p>Elm: The map crashes.</p></li>\
-             <li><p>Oak: Thanks.</p>{}</li></ul>",
-            if inside { "" } else { frame },
-            if inside { frame } else { "" }
-        );
-        h.page.navigate(&url, None).await.expect("navigate");
-        let captured = h.page.capture().await.expect("capture");
-        let members: Vec<_> = captured.blocks.iter().filter(|b| b.list_id.is_some()).collect();
-        assert!(!members.is_empty(), "inside={inside}");
-        assert_eq!(members.iter().map(|b| b.list_frameless).collect::<HashSet<_>>(), HashSet::from([!inside]));
-        h.close().await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_list_that_hosts_a_shadow_root_is_not_frameless() {
+async fn test_a_captured_list_block_carries_no_list_fields() {
     let Some(h) = harness().await else { return };
     h.page
         .navigate(
-            "data:text/html,<h1>Birch</h1><h2>Comments (2)</h2>\
-             <div id=list role=list><div role=listitem><p>Elm: The map crashes.</p></div>\
-             <div role=listitem><p>Oak: Thanks.</p></div></div>\
-             <script>document.getElementById('list').attachShadow({mode: 'open'}).innerHTML = \
-             \"<slot></slot><iframe sandbox srcdoc='<p>More</p>'></iframe>\";</script>",
+            "data:text/html,<h1>Birch</h1><ul><li><p>Elm: The map crashes.</p></li><li><p>Oak: Thanks.</p></li></ul>",
             None,
         )
         .await
         .expect("navigate");
-    let captured = h.page.capture().await.expect("capture");
-    let members: Vec<_> = captured.blocks.iter().filter(|b| b.list_id.is_some()).collect();
-    assert!(!members.is_empty());
-    assert_eq!(members.iter().map(|b| b.list_frameless).collect::<HashSet<_>>(), HashSet::from([false]));
+    let script = format!("({})(null).blocks", fastbrowse_browser::session::CAPTURE_JS);
+    let blocks = eval_active(&h.session, &script).await;
+    let blocks = blocks.as_array().expect("capture.js returns its blocks");
+    assert!(blocks.iter().any(|block| block["text"].as_str().is_some_and(|text| text.contains("Elm"))), "{blocks:?}");
+    let keys: Vec<&String> =
+        blocks.iter().filter_map(|block| block.as_object()).flat_map(|block| block.keys()).collect();
+    assert!(keys.iter().all(|key| !key.starts_with("list_")), "{keys:?}");
     h.close().await;
 }
 

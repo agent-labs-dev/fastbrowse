@@ -26,7 +26,7 @@ use super::acting::Carried;
 use super::driving::edit_progress;
 use super::helpers::{read_sources, unsent_fact};
 use super::state::Written;
-use super::state::{FailureCause, Flow, RunState, SiteFailure};
+use super::state::{Extent, FailureCause, Flow, RunState, SiteFailure};
 use crate::memory::{Fact, Notes};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
@@ -5065,10 +5065,10 @@ fn paged(url: &str, next: &str) -> Observation {
 }
 
 /// A run that read `page` and holds one note from it, with the task's output already judged as text.
-fn read_one(state: &mut RunState, page: &Observation, every_page: bool) {
+fn read_one(state: &mut RunState, page: &Observation, extent: Extent) {
     state.task = "How many quotes on the whole site are by the author?".into();
     state.output_intent = super::state::OutputIntent::Text;
-    state.every_page = every_page;
+    state.extent = extent;
     let captured = Capture { url: page.url.clone(), ..capture(&[(BlockKind::Paragraph, "A quote by the author.")]) };
     state.notes.add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice));
     state.mark_read(page);
@@ -5092,7 +5092,7 @@ async fn test_done_on_page_one_of_a_whole_list_task_opens_the_next_page_instead(
     let agent = pager_agent(browser.clone());
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
-    read_one(&mut state, &first, true);
+    read_one(&mut state, &first, Extent::EveryPage);
     state.note_pager_pages(&first);
 
     let finished = agent.finish(&mut state, &first, None, None).await.expect("the run goes on");
@@ -5109,7 +5109,7 @@ async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread
     let agent = pager_agent(browser.clone());
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
-    read_one(&mut state, &first, true);
+    read_one(&mut state, &first, Extent::EveryPage);
     state.note_pager_pages(&first);
     let record = at("https://list.test/author/a/", &[]);
     state.mark_read(&record);
@@ -5128,7 +5128,7 @@ async fn test_done_on_a_task_about_what_one_page_shows_concludes_with_a_next_pag
     let agent = pager_agent(browser.clone());
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
-    read_one(&mut state, &first, false);
+    read_one(&mut state, &first, Extent::Shown);
     state.note_pager_pages(&first);
 
     let finished = agent.finish(&mut state, &first, None, None).await.expect("finished");
@@ -5142,7 +5142,7 @@ async fn test_a_whole_list_answer_with_a_next_page_still_unread_is_not_complete(
     let agent = pager_agent(browser);
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
-    read_one(&mut state, &first, true);
+    read_one(&mut state, &first, Extent::EveryPage);
     state.note_pager_pages(&first);
     // The run opened page 2 already and could not read it, so it concludes.
     state.pager_followed.insert("https://list.test/page/2/".into());
@@ -5159,7 +5159,7 @@ async fn test_a_next_page_that_redirects_is_read_once_its_landing_page_is() {
     let agent = pager_agent(browser);
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
-    read_one(&mut state, &first, true);
+    read_one(&mut state, &first, Extent::EveryPage);
     state.note_pager_pages(&first);
     assert!(agent.finish(&mut state, &first, None, None).await.expect("the run goes on").is_none());
 
@@ -5208,11 +5208,11 @@ fn test_a_list_that_gave_the_task_no_note_is_not_the_one_it_reads() {
     state.note_pager_pages(&home);
     state.mark_read(&home);
     let category = at("https://shop.test/catalogue/category/travel/index.html", &[]);
-    read_one(&mut state, &category, true);
+    read_one(&mut state, &category, Extent::EveryPage);
     state.note_pager_pages(&category);
     assert_eq!(state.unread_pager_page(), None, "{:?}", state.pager_pages);
     // Once the front page gave a note, its list is the one the task reads.
-    read_one(&mut state, &home, true);
+    read_one(&mut state, &home, Extent::EveryPage);
     assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://shop.test/catalogue/page-2.html"));
 }
 
@@ -5221,9 +5221,9 @@ fn test_returning_to_a_lists_first_page_keeps_its_later_pages() {
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
     let second = paged("https://list.test/page/2/", "/page/3/");
-    read_one(&mut state, &first, true);
+    read_one(&mut state, &first, Extent::EveryPage);
     state.note_pager_pages(&first);
-    read_one(&mut state, &second, true);
+    read_one(&mut state, &second, Extent::EveryPage);
     state.note_pager_pages(&second);
     // Back on page 1 from a record page, the list is the same one, and page 3 is still unread.
     state.note_pager_pages(&first);
@@ -5260,7 +5260,7 @@ async fn review_a_redirected_next_page_preserves_the_list_without_matching_recor
     let agent = pager_agent(browser);
     let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
-    read_one(&mut state, &first, true);
+    read_one(&mut state, &first, Extent::EveryPage);
     state.note_pager_pages(&first);
     assert!(agent.finish(&mut state, &first, None, None).await.expect("follow next page").is_none());
 
@@ -5288,8 +5288,163 @@ fn test_a_note_read_where_a_next_page_landed_keeps_the_list_open() {
     let second = paged("https://list.test/page/2", "/page/3/");
     state.arrived_by = Some((super::state::read_key(&second), "https://list.test/page/2/".into()));
     state.note_pager_pages(&second);
-    read_one(&mut state, &second, true);
+    read_one(&mut state, &second, Extent::EveryPage);
     assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://list.test/page/3/"));
+}
+
+#[tokio::test]
+async fn test_done_after_the_last_page_a_task_names_finishes() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    let second = paged("https://list.test/page/2/", "/page/3/");
+    read_one(&mut state, &first, Extent::Pages(Some((1, 2))));
+    state.note_pager_pages(&first);
+    read_one(&mut state, &second, Extent::Pages(Some((1, 2))));
+    state.note_pager_pages(&second);
+
+    let finished = agent.finish(&mut state, &second, None, None).await.expect("finished");
+    assert!(finished.is_some(), "a task over the first two pages went on to page 3");
+    assert!(state.steps.iter().all(|step| step.operation != Operation::Navigate));
+}
+
+#[tokio::test]
+async fn test_done_inside_a_named_page_range_opens_the_next_page() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::Pages(Some((1, 3))));
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a task over the first three pages finished with page 2 unread");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.decided_by), (Operation::Navigate, Decider::Code));
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
+}
+
+#[tokio::test]
+async fn test_a_named_page_range_past_page_one_walks_the_pages_before_it() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::Pages(Some((3, 5))));
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a task over pages 3 to 5 finished on page 1");
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
+}
+
+#[tokio::test]
+async fn test_a_named_page_range_with_an_unread_page_is_unverified() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::Pages(Some((1, 3))));
+    state.note_pager_pages(&first);
+    // The run opened page 2 already and could not read it.
+    state.pager_followed.insert("https://list.test/page/2/".into());
+
+    let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
+    assert_eq!(result.status, Status::Unverified);
+    let error = result.error.expect("the unread page is named");
+    assert!(error.contains("https://list.test/page/2/") && error.contains("pages 1 to 3"), "{error}");
+}
+
+/// A note read on `url`, with its own text so each page's note is its own fact.
+fn note_on(state: &mut RunState, url: &str, text: &str) {
+    let captured = Capture { url: url.into(), ..capture(&[(BlockKind::Paragraph, text)]) };
+    state.notes.add(Fact::read(text, block_evidence(&captured, "s0"), FactReader::JevChoice));
+}
+
+#[test]
+fn test_notes_from_pages_past_the_named_range_are_not_composed() {
+    let mut state = run_state();
+    state.extent = Extent::Pages(Some((1, 2)));
+    for (url, next) in [
+        ("https://list.test/", "/page/2/"),
+        ("https://list.test/page/2/", "/page/3/"),
+        ("https://list.test/page/3/", "/page/4/"),
+    ] {
+        state.note_pager_pages(&paged(url, next));
+    }
+    note_on(&mut state, "https://list.test/", "Story one.");
+    note_on(&mut state, "https://list.test/page/2/", "Story two.");
+    note_on(&mut state, "https://list.test/page/3/", "Story three.");
+    note_on(&mut state, "https://list.test/author/a/", "An author's page.");
+
+    let composed = state.notes_to_compose();
+    let texts: Vec<&str> = composed.facts().iter().map(|fact| fact.text.as_str()).collect();
+    assert_eq!(texts, ["Story one.", "Story two.", "An author's page."]);
+}
+
+#[test]
+fn test_a_redirected_next_page_keeps_its_ordinal() {
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    state.note_pager_pages(&first);
+    // `/page/2/` lands at `/page/2`, which names `/page/3/`.
+    let second = paged("https://list.test/page/2", "/page/3/");
+    state.arrived_by = Some((super::state::read_key(&second), "https://list.test/page/2/".into()));
+    state.note_pager_pages(&second);
+
+    let ordinal = |url: &str| state.pager_ordinals.get(&crate::memory::address(url)).copied();
+    assert_eq!(ordinal("https://list.test/page/2"), Some(2));
+    assert_eq!(ordinal("https://list.test/page/3/"), Some(3), "{:?}", state.pager_ordinals);
+}
+
+#[tokio::test]
+async fn test_a_named_page_range_without_numbers_never_walks() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::Pages(None));
+    state.note_pager_pages(&first);
+    assert_eq!(state.unread_pager_page(), None);
+
+    let result = agent.conclude(&mut state, &first, None).await.expect("a conclusion");
+    assert_ne!(result.status, Status::Unverified, "{:?}", result.error);
+}
+
+/// Reads the task's page range as its pages one to `last`, or fails as a provider does.
+struct PageRangeLLM(Option<u32>);
+
+impl LLMClient for PageRangeLLM {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            assert_eq!(purpose, LLMPurpose::Pages);
+            let Some(last) = self.0 else { return Err(LLMError::Failed("no reply".into())) };
+            let data =
+                schema.validate_json(&json!({"first": null, "last": last}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_a_task_over_named_pages_reads_its_range_from_the_task() {
+    let extent = |llm: PageRangeLLM| async move {
+        let jev = Arc::new(IntentJev { evidence: "pages", ..IntentJev::new("text") });
+        let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(llm));
+        let mut state = run_state();
+        state.task = "List every story on the first 5 pages.".into();
+        agent.output_intent(&mut state).await.expect("asked");
+        state.extent
+    };
+    assert_eq!(extent(PageRangeLLM(Some(5))).await, Extent::Pages(Some((1, 5))));
+    assert_eq!(extent(PageRangeLLM(None)).await, Extent::Pages(None));
 }
 
 #[test]

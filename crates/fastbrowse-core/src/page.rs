@@ -338,14 +338,6 @@ pub struct Block {
     pub control_context: Option<SourceControl>,
     #[serde(default)]
     pub href: Option<String>,
-    #[serde(default)]
-    pub list_id: Option<String>,
-    #[serde(default, deserialize_with = "lax::opt_int_ge0")]
-    pub list_count: Option<i64>,
-    /// The capture saw no frame inside this block's list element, so a frame it could not open elsewhere on the page
-    /// cannot hold one of the list's members.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub list_frameless: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

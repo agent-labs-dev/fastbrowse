@@ -171,6 +171,7 @@ impl ScriptedLLM {
             LLMPurpose::Compose => Some(json!({"claims": []})),
             LLMPurpose::ImageRead => Some(json!({"text": null})),
             LLMPurpose::Fill => Some(json!({"value": null})),
+            LLMPurpose::Pages => Some(json!({"first": null, "last": null})),
         }
     }
 }
