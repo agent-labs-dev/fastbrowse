@@ -201,6 +201,9 @@ const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contain
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
+/// What the notes read on a claim's cited pages may and may not establish when Jev judges it (#818).
+const PAGE_NOTES: &str = "When the state lists page_notes, they are every note read on the pages that cited quotes come from. They are not citations: every value this claim states must be in its cited quotes. Notes whose url is the url of one of this claim's cited quotes may show the set that a comparison, count, total or superlative in this claim ranges over, such as that no other record on those pages has a lower value.";
+
 const SOURCE_STATE: &str = "A quote marked superseded was replaced by a later read of its source. It remains evidence about that earlier state, not the current value. Notes are in reading order and name the page each was read on: a later page reached by changing filters, sorting or inputs shows the state after that change. Judge which state the task requests; historical comparisons can use earlier states.";
 
 fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
@@ -518,7 +521,7 @@ async fn review_claims(
         for (key, focus) in checks {
             let question = NoulQuestion::new(
                 format!(
-                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record. Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer. A count of reported records requires those records as evidence.\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}"
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A count, total or comparison may be derived from the quoted facts. A cell marked unavailable is supported only when these quotes give no value for that field of the same record. Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer. A count of reported records requires those records as evidence. {PAGE_NOTES}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}"
                 ),
                 Some("Every assertion being judged is supported by these quotes."),
                 Some(
@@ -530,7 +533,7 @@ async fn review_claims(
         }
     }
     let tokens = jev.profile().fit(None).tokens;
-    let state = json!({"task": task, "pages_read": pages_read(notes)});
+    let mut state = json!({"task": task, "pages_read": pages_read(notes)});
     let state_chars = text::len(&dumps(&state)) as i64;
     if require_coverage && questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]))
     {
@@ -552,6 +555,20 @@ async fn review_claims(
         .chain(counts.iter().map(|(key, question)| (format!("{key}/count"), question.clone())))
         .chain(breakdowns.iter().map(|(key, question)| (key.clone(), question.clone())))
         .collect();
+    // The notes on the cited pages are sent only when no check that fits without them is crowded out by them.
+    let page_notes = page_notes(&claims, notes);
+    if !page_notes.is_empty() {
+        let mut widened = state.clone();
+        widened["page_notes"] = json!(page_notes);
+        let widened_chars = text::len(&dumps(&widened)) as i64;
+        let fits = asked.values().all(|question| {
+            let room = tokens.input_chars(&[question.dump_json()]);
+            state_chars > room || widened_chars <= room
+        });
+        if fits {
+            state = widened;
+        }
+    }
     let (answered, failure) =
         match evaluate_batches(JevPurpose::Verify, jev, &state, &asked, &tokens, ledger, None, false).await {
             Ok(answered) => (answered, None),
@@ -645,6 +662,23 @@ fn cited_quotes(claim: &Claim, notes: &Notes) -> Vec<serde_json::Value> {
                 .as_ref()
                 .map(|quote| json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)) }))
         })
+        .collect()
+}
+
+/// Every note read on the pages the claims cite, in reading order, each with whether a later read superseded it.
+fn page_notes(claims: &[Claim], notes: &Notes) -> Vec<serde_json::Value> {
+    let facts = notes.facts_by_id();
+    let pages: HashSet<&str> = claims
+        .iter()
+        .flat_map(|claim| notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)))
+        .filter_map(|id| facts.get(&id).and_then(|fact| fact.evidence.as_ref()).map(|quote| quote.url.as_str()))
+        .collect();
+    notes
+        .facts()
+        .into_iter()
+        .filter_map(|fact| fact.evidence.as_ref().map(|quote| (fact, quote)))
+        .filter(|(_, quote)| pages.contains(quote.url.as_str()))
+        .map(|(fact, quote)| json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)) }))
         .collect()
 }
 
@@ -2111,6 +2145,80 @@ mod tests {
         assert_eq!(answer.claims.len(), 1);
         assert_eq!(answer.claims[0].evidence_ids, vec![fact_id(facts[0])]);
         assert_eq!(answer.problem.as_deref(), Some(UNREDUCED));
+    }
+
+    fn page_fact(index: usize, url: &str, text: &str) -> Fact {
+        let mut note = fact(index, text.into());
+        note.evidence.as_mut().unwrap().url = url.into();
+        note
+    }
+
+    /// A superlative over a list ranges over every record the list shows, so its judge sees the other notes read on
+    /// the pages it cites, while its citations stay the ones it named (#818).
+    #[tokio::test]
+    async fn a_superlative_is_judged_with_every_note_on_its_cited_pages() {
+        let facts = [
+            page_fact(0, "https://shop.test/p1", "32 results - showing 1 to 20."),
+            page_fact(1, "https://shop.test/p1", "Book X £10.69"),
+            page_fact(2, "https://shop.test/p1", "Book Y £12.00"),
+            page_fact(3, "https://shop.test/other", "Book W £1.00"),
+            page_fact(4, "https://shop.test/p2", "32 results - showing 21 to 32."),
+            page_fact(5, "https://shop.test/p2", "Book Z £15.10"),
+        ];
+        let ids: Vec<String> = [&facts[1], &facts[0], &facts[4]].into_iter().map(fact_id).collect();
+        let notes = Notes::new(facts);
+        let claims = vec![Claim::new("The cheapest is Book X at £10.69", ids)];
+        let jev = Support::new(true);
+        let (supported, problem) =
+            supported_claims(&jev, "Find the cheapest book", None, claims, &notes, None).await.unwrap();
+        assert_eq!(problem, None);
+        let states = jev.states.lock().unwrap();
+        let page_notes = states[0]["page_notes"].as_array().expect("the judge sees the notes on the cited pages");
+        let quotes: Vec<&str> = page_notes.iter().map(|note| note["quote"].as_str().unwrap()).collect();
+        assert_eq!(
+            quotes,
+            [
+                "32 results - showing 1 to 20.",
+                "Book X £10.69",
+                "Book Y £12.00",
+                "32 results - showing 21 to 32.",
+                "Book Z £15.10"
+            ]
+        );
+        assert!(page_notes.iter().all(|note| note["url"] != "https://shop.test/other"));
+        let answer = assemble_answer(&supported, &notes);
+        let cited: Vec<&str> = answer.citations.iter().map(|citation| citation.text.as_str()).collect();
+        assert_eq!(cited, ["32 results - showing 1 to 20.", "Book X £10.69", "32 results - showing 21 to 32."]);
+    }
+
+    #[tokio::test]
+    async fn page_notes_that_would_crowd_out_a_check_are_left_out() {
+        let limit = fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4;
+        let cited = page_fact(0, "https://shop.test/p1", "Book X costs 10");
+        let id = fact_id(&cited);
+        let filler = (1..=4).map(|index| page_fact(index, "https://shop.test/p1", &"x".repeat(limit / 3)));
+        let notes = Notes::new(std::iter::once(cited).chain(filler));
+        let claims = vec![Claim::new("Book X costs 10", vec![id])];
+        let jev = Support::new(true);
+        let (supported, problem) =
+            supported_claims(&jev, "Find the price of Book X", None, claims, &notes, None).await.unwrap();
+        assert_eq!(supported.len(), 1);
+        assert!(problem.is_none_or(|problem| !problem.contains("input limits")));
+        assert!(jev.states.lock().unwrap().iter().all(|state| state.get("page_notes").is_none()));
+        assert!(jev.asked.lock().unwrap().iter().any(|questions| questions.contains_key("claim0")));
+    }
+
+    #[tokio::test]
+    async fn a_claim_citing_no_note_widens_nothing() {
+        let notes = Notes::new([page_fact(0, "https://shop.test/p1", "Book X costs 10")]);
+        let claims = vec![Claim::new("Book X costs 10", vec!["unknown".into()])];
+        let jev = Support::new(true);
+        let checked = review_claims(&jev, "Find the price of Book X", None, claims, &notes, None, false).await.unwrap();
+        assert!(checked.claims.is_empty());
+        let feedback: Value = serde_json::from_str(checked.rejection.as_deref().expect("a repair")).unwrap();
+        assert_eq!(feedback["rejected_checks"], json!(["claim0/citations"]));
+        assert_eq!(feedback["uncited_claims"], json!([{"claim": 0, "unknown_evidence_ids": ["unknown"]}]));
+        assert!(jev.states.lock().unwrap().iter().all(|state| state.get("page_notes").is_none()));
     }
 
     #[test]
