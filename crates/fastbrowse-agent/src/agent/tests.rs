@@ -4889,8 +4889,8 @@ async fn test_a_next_page_that_redirects_is_read_once_its_landing_page_is() {
 
 #[test]
 fn test_a_next_link_to_another_site_is_not_this_lists_next_page() {
-    // The browser marks only same-origin pagers, since it writes another origin's href as host and path; a reader
-    // that hands over an absolute address to another site is refused here too.
+    // The browser marks only same-origin pagers; a reader that hands over an absolute address to another site is
+    // refused here too.
     let mut state = run_state();
     let absolute = paged("https://list.test/", "https://other.test/page/2/");
     state.note_pager_pages(&absolute);
