@@ -168,6 +168,8 @@ pub struct Found {
 struct Reader<'a> {
     url: &'a str,
     blocks: Vec<Found>,
+    /// Rendered frames whose documents this read does not fetch, so the read is not the whole page.
+    frames: usize,
     title: String,
     skip: usize,
     buffer: String,
@@ -205,6 +207,7 @@ impl<'a> Reader<'a> {
         Reader {
             url,
             blocks: Vec::new(),
+            frames: 0,
             title: String::new(),
             skip: 0,
             buffer: String::new(),
@@ -277,6 +280,10 @@ impl<'a> Reader<'a> {
             && open == tag
         {
             *nested += 1;
+        }
+        let shown = self.skip == 0 && get("hidden").is_none() && !hides(get("style").unwrap_or_default());
+        if shown && matches!(tag, "iframe" | "frame") && (get("src").is_some() || get("srcdoc").is_some()) {
+            self.frames += 1;
         }
         if SKIPPED.contains(&tag) {
             self.skip += 1;
@@ -590,15 +597,16 @@ pub fn join(base: &str, href: &str) -> String {
 
 /// The document's title and its blocks, in reading order.
 pub fn blocks(html: &str, url: &str) -> (String, Vec<Found>) {
-    let (title, found, _) = read(html, url);
+    let (title, found, ..) = read(html, url);
     (title, found)
 }
 
-/// The document's title, its blocks in reading order, and the controls its markup offers.
-pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>) {
+/// The document's title, its blocks in reading order, the controls its markup offers, and how many rendered frames
+/// hold documents of their own that it leaves unread.
+pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, usize) {
     let mut reader = tokenize(html, Sink(RefCell::new(Reader::new(url)))).0.into_inner();
     reader.flush(None, None, false);
-    (clean(&reader.title), reader.blocks, reader.controls)
+    (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
 }
 
 /// The first `<meta>` charset in a document's first 1024 bytes, which is where the HTML standard's prescan looks for
@@ -655,6 +663,18 @@ mod tests {
     }
 
     #[test]
+    fn a_rendered_frame_is_counted_as_a_document_the_read_leaves_out() {
+        let (_, found, _, frames) = read(
+            "<h2>Internal frame</h2><iframe src=/inner></iframe><iframe srcdoc='<p>x'></iframe>\
+             <iframe></iframe><iframe hidden src=/a></iframe><div style='display:none'><iframe src=/b></iframe></div>\
+             <noscript><iframe src=/c></iframe></noscript>",
+            "https://a.example/",
+        );
+        assert_eq!(found.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Internal frame"]);
+        assert_eq!(frames, 2);
+    }
+
+    #[test]
     fn an_element_hides_itself_only_by_its_own_declaration() {
         assert!(hides("color:red; Display : None"));
         assert!(hides("visibility:hidden"));
@@ -675,7 +695,7 @@ mod tests {
 
     #[test]
     fn the_markup_names_its_links_and_fields() {
-        let (_, _, controls) = read(
+        let (_, _, controls, _) = read(
             "<h2>Pages</h2><a href='/b' rel='next'>More <b>items</b></a><a href='/c'><img src=x></a>\
              <nav><ul class='pager'><li class='next'><a href='/e'>Next</a></li><li><a href='/f'>Other</a></li></ul></nav>\
              <div hidden><a href='/secret'>x</a></div><table><tr><td><a href=/d>In a row</a></table>\
@@ -703,7 +723,7 @@ mod tests {
 
     #[test]
     fn a_nested_element_of_the_containers_tag_does_not_close_the_pagination() {
-        let (_, _, controls) = read(
+        let (_, _, controls, _) = read(
             "<div class='pagination'><div>Page 1 of 3</div><a class='next' href='/page/2'>Next</a></div>",
             "https://a.example/list",
         );
@@ -713,7 +733,7 @@ mod tests {
 
     #[test]
     fn a_next_class_marks_a_pager_only_inside_pagination_on_this_site() {
-        let (_, _, controls) = read(
+        let (_, _, controls, _) = read(
             "<div class='carousel'><a class='next' href='/slide/2'>Next</a></div>\
              <article><li class='next'><a href='/post/9'>Next article</a></li></article>\
              <nav aria-label='Pagination'><a class='next' href='https://other.example/page/2'>Next</a>\
@@ -727,7 +747,7 @@ mod tests {
 
     #[test]
     fn review_a_page_layout_class_does_not_turn_a_carousel_into_pagination() {
-        let (_, _, controls) = read(
+        let (_, _, controls, _) = read(
             "<body class='page'><main><div class='carousel'>\
              <a class='next' href='/slide/2'>Next slide</a></div></main></body>",
             "https://a.example/list",
@@ -755,7 +775,7 @@ mod tests {
             text("<table><tr><td><time datetime=\"2026-03-04\">March</time></td></tr></table>"),
             ["| March (2026-03-04) |"]
         );
-        let (_, found, controls) =
+        let (_, found, controls, _) =
             read("<p><a href=\"/c\"><time datetime=\"2026-11-01\">5 days ago</time></a></p>", "https://a.example/");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, BlockKind::Link);

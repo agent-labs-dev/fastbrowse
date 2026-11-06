@@ -62,7 +62,7 @@ fn refused(message: impl Into<String>) -> NotFetched {
 }
 
 /// The fetched blocks as a `Capture`, with the spans and hash a quote is validated against.
-fn capture(url: &str, title: String, found: Vec<Found>) -> Capture {
+fn capture(url: &str, title: String, found: Vec<Found>, frames: usize) -> Capture {
     let mut text_out = String::new();
     let mut captured = Vec::with_capacity(found.len());
     let mut offset = 0;
@@ -92,7 +92,9 @@ fn capture(url: &str, title: String, found: Vec<Found>) -> Capture {
         sha256: sha256_hex(text_out.as_bytes()),
         text: text_out,
         blocks: captured,
-        inaccessible_frames: 0,
+        // A frame's document is never fetched, so its text is missing from this read like a frame a browser could not
+        // reach: a reader told nothing is missing would take the page without it as the whole page.
+        inaccessible_frames: frames as i64,
     }
 }
 
@@ -221,19 +223,19 @@ pub async fn fetch_document(
             return Err(refused("the document is empty"));
         }
         let found = Found { kind: BlockKind::Paragraph, text: clean(&body), heading_path: Vec::new(), href: None };
-        return Ok(Fetched { capture: capture(&final_url, String::new(), vec![found]), controls: Vec::new() });
+        return Ok(Fetched { capture: capture(&final_url, String::new(), vec![found], 0), controls: Vec::new() });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };
         return Err(refused(format!("{named} is not a document read as text")));
     }
-    let (title, found, controls) = read(&body, &final_url);
+    let (title, found, controls, frames) = read(&body, &final_url);
     if found.iter().all(|block| block.text.is_empty()) {
         // A page whose markup is scripts and styles has nothing to quote: the browser is the only reader of what they
         // build, and reading the shell as the page would answer from nothing.
         return Err(refused("the page renders its content with scripts, so the markup holds no readable text"));
     }
-    Ok(Fetched { capture: capture(&final_url, title, found), controls })
+    Ok(Fetched { capture: capture(&final_url, title, found, frames), controls })
 }
 
 #[derive(Default)]
@@ -345,7 +347,7 @@ impl Page for FetchedPage {
                     opener_id: None,
                 }],
                 dialog: None,
-                inaccessible_frames: 0,
+                inaccessible_frames: capture.inaccessible_frames,
                 can_go_back: false,
                 history_entry: Some(capture.url),
             })
